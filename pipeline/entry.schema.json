@@ -1,0 +1,169 @@
+{
+  "$defs": {
+    "Code": {
+      "description": "A single copyable code/command block attached to a step.",
+      "properties": {
+        "lang": {
+          "default": "bash",
+          "description": "Language / shell of the block.",
+          "title": "Lang",
+          "type": "string"
+        },
+        "cmd": {
+          "description": "The command or code text.",
+          "title": "Cmd",
+          "type": "string"
+        },
+        "copyable": {
+          "default": true,
+          "description": "Render with a copy button.",
+          "title": "Copyable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cmd"
+      ],
+      "title": "Code",
+      "type": "object"
+    },
+    "Step": {
+      "description": "One ordered step of a technique, playbook, or checklist item.",
+      "properties": {
+        "n": {
+          "description": "1-based position within the entry.",
+          "title": "N",
+          "type": "integer"
+        },
+        "text": {
+          "default": "",
+          "description": "Human-readable instruction.",
+          "title": "Text",
+          "type": "string"
+        },
+        "code": {
+          "description": "Copyable commands.",
+          "items": {
+            "$ref": "#/$defs/Code"
+          },
+          "title": "Code",
+          "type": "array"
+        },
+        "images": {
+          "description": "Image paths/URLs illustrating the step.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Images",
+          "type": "array"
+        }
+      },
+      "required": [
+        "n"
+      ],
+      "title": "Step",
+      "type": "object"
+    }
+  },
+  "description": "The canonical knowledge-base entry \u2014 one normalized document.",
+  "properties": {
+    "id": {
+      "description": "Stable, unique slug for this entry.",
+      "title": "Id",
+      "type": "string"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "category": {
+      "description": "Top-level bucket, e.g. web, active-directory, recon, privesc, services, tools.",
+      "title": "Category",
+      "type": "string"
+    },
+    "subcategory": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Subcategory"
+    },
+    "source": {
+      "description": "Origin knowledge source slug.",
+      "title": "Source",
+      "type": "string"
+    },
+    "tier": {
+      "default": 2,
+      "description": "Trust ranking (lower = more trusted).",
+      "title": "Tier",
+      "type": "integer"
+    },
+    "tags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tags",
+      "type": "array"
+    },
+    "tools": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tools",
+      "type": "array"
+    },
+    "summary": {
+      "default": "",
+      "description": "Short one-paragraph summary.",
+      "title": "Summary",
+      "type": "string"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/$defs/Step"
+      },
+      "title": "Steps",
+      "type": "array"
+    },
+    "body_md": {
+      "default": "",
+      "description": "Full normalized markdown body.",
+      "title": "Body Md",
+      "type": "string"
+    },
+    "references": {
+      "description": "Reference URLs.",
+      "items": {
+        "type": "string"
+      },
+      "title": "References",
+      "type": "array"
+    },
+    "meta": {
+      "additionalProperties": true,
+      "title": "Meta",
+      "type": "object"
+    },
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "title",
+    "category",
+    "source"
+  ],
+  "title": "HackPit Knowledge Entry",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-schema-version": "1.0"
+}

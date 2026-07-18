@@ -1,0 +1,8 @@
+{
+  "_comment": "Hand-authored caption overrides for note screenshots. These are OUR authored, verified scene-labels (tier-1 truth) — used in place of the local vision-model (llava) caption, which hallucinated on these images. Keys are image paths relative to the notes root (posix, NOT url-encoded), matching keys in data/images/captions.json. Because these captions are authored (not machine-guessed), the ingester treats them as trusted, searchable content — unlike unverified llava captions, which stay in meta only and are never indexed.",
+  "captions": {
+    "Active Directory/image 7.png": "AD DS 'Trees' slide — a domain tree is a hierarchy of domains in AD DS. Diagram: root contoso.com with child domains emea.contoso.com and na.contoso.com.",
+    "Active Directory/image 8.png": "AD DS 'Forests' slide — a forest is a collection of one or more domain trees. Diagram: two domain trees joined into a forest.",
+    "Burpsuite/image.png": "Firefox Connection Settings — configuring the browser to proxy through Burp: Manual proxy configuration, HTTP Proxy 127.0.0.1 port 8080, 'Also use this proxy for HTTPS' checked (HTTPS Proxy 127.0.0.1:8080). Standard step to point the browser at Burp's listener."
+  }
+}

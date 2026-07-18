@@ -39,6 +39,10 @@ from pathlib import Path
 DEFAULT_NOTES_PATH = r"C:\Users\zaid_\Downloads\hacks\PRACTICAL ETHICAL HACKING COMPLETE NOTES"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = REPO_ROOT / "data" / "images"
+# Hand-authored caption overrides (committed — our own tiny authored text).
+# Where a note image is present here, this verified caption is preferred over
+# the local vision-model (llava) caption, which can hallucinate.
+MANUAL_CAPTIONS = Path(__file__).with_name("manual_captions.json")
 OLLAMA_HOST = "http://localhost:11434"
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff"}
@@ -190,6 +194,40 @@ def find_images(notes_path: Path) -> list[Path]:
     )
 
 
+def load_manual_captions(path: Path = MANUAL_CAPTIONS) -> dict[str, str]:
+    """Load committed manual caption overrides -> {image_rel_path: caption}.
+
+    Missing file is fine (returns {}). Supports both the wrapped form
+    ``{"captions": {...}}`` and a bare ``{path: caption}`` mapping.
+    """
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    caps = data.get("captions", data) if isinstance(data, dict) else {}
+    return {str(k): str(v) for k, v in caps.items() if not str(k).startswith("_")}
+
+
+def apply_manual_overrides(images: dict, manual: dict[str, str]) -> int:
+    """Force every image present in `manual` to use the authored caption.
+
+    Runs across the whole cache (including images skipped this run) so a manual
+    caption always wins over any previously-stored llava caption.
+    """
+    applied = 0
+    for rel, caption in manual.items():
+        rec = images.get(rel)
+        if rec is None:
+            continue
+        rec["caption"] = caption
+        rec["caption_source"] = "manual"
+        rec.pop("caption_error", None)
+        applied += 1
+    return applied
+
+
 def load_cache(out_file: Path) -> dict:
     if out_file.exists():
         try:
@@ -228,6 +266,7 @@ def process(
     out_file = out_dir / "captions.json"
     cache = load_cache(out_file)
     images = cache.setdefault("images", {})
+    manual = load_manual_captions()
 
     all_imgs = find_images(notes_path)
     if limit:
@@ -247,14 +286,21 @@ def process(
             kind, char_count = classify(ocr_text)
             rec.update(ocr_text=ocr_text, kind=kind, char_count=char_count)
 
-            want_caption = use_vision and model and (
-                kind == "gui" or char_count < LOW_TEXT_CHARS
-            )
-            if want_caption:
-                try:
-                    rec["caption"] = ollama_caption(host, model, img)
-                except Exception as exc:  # caption is best-effort
-                    rec["caption_error"] = f"{type(exc).__name__}: {exc}"
+            override = manual.get(rel)
+            if override is not None:
+                # Authored caption wins — don't spend a vision-model call.
+                rec["caption"] = override
+                rec["caption_source"] = "manual"
+            else:
+                want_caption = use_vision and model and (
+                    kind == "gui" or char_count < LOW_TEXT_CHARS
+                )
+                if want_caption:
+                    try:
+                        rec["caption"] = ollama_caption(host, model, img)
+                        rec["caption_source"] = "llava"
+                    except Exception as exc:  # caption is best-effort
+                        rec["caption_error"] = f"{type(exc).__name__}: {exc}"
 
             rec["ok"] = bool(rec["ocr_text"] or rec["caption"])
         except Exception as exc:  # OCR / read failure — record and continue
@@ -270,12 +316,17 @@ def process(
         print(f"[{i}/{len(all_imgs)}] {tag:8} {rec['char_count']:>5}c{cap}  {rel}")
         save_cache(out_file, cache)  # incremental — survive crashes
 
+    # Manual overrides win over any stored llava caption, even for images that
+    # were skipped (already cached) this run.
+    overridden = apply_manual_overrides(images, manual)
+
     cache["meta"] = {
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "notes_path": str(notes_path),
         "tesseract": tesseract,
         "vision_model": model,
         "total_images": len(all_imgs),
+        "manual_overrides": overridden,
     }
     save_cache(out_file, cache)
 

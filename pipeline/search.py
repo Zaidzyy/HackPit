@@ -15,8 +15,16 @@ import argparse
 import json
 import math
 import re
+import sys
 from collections import Counter
 from pathlib import Path
+
+# The KB can contain unicode (e.g. Notion notes use → and — arrows); keep the
+# CLI from dying on a legacy console codepage (Windows cp1252).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"

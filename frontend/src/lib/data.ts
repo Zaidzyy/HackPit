@@ -1,12 +1,9 @@
 /**
- * Static content for the HackPit shell.
- * Numbers here are placeholders — real counts arrive when the backend is wired.
+ * Static UI content for the HackPit shell. Live numbers (stats, category
+ * counts) come from the backend; this file holds only presentational copy.
  */
 
-export type Stat = {
-  to: number;
-  label: string;
-};
+import type { Stats } from "./api";
 
 export type NavItem = {
   key: string;
@@ -18,21 +15,6 @@ export type AccentSwatch = {
   hex: string;
   title: string;
 };
-
-export type Category = {
-  icon: string;
-  color: string;
-  title: string;
-  desc: string;
-  count?: number;
-};
-
-export const STATS: Stat[] = [
-  { to: 276, label: "techniques" },
-  { to: 72, label: "tools" },
-  { to: 131, label: "workflows" },
-  { to: 65, label: "screenshots ocr'd" },
-];
 
 export const NAV: NavItem[] = [
   { key: "recon", label: ":recon", active: true },
@@ -48,9 +30,18 @@ export const ACCENTS: AccentSwatch[] = [
   { hex: "#4fe0d0", title: "cyan" },
 ];
 
-/** Placeholder entry count shown in the ⌘K affordance. */
+/** Placeholder shown in the ⌘K affordance (search wiring is the next step). */
 export const ENTRY_COUNT = 431;
 
+/** The four home counters, in order, mapped to /stats fields. */
+export const STAT_FIELDS: { key: keyof Stats; label: string }[] = [
+  { key: "techniques", label: "techniques" },
+  { key: "tools", label: "tools" },
+  { key: "workflows", label: "workflows" },
+  { key: "screenshots_ocr", label: "screenshots ocr'd" },
+];
+
+/** Featured bento card — the future guided-attack-paths surface (visual only). */
 export const FEATURED = {
   icon: "↳",
   color: "#ffb03a",
@@ -60,47 +51,25 @@ export const FEATURED = {
   cta: "start →",
 };
 
-export const CATEGORIES: Category[] = [
-  {
-    icon: "⬡",
-    color: "#5dd3aa",
-    title: "Active Directory",
-    desc: "Kerberoasting, AS-REP, NTLM relay, ADCS, lateral movement.",
-    count: 81,
-  },
-  {
-    icon: "⚑",
-    color: "#5aa9f0",
-    title: "Web & bug bounty",
-    desc: "SQLi, XSS, SSRF, IDOR, auth bypass, WAF evasion.",
-    count: 26,
-  },
-  {
-    icon: "◈",
-    color: "#a996f5",
-    title: "Recon & enum",
-    desc: "Nmap, ffuf, dns, subdomains, service fingerprinting.",
-    count: 56,
-  },
-  {
-    icon: "▲",
-    color: "#e88a5a",
-    title: "Privilege escalation",
-    desc: "SUID, capabilities, cron, kernel, Windows privesc.",
-    count: 21,
-  },
-  {
-    icon: "⚒",
-    color: "#e0c15a",
-    title: "Tools",
-    desc: "Metasploit, mimikatz, chisel, ligolo, netexec, hashcat.",
-    count: 72,
-  },
-  {
-    icon: "⌂",
-    color: "#6ad39a",
-    title: "Post-exploitation",
-    desc: "Persistence, pivoting, credential dumping, loot.",
-    count: 7,
-  },
-];
+/**
+ * Short blurbs per category slug, so the bento cards keep the mock's copy.
+ * Categories without a blurb fall back to an entry count line.
+ */
+export const CATEGORY_BLURBS: Record<string, string> = {
+  "active-directory": "Kerberoasting, AS-REP, NTLM relay, ADCS, lateral movement.",
+  web: "SQLi, XSS, SSRF, IDOR, auth bypass, WAF evasion.",
+  recon: "Nmap, ffuf, dns, subdomains, service fingerprinting.",
+  privesc: "SUID, capabilities, cron, kernel, Windows privesc.",
+  tools: "Metasploit, mimikatz, chisel, ligolo, netexec, hashcat.",
+  "post-exploitation": "Persistence, pivoting, credential dumping, loot.",
+  services: "Per-service enumeration & exploitation playbooks.",
+  credentials: "Hashes, cracking, spraying, credential reuse.",
+  persistence: "Footholds, backdoors, scheduled tasks, autoruns.",
+  exploitation: "Public exploits, PoCs, initial access.",
+  reference: "Cheatsheets, mappings, quick-reference material.",
+  wireless: "Wi-Fi capture, cracking, and rogue AP attacks.",
+};
+
+export function categoryBlurb(slug: string, count: number): string {
+  return CATEGORY_BLURBS[slug] ?? `${count} ${count === 1 ? "entry" : "entries"}.`;
+}

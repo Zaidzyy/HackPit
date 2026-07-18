@@ -2,38 +2,53 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 import { CategoryCard } from "./CategoryCard";
-import { CATEGORIES, FEATURED } from "@/lib/data";
+import { FEATURED } from "@/lib/data";
+import type { Category } from "@/lib/api";
 import { useReducedMotion } from "@/lib/useReducedMotion";
 
-/** Total cards = 1 featured + N categories. */
-const TOTAL = CATEGORIES.length + 1;
+type CategoryGridProps = {
+  active: boolean;
+  categories: Category[] | null;
+  loading: boolean;
+  error: string | null;
+};
 
 /**
- * The bento grid. Cards stagger in (70ms apart) once `active` becomes true,
- * matching the mock. Reduced motion reveals them all at once.
+ * The bento grid. The featured card is static; the rest are populated from
+ * GET /categories (real counts + colour/icon). Cards stagger in (70ms apart)
+ * once revealed and data is present; reduced motion reveals them at once.
  */
-export function CategoryGrid({ active }: { active: boolean }) {
+export function CategoryGrid({
+  active,
+  categories,
+  loading,
+  error,
+}: CategoryGridProps) {
   const reduced = useReducedMotion();
   const [shownCount, setShownCount] = useState(0);
+
+  const total = 1 + (categories?.length ?? 0); // featured + categories
 
   useEffect(() => {
     if (!active) return;
 
     if (reduced) {
-      setShownCount(TOTAL);
+      setShownCount(total);
       return;
     }
 
     const timers: ReturnType<typeof setTimeout>[] = [];
-    for (let i = 0; i < TOTAL; i++) {
-      timers.push(setTimeout(() => setShownCount((c) => Math.max(c, i + 1)), i * 70));
+    for (let i = 0; i < total; i++) {
+      timers.push(
+        setTimeout(() => setShownCount((c) => Math.max(c, i + 1)), i * 70)
+      );
     }
     return () => timers.forEach(clearTimeout);
-  }, [active, reduced]);
+  }, [active, reduced, total]);
 
   return (
     <div className="hp-grid">
-      {/* Featured — guided attack paths */}
+      {/* Featured — guided attack paths (visual placeholder for now) */}
       <div
         className={`hp-card hp-feat${shownCount > 0 ? " hp-in" : ""}`}
         style={{ "--cc": FEATURED.color } as CSSProperties}
@@ -48,9 +63,22 @@ export function CategoryGrid({ active }: { active: boolean }) {
         <div className="hp-go">{FEATURED.cta}</div>
       </div>
 
-      {CATEGORIES.map((cat, i) => (
-        <CategoryCard key={cat.title} {...cat} shown={shownCount > i + 1} />
+      {categories?.map((cat, i) => (
+        <CategoryCard
+          key={cat.slug}
+          category={cat}
+          shown={shownCount > i + 1}
+        />
       ))}
+
+      {loading && !categories && (
+        <div className="hp-card-msg">loading categories…</div>
+      )}
+      {error && !categories && (
+        <div className="hp-card-msg hp-note-err">
+          couldn&apos;t load categories — {error}
+        </div>
+      )}
     </div>
   );
 }

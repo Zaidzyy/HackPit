@@ -8,13 +8,17 @@ of where the knowledge came from.
 
 ## Layout
 
-| File                | Purpose                                                        |
-| ------------------- | ------------------------------------------------------------- |
-| `schema.py`         | Canonical `Entry` Pydantic model + JSON Schema emitter.       |
-| `entry.schema.json` | Emitted JSON Schema (committed spec artifact).                |
-| `ingest.py`         | Ingester for the "some hacking resources" markdown source.    |
-| `search.py`         | BM25 full-text search CLI over the normalized KB.             |
-| `images.py`         | Image text/caption extraction (OCR + local vision model).     |
+| File                  | Purpose                                                      |
+| --------------------- | ----------------------------------------------------------- |
+| `schema.py`           | Canonical `Entry` Pydantic model + JSON Schema emitter.     |
+| `entry.schema.json`   | Emitted JSON Schema (committed spec artifact).              |
+| `ingest.py`           | Ingester for the "some hacking resources" markdown source.  |
+| `ingest_notes.py`     | Ingester for the personal PEH course notes (tier-1).        |
+| `images.py`           | Image text/caption extraction (OCR + local vision model).   |
+| `manual_captions.json`| Hand-authored caption overrides (committed).                |
+| `exclude.json`        | Explicit, reversible KB exclusion list (committed).         |
+| `embed.py`            | Local vector embeddings (Ollama `nomic-embed-text`).        |
+| `search.py`           | Hybrid (BM25 + vector, RRF-fused) search CLI.               |
 
 ## Schema (`Entry`)
 
@@ -39,11 +43,33 @@ uv run python schema.py
 uv run python ingest.py
 uv run python ingest.py --source-path "C:\path\to\source" --out ../data/kb
 
-# search the normalized KB
+# build local vector embeddings (needs Ollama running + nomic-embed-text pulled)
+uv run python embed.py            # hash-cached; re-embeds only changed entries
+
+# search the normalized KB (hybrid by default)
 uv run python search.py "kerberoasting"
-uv run python search.py "smb enumeration" --top 3
-uv run python search.py "sqlmap" --json
+uv run python search.py "crack service account tickets offline"   # semantic
+uv run python search.py "sqlmap" --mode lexical   # {hybrid,lexical,vector}
+uv run python search.py "asrep roasting" --top 3 --json
 ```
+
+## Hybrid search (`search.py` + `embed.py`)
+
+Two retrievers are fused:
+
+- **Lexical** — Okapi BM25 over title/tags/tools/summary/`body_md` (which carries
+  folded screenshot OCR) and extracted commands.
+- **Semantic** — cosine over local `nomic-embed-text` vectors. `embed.py` embeds
+  a composite doc per entry (title + summary + tags + tools + every `step.text`
+  + `body_md`) with nomic's required `search_document:` / `search_query:` task
+  prefixes, and stores `data/kb/embeddings.npy` + `ids.json` (gitignored,
+  hash-cached). Everything is local and free — no cloud, no paid API.
+
+Rankings are combined with **weighted Reciprocal Rank Fusion** (lexical favored
+slightly, so exact identifiers aren't buried by semantic neighbours), then a
+small **tier boost** lifts tier-1 (the author's notes) so they compete fairly
+without dominating. Excluded entries are filtered defensively. `--mode` selects
+`hybrid` (default), `lexical`, or `vector` for comparison.
 
 ## Image extraction (`images.py`)
 

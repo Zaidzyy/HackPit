@@ -1,10 +1,13 @@
 [project]
 name = "backend"
 version = "0.1.0"
-description = "Add your description here"
+description = "HackPit backend — serves the knowledge base + hybrid search to the frontend."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.139.2",
     "uvicorn[standard]>=0.51.0",
+    # numpy powers the vector half of pipeline/search.py (hybrid + vector modes).
+    # Lexical mode needs none of it, so /search still works if this is absent.
+    "numpy>=2.0",
 ]

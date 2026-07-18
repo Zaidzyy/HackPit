@@ -1,0 +1,15 @@
+{
+  "_comment": "Explicit, reversible content-exclusion list for the built KB. Entries listed here are left OUT of data/kb/ entirely by ingest_notes.py — they never enter the companion. This does NOT modify the original notes (the pipeline only reads them); exclusion is fully reversible by removing an item here and re-ingesting. Match is by entry `id` OR by source-relative `file` path (either is sufficient), so a slug change on one side won't silently un-exclude a page. Keep `reason` short — it is surfaced in the exclusion report.",
+  "exclude": [
+    {
+      "id": "practical-ethical-hacking-complete-notes",
+      "file": "PRACTICAL ETHICAL HACKING COMPLETE NOTES 382e923e36d480ddad90c4a549d7a0fb.md",
+      "reason": "Root table-of-contents / navigation page — only child-page links and intro boilerplate, no technique content."
+    },
+    {
+      "id": "exploitation-privilage-escalation-win-prev-esc-extra-resources",
+      "file": "Exploitation/privilage escalation/win prev esc extra resources 3a0e923e36d480749e36f235b029233b.md",
+      "reason": "Dead/outdated Windows privesc tool links; the note's own author annotation says it is very old."
+    }
+  ]
+}

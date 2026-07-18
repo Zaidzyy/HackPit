@@ -54,6 +54,7 @@ TIER = 1  # author's own notes — the most-trusted tier.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = REPO_ROOT / "data" / "kb"
 DEFAULT_CAPTIONS = REPO_ROOT / "data" / "images" / "captions.json"
+DEFAULT_EXCLUDE = Path(__file__).with_name("exclude.json")
 
 # Notion appends " <32-hex-id>" to every exported page filename.
 NOTION_HASH_RE = re.compile(r"\s+[0-9a-f]{32}$")
@@ -62,6 +63,28 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 LINK_RE = re.compile(r"\[[^\]]*\]\((https?://[^)]+)\)")
 BARE_URL_RE = re.compile(r"(?<!\()(https?://[^\s)\]]+)")
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff"}
+
+# Author annotations embedded in notes, addressed to the assistant. Two forms:
+# parenthesized `(instruction for claude: ...)` and a bare line `instruction
+# for claude: ...`. Case-insensitive; tolerates "instruction(s)" and "for/to".
+ANNOTATION_PAREN_RE = re.compile(
+    r"\(\s*instruction[s]?\s+(?:for|to)\s+claude\b\s*[:\-]?\s*([^)]*)\)",
+    re.IGNORECASE,
+)
+ANNOTATION_LINE_RE = re.compile(
+    r"^[^\S\n]*(?:[-*>]\s*)?instruction[s]?\s+(?:for|to)\s+claude\b\s*[:\-]?[^\S\n]*(.*)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+# Words in an annotation that mean "this page is not worth keeping".
+SKIP_ANNOTATION_WORDS = (
+    "old", "outdated", "out of date", "deprecated", "dead", "worthless",
+    "useless", "skip", "ignore", "remove", "delete", "obsolete", "stale",
+)
+
+# Thresholds for the (advisory, non-hiding) proposed-exclusion report.
+THIN_WORDS = 60          # below this a note is "thin" -> propose for review
+LINKY_WORDS = 80         # a link-only note is short prose + several links
+LINKY_MIN_REFS = 3
 
 # Shell blocks in these notes are routinely mistagged by Notion as ```c / ```jsx
 # (there is no real C or JSX in the course). Retag those to bash. An empty fence
@@ -72,6 +95,61 @@ SHELL_MISTAGS = {"c", "jsx"}
 def strip_hash(name: str) -> str:
     """`sql injection resource 39ee...` -> `sql injection resource`."""
     return NOTION_HASH_RE.sub("", name).strip()
+
+
+# --------------------------------------------------------------------------- #
+# exclusion list (explicit, reversible — NOT a hidden flag)
+# --------------------------------------------------------------------------- #
+def load_exclude(path: Path = DEFAULT_EXCLUDE) -> list[dict]:
+    """Load the committed exclude list -> [{id?, file?, reason}]."""
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    items = data.get("exclude", data) if isinstance(data, dict) else data
+    return [x for x in items if isinstance(x, dict) and (x.get("id") or x.get("file"))]
+
+
+def match_exclude(entry_id: str, src_file: str, exclude: list[dict]) -> dict | None:
+    """Return the matching exclude item (by id OR file), else None."""
+    for x in exclude:
+        if x.get("id") and x["id"] == entry_id:
+            return x
+        if x.get("file") and x["file"] == src_file:
+            return x
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# author annotations addressed to the assistant
+# --------------------------------------------------------------------------- #
+def extract_annotations(raw: str) -> tuple[str, list[str]]:
+    """Return (clean_text, annotations). Removes every `instruction for claude`
+    annotation from the text so it can NEVER reach user-facing content, and
+    returns the annotation bodies verbatim for meta + reporting."""
+    found: list[str] = []
+
+    def take_paren(m: re.Match) -> str:
+        found.append(m.group(1).strip())
+        return ""
+
+    def take_line(m: re.Match) -> str:
+        found.append(m.group(1).strip())
+        return ""
+
+    clean = ANNOTATION_PAREN_RE.sub(take_paren, raw)
+    clean = ANNOTATION_LINE_RE.sub(take_line, clean)
+    # tidy the empty artifacts a removed annotation can leave behind
+    clean = re.sub(r"[ \t]{2,}", " ", clean)
+    clean = re.sub(r"\n{3,}", "\n\n", clean)
+    return clean.strip(), [a for a in found if a]
+
+
+def is_skip_annotation(text: str) -> bool:
+    low = text.lower()
+    return any(w in low for w in SKIP_ANNOTATION_WORDS)
 
 
 # --------------------------------------------------------------------------- #
@@ -171,6 +249,7 @@ def caption_for(key: str, rec: dict, manual: dict[str, str]) -> tuple[str, str]:
 
 
 def parse_note(
+    raw: str,
     md_path: Path,
     notes_root: Path,
     by_key: dict,
@@ -180,8 +259,10 @@ def parse_note(
     """Walk a note's markdown once, producing:
         title, summary, steps[], augmented body_md, images_meta[],
         external_image_urls[], stats(n_code, n_local_images).
+
+    `raw` must already have author annotations stripped, so nothing addressed
+    to the assistant can leak into user-facing content.
     """
-    raw = md_path.read_text(encoding="utf-8", errors="replace")
     lines = raw.splitlines()
 
     title = ""
@@ -410,14 +491,18 @@ def normalize(path: Path, notes_root: Path, by_key: dict,
     category, matched = derive_category(top)
     section_name = strip_hash(path.stem)
 
-    parsed = parse_note(path, notes_root, by_key, root_by_basename, manual)
-    raw = path.read_text(encoding="utf-8", errors="replace")
+    raw_orig = path.read_text(encoding="utf-8", errors="replace")
+    # Strip author annotations BEFORE anything user-facing is built from the text.
+    clean_raw, annotations = extract_annotations(raw_orig)
+    parsed = parse_note(clean_raw, path, notes_root, by_key, root_by_basename, manual)
 
     tools = extract_tools(parsed["body_md"])
-    references = extract_references(raw, parsed["external_images"])
+    references = extract_references(clean_raw, parsed["external_images"])
+    skip_annotation = any(is_skip_annotation(a) for a in annotations)
 
-    # A note is "reference" when it carries no runnable commands and no captured
-    # screenshots — its value is reading / links, not reproducible steps.
+    # "reference" is now a PLAIN, NON-HIDING descriptive label: the note carries
+    # no runnable commands and no captured screenshots (reading / link material).
+    # It never removes an entry — only exclude.json does that.
     is_root_index = top.lower().startswith("practical ethical hacking complete notes")
     is_reference = is_root_index or (
         parsed["n_code"] == 0 and parsed["n_local_images"] == 0
@@ -435,8 +520,10 @@ def normalize(path: Path, notes_root: Path, by_key: dict,
         meta["images"] = parsed["images_meta"]
     if parsed["external_images"]:
         meta["external_images"] = parsed["external_images"]
+    if annotations:
+        meta["instructions"] = annotations  # author notes to the assistant
     if is_reference:
-        meta["kind"] = "reference"
+        meta["kind"] = "reference"  # descriptive label only — does NOT hide
     if not matched:
         meta["category_unmatched"] = True
 
@@ -459,13 +546,16 @@ def normalize(path: Path, notes_root: Path, by_key: dict,
     report_row = {
         "file": rel,
         "id": entry.id,
+        "title": entry.title,
         "category": category,
         "section": section_name,
         "n_code": parsed["n_code"],
         "n_images": parsed["n_local_images"],
         "n_refs": len(references),
-        "words": len(re.findall(r"\w+", raw)),
+        "words": len(re.findall(r"\w+", clean_raw)),
         "reference": is_reference,
+        "annotations": annotations,
+        "skip_annotation": skip_annotation,
         "unmatched_category": not matched,
     }
     return entry, report_row
@@ -486,10 +576,14 @@ def ingest(notes_path: Path, out_dir: Path, captions_path: Path) -> dict:
     by_key, root_by_basename = build_caption_index(captions)
     manual = load_manual_captions()
 
+    exclude = load_exclude()
+
     files = sorted(notes_path.rglob("*.md"))
     entries: list[Entry] = []
     rows: list[dict] = []
     failed: list[dict] = []
+    excluded: list[dict] = []          # EXCLUDED NOW (removed from the KB)
+    annotations_found: list[dict] = []  # author annotations seen (any page)
     ids: dict[str, str] = {}
 
     for f in files:
@@ -503,6 +597,26 @@ def ingest(notes_path: Path, out_dir: Path, captions_path: Path) -> dict:
                 k += 1
             ids[e.id] = rel
             row["id"] = e.id
+
+            # Record annotations regardless of whether the page is excluded.
+            if row["annotations"]:
+                annotations_found.append({
+                    "id": e.id, "title": e.title, "file": rel,
+                    "annotations": row["annotations"],
+                    "skip_type": row["skip_annotation"],
+                })
+
+            # Exclusion: explicit + reversible. Excluded pages never enter the KB.
+            xm = match_exclude(e.id, rel, exclude)
+            if xm is not None:
+                excluded.append({
+                    "id": e.id, "title": e.title, "file": rel,
+                    "source": SOURCE_NAME,
+                    "reason": xm.get("reason", ""),
+                    "matched_on": "id" if xm.get("id") == e.id else "file",
+                })
+                continue  # do NOT append -> stays out of data/kb entirely
+
             entries.append(e)
             rows.append(row)
         except Exception as exc:  # noqa: BLE001 - report, never abort the run
@@ -518,11 +632,34 @@ def ingest(notes_path: Path, out_dir: Path, captions_path: Path) -> dict:
         for r in merged:
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")
 
+    # ---- proposed-for-exclusion: advisory only, NOT removed ----
+    # Candidates among the kept entries: genuinely thin, link-dominated, or
+    # carrying a skip-type author annotation. The author approves/vetoes these.
+    proposed: list[dict] = []
+    for r in rows:
+        why = []
+        if r["skip_annotation"]:
+            why.append("skip-type author annotation")
+        # "thin" only counts when there's also no reproducible content — a page
+        # whose value is screenshots/commands is not worthless just for low prose.
+        if r["words"] < THIN_WORDS and r["n_code"] == 0 and r["n_images"] == 0:
+            why.append(f"thin (<{THIN_WORDS} words, no commands/screenshots)")
+        if (r["n_code"] == 0 and r["n_images"] == 0
+                and r["n_refs"] >= LINKY_MIN_REFS and r["words"] < LINKY_WORDS):
+            why.append("link-only (no commands/screenshots, mostly external links)")
+        if why:
+            proposed.append({
+                "id": r["id"], "title": r["title"], "file": r["file"],
+                "words": r["words"], "n_refs": r["n_refs"],
+                "category": r["category"], "why": why,
+            })
+
     # ---- manifest for this source ----
     by_cat = Counter(e.category for e in entries)
-    ref_files = [r["file"] for r in rows if r["reference"]]
+    ref_labeled = [r["file"] for r in rows if r["reference"]]
     unmatched = [r["file"] for r in rows if r["unmatched_category"]]
     n_img_attached = sum(len(e.meta.get("images", [])) for e in entries)
+    peh_built = len(entries) + len(excluded)
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -532,11 +669,14 @@ def ingest(notes_path: Path, out_dir: Path, captions_path: Path) -> dict:
         "captions_path": str(captions_path),
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "total": len(entries),
+        "built_before_exclusion": peh_built,
+        "excluded_count": len(excluded),
         "failed_count": len(failed),
         "images_attached": n_img_attached,
         "manual_overrides_available": len(manual),
         "counts": {"by_category": dict(sorted(by_cat.items()))},
-        "reference_tagged": ref_files,
+        # "reference" is a plain descriptive label now (non-hiding).
+        "reference_labeled": ref_labeled,
         "unmatched_category": unmatched,
         "failed": failed,
         "files": rows,
@@ -547,7 +687,24 @@ def ingest(notes_path: Path, out_dir: Path, captions_path: Path) -> dict:
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
+    # ---- exclusion report (the review deliverable) ----
+    report = {
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "source": SOURCE_NAME,
+        "peh_notes_built_before_exclusion": peh_built,
+        "peh_notes_after_exclusion": len(entries),
+        "kb_total_after_merge": len(merged),
+        "kb_by_source": dict(Counter(r.get("source") for r in merged)),
+        "excluded_now": excluded,
+        "proposed_for_exclusion": proposed,
+        "annotations_found": annotations_found,
+    }
+    (out_dir / "exclusion_report.json").write_text(
+        json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
     emit_json_schema(Path(__file__).with_name("entry.schema.json"))
+    manifest["report"] = report
     return manifest
 
 
@@ -563,13 +720,39 @@ def main() -> None:
         raise SystemExit(f"Notes path not found: {notes_path}")
 
     m = ingest(notes_path, Path(args.out), Path(args.captions))
-    print(f"Ingested {m['total']} note entries ({m['failed_count']} failed); "
-          f"{m['images_attached']} image attachments.")
+    r = m["report"]
+    print(f"Ingested {m['total']} note entries "
+          f"({m['built_before_exclusion']} built - {m['excluded_count']} excluded); "
+          f"{m['failed_count']} failed; {m['images_attached']} image attachments.")
     print("By category:", m["counts"]["by_category"])
     print("KB after merge:", m["kb_total_after_merge"], m["kb_by_source"])
-    print("Reference-tagged:", len(m["reference_tagged"]), "files")
+
+    print(f"\n=== EXCLUDED NOW ({len(r['excluded_now'])}) — removed from data/kb ===")
+    for x in r["excluded_now"]:
+        print(f"  - {x['title']}  [{x['source']}]  (matched on {x['matched_on']})")
+        print(f"      reason: {x['reason']}")
+
+    print(f"\n=== PROPOSED FOR EXCLUSION ({len(r['proposed_for_exclusion'])}) "
+          f"— NOT removed, awaiting your approval ===")
+    for p in r["proposed_for_exclusion"]:
+        print(f"  - {p['title']}  ({p['words']} words, {p['n_refs']} links, "
+              f"[{p['category']}])")
+        print(f"      why: {'; '.join(p['why'])}")
+    if not r["proposed_for_exclusion"]:
+        print("  (none)")
+
+    print(f"\n=== ANNOTATIONS FOUND ({len(r['annotations_found'])}) ===")
+    for a in r["annotations_found"]:
+        tag = " [skip-type]" if a["skip_type"] else ""
+        print(f"  - {a['title']}{tag}")
+        for t in a["annotations"]:
+            print(f"      \"{t}\"")
+    if not r["annotations_found"]:
+        print("  (none)")
+
     if m["unmatched_category"]:
-        print("UNMATCHED category:", m["unmatched_category"])
+        print("\nUNMATCHED category:", m["unmatched_category"])
+    print("\nWrote:", Path(args.out) / "exclusion_report.json")
 
 
 if __name__ == "__main__":

@@ -78,6 +78,29 @@ export type Entry = {
   schema_version: string;
 };
 
+/** One ranked search result (snippet emphasises matches with **markers**). */
+export type SearchHit = {
+  rank: number;
+  score: number;
+  id: string;
+  title: string;
+  category: string;
+  source: string;
+  tier: number | null;
+  snippet: string;
+};
+
+export type SearchResponse = {
+  query: string;
+  /** Mode actually used ("hybrid" | "lexical" | "vector"). */
+  mode: string;
+  requested_mode: string;
+  /** True when the requested mode degraded to lexical (e.g. Ollama down). */
+  fell_back: boolean;
+  count: number;
+  results: SearchHit[];
+};
+
 // ---- fetch plumbing ------------------------------------------------------ //
 
 export class ApiError extends Error {
@@ -118,3 +141,13 @@ export const getCategory = (slug: string, signal?: AbortSignal) =>
 
 export const getEntry = (id: string, signal?: AbortSignal) =>
   getJSON<Entry>(`/entry/${encodeURIComponent(id)}`, signal);
+
+export const search = (
+  q: string,
+  opts: { mode?: string; top?: number } = {},
+  signal?: AbortSignal
+) => {
+  const { mode = "hybrid", top = 20 } = opts;
+  const params = new URLSearchParams({ q, mode, top: String(top) });
+  return getJSON<SearchResponse>(`/search?${params.toString()}`, signal);
+};

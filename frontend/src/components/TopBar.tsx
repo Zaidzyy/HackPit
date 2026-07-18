@@ -2,6 +2,7 @@
 
 import { Wordmark } from "./Wordmark";
 import { ACCENTS, ENTRY_COUNT, NAV } from "@/lib/data";
+import { openPalette } from "@/lib/paletteBus";
 
 /**
  * Swaps the single signature accent at runtime by rewriting the three
@@ -33,10 +34,15 @@ export function TopBar() {
         ))}
       </nav>
 
-      <div className="hp-cmdk" role="button" tabIndex={0}>
+      <button
+        type="button"
+        className="hp-cmdk"
+        onClick={openPalette}
+        aria-label="Open search"
+      >
         search {ENTRY_COUNT} entries <kbd>⌘</kbd>
         <kbd>K</kbd>
-      </div>
+      </button>
 
       <div className="hp-swatches">
         {ACCENTS.map((sw) => (

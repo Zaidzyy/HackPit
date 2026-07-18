@@ -58,6 +58,16 @@ VEC_WEIGHT = 0.5
 TIER_BOOST = 0.004
 BASELINE_TIER = 2   # tiers below this (i.e. tier 1) get the boost; >=2 get none.
 
+# Small additive bonus when the *whole* query is the literal name of an entry.
+# Typing a technique's exact title (or a leading-word prefix of it), an exact
+# tag, or the entry id should float that canonical entry to the top. This is
+# gated on a whole-query match, so natural-language queries — which never equal
+# a title — are completely unaffected and the semantic/tier ranking stands.
+TITLE_EXACT_BONUS = 0.03
+TITLE_PREFIX_BONUS = 0.015
+TAG_ID_BONUS = 0.012
+MIN_PREFIX_LEN = 4  # don't prefix-boost on 1–3 char fragments
+
 
 def tokenize(text: str) -> list[str]:
     return [t for t in TOKEN_RE.findall((text or "").lower()) if len(t) >= 2]
@@ -210,6 +220,30 @@ def tier_bonus(entry: dict, boost: float) -> float:
     return boost * max(0, BASELINE_TIER - tier)  # tier1 -> +boost; tier>=2 -> 0
 
 
+def _norm(s: str) -> str:
+    return " ".join((s or "").lower().split())
+
+
+def title_bonus(entry: dict, q_norm: str) -> float:
+    """Reward entries whose *name* the query literally is (exact > prefix > tag/id).
+
+    Only fires on a whole-query match, so it lifts `ad-kerberoasting` for the
+    query "kerberoasting" without touching natural-language queries.
+    """
+    if not q_norm:
+        return 0.0
+    title = _norm(entry.get("title", ""))
+    if q_norm == title:
+        return TITLE_EXACT_BONUS
+    if len(q_norm) >= MIN_PREFIX_LEN and title.startswith(q_norm + " "):
+        return TITLE_PREFIX_BONUS
+    if q_norm == _norm(entry.get("id", "")):
+        return TAG_ID_BONUS
+    if any(q_norm == _norm(t) for t in entry.get("tags", [])):
+        return TAG_ID_BONUS
+    return 0.0
+
+
 # --------------------------------------------------------------------------- #
 # top-level search
 # --------------------------------------------------------------------------- #
@@ -237,6 +271,7 @@ def search(entries: list[dict], query: str, top: int, mode: str = "hybrid",
            tier_boost: float = TIER_BOOST) -> list[dict]:
     entries = filter_excluded(entries)
     q_tokens = tokenize(query)
+    q_norm = _norm(query)
 
     lex = lexical_ranking(entries, query) if mode in ("hybrid", "lexical") else []
     vec = vector_ranking(entries, query, host, model) if mode in ("hybrid", "vector") else []
@@ -254,6 +289,7 @@ def search(entries: list[dict], query: str, top: int, mode: str = "hybrid",
         fused = rrf([lex, vec], [LEX_WEIGHT, VEC_WEIGHT])
         for idx in fused:
             fused[idx] += tier_bonus(entries[idx], tier_boost)
+            fused[idx] += title_bonus(entries[idx], q_norm)
         order = sorted(((s, idx) for idx, s in fused.items()),
                        key=lambda x: x[0], reverse=True)
 

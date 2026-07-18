@@ -1,10 +1,21 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { PageShell } from "./PageShell";
 import { CopyButton } from "./CopyButton";
-import { getCategories, getEntry, type MetaImage, type Step } from "@/lib/api";
+import { Lightbox } from "./Lightbox";
+import { Markdown } from "./Markdown";
+import {
+  getCategories,
+  getEntry,
+  imageUrl,
+  type MetaImage,
+  type Step,
+} from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+
+type OpenImage = (src: string, alt: string) => void;
 
 function prettySlug(slug: string) {
   return slug.replace(/-/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
@@ -15,7 +26,10 @@ function basename(path: string) {
 }
 
 /** Pull the ingest image metadata (kind, caption) for a given step image path. */
-function imageMeta(entryMeta: Record<string, unknown>, path: string): MetaImage | undefined {
+function imageMeta(
+  entryMeta: Record<string, unknown>,
+  path: string
+): MetaImage | undefined {
   const imgs = entryMeta?.images;
   if (!Array.isArray(imgs)) return undefined;
   return (imgs as MetaImage[]).find((m) => m?.path === path);
@@ -25,6 +39,9 @@ function imageMeta(entryMeta: Record<string, unknown>, path: string): MetaImage 
 export function EntryScreen({ id }: { id: string }) {
   const entry = useApi((s) => getEntry(id, s), [id]);
   const categories = useApi(getCategories, []);
+  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(
+    null
+  );
 
   if (entry.loading) {
     return (
@@ -54,6 +71,7 @@ export function EntryScreen({ id }: { id: string }) {
   const e = entry.data;
   const catMeta = categories.data?.find((c) => c.slug === e.category);
   const catName = catMeta?.name ?? prettySlug(e.category);
+  const openImage: OpenImage = (src, alt) => setLightbox({ src, alt });
 
   return (
     <PageShell
@@ -104,15 +122,17 @@ export function EntryScreen({ id }: { id: string }) {
         {e.steps.length > 0 ? (
           <ol className="hp-steps">
             {e.steps.map((s) => (
-              <StepBlock key={s.n} step={s} meta={e.meta} />
+              <StepBlock
+                key={s.n}
+                step={s}
+                meta={e.meta}
+                onImage={openImage}
+              />
             ))}
           </ol>
         ) : (
-          e.body_md && (
-            // No structured steps — fall back to the normalized body so the
-            // page isn't empty. (Markdown is shown as-is; not re-rendered.)
-            <div className="hp-body">{e.body_md}</div>
-          )
+          // No structured steps — render the normalized body as themed markdown.
+          e.body_md && <Markdown source={e.body_md} />
         )}
 
         {e.references.length > 0 && (
@@ -130,11 +150,25 @@ export function EntryScreen({ id }: { id: string }) {
           </footer>
         )}
       </article>
+
+      <Lightbox
+        src={lightbox?.src ?? null}
+        alt={lightbox?.alt}
+        onClose={() => setLightbox(null)}
+      />
     </PageShell>
   );
 }
 
-function StepBlock({ step, meta }: { step: Step; meta: Record<string, unknown> }) {
+function StepBlock({
+  step,
+  meta,
+  onImage,
+}: {
+  step: Step;
+  meta: Record<string, unknown>;
+  onImage: OpenImage;
+}) {
   return (
     <li className="hp-step">
       <div className="hp-step-n">{step.n}</div>
@@ -154,7 +188,12 @@ function StepBlock({ step, meta }: { step: Step; meta: Record<string, unknown> }
         ))}
 
         {step.images.map((path) => (
-          <StepImage key={path} path={path} meta={imageMeta(meta, path)} />
+          <StepImage
+            key={path}
+            path={path}
+            meta={imageMeta(meta, path)}
+            onImage={onImage}
+          />
         ))}
       </div>
     </li>
@@ -162,30 +201,74 @@ function StepBlock({ step, meta }: { step: Step; meta: Record<string, unknown> }
 }
 
 /**
- * Image reference. The backend doesn't serve the screenshot files, so we show
- * a labelled reference plus — only if present — the machine-generated caption,
- * clearly flagged as unverified rather than presented as fact.
+ * A real screenshot thumbnail (lazy-loaded) served from the sandboxed backend
+ * image route. Click to enlarge. If the file can't be served the component
+ * falls back to a labelled reference. The machine (llava) caption stays behind
+ * an "unverified" disclosure and is never presented as fact.
  */
-function StepImage({ path, meta }: { path: string; meta?: MetaImage }) {
+function StepImage({
+  path,
+  meta,
+  onImage,
+}: {
+  path: string;
+  meta?: MetaImage;
+  onImage: OpenImage;
+}) {
+  const [failed, setFailed] = useState(false);
+  const src = imageUrl(path);
+  const name = basename(path);
   const caption = meta?.caption?.trim();
   const ocrLen = meta?.ocr_len ?? meta?.char_count;
+
   return (
     <figure className="hp-figure">
-      <div className="hp-figure-frame">
-        <span className="hp-figure-icon">🖼</span>
-        <div className="hp-figure-info">
-          <span className="hp-figure-name">{basename(path)}</span>
-          <span className="hp-figure-tags">
-            {meta?.kind && <span className="hp-chip hp-chip-dim">{meta.kind}</span>}
-            {typeof ocrLen === "number" && ocrLen > 0 && (
-              <span className="hp-figure-ocr">{ocrLen} chars OCR&apos;d</span>
-            )}
-          </span>
+      {failed ? (
+        <div className="hp-figure-frame">
+          <span className="hp-figure-icon">🖼</span>
+          <div className="hp-figure-info">
+            <span className="hp-figure-name">{name}</span>
+            <span className="hp-figure-tags">
+              {meta?.kind && (
+                <span className="hp-chip hp-chip-dim">{meta.kind}</span>
+              )}
+              <span className="hp-figure-ocr">image unavailable</span>
+            </span>
+          </div>
         </div>
-      </div>
+      ) : (
+        <button
+          type="button"
+          className="hp-thumb"
+          onClick={() => onImage(src, name)}
+          aria-label={`Enlarge ${name}`}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            className="hp-thumb-img"
+            src={src}
+            alt={name}
+            loading="lazy"
+            onError={() => setFailed(true)}
+          />
+          <span className="hp-thumb-hint">
+            {meta?.kind ? `${meta.kind} · ` : ""}click to enlarge
+          </span>
+        </button>
+      )}
+
+      <figcaption className="hp-figure-meta">
+        <span className="hp-figure-name">{name}</span>
+        {typeof ocrLen === "number" && ocrLen > 0 && (
+          <span className="hp-figure-ocr">{ocrLen} chars OCR&apos;d</span>
+        )}
+      </figcaption>
+
       {caption && (
         <details className="hp-figure-cap">
-          <summary>AI-generated description (unverified — may be inaccurate)</summary>
+          <summary>
+            AI-generated description (unverified — may be inaccurate)
+          </summary>
           <p>{caption}</p>
         </details>
       )}

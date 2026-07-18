@@ -1,8 +1,10 @@
 """HackPit backend — FastAPI service.
 
 Exposes the built knowledge base (data/kb/) and the existing hybrid search
-(pipeline/search.py) to the frontend. Read-only over the *built* KB only —
-nothing here touches the original source folders at request time.
+(pipeline/search.py) to the frontend. Read-only over the *built* KB, plus one
+read-only exception: GET /image serves note screenshots straight from the
+external notes folder (they are never copied into the repo), strictly
+sandboxed to that folder.
 
 Design notes
 ------------
@@ -19,6 +21,7 @@ Design notes
 from __future__ import annotations
 
 import json
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,6 +29,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 # --------------------------------------------------------------------------- #
@@ -42,6 +46,31 @@ from schema import Entry  # noqa: E402  (pipeline/schema.py — canonical entry 
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
 CAPTIONS_PATH = REPO_ROOT / "data" / "images" / "captions.json"
+
+
+# --------------------------------------------------------------------------- #
+# note screenshots live ONLY in the external notes folder (never copied into
+# the repo). The /image route serves them read-only, strictly sandboxed.
+# --------------------------------------------------------------------------- #
+IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
+
+
+def _resolve_notes_dir() -> Path | None:
+    """Notes folder: env override → captions.json meta → None (route 503s)."""
+    env = os.environ.get("HACKPIT_NOTES_DIR")
+    if env:
+        return Path(env)
+    if CAPTIONS_PATH.exists():
+        try:
+            meta = json.loads(CAPTIONS_PATH.read_text(encoding="utf-8")).get("meta", {})
+            if meta.get("notes_path"):
+                return Path(meta["notes_path"])
+        except Exception:
+            pass
+    return None
+
+
+NOTES_DIR = _resolve_notes_dir()
 
 # --------------------------------------------------------------------------- #
 # category -> display name / accent colour / glyph.
@@ -308,3 +337,44 @@ def entry(entry_id: str) -> dict[str, Any]:
     if e is None:
         raise HTTPException(status_code=404, detail=f"unknown entry: {entry_id}")
     return e
+
+
+@app.get("/image")
+def image(path: str = Query(..., description="Notes-relative screenshot path")):
+    """Serve a note screenshot from inside the notes folder — nowhere else.
+
+    Hardening: the path must be notes-relative (no drive, no leading slash, no
+    ``..`` segment), the resolved target must stay within the notes folder, and
+    only image extensions are served. Any violation is rejected before touching
+    the filesystem beyond a stat.
+    """
+    if NOTES_DIR is None:
+        raise HTTPException(status_code=503, detail="notes directory not configured")
+
+    base = NOTES_DIR.resolve()
+    rel = path.strip().replace("\\", "/")
+    parts = rel.split("/")
+
+    # reject empty, absolute (leading slash), drive-qualified, or traversal paths
+    if (
+        not rel
+        or rel.startswith("/")
+        or (len(rel) >= 2 and rel[1] == ":")
+        or ".." in parts
+    ):
+        raise HTTPException(status_code=400, detail="invalid path")
+
+    target = (base / rel).resolve()
+
+    # defence in depth: the resolved path must live inside the notes folder
+    try:
+        target.relative_to(base)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="path escapes notes directory")
+
+    if target.suffix.lower() not in IMAGE_EXTS:
+        raise HTTPException(status_code=415, detail="unsupported media type")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="image not found")
+
+    return FileResponse(target, headers={"Cache-Control": "public, max-age=86400"})

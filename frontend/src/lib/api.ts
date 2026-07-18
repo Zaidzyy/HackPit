@@ -142,6 +142,10 @@ export const getCategory = (slug: string, signal?: AbortSignal) =>
 export const getEntry = (id: string, signal?: AbortSignal) =>
   getJSON<Entry>(`/entry/${encodeURIComponent(id)}`, signal);
 
+/** URL for a note screenshot served by the backend's sandboxed /image route. */
+export const imageUrl = (path: string) =>
+  `${API_URL}/image?path=${encodeURIComponent(path)}`;
+
 export const search = (
   q: string,
   opts: { mode?: string; top?: number } = {},

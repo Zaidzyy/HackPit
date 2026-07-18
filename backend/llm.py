@@ -177,16 +177,35 @@ def _post_json(
 # --------------------------------------------------------------------------- #
 def _chat_ollama(system: str, user: str, cfg: dict) -> str:
     host = str(cfg.get("host") or DEFAULTS["host"]).rstrip("/")
+    # Reasoning models (qwen3 et al.) otherwise emit a long <think>…</think>
+    # block that dominates the compose time. Suppress it two ways for
+    # reliability: the API-level ``think: false`` flag AND qwen3's ``/no_think``
+    # prompt convention. num_predict caps the (now much shorter) output so a
+    # runaway generation can't stall the request.
     payload = {
         "model": cfg["model"],
         "messages": [
-            {"role": "system", "content": system},
+            {"role": "system", "content": system + "\n/no_think"},
             {"role": "user", "content": user},
         ],
         "stream": False,
-        "options": {"temperature": 0.4, "num_ctx": 8192},
+        "think": False,
+        "options": {
+            "temperature": 0.4,
+            "num_ctx": 8192,
+            "num_predict": 2048,
+        },
     }
-    data = _post_json(f"{host}/api/chat", payload, {})
+    try:
+        data = _post_json(f"{host}/api/chat", payload, {})
+    except LLMError as e:
+        # Older Ollama builds reject an unknown ``think`` field with HTTP 400.
+        # Retry without it — ``/no_think`` in the prompt still suppresses most
+        # of the reasoning, and `strip_think` cleans up any that remains.
+        if "HTTP 400" not in str(e):
+            raise
+        payload.pop("think", None)
+        data = _post_json(f"{host}/api/chat", payload, {})
     msg = (data.get("message") or {}).get("content")
     if not msg:
         raise LLMError(f"Ollama returned no content: {str(data)[:200]}")

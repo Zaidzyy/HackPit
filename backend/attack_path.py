@@ -89,6 +89,7 @@ _TARGET_CONTEXT: dict[str, str] = {
 
 # tuning
 _PER_PHASE_CAP = 6          # techniques kept per phase for the prompt
+_MIN_PER_PHASE = 2          # keep this many even if only overview entries exist
 _CMDS_PER_ENTRY = 4         # commands shown per technique in the prompt
 _SUMMARY_CHARS = 260
 _CMD_CHARS = 320
@@ -170,16 +171,38 @@ def retrieve(
 
     grouped: dict[str, list[dict]] = {}
     for phase in PHASE_ORDER:
-        ranked = sorted(buckets[phase], key=lambda x: x[0], reverse=True)
+        # Prefer entries that actually carry commands: a step grounded on a
+        # command-less overview note (e.g. the "Active Directory" landing page)
+        # gives the user nothing to run. Partition by whether the entry has
+        # commands, rank each partition by score, and take command-bearing
+        # entries first. Command-less entries are only kept as a fallback when a
+        # phase has too few actionable ones, so no phase silently disappears.
+        cmds: dict[str, list[dict]] = {}
+        with_cmds: list[tuple[float, dict]] = []
+        without_cmds: list[tuple[float, dict]] = []
+        for score, e in buckets[phase]:
+            c = entry_commands(e)
+            cmds[e["id"]] = c
+            (with_cmds if c else without_cmds).append((score, e))
+
+        with_cmds.sort(key=lambda x: x[0], reverse=True)
+        without_cmds.sort(key=lambda x: x[0], reverse=True)
+
+        chosen = with_cmds[:_PER_PHASE_CAP]
+        # top up with a couple of overview entries only if we're short on
+        # actionable ones — this is the "phase has only overview content" safety.
+        if len(chosen) < _MIN_PER_PHASE:
+            chosen += without_cmds[: _MIN_PER_PHASE - len(chosen)]
+
         techs = []
-        for _score, e in ranked[:_PER_PHASE_CAP]:
+        for _score, e in chosen:
             techs.append(
                 {
                     "entry_id": e["id"],
                     "title": e["title"],
                     "category": e.get("category", ""),
                     "summary": (e.get("summary") or "")[:_SUMMARY_CHARS],
-                    "commands": entry_commands(e),
+                    "commands": cmds[e["id"]],
                 }
             )
         if techs:

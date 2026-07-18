@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# LLM provider config — may hold an API key. NEVER commit.
+llm_config.json

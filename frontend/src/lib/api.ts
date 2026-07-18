@@ -101,6 +101,45 @@ export type SearchResponse = {
   results: SearchHit[];
 };
 
+// ---- guided attack paths (generative) ------------------------------------ //
+
+/** LLM provider config as the browser is allowed to see it (never the key). */
+export type LLMConfig = {
+  /** ollama | openai | anthropic | openrouter */
+  provider: string;
+  model: string;
+  /** Whether a key is stored server-side. The key itself is never returned. */
+  has_key: boolean;
+};
+
+/** One grounded step of a composed attack path. */
+export type AttackStep = {
+  /** Stable id ("{phase}-{n}") — safe to key engagement/check-off state on. */
+  id: string;
+  title: string;
+  /** The cited KB entry — links to /entry/{entry_id}. */
+  entry_id: string;
+  why: string;
+  /** Real commands lifted from the cited KB entry (never model-invented). */
+  commands: Code[];
+};
+
+export type AttackPhase = {
+  /** recon | enumeration | exploitation | privesc | post-exploitation */
+  phase: string;
+  label: string;
+  steps: AttackStep[];
+};
+
+export type AttackPath = {
+  goal: string;
+  target_type: string | null;
+  phases: AttackPhase[];
+  /** Model that composed the path (e.g. "qwen3:8b"). */
+  model_used: string;
+  provider: string;
+};
+
 // ---- fetch plumbing ------------------------------------------------------ //
 
 export class ApiError extends Error {
@@ -111,6 +150,19 @@ export class ApiError extends Error {
     super(message);
     this.name = "ApiError";
   }
+}
+
+/** Pull a human-readable message out of a FastAPI error body, if present. */
+async function errorMessage(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await res.json()) as { detail?: unknown };
+    if (typeof body?.detail === "string" && body.detail.trim()) {
+      return body.detail;
+    }
+  } catch {
+    /* non-JSON body — use the fallback */
+  }
+  return fallback;
 }
 
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -126,6 +178,31 @@ async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   if (!res.ok) {
     if (res.status === 404) throw new ApiError(404, "Not found.");
     throw new ApiError(res.status, `Request failed (${res.status}).`);
+  }
+  return (await res.json()) as T;
+}
+
+async function postJSON<T>(
+  path: string,
+  body: unknown,
+  signal?: AbortSignal
+): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch {
+    throw new ApiError(0, `Cannot reach the API at ${API_URL}. Is it running?`);
+  }
+  if (!res.ok) {
+    throw new ApiError(
+      res.status,
+      await errorMessage(res, `Request failed (${res.status}).`)
+    );
   }
   return (await res.json()) as T;
 }
@@ -155,3 +232,27 @@ export const search = (
   const params = new URLSearchParams({ q, mode, top: String(top) });
   return getJSON<SearchResponse>(`/search?${params.toString()}`, signal);
 };
+
+// ---- guided attack paths + LLM config ------------------------------------ //
+
+export const getLLMConfig = (signal?: AbortSignal) =>
+  getJSON<LLMConfig>("/llm-config", signal);
+
+/** Persist provider/model (+ optional key). The key is sent ONCE and never
+ *  stored in the browser — the response only reports whether a key is held. */
+export const setLLMConfig = (
+  cfg: { provider: string; model?: string; api_key?: string },
+  signal?: AbortSignal
+) => postJSON<LLMConfig>("/llm-config", cfg, signal);
+
+/** Compose a guided attack path. Slow: the local model can take a minute+. */
+export const composeAttackPath = (
+  goal: string,
+  target_type?: string | null,
+  signal?: AbortSignal
+) =>
+  postJSON<AttackPath>(
+    "/attack-path",
+    { goal, target_type: target_type ?? null },
+    signal
+  );

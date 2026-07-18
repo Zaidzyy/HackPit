@@ -27,7 +27,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -42,7 +42,11 @@ if str(PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(PIPELINE_DIR))
 
 import search as kb_search  # noqa: E402  (pipeline/search.py)
-from schema import Entry  # noqa: E402  (pipeline/schema.py — canonical entry model)
+from schema import Code, Entry  # noqa: E402  (pipeline/schema.py — canonical models)
+
+# generative layer (backend/llm.py + backend/attack_path.py) — provider-swappable
+import attack_path  # noqa: E402
+import llm  # noqa: E402
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
 CAPTIONS_PATH = REPO_ROOT / "data" / "images" / "captions.json"
@@ -179,9 +183,23 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+# --------------------------------------------------------------------------- #
+# search helper shared by /search and the attack-path retrieval: degrade a
+# non-lexical mode to lexical if the vector half is unavailable (Ollama down)
+# rather than failing the whole request.
+# --------------------------------------------------------------------------- #
+def _resilient_search(q: str, top: int, mode: str) -> list[dict]:
+    try:
+        return kb_search.search(STATE.entries, q, top, mode=mode)
+    except (Exception, SystemExit):
+        if mode == "lexical":
+            raise
+        return kb_search.search(STATE.entries, q, top, mode="lexical")
 
 
 # --------------------------------------------------------------------------- #
@@ -234,6 +252,49 @@ class SearchResponse(BaseModel):
     )
     count: int
     results: list[SearchHit]
+
+
+# ---- LLM config (guided attack paths) ------------------------------------ #
+class LLMConfigOut(BaseModel):
+    provider: str = Field(description="ollama | openai | anthropic | openrouter.")
+    model: str
+    has_key: bool = Field(description="Whether a key is stored (never the key itself).")
+
+
+class LLMConfigIn(BaseModel):
+    provider: str
+    model: str | None = None
+    api_key: str | None = Field(default=None, description="Never returned or logged.")
+
+
+# ---- attack path --------------------------------------------------------- #
+class AttackPathIn(BaseModel):
+    goal: str = Field(min_length=3, description="Free-text target/goal description.")
+    target_type: str | None = Field(
+        default=None, description="Optional chip: web | ad | linux | ctf."
+    )
+
+
+class AttackStep(BaseModel):
+    id: str = Field(description="Stable per-step id ({phase}-{n}) for engagement state.")
+    title: str
+    entry_id: str = Field(description="Cited KB entry — links to /entry/{id}.")
+    why: str = Field(description="1–2 line rationale for this step.")
+    commands: list[Code] = Field(description="Real commands from the cited KB entry.")
+
+
+class AttackPhase(BaseModel):
+    phase: str
+    label: str
+    steps: list[AttackStep]
+
+
+class AttackPathOut(BaseModel):
+    goal: str
+    target_type: str | None
+    phases: list[AttackPhase]
+    model_used: str
+    provider: str
 
 
 # --------------------------------------------------------------------------- #
@@ -305,7 +366,10 @@ def search(
             raise HTTPException(status_code=500, detail="lexical search failed")
         used_mode = "lexical"
         fell_back = True
-        hits = kb_search.search(STATE.entries, q, top, mode="lexical")
+        try:
+            hits = kb_search.search(STATE.entries, q, top, mode="lexical")
+        except (Exception, SystemExit):
+            raise HTTPException(status_code=500, detail="lexical search failed")
 
     results = [
         SearchHit(
@@ -378,3 +442,46 @@ def image(path: str = Query(..., description="Notes-relative screenshot path")):
         raise HTTPException(status_code=404, detail="image not found")
 
     return FileResponse(target, headers={"Cache-Control": "public, max-age=86400"})
+
+
+# --------------------------------------------------------------------------- #
+# generative: LLM config + guided attack paths
+# --------------------------------------------------------------------------- #
+@app.get("/llm-config", response_model=LLMConfigOut)
+def get_llm_config() -> dict[str, Any]:
+    """Current LLM provider/model + whether a key is stored. NEVER the key."""
+    return llm.public_config()
+
+
+@app.post("/llm-config", response_model=LLMConfigOut)
+def set_llm_config(cfg: LLMConfigIn = Body(...)) -> dict[str, Any]:
+    """Persist provider/model (+ optional key) to the gitignored config file.
+
+    The key is written to disk only and never returned. Default stays local
+    Ollama, which needs no key.
+    """
+    try:
+        return llm.save_config(cfg.provider, cfg.model, cfg.api_key)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/attack-path", response_model=AttackPathOut)
+def attack_path_compose(req: AttackPathIn = Body(...)) -> dict[str, Any]:
+    """Compose an ordered, KB-grounded attack walkthrough for a goal.
+
+    Retrieval uses the existing hybrid search across phases; composition uses
+    the configured LLM (default local Ollama). Every returned step cites a real
+    KB entry and carries that entry's real commands — steps the model invents or
+    miscites are dropped in the grounding pass.
+    """
+    goal = req.goal.strip()
+    if not goal:
+        raise HTTPException(status_code=400, detail="goal is required")
+    try:
+        return attack_path.compose(
+            STATE.by_id, goal, req.target_type, _resilient_search
+        )
+    except llm.LLMError as e:
+        # Ollama offline / no key / unparseable output / nothing grounded.
+        raise HTTPException(status_code=503, detail=str(e))

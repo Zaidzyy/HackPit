@@ -17,6 +17,10 @@
 secrets/
 *.secret
 
+# LLM provider config — may hold an API key. NEVER commit.
+llm_config.json
+backend/llm_config.json
+
 # --- Node / Next.js (frontend) ---
 node_modules/
 .next/

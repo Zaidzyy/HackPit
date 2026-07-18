@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, type CSSProperties } from "react";
 import { CategoryCard } from "./CategoryCard";
 import { FEATURED } from "@/lib/data";
@@ -48,8 +49,9 @@ export function CategoryGrid({
 
   return (
     <div className="hp-grid">
-      {/* Featured — guided attack paths (visual placeholder for now) */}
-      <div
+      {/* Featured — guided attack paths (the first generative feature) */}
+      <Link
+        href="/attack-path"
         className={`hp-card hp-feat${shownCount > 0 ? " hp-in" : ""}`}
         style={{ "--cc": FEATURED.color } as CSSProperties}
       >
@@ -61,7 +63,7 @@ export function CategoryGrid({
           <p>{FEATURED.desc}</p>
         </div>
         <div className="hp-go">{FEATURED.cta}</div>
-      </div>
+      </Link>
 
       {categories?.map((cat, i) => (
         <CategoryCard

@@ -6,6 +6,7 @@ import { PageShell } from "./PageShell";
 import { CopyButton } from "./CopyButton";
 import { Lightbox } from "./Lightbox";
 import { Markdown } from "./Markdown";
+import { StepText } from "./StepText";
 import {
   getCategories,
   getEntry,
@@ -173,7 +174,7 @@ function StepBlock({
     <li className="hp-step">
       <div className="hp-step-n">{step.n}</div>
       <div className="hp-step-body">
-        {step.text && <div className="hp-step-text">{step.text}</div>}
+        {step.text && <StepText text={step.text} />}
 
         {step.code.map((c, i) => (
           <div className="hp-code" key={i}>

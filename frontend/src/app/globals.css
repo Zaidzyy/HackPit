@@ -720,6 +720,51 @@ body {
   margin-bottom: 12px;
 }
 
+/* step prose rendered as markdown (bold, lists, inline code, callouts) */
+.hp-step-prose {
+  margin-bottom: 8px;
+}
+.hp-step-prose .hp-md {
+  font-size: 15px;
+  color: #d3d8d3;
+}
+.hp-step-prose .hp-md > :first-child {
+  margin-top: 0;
+}
+.hp-step-prose .hp-md > :last-child {
+  margin-bottom: 0;
+}
+
+/* Notion callout (<aside>) → themed box */
+.hp-callout {
+  display: flex;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 11px 14px 11px 13px;
+  border-left: 2px solid var(--accent-line);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-radius: 0 8px 8px 0;
+}
+.hp-callout-icon {
+  flex: none;
+  font-size: 15px;
+  line-height: 1.65;
+}
+.hp-callout-body {
+  flex: 1;
+  min-width: 0;
+}
+.hp-callout-body .hp-md {
+  font-size: 14px;
+  color: var(--grey);
+}
+.hp-callout-body .hp-md > :first-child {
+  margin-top: 0;
+}
+.hp-callout-body .hp-md > :last-child {
+  margin-bottom: 0;
+}
+
 /* code block with copy */
 .hp-code {
   border: 1px solid var(--border-2);
@@ -1253,6 +1298,13 @@ body {
   border-radius: 5px;
   padding: 1px 6px;
   color: var(--accent);
+}
+.hp-md-img {
+  display: block;
+  max-width: 100%;
+  margin: 12px 0;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
 }
 .hp-md table {
   display: block;

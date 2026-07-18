@@ -4,6 +4,15 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
 import { CopyButton } from "./CopyButton";
+import { imageUrl } from "@/lib/api";
+
+function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
 
 /** A fenced/indented code block rendered in the theme with a copy button. */
 function MdCodeBlock({ lang, text }: { lang: string; text: string }) {
@@ -37,6 +46,25 @@ const components: Components = {
       {children}
     </a>
   ),
+  // Route note-relative image srcs through the sandboxed backend route; hide
+  // gracefully if the file can't be served rather than showing a broken icon.
+  img: ({ src, alt }) => {
+    if (typeof src !== "string" || !src) return null;
+    const remote = /^(https?:|data:)/i.test(src);
+    const url = remote ? src : imageUrl(safeDecode(src));
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        className="hp-md-img"
+        src={url}
+        alt={alt || ""}
+        loading="lazy"
+        onError={(e) => {
+          e.currentTarget.style.display = "none";
+        }}
+      />
+    );
+  },
 };
 
 /**

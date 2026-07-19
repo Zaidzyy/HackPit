@@ -276,7 +276,7 @@ class LLMConfigIn(BaseModel):
 class AttackPathIn(BaseModel):
     goal: str = Field(min_length=3, description="Free-text target/goal description.")
     target_type: str | None = Field(
-        default=None, description="Optional chip: web | ad | linux | ctf."
+        default=None, description="Optional chip: pentest | bugbounty | ctf | ad."
     )
 
 
@@ -297,6 +297,11 @@ class AttackPhase(BaseModel):
 class AttackPathOut(BaseModel):
     goal: str
     target_type: str | None
+    target: str | None = Field(
+        default=None,
+        description="Target (IP/host/URL) parsed from the goal and substituted "
+        "into step commands; null if none was detectable.",
+    )
     phases: list[AttackPhase]
     model_used: str
     provider: str

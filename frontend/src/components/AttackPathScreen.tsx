@@ -22,10 +22,10 @@ import { useReducedMotion } from "@/lib/useReducedMotion";
 type Chip = { value: string; label: string };
 
 const CHIPS: Chip[] = [
-  { value: "web", label: "Web" },
-  { value: "ad", label: "AD" },
-  { value: "linux", label: "Linux" },
+  { value: "pentest", label: "Pentest" },
+  { value: "bugbounty", label: "Bug Bounty" },
   { value: "ctf", label: "CTF" },
+  { value: "ad", label: "AD" },
 ];
 
 const PLACEHOLDER =
@@ -212,6 +212,19 @@ export function AttackPathScreen() {
               <div className="hp-ap-goal">
                 <span className="hp-ap-goal-label">attack path for</span>
                 <span className="hp-ap-goal-text">{result.goal}</span>
+                {result.target ? (
+                  <span className="hp-ap-target">
+                    target: <b>{result.target}</b>{" "}
+                    <span className="hp-ap-target-note">
+                      · substituted into every command
+                    </span>
+                  </span>
+                ) : (
+                  <span className="hp-ap-target hp-ap-target-none">
+                    no target detected in your goal — commands keep their
+                    placeholders / example values
+                  </span>
+                )}
               </div>
               <div className="hp-ap-byline">
                 <span className="hp-ap-model">
@@ -234,6 +247,15 @@ export function AttackPathScreen() {
             </div>
 
             <div className="hp-ap-startbar">
+              <div className="hp-ap-starttext">
+                <span className="hp-ap-startbadge">preview</span>
+                <p className="hp-ap-starthint">
+                  This is a read-only preview.{" "}
+                  <b>Start engagement</b> to turn it into a live session — check
+                  off steps, paste your results as you go, and generate a report
+                  at the end.
+                </p>
+              </div>
               <button
                 type="button"
                 className="hp-ap-start"
@@ -242,10 +264,6 @@ export function AttackPathScreen() {
               >
                 {starting ? "starting…" : "Start engagement →"}
               </button>
-              <span className="hp-ap-starthint">
-                save this path as an interactive session — check off steps &amp;
-                paste results as you go
-              </span>
             </div>
             {startError && (
               <p className="hp-note-err hp-ap-starterr">{startError}</p>
@@ -314,7 +332,10 @@ function StepCard({ step }: { step: AttackStep }) {
       <div className="hp-ap-step-head">
         <span className="hp-ap-step-id">{step.id}</span>
         <h3 className="hp-ap-step-title">{step.title}</h3>
-        <Link href={`/entry/${step.entry_id}`} className="hp-ap-step-link">
+        <Link
+          href={`/entry/${encodeURIComponent(step.entry_id)}`}
+          className="hp-ap-step-link"
+        >
           technique →
         </Link>
       </div>
@@ -336,7 +357,10 @@ function StepCard({ step }: { step: AttackStep }) {
       ) : (
         <div className="hp-ap-nocode">
           No commands on this entry —{" "}
-          <Link href={`/entry/${step.entry_id}`}>open the full technique</Link>.
+          <Link href={`/entry/${encodeURIComponent(step.entry_id)}`}>
+            open the full technique
+          </Link>
+          .
         </div>
       )}
     </article>

@@ -150,7 +150,7 @@ export function CommandPalette() {
   const openEntry = useCallback(
     (id: string) => {
       close(false);
-      router.push(`/entry/${id}`);
+      router.push(`/entry/${encodeURIComponent(id)}`);
     },
     [close, router]
   );

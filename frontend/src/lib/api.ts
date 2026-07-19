@@ -134,6 +134,8 @@ export type AttackPhase = {
 export type AttackPath = {
   goal: string;
   target_type: string | null;
+  /** Target (IP/host/URL) parsed from the goal + substituted into commands. */
+  target: string | null;
   phases: AttackPhase[];
   /** Model that composed the path (e.g. "qwen3:8b"). */
   model_used: string;
@@ -302,6 +304,7 @@ export type EngagementPhase = {
 export type EngagementPath = {
   goal: string;
   target_type: string | null;
+  target?: string | null;
   phases: EngagementPhase[];
   model_used: string;
   provider: string;

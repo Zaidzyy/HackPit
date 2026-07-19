@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useReducedMotion } from "@/lib/useReducedMotion";
 
 type StatCounterProps = {
   /** Target value; `null` means "not loaded yet / unavailable". */
@@ -13,22 +12,17 @@ type StatCounterProps = {
 
 /**
  * A single stat with an eased count-up. Matches the mock: ~1.1s, easeOutCubic.
- * Jumps straight to the final value when reduced motion is preferred, and
- * shows an em-dash placeholder until a real value arrives.
+ * This is a SIGNATURE animation — it ALWAYS counts up, even under
+ * prefers-reduced-motion (no vestibular risk; only the continuous WaveGrid
+ * background honours reduced motion). Shows an em-dash until a value arrives.
  */
 export function StatCounter({ to, label, active }: StatCounterProps) {
   const [value, setValue] = useState(0);
   const started = useRef(false);
-  const reduced = useReducedMotion();
 
   useEffect(() => {
     if (!active || to === null || started.current) return;
     started.current = true;
-
-    if (reduced) {
-      setValue(to);
-      return;
-    }
 
     let raf = 0;
     let start: number | null = null;
@@ -41,7 +35,7 @@ export function StatCounter({ to, label, active }: StatCounterProps) {
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [active, to, reduced]);
+  }, [active, to]);
 
   return (
     <div className="hp-stat">

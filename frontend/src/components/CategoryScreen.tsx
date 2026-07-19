@@ -63,7 +63,7 @@ export function CategoryScreen({ slug }: { slug: string }) {
           <ul className="hp-rows">
             {entries.data.map((e) => (
               <li key={e.id}>
-                <Link href={`/entry/${e.id}`} className="hp-row">
+                <Link href={`/entry/${encodeURIComponent(e.id)}`} className="hp-row">
                   <div className="hp-row-main">
                     <h3 className="hp-row-title">{e.title}</h3>
                     {e.summary && <p className="hp-row-sum">{e.summary}</p>}

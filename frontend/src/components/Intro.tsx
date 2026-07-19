@@ -2,7 +2,6 @@
 
 import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
-import { useReducedMotion } from "@/lib/useReducedMotion";
 
 const WORD = "hackpit_";
 
@@ -18,20 +17,14 @@ type IntroProps = {
  * The dissolve on exit is handled by the parent's <AnimatePresence>.
  */
 export function Intro({ onEnter }: IntroProps) {
-  const reduced = useReducedMotion();
   const [typed, setTyped] = useState("");
   const [showTag, setShowTag] = useState(false);
   const [showEnter, setShowEnter] = useState(false);
 
-  // typing sequence
+  // Typing sequence — a SIGNATURE animation that ALWAYS plays, even under
+  // prefers-reduced-motion (it carries no vestibular risk). Only the continuous
+  // WaveGrid background honours reduced motion.
   useEffect(() => {
-    if (reduced) {
-      setTyped(WORD);
-      setShowTag(true);
-      setShowEnter(true);
-      return;
-    }
-
     const timers: ReturnType<typeof setTimeout>[] = [];
     [...WORD].forEach((ch, k) => {
       timers.push(
@@ -43,7 +36,7 @@ export function Intro({ onEnter }: IntroProps) {
     timers.push(setTimeout(() => setShowEnter(true), base + 900));
 
     return () => timers.forEach(clearTimeout);
-  }, [reduced]);
+  }, []);
 
   // Enter key advances
   const onEnterRef = useRef(onEnter);
@@ -61,7 +54,7 @@ export function Intro({ onEnter }: IntroProps) {
       className="hp-intro"
       initial={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: reduced ? 0 : 0.9, ease: "easeInOut" }}
+      transition={{ duration: 0.9, ease: "easeInOut" }}
     >
       <div className="hp-type">
         <span>{typed}</span>
@@ -71,7 +64,7 @@ export function Intro({ onEnter }: IntroProps) {
       <motion.div
         className="hp-tag"
         animate={{ opacity: showTag ? 1 : 0 }}
-        transition={{ duration: reduced ? 0 : 1, delay: reduced ? 0 : 0.3 }}
+        transition={{ duration: 1, delay: 0.3 }}
       >
         offensive security companion
       </motion.div>
@@ -81,7 +74,7 @@ export function Intro({ onEnter }: IntroProps) {
         className="hp-enter"
         onClick={onEnter}
         animate={{ opacity: showEnter ? 1 : 0 }}
-        transition={{ duration: reduced ? 0 : 0.3 }}
+        transition={{ duration: 0.3 }}
         style={{ pointerEvents: showEnter ? "auto" : "none" }}
       >
         enter ↵

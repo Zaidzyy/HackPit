@@ -33,12 +33,11 @@ export const ACCENTS: AccentSwatch[] = [
 /** Placeholder shown in the ⌘K affordance (search wiring is the next step). */
 export const ENTRY_COUNT = 431;
 
-/** The four home counters, in order, mapped to /stats fields. */
+/** The home counters, in order, mapped to /stats fields. */
 export const STAT_FIELDS: { key: keyof Stats; label: string }[] = [
   { key: "techniques", label: "techniques" },
   { key: "tools", label: "tools" },
   { key: "workflows", label: "workflows" },
-  { key: "screenshots_ocr", label: "screenshots ocr'd" },
 ];
 
 /** Featured bento card — the future guided-attack-paths surface (visual only). */

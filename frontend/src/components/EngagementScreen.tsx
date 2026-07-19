@@ -233,7 +233,10 @@ function StepCard({
           <div className="hp-ap-step-head">
             <span className="hp-ap-step-id">{step.id}</span>
             <h3 className="hp-ap-step-title">{step.title}</h3>
-            <Link href={`/entry/${step.entry_id}`} className="hp-ap-step-link">
+            <Link
+              href={`/entry/${encodeURIComponent(step.entry_id)}`}
+              className="hp-ap-step-link"
+            >
               technique →
             </Link>
           </div>
@@ -255,7 +258,9 @@ function StepCard({
           ) : (
             <div className="hp-ap-nocode">
               No commands on this entry —{" "}
-              <Link href={`/entry/${step.entry_id}`}>open the full technique</Link>
+              <Link href={`/entry/${encodeURIComponent(step.entry_id)}`}>
+                open the full technique
+              </Link>
               .
             </div>
           )}

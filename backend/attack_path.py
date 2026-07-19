@@ -20,6 +20,7 @@ stays decoupled from FastAPI and from how the KB is loaded.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 import llm
@@ -79,12 +80,13 @@ _CATEGORY_MAP: dict[str, str] = {
     "persistence": "post-exploitation",
 }
 
-# target-type chip → extra query context
+# target-type chip → extra query context.
+# Chips: Pentest (general full-scope) · Bug Bounty (web-focused) · CTF · AD.
 _TARGET_CONTEXT: dict[str, str] = {
-    "web": "web application bug bounty",
-    "ad": "active directory windows domain",
-    "linux": "linux host",
+    "pentest": "penetration test full scope network hosts services",
+    "bugbounty": "web application bug bounty http api",
     "ctf": "capture the flag",
+    "ad": "active directory windows domain",
 }
 
 # tuning
@@ -95,6 +97,97 @@ _SUMMARY_CHARS = 260
 _CMD_CHARS = 320
 
 SearchFn = Callable[[str, int, str], list[dict]]
+
+
+# --------------------------------------------------------------------------- #
+# target extraction + substitution
+# --------------------------------------------------------------------------- #
+# Pull the user's real target (IP / host / URL, optional port) out of the goal
+# text, then substitute it into each cited entry's example commands so a step
+# reads "nmap 10.10.11.55" instead of the note author's "nmap 192.168.13.138".
+_IPV4 = r"(?:\d{1,3}\.){3}\d{1,3}"
+_PORT = r"(?::\d{1,5})?"
+_URL_RE = re.compile(r"https?://[^\s'\"`<>]+", re.I)
+_IP_RE = re.compile(r"\b" + _IPV4 + _PORT + r"\b")
+_HOST_RE = re.compile(
+    r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}" + _PORT + r"\b"
+)
+
+# placeholder tokens the notes/library use for "put the target here"
+_PLACEHOLDER_RE = re.compile(
+    r"(?:<[^<>\s]*(?:target|rhosts?|ip|url|hostname|host|domain|victim)[^<>\s]*>"
+    r"|\{\{?\s*(?:TARGET|RHOSTS?|IP|URL|HOSTNAME|HOST|DOMAIN|VICTIM)\s*\}?\}"
+    r"|\$\{?(?:TARGET|RHOSTS?|IP|URL|HOSTNAME|HOST|DOMAIN|VICTIM)\}?)",
+    re.I,
+)
+# obvious example/lab IPs baked into notes (private + HTB/THM ranges). Localhost
+# (127.*), 0.0.0.0 and netmasks (255.*) are deliberately NOT matched. The lead
+# guard is (?<![\d.]) rather than \b so IPs embedded after a word char also
+# match (e.g. a filename like scan_192.168.186.137.txt) while a fragment of a
+# larger number/IP still can't be picked up.
+_EXAMPLE_IP_RE = re.compile(
+    r"(?<![\d.])(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+    r"|192\.168\.\d{1,3}\.\d{1,3}"
+    r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})" + _PORT + r"(?!\d)"
+)
+# obvious example hostnames (lab TLDs + example.*)
+_EXAMPLE_HOST_RE = re.compile(
+    r"\b(?:[a-zA-Z0-9-]+\.)+(?:htb|thm|box|vh|lab|local|example|test)"
+    r"(?:\.[a-zA-Z]{2,})?" + _PORT + r"\b",
+    re.I,
+)
+
+
+def _is_ipv4(value: str) -> bool:
+    return bool(re.fullmatch(_IPV4, value))
+
+
+def extract_target(goal: str) -> str | None:
+    """Best-effort target (URL > IP[:port] > host[:port]) parsed from the goal."""
+    m = _URL_RE.search(goal)
+    if m:
+        return m.group(0).rstrip(".,);'\"")
+    m = _IP_RE.search(goal)
+    if m:
+        return m.group(0)
+    m = _HOST_RE.search(goal)
+    if m:
+        return m.group(0)
+    return None
+
+
+def _target_host(target: str) -> str:
+    """Host[:port] portion of a target — strips a URL scheme/path if present."""
+    t = re.sub(r"^https?://", "", target, flags=re.I)
+    return t.split("/", 1)[0]
+
+
+def substitute_target(cmd: str, target: str | None) -> str:
+    """Rewrite a command's placeholders + obvious example IPs/hosts to `target`.
+
+    Conservative: only touches recognised placeholder tokens and lab/private
+    example addresses, so unrelated literals (loopback, bind-all, netmasks,
+    version numbers) are left untouched.
+    """
+    if not target:
+        return cmd
+    host = _target_host(target)
+    is_url = bool(_URL_RE.match(target))
+
+    # 1) explicit placeholders → full target for URL-ish, host for the rest
+    def _ph(m: re.Match[str]) -> str:
+        tok = m.group(0).lower()
+        return target if ("url" in tok and is_url) else host
+
+    out = _PLACEHOLDER_RE.sub(_ph, cmd)
+
+    # 2) obvious example IPs → target host (only when our host is an IP)
+    if _is_ipv4(host.split(":", 1)[0]):
+        out = _EXAMPLE_IP_RE.sub(host, out)
+
+    # 3) obvious example hostnames → target host
+    out = _EXAMPLE_HOST_RE.sub(host, out)
+    return out
 
 
 def canonical_phase(entry: dict) -> str:
@@ -226,6 +319,9 @@ _SYSTEM = (
     "explaining what it achieves at that point in the engagement.\n"
     "- Group steps under the phase they belong to and order phases as: recon, "
     "enumeration, exploitation, privesc, post-exploitation.\n"
+    "- WITHIN each phase, order the steps by PRIORITY: what a tester should do "
+    "first / what matters most goes first, later or optional actions last. The "
+    "order you return is preserved verbatim, so rank deliberately.\n"
     "- Do NOT restate commands; the system attaches the real commands from each "
     "cited entry. Just cite the entry_id.\n"
     "Respond with ONLY a JSON object, no prose."
@@ -265,8 +361,9 @@ def build_user_prompt(
     lines.append("")
     lines.append(
         "Compose the ordered attack path for the goal above. "
-        "Select the most relevant techniques (2-5 per phase where useful), "
-        "put them in the right order, and give each a 'why'. "
+        "Select the most relevant techniques (2-5 per phase where useful), and "
+        "within each phase order the steps by priority — highest-impact / "
+        "earliest actions first. Give each a 'why'. "
         f"Return JSON exactly shaped like: {_SCHEMA_HINT}"
     )
     return "\n".join(lines)
@@ -275,21 +372,44 @@ def build_user_prompt(
 # --------------------------------------------------------------------------- #
 # 3) grounding / validation
 # --------------------------------------------------------------------------- #
+def _norm_id(value: str) -> str:
+    """Loosely normalise an id for fuzzy matching (case / separators / space)."""
+    return re.sub(r"[\s_-]+", "-", value.strip().lower()).strip("-")
+
+
+def _resolve_entry_id(cited: str, by_id: dict[str, dict], norm_map: dict[str, str]) -> str | None:
+    """Resolve a cited id to a REAL, servable KB id, or None if it can't be.
+
+    Exact hit first; otherwise a normalised (case/separator-insensitive) match.
+    Guarantees the returned id is present in ``by_id`` — i.e. ``/entry/{id}``
+    will serve it — so a composed step can never link to a 404.
+    """
+    if cited in by_id:
+        return cited
+    hit = norm_map.get(_norm_id(cited))
+    return hit if hit and hit in by_id else None
+
+
 def _ground(
-    parsed: Any, by_id: dict[str, dict]
+    parsed: Any, by_id: dict[str, dict], target: str | None
 ) -> list[dict[str, Any]]:
     """Turn the model's JSON into validated, KB-grounded phases.
 
-    Drops steps whose entry_id isn't in the KB, replaces the model's commands
-    with the real entry's commands, assigns a stable ``{phase}-{n}`` id, and
-    reorders phases canonically. Duplicate entry_ids are collapsed to the first
-    occurrence so the path doesn't repeat a technique.
+    Resolves each cited entry_id to a REAL servable id (exact, else a normalised
+    match), drops steps that can't be resolved, replaces the model's commands
+    with the real entry's commands (with the user's ``target`` substituted in),
+    assigns a stable ``{phase}-{n}`` id, and reorders phases canonically while
+    preserving the model's within-phase priority order. Duplicate entries are
+    collapsed to the first occurrence so the path doesn't repeat a technique.
     """
     raw_phases = parsed.get("phases") if isinstance(parsed, dict) else None
     if not isinstance(raw_phases, list):
         return []
 
-    # collect steps per canonical phase, preserving model order
+    # normalised-id lookup for fuzzy resolution of near-miss citations
+    norm_map = {_norm_id(k): k for k in by_id}
+
+    # collect steps per canonical phase, preserving model (priority) order
     per_phase: dict[str, list[dict]] = {p: [] for p in PHASE_ORDER}
     used: set[str] = set()
 
@@ -302,18 +422,22 @@ def _ground(
         for st in rp.get("steps") or []:
             if not isinstance(st, dict):
                 continue
-            eid = str(st.get("entry_id") or "").strip()
-            if eid not in by_id or eid in used:
+            eid = _resolve_entry_id(str(st.get("entry_id") or ""), by_id, norm_map)
+            if eid is None or eid in used:
                 continue
             used.add(eid)
             e = by_id[eid]
             why = str(st.get("why") or "").strip()
+            cmds = [
+                {**c, "cmd": substitute_target(c["cmd"], target)}
+                for c in entry_commands(e, cap=6)
+            ]
             per_phase[phase].append(
                 {
                     "title": e["title"],
                     "entry_id": eid,
                     "why": why,
-                    "commands": entry_commands(e, cap=6),
+                    "commands": cmds,
                 }
             )
 
@@ -325,6 +449,11 @@ def _ground(
         for i, step in enumerate(steps, 1):
             step["id"] = f"{phase}-{i}"  # STABLE per-step id for later layers
         out.append({"phase": phase, "label": PHASE_LABEL[phase], "steps": steps})
+
+    # belt-and-suspenders: every emitted step must be servable by /entry/{id}
+    assert all(
+        s["entry_id"] in by_id for ph in out for s in ph["steps"]
+    ), "grounding emitted a non-servable entry_id"
     return out
 
 
@@ -347,10 +476,12 @@ def compose(
     if not grouped:
         raise llm.LLMError("no relevant techniques found in the knowledge base")
 
+    target = extract_target(goal)
+
     user = build_user_prompt(goal, target_type, grouped)
     raw = llm.chat(_SYSTEM, user, cfg)
     parsed = llm.extract_json(raw)
-    phases = _ground(parsed, by_id)
+    phases = _ground(parsed, by_id, target)
 
     if not phases:
         raise llm.LLMError(
@@ -360,6 +491,7 @@ def compose(
     return {
         "goal": goal,
         "target_type": target_type,
+        "target": target,
         "phases": phases,
         "model_used": cfg["model"],
         "provider": cfg["provider"],

@@ -1329,11 +1329,10 @@ body {
 }
 
 /* ---------- accessibility: reduce motion ---------- */
+/* The signature blinking cursor / wordmark underscore are intentionally left
+   animating here — they always play (see Intro + StatCounter). Only the
+   continuous WaveGrid background honours prefers-reduced-motion. */
 @media (prefers-reduced-motion: reduce) {
-  .hp-cursor,
-  .hp-wm .hp-c {
-    animation: none;
-  }
   .hp-card {
     transition: border-color 0.25s, background 0.25s;
   }
@@ -2042,17 +2041,54 @@ a.hp-card {
   color: var(--accent);
 }
 
+/* ---------- target line on the attack-path result head ---------- */
+.hp-ap-target {
+  display: block;
+  margin-top: 8px;
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 12.5px;
+  letter-spacing: 0.3px;
+  color: var(--grey);
+}
+.hp-ap-target b {
+  color: var(--accent);
+  font-weight: 500;
+}
+.hp-ap-target-note {
+  color: var(--dim);
+}
+.hp-ap-target-none {
+  color: var(--dim);
+  font-style: italic;
+  font-family: var(--font-space-grotesk), sans-serif;
+}
+
 /* ---------- "Start engagement" bar on the attack-path result ---------- */
 .hp-ap-startbar {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 18px;
   margin: 0 0 28px;
-  padding: 16px 18px;
+  padding: 18px 20px;
   border: 1px solid var(--accent-line);
   border-radius: 12px;
   background: var(--accent-soft);
   flex-wrap: wrap;
+}
+.hp-ap-starttext {
+  flex: 1;
+  min-width: 240px;
+}
+.hp-ap-startbadge {
+  display: inline-block;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+  border-radius: 5px;
+  padding: 2px 8px;
+  margin-bottom: 8px;
 }
 .hp-ap-start {
   font-size: 12px;
@@ -2081,11 +2117,20 @@ a.hp-card {
   cursor: default;
 }
 .hp-ap-starthint {
-  flex: 1;
-  min-width: 220px;
+  margin: 0;
   color: var(--grey);
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.6;
+}
+.hp-ap-starthint b {
+  color: var(--white);
+  font-weight: 500;
+}
+/* make the primary action unmistakable */
+.hp-ap-startbar .hp-ap-start {
+  font-size: 13px;
+  padding: 13px 26px;
+  box-shadow: 0 0 30px -8px var(--accent);
 }
 .hp-ap-starterr {
   margin: -14px 0 22px;

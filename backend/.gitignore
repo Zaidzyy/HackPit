@@ -11,3 +11,8 @@ wheels/
 
 # LLM provider config — may hold an API key. NEVER commit.
 llm_config.json
+
+# Local engagement sessions store (SQLite). NEVER commit.
+sessions.db
+*.db-wal
+*.db-shm

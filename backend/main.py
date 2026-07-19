@@ -47,6 +47,7 @@ from schema import Code, Entry  # noqa: E402  (pipeline/schema.py — canonical 
 # generative layer (backend/llm.py + backend/attack_path.py) — provider-swappable
 import attack_path  # noqa: E402
 import llm  # noqa: E402
+import sessions as sessions_db  # noqa: E402  (backend/sessions.py — SQLite store)
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
 CAPTIONS_PATH = REPO_ROOT / "data" / "images" / "captions.json"
@@ -166,6 +167,9 @@ async def lifespan(app: FastAPI):
         by_cat.setdefault(e.get("category", "uncategorized"), []).append(e)
     STATE.by_category = by_cat
     STATE.stats = _load_stats(entries)
+
+    # engagement sessions live in a local SQLite file (gitignored).
+    sessions_db.init_db()
     yield
     STATE.entries = []
     STATE.by_id = {}
@@ -183,7 +187,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -295,6 +299,55 @@ class AttackPathOut(BaseModel):
     phases: list[AttackPhase]
     model_used: str
     provider: str
+
+
+# ---- engagement sessions ------------------------------------------------- #
+class SessionCreateIn(BaseModel):
+    goal: str = Field(min_length=1)
+    target_type: str | None = None
+    path: dict = Field(description="A composed attack-path (the /attack-path output).")
+
+
+class SessionCreateOut(BaseModel):
+    id: str
+
+
+class SessionSummary(BaseModel):
+    id: str
+    label: str
+    goal: str
+    target_type: str | None
+    checked: int
+    total: int
+    created_at: str
+    updated_at: str
+
+
+class SessionDetail(BaseModel):
+    id: str
+    label: str
+    goal: str
+    target_type: str | None
+    created_at: str
+    updated_at: str
+    checked: int
+    total: int
+    # the composed path with per-step `checked` + `result_text` merged in
+    path: dict
+
+
+class StepUpdateIn(BaseModel):
+    checked: bool | None = None
+    result: str | None = None
+
+
+class StepStateOut(BaseModel):
+    checked: bool
+    result_text: str
+
+
+class SessionRenameIn(BaseModel):
+    label: str = Field(min_length=1)
 
 
 # --------------------------------------------------------------------------- #
@@ -485,3 +538,64 @@ def attack_path_compose(req: AttackPathIn = Body(...)) -> dict[str, Any]:
     except llm.LLMError as e:
         # Ollama offline / no key / unparseable output / nothing grounded.
         raise HTTPException(status_code=503, detail=str(e))
+
+
+# --------------------------------------------------------------------------- #
+# engagement sessions — save a composed path and work it interactively
+# --------------------------------------------------------------------------- #
+@app.post("/sessions", response_model=SessionCreateOut, status_code=201)
+def create_session(req: SessionCreateIn = Body(...)) -> dict[str, str]:
+    """Create a saved engagement from a composed attack-path. Returns its id."""
+    if not req.path.get("phases"):
+        raise HTTPException(status_code=400, detail="path has no phases")
+    sid = sessions_db.create_session(req.goal.strip(), req.target_type, req.path)
+    return {"id": sid}
+
+
+@app.get("/sessions", response_model=list[SessionSummary])
+def list_sessions() -> list[dict[str, Any]]:
+    """All saved engagements (newest-updated first) with checked/total progress."""
+    return sessions_db.list_sessions()
+
+
+@app.get("/sessions/{session_id}", response_model=SessionDetail)
+def get_session(session_id: str) -> dict[str, Any]:
+    """Full engagement: metadata + the path with per-step state merged in."""
+    s = sessions_db.get_session(session_id)
+    if s is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return s
+
+
+@app.patch("/sessions/{session_id}/steps/{step_id}", response_model=StepStateOut)
+def update_session_step(
+    session_id: str, step_id: str, req: StepUpdateIn = Body(...)
+) -> dict[str, Any]:
+    """Partially update one step's state (checked and/or pasted result)."""
+    if req.checked is None and req.result is None:
+        raise HTTPException(status_code=400, detail="nothing to update")
+    res = sessions_db.update_step(session_id, step_id, req.checked, req.result)
+    if res is None:
+        raise HTTPException(
+            status_code=404, detail="session or step not found"
+        )
+    return res
+
+
+@app.patch("/sessions/{session_id}", response_model=SessionSummary)
+def rename_session(
+    session_id: str, req: SessionRenameIn = Body(...)
+) -> dict[str, Any]:
+    """Rename an engagement (its label)."""
+    if not sessions_db.rename_session(session_id, req.label):
+        raise HTTPException(status_code=404, detail="session not found")
+    s = sessions_db.get_session(session_id)
+    assert s is not None  # just renamed it
+    return s
+
+
+@app.delete("/sessions/{session_id}", status_code=204)
+def delete_session(session_id: str) -> None:
+    """Delete an engagement and all its step state."""
+    if not sessions_db.delete_session(session_id):
+        raise HTTPException(status_code=404, detail="session not found")

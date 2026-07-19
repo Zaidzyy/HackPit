@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Wordmark } from "./Wordmark";
 import { ACCENTS, ENTRY_COUNT, NAV } from "@/lib/data";
 import { openPalette } from "@/lib/paletteBus";
@@ -32,6 +33,9 @@ export function TopBar() {
             {item.label}
           </span>
         ))}
+        <Link href="/engagements" className="hp-nav-eng">
+          :engagements
+        </Link>
       </nav>
 
       <button

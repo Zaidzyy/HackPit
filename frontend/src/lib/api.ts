@@ -207,6 +207,33 @@ async function postJSON<T>(
   return (await res.json()) as T;
 }
 
+async function sendJSON<T>(
+  method: "PATCH" | "DELETE",
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal
+): Promise<T | null> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      method,
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
+    });
+  } catch {
+    throw new ApiError(0, `Cannot reach the API at ${API_URL}. Is it running?`);
+  }
+  if (!res.ok) {
+    throw new ApiError(
+      res.status,
+      await errorMessage(res, `Request failed (${res.status}).`)
+    );
+  }
+  if (res.status === 204) return null;
+  return (await res.json()) as T;
+}
+
 export const getStats = (signal?: AbortSignal) =>
   getJSON<Stats>("/stats", signal);
 
@@ -256,3 +283,99 @@ export const composeAttackPath = (
     { goal, target_type: target_type ?? null },
     signal
   );
+
+// ---- engagement sessions -------------------------------------------------- //
+
+/** A saved session's step: an attack step plus its persisted engagement state. */
+export type EngagementStep = AttackStep & {
+  checked: boolean;
+  result_text: string;
+};
+
+export type EngagementPhase = {
+  phase: string;
+  label: string;
+  steps: EngagementStep[];
+};
+
+/** The composed path as stored in a session, with per-step state merged in. */
+export type EngagementPath = {
+  goal: string;
+  target_type: string | null;
+  phases: EngagementPhase[];
+  model_used: string;
+  provider: string;
+};
+
+/** Full engagement session (GET /sessions/{id}). */
+export type Session = {
+  id: string;
+  label: string;
+  goal: string;
+  target_type: string | null;
+  created_at: string;
+  updated_at: string;
+  checked: number;
+  total: number;
+  path: EngagementPath;
+};
+
+/** Session list row (GET /sessions). */
+export type SessionSummary = {
+  id: string;
+  label: string;
+  goal: string;
+  target_type: string | null;
+  checked: number;
+  total: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type StepState = { checked: boolean; result_text: string };
+
+/** Create a saved engagement from a composed path. Returns the new id. */
+export const createSession = (
+  path: AttackPath,
+  signal?: AbortSignal
+) =>
+  postJSON<{ id: string }>(
+    "/sessions",
+    { goal: path.goal, target_type: path.target_type, path },
+    signal
+  );
+
+export const listSessions = (signal?: AbortSignal) =>
+  getJSON<SessionSummary[]>("/sessions", signal);
+
+export const getSession = (id: string, signal?: AbortSignal) =>
+  getJSON<Session>(`/sessions/${encodeURIComponent(id)}`, signal);
+
+/** Partially update one step's state (checked and/or pasted result). */
+export const updateStep = (
+  sessionId: string,
+  stepId: string,
+  patch: { checked?: boolean; result?: string },
+  signal?: AbortSignal
+) =>
+  sendJSON<StepState>(
+    "PATCH",
+    `/sessions/${encodeURIComponent(sessionId)}/steps/${encodeURIComponent(stepId)}`,
+    patch,
+    signal
+  ) as Promise<StepState>;
+
+export const renameSession = (
+  id: string,
+  label: string,
+  signal?: AbortSignal
+) =>
+  sendJSON<SessionSummary>(
+    "PATCH",
+    `/sessions/${encodeURIComponent(id)}`,
+    { label },
+    signal
+  ) as Promise<SessionSummary>;
+
+export const deleteSession = (id: string, signal?: AbortSignal) =>
+  sendJSON<null>("DELETE", `/sessions/${encodeURIComponent(id)}`, undefined, signal);

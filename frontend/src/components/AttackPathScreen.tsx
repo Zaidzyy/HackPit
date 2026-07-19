@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { PageShell } from "./PageShell";
@@ -10,6 +11,7 @@ import { ComposingLoader } from "./ComposingLoader";
 import {
   ApiError,
   composeAttackPath,
+  createSession,
   getLLMConfig,
   type AttackPath,
   type AttackStep,
@@ -49,6 +51,10 @@ export function AttackPathScreen() {
   const [config, setConfig] = useState<LLMConfig | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
+
+  const router = useRouter();
   const ctrlRef = useRef<AbortController | null>(null);
 
   // Load current LLM config once (for the "composed by …" line + gear default).
@@ -94,6 +100,20 @@ export function AttackPathScreen() {
     },
     [goal, targetType, loading]
   );
+
+  const startEngagement = useCallback(() => {
+    if (!result || starting) return;
+    setStarting(true);
+    setStartError(null);
+    createSession(result)
+      .then(({ id }) => router.push(`/engagement/${id}`))
+      .catch((err: unknown) => {
+        setStarting(false);
+        setStartError(
+          err instanceof ApiError ? err.message : "Couldn’t start the engagement."
+        );
+      });
+  }, [result, starting, router]);
 
   const providerLabel =
     config?.provider === "ollama" ? "local" : config?.provider;
@@ -212,6 +232,24 @@ export function AttackPathScreen() {
                 </button>
               </div>
             </div>
+
+            <div className="hp-ap-startbar">
+              <button
+                type="button"
+                className="hp-ap-start"
+                onClick={startEngagement}
+                disabled={starting}
+              >
+                {starting ? "starting…" : "Start engagement →"}
+              </button>
+              <span className="hp-ap-starthint">
+                save this path as an interactive session — check off steps &amp;
+                paste results as you go
+              </span>
+            </div>
+            {startError && (
+              <p className="hp-note-err hp-ap-starterr">{startError}</p>
+            )}
 
             <ol className="hp-ap-phases">
               {result.phases.map((ph, pi) => (

@@ -21,6 +21,12 @@ secrets/
 llm_config.json
 backend/llm_config.json
 
+# Local engagement sessions store (SQLite). NEVER commit.
+sessions.db
+backend/sessions.db
+*.db-wal
+*.db-shm
+
 # --- Node / Next.js (frontend) ---
 node_modules/
 .next/

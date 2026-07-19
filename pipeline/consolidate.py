@@ -68,6 +68,7 @@ SOURCE_LABELS = {
     "some-hacking-resources": "some hacking resources",
     "payloadsallthethings": "PayloadsAllTheThings",
     "oscp-cpts-notes": "oscp-cpts-notes",
+    "htb-academy": "HTB Academy",
 }
 
 # --------------------------------------------------------------------------- #
@@ -599,6 +600,114 @@ def discover_oscp(root: Path, failures: list | None = None) -> list[Entry]:
     return [c for c in cands if c is not None]
 
 
+# =========================================================================== #
+#  SOURCE 3 — HTB Academy (proprietary module notes: adapt-only, HARD cap)
+# =========================================================================== #
+# HTB Academy is PAID curriculum. We synthesise a minimal adapted digest and
+# cap hard — never store large verbatim proprietary text (and never commit it;
+# the KB lives under gitignored /data).
+HTB_MAX_STEPS = 6
+HTB_MAX_CODE_PER_SECTION = 2
+HTB_MAX_CODE_CHARS = 300
+HTB_MAX_PROSE = 140
+HTB_MAX_BODY = 1200
+
+
+def _section_code(sec: dict, max_blocks: int, code_cap: int) -> list[Code]:
+    """Fenced blocks + inline-backtick command bullets from one section."""
+    blocks: list[Code] = []
+    for lg, cd in sec["code"]:
+        blocks.append(Code(lang=(lg or "text"), cmd=cd[:code_cap]))
+    for ln in sec["raw"]:
+        m = _INLINE_CMD_RE.match(ln)
+        if m:
+            cmd = _PROMPT_RE.sub("", m.group(1).strip())
+            if cmd:
+                blocks.append(Code(lang="bash", cmd=cmd[:code_cap]))
+    return blocks[:max_blocks]
+
+
+def _htb_body(title: str, summary: str, steps: list[Step]) -> str:
+    """A hard-capped SYNTHESISED digest (headings + capped code, prose dropped)
+    — deliberately not the source's verbatim prose."""
+    parts = [f"# {title}"]
+    if summary:
+        parts.append(f"> {summary}")
+    parts.append("\n## Key techniques (adapted digest)")
+    for s in steps:
+        head = s.text.split(" — ", 1)[0]
+        parts.append(f"\n### {head}")
+        for c in s.code:
+            parts.append(f"```{c.lang}\n{c.cmd}\n```")
+    return "\n".join(parts).strip()[:HTB_MAX_BODY]
+
+
+def parse_htb(path: Path, root: Path) -> Entry | None:
+    """Adapt one HTB Academy module README into a canonical Entry (None if the
+    file is unreadable or empty). Hard-capped, synthesised — not a raw dump."""
+    text = _safe_read(path)
+    if text is None or not text.strip():
+        return None
+    text, _n = _strip_gitbook(text)
+    lines = text.splitlines()
+    folder = path.relative_to(root).parts[0]
+    title = humanize(folder.replace("&", " and "))
+
+    first_heading = ""
+    for line in lines:
+        if line.startswith("#"):
+            first_heading = line.lstrip("#").strip()
+            break
+
+    summary = ""
+    for para in text.split("\n\n"):
+        p = " ".join(para.split())
+        if p and not p.startswith(("#", ">", "```", "|", "*", "-", "!")):
+            summary = p[:200].rstrip()
+            break
+
+    steps: list[Step] = []
+    for sec in _walk_sections(lines):
+        if not sec["heading"] or sec["heading"].lower() in _SKIP_HEADINGS:
+            continue
+        code = _section_code(sec, HTB_MAX_CODE_PER_SECTION, HTB_MAX_CODE_CHARS)
+        prose = " ".join(sec["prose"]).strip()[:HTB_MAX_PROSE]
+        text_i = f"{sec['heading']} — {prose}" if prose else sec["heading"]
+        if code or sec["heading"]:
+            steps.append(Step(n=len(steps) + 1, text=text_i.strip()[:400], code=code))
+        if len(steps) >= HTB_MAX_STEPS:
+            break
+
+    # keys from folder title + the module's opening topic (its primary subject),
+    # so e.g. "Server-Side Attacks" + "Identifying SSRF" resolves to ssrf.
+    keys = sorted(canonical_keys(f"{title} {first_heading}"))
+    return Entry(
+        id="htb-" + slugify(folder), title=title, category="web",
+        source="htb-academy", tier=3,
+        tags=_dedup(["reference"] + keys + [slugify(title)]),
+        tools=_oscp_tools(text), summary=summary or title, steps=steps,
+        body_md=_htb_body(title, summary, steps),
+        references=_dedup(_section_urls(lines)),
+        meta={"src_file": path.relative_to(root).parts[0], "kind": "reference",
+              "source_label": SOURCE_LABELS["htb-academy"],
+              "canonical_keys": keys, "also_covered_in": ["htb-academy"]},
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def discover_htb(root: Path, failures: list | None = None) -> list[Entry]:
+    """One candidate per HTB module README; skip empty/unreadable (recorded)."""
+    out: list[Entry] = []
+    for p in sorted(root.rglob("README.md")):
+        e = parse_htb(p, root)
+        if e is None:
+            if failures is not None:
+                failures.append(p.relative_to(root).as_posix())
+            continue
+        out.append(e)
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # source registry
 # --------------------------------------------------------------------------- #
@@ -619,6 +728,10 @@ SPECS: dict[str, SourceSpec] = {
         "oscp-cpts-notes", SOURCE_LABELS["oscp-cpts-notes"],
         r"C:\Users\zaid_\Downloads\hacks\new resources\oscp-cpts-notes",
         discover_oscp),
+    "htb": SourceSpec(
+        "htb-academy", SOURCE_LABELS["htb-academy"],
+        r"C:\Users\zaid_\Downloads\hacks\new resources\HTB_academy",
+        discover_htb),
 }
 
 

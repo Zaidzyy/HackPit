@@ -220,6 +220,19 @@ export function ReportScreen({ id }: { id: string }) {
                 >
                   ↻ regenerate
                 </button>
+                <button
+                  type="button"
+                  className="hp-rep-btn"
+                  onClick={() =>
+                    window.open(
+                      `/engagement/${id}/report/print`,
+                      "_blank",
+                      "noopener"
+                    )
+                  }
+                >
+                  ↓ download pdf
+                </button>
                 <button type="button" className="hp-rep-btn" onClick={download}>
                   ↓ download .md
                 </button>

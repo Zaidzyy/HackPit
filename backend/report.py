@@ -82,6 +82,28 @@ def _clean_markdown(text: str) -> str:
     return text.strip()
 
 
+# internal status tags from the prompt format (e.g. "[COMPLETED]") that the
+# model sometimes echoes into the prose — never meant for the reader.
+_STATUS_TAG_RE = re.compile(
+    r"\[\s*(?:COMPLETED|DONE|NOT[\s_-]?DONE|IN[\s_-]?PROGRESS|PENDING|SKIPPED)"
+    r"\s*\]\s*",
+    re.IGNORECASE,
+)
+
+
+def _strip_status_tags(md: str) -> str:
+    """Remove leaked ``[COMPLETED]`` / ``[NOT DONE]`` style tags from the prose.
+
+    The Evidence section is built afterwards and never contains these, so this
+    only touches the model's narrative. Tidies up empty bold left behind
+    (``**[COMPLETED]**`` → nothing) and doubled spaces.
+    """
+    md = _STATUS_TAG_RE.sub("", md)
+    md = re.sub(r"\*\*\s*\*\*", "", md)  # empty bold left by a removed tag
+    md = re.sub(r"[ \t]{2,}", " ", md)  # collapse runs of spaces (not newlines)
+    return md
+
+
 def _commands(step: dict) -> list[str]:
     out: list[str] = []
     for c in step.get("commands", []) or []:
@@ -264,5 +286,6 @@ def compose_report(session: dict) -> tuple[str, str]:
     md = _clean_markdown(raw)
     if not md:
         raise llm.LLMError("the model returned an empty report")
+    md = _strip_status_tags(md)
     md = _insert_evidence(md, session)
     return md, cfg["model"]

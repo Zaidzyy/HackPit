@@ -819,6 +819,10 @@ body {
   color: #e6ebe6;
   white-space: pre;
   tab-size: 2;
+  /* show operators (->, !=, >=) literally, not as ligature glyphs, so pasted
+     commands / evidence read exactly as typed. */
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
 }
 .hp-code-pre code {
   font-family: inherit;
@@ -2575,5 +2579,245 @@ a.hp-card {
 @media (max-width: 600px) {
   .hp-rep-doc {
     padding: 24px 20px;
+  }
+}
+
+/* ================================================================== *
+ *  Print / PDF export — a clean light document, no app chrome
+ * ================================================================== */
+.hp-print-page {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  overflow: auto;
+  background: #e9eaec;
+  color: #14181a;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.hp-print-status {
+  padding: 60px 24px;
+  text-align: center;
+  color: #4a5560;
+  font-family: var(--font-jetbrains-mono), monospace;
+}
+.hp-print-doc {
+  max-width: 760px;
+  margin: 28px auto;
+  background: #ffffff;
+  padding: 56px 60px 64px;
+  border-radius: 4px;
+  box-shadow: 0 8px 40px -12px rgba(0, 0, 0, 0.3);
+}
+.hp-print-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-bottom: 28px;
+}
+.hp-print-btn {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: #fff;
+  background: #14181a;
+  border: 1px solid #14181a;
+  border-radius: 6px;
+  padding: 9px 16px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: opacity 0.15s;
+}
+.hp-print-btn:hover {
+  opacity: 0.88;
+}
+.hp-print-btn.ghost {
+  color: #14181a;
+  background: transparent;
+}
+
+/* title block */
+.hp-print-titleblock {
+  border-bottom: 2px solid #14181a;
+  padding-bottom: 22px;
+  margin-bottom: 30px;
+  break-after: avoid;
+}
+.hp-print-eyebrow {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 11px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: #6a7580;
+  margin-bottom: 10px;
+}
+.hp-print-title {
+  font-family: var(--font-space-grotesk), sans-serif;
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: #0d1113;
+  margin: 0 0 20px;
+}
+.hp-print-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px 28px;
+  margin: 0;
+}
+.hp-print-meta div {
+  margin: 0;
+}
+.hp-print-meta dt {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: #8a949d;
+  margin-bottom: 3px;
+}
+.hp-print-meta dd {
+  margin: 0;
+  font-size: 14px;
+  color: #22282c;
+  word-break: break-word;
+}
+
+/* document body typography (light, print-legible) */
+.hp-print-body {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 15px;
+  line-height: 1.7;
+  color: #1c2226;
+}
+.hp-print-body h1,
+.hp-print-body h2,
+.hp-print-body h3,
+.hp-print-body h4 {
+  font-family: var(--font-space-grotesk), sans-serif;
+  color: #0d1113;
+  line-height: 1.3;
+  break-after: avoid;
+}
+.hp-print-body h1 {
+  font-size: 24px;
+  margin: 30px 0 12px;
+}
+.hp-print-body h2 {
+  font-size: 20px;
+  margin: 28px 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #dde1e4;
+}
+.hp-print-body h3 {
+  font-size: 16px;
+  margin: 22px 0 8px;
+}
+.hp-print-body h4 {
+  font-size: 14px;
+  margin: 18px 0 6px;
+}
+.hp-print-body p {
+  margin: 0 0 12px;
+}
+.hp-print-body ul,
+.hp-print-body ol {
+  margin: 0 0 14px;
+  padding-left: 24px;
+}
+.hp-print-body li {
+  margin: 5px 0;
+  break-inside: avoid;
+}
+.hp-print-body a {
+  color: #10457e;
+  text-decoration: none;
+}
+.hp-print-body strong {
+  font-weight: 700;
+  color: #0d1113;
+}
+.hp-print-body blockquote {
+  margin: 0 0 14px;
+  padding: 4px 16px;
+  border-left: 3px solid #c7ccd0;
+  color: #4a5560;
+  break-inside: avoid;
+}
+.hp-print-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 16px;
+  font-size: 13px;
+  break-inside: avoid;
+}
+.hp-print-body th,
+.hp-print-body td {
+  border: 1px solid #d3d8dc;
+  padding: 6px 10px;
+  text-align: left;
+}
+.hp-print-body th {
+  background: #f1f3f5;
+  font-family: var(--font-space-grotesk), sans-serif;
+}
+
+/* code — legible mono, light, never clipped */
+.hp-print-code {
+  font-family: var(--font-jetbrains-mono), "JetBrains Mono", monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  background: #f5f6f7;
+  border: 1px solid #dce0e3;
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 0 0 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  color: #14181a;
+  break-inside: avoid;
+  /* evidence integrity: render operators like -> and != literally, never as
+     ligature glyphs, so captured output is visually exact. */
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.hp-print-code-inline {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 0.88em;
+  background: #eef0f2;
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: #14181a;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+}
+
+@media print {
+  body {
+    background: #fff !important;
+  }
+  .hp-print-noprint {
+    display: none !important;
+  }
+  .hp-print-page {
+    position: static;
+    overflow: visible;
+    background: #fff;
+  }
+  .hp-print-doc {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    box-shadow: none;
+    border-radius: 0;
+  }
+  .hp-print-body h2 {
+    break-inside: avoid;
+  }
+  @page {
+    margin: 18mm 16mm;
   }
 }

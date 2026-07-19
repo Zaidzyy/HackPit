@@ -175,13 +175,13 @@ def _post_json(
 # --------------------------------------------------------------------------- #
 # provider adapters — each takes (system, user, cfg) and returns raw text
 # --------------------------------------------------------------------------- #
-def _chat_ollama(system: str, user: str, cfg: dict) -> str:
+def _chat_ollama(system: str, user: str, cfg: dict, max_tokens: int = 2048) -> str:
     host = str(cfg.get("host") or DEFAULTS["host"]).rstrip("/")
     # Reasoning models (qwen3 et al.) otherwise emit a long <think>…</think>
     # block that dominates the compose time. Suppress it two ways for
     # reliability: the API-level ``think: false`` flag AND qwen3's ``/no_think``
-    # prompt convention. num_predict caps the (now much shorter) output so a
-    # runaway generation can't stall the request.
+    # prompt convention. num_predict caps the output — small for short JSON,
+    # larger for long-form output like reports (raised by the caller).
     payload = {
         "model": cfg["model"],
         "messages": [
@@ -193,7 +193,7 @@ def _chat_ollama(system: str, user: str, cfg: dict) -> str:
         "options": {
             "temperature": 0.4,
             "num_ctx": 8192,
-            "num_predict": 2048,
+            "num_predict": max_tokens,
         },
     }
     try:
@@ -212,7 +212,9 @@ def _chat_ollama(system: str, user: str, cfg: dict) -> str:
     return msg
 
 
-def _chat_openai_compatible(system: str, user: str, cfg: dict, url: str) -> str:
+def _chat_openai_compatible(
+    system: str, user: str, cfg: dict, url: str, max_tokens: int = 2048
+) -> str:
     """OpenAI Chat Completions shape — also used for OpenRouter."""
     key = cfg.get("api_key")
     if not key:
@@ -224,6 +226,7 @@ def _chat_openai_compatible(system: str, user: str, cfg: dict, url: str) -> str:
             {"role": "user", "content": user},
         ],
         "temperature": 0.4,
+        "max_tokens": max_tokens,
     }
     data = _post_json(url, payload, {"Authorization": f"Bearer {key}"})
     try:
@@ -232,13 +235,13 @@ def _chat_openai_compatible(system: str, user: str, cfg: dict, url: str) -> str:
         raise LLMError(f"unexpected chat response: {str(data)[:200]}") from e
 
 
-def _chat_anthropic(system: str, user: str, cfg: dict) -> str:
+def _chat_anthropic(system: str, user: str, cfg: dict, max_tokens: int = 2048) -> str:
     key = cfg.get("api_key")
     if not key:
         raise LLMError("missing api_key for anthropic")
     payload = {
         "model": cfg["model"],
-        "max_tokens": 4096,
+        "max_tokens": max_tokens,
         "system": system,
         "messages": [{"role": "user", "content": user}],
     }
@@ -254,22 +257,33 @@ def _chat_anthropic(system: str, user: str, cfg: dict) -> str:
         raise LLMError(f"unexpected anthropic response: {str(data)[:200]}") from e
 
 
-def chat(system: str, user: str, cfg: dict | None = None) -> str:
-    """Route one system+user turn to the configured provider, return raw text."""
+def chat(
+    system: str, user: str, cfg: dict | None = None, max_tokens: int = 2048
+) -> str:
+    """Route one system+user turn to the configured provider, return raw text.
+
+    ``max_tokens`` caps the output length (num_predict for Ollama, max_tokens
+    for the API providers). Keep it small for short structured output; raise it
+    for long-form output like reports so they aren't truncated.
+    """
     cfg = cfg or load_config()
     provider = cfg["provider"]
     if provider == "ollama":
-        return _chat_ollama(system, user, cfg)
+        return _chat_ollama(system, user, cfg, max_tokens)
     if provider == "openai":
         return _chat_openai_compatible(
-            system, user, cfg, "https://api.openai.com/v1/chat/completions"
+            system, user, cfg, "https://api.openai.com/v1/chat/completions", max_tokens
         )
     if provider == "openrouter":
         return _chat_openai_compatible(
-            system, user, cfg, "https://openrouter.ai/api/v1/chat/completions"
+            system,
+            user,
+            cfg,
+            "https://openrouter.ai/api/v1/chat/completions",
+            max_tokens,
         )
     if provider == "anthropic":
-        return _chat_anthropic(system, user, cfg)
+        return _chat_anthropic(system, user, cfg, max_tokens)
     raise LLMError(f"unsupported provider '{provider}'")
 
 

@@ -51,13 +51,15 @@ def init_db() -> None:
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS sessions (
-                id          TEXT PRIMARY KEY,
-                label       TEXT NOT NULL,
-                goal        TEXT NOT NULL,
-                target_type TEXT,
-                path_json   TEXT NOT NULL,
-                created_at  TEXT NOT NULL,
-                updated_at  TEXT NOT NULL
+                id                  TEXT PRIMARY KEY,
+                label               TEXT NOT NULL,
+                goal                TEXT NOT NULL,
+                target_type         TEXT,
+                path_json           TEXT NOT NULL,
+                created_at          TEXT NOT NULL,
+                updated_at          TEXT NOT NULL,
+                report_md           TEXT,
+                report_generated_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS step_state (
@@ -70,6 +72,14 @@ def init_db() -> None:
             );
             """
         )
+        # migrate DBs created before the report columns existed
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+        if "report_md" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN report_md TEXT")
+        if "report_generated_at" not in cols:
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN report_generated_at TEXT"
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -194,6 +204,7 @@ def get_session(session_id: str) -> dict[str, Any] | None:
             if step["checked"]:
                 checked += 1
 
+    keys = row.keys()
     return {
         "id": row["id"],
         "label": row["label"],
@@ -204,6 +215,10 @@ def get_session(session_id: str) -> dict[str, Any] | None:
         "checked": checked,
         "total": total,
         "path": path,
+        "report_md": row["report_md"] if "report_md" in keys else None,
+        "report_generated_at": (
+            row["report_generated_at"] if "report_generated_at" in keys else None
+        ),
     }
 
 
@@ -266,6 +281,23 @@ def rename_session(session_id: str, label: str) -> bool:
             (label, _now(), session_id),
         )
         return cur.rowcount > 0
+
+
+def save_report(session_id: str, report_md: str) -> str | None:
+    """Persist a generated report on the session. Returns its timestamp.
+
+    Returns ``None`` if the session doesn't exist.
+    """
+    ts = _now()
+    with _write_lock, _connect() as conn:
+        cur = conn.execute(
+            "UPDATE sessions SET report_md=?, report_generated_at=?, updated_at=? "
+            "WHERE id=?",
+            (report_md, ts, ts, session_id),
+        )
+        if cur.rowcount == 0:
+            return None
+    return ts
 
 
 def delete_session(session_id: str) -> bool:

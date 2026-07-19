@@ -152,6 +152,20 @@ export function EngagementScreen({ id }: { id: string }) {
               {total > 0 && checked === total ? " · complete ✓" : ""}
             </span>
           </div>
+
+          <div className="hp-eng-reportbar">
+            <Link
+              href={`/engagement/${id}/report`}
+              className="hp-eng-reportbtn"
+            >
+              {session.report_md ? "View report →" : "Generate report →"}
+            </Link>
+            <span className="hp-eng-reporthint">
+              {session.report_md
+                ? "turn this engagement into a written pentest report"
+                : "draft a structured pentest report from your checked steps & pasted evidence"}
+            </span>
+          </div>
         </header>
 
         <ol className="hp-ap-phases hp-eng-phases">

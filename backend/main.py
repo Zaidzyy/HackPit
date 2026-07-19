@@ -47,6 +47,7 @@ from schema import Code, Entry  # noqa: E402  (pipeline/schema.py — canonical 
 # generative layer (backend/llm.py + backend/attack_path.py) — provider-swappable
 import attack_path  # noqa: E402
 import llm  # noqa: E402
+import report as report_gen  # noqa: E402  (backend/report.py — LLM report drafting)
 import sessions as sessions_db  # noqa: E402  (backend/sessions.py — SQLite store)
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
@@ -334,6 +335,15 @@ class SessionDetail(BaseModel):
     total: int
     # the composed path with per-step `checked` + `result_text` merged in
     path: dict
+    # the last generated report (Markdown) + when, if any
+    report_md: str | None = None
+    report_generated_at: str | None = None
+
+
+class ReportOut(BaseModel):
+    report_md: str = Field(description="The generated report as Markdown.")
+    report_generated_at: str
+    model_used: str
 
 
 class StepUpdateIn(BaseModel):
@@ -599,3 +609,28 @@ def delete_session(session_id: str) -> None:
     """Delete an engagement and all its step state."""
     if not sessions_db.delete_session(session_id):
         raise HTTPException(status_code=404, detail="session not found")
+
+
+@app.post("/sessions/{session_id}/report", response_model=ReportOut)
+def generate_report(session_id: str) -> dict[str, Any]:
+    """Draft a pentest report from the session, persist it, and return it.
+
+    Grounded in the session's completed steps + pasted evidence (see
+    ``report.py``). Long-form output, so this is slower on the local model.
+    """
+    session = sessions_db.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    try:
+        report_md, model_used = report_gen.compose_report(session)
+    except llm.LLMError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    ts = sessions_db.save_report(session_id, report_md)
+    if ts is None:  # deleted between fetch and save — unlikely
+        raise HTTPException(status_code=404, detail="session not found")
+    return {
+        "report_md": report_md,
+        "report_generated_at": ts,
+        "model_used": model_used,
+    }

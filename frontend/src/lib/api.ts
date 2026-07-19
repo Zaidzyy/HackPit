@@ -318,6 +318,16 @@ export type Session = {
   checked: number;
   total: number;
   path: EngagementPath;
+  /** Last generated report (Markdown) + when, if any. */
+  report_md: string | null;
+  report_generated_at: string | null;
+};
+
+/** A freshly generated report (POST /sessions/{id}/report). */
+export type Report = {
+  report_md: string;
+  report_generated_at: string;
+  model_used: string;
 };
 
 /** Session list row (GET /sessions). */
@@ -379,3 +389,7 @@ export const renameSession = (
 
 export const deleteSession = (id: string, signal?: AbortSignal) =>
   sendJSON<null>("DELETE", `/sessions/${encodeURIComponent(id)}`, undefined, signal);
+
+/** Draft (or re-draft) a pentest report for the session. Slow on local models. */
+export const generateReport = (id: string, signal?: AbortSignal) =>
+  postJSON<Report>(`/sessions/${encodeURIComponent(id)}/report`, {}, signal);

@@ -77,6 +77,7 @@ SOURCE_LABELS = {
     "claude-bug-bounty": "claude-bug-bounty",
     "galaxy-checklist": "Galaxy Bug Bounty Checklist",
     "htb-cheatsheets": "HTB Academy cheat sheet",
+    "shodan-dorks": "shodan-dorks",
 }
 
 # Zaid's OWN notes — the trusted tier-1 sources. When one of these is the
@@ -1667,6 +1668,99 @@ def discover_htb_pdf(root: Path, failures: list | None = None,
     return out
 
 
+# =========================================================================== #
+#  SOURCE 11 — shodan-dorks (a ~2000-line dork list -> ONE reference entry)
+# =========================================================================== #
+# A flat list of Shodan search queries. Per the "don't explode into hundreds of
+# tiny entries" rule, this folds into a SINGLE reference entry: the dorks are
+# bucketed by query type into a handful of capped, copyable blocks. Kept
+# standalone (no canonical class) so it never merges into the OSINT entry.
+_SHODAN_BUCKETS = [
+    ("CPE / version dorks", re.compile(r"^'?\"?cpe:", re.I)),
+    ("HTTP title dorks", re.compile(r"\b(http\.)?title:", re.I)),
+    ("HTTP html/body dorks", re.compile(r"\bhttp\.(html|favicon|component)", re.I)),
+    ("Product / app dorks", re.compile(r"\b(product:|app=|http\.component:)", re.I)),
+    ("SSL / TLS certificate dorks", re.compile(r"\bssl", re.I)),
+    ("Port / service dorks", re.compile(r"\b(port:|has_screenshot|net:|org:)", re.I)),
+]
+_SHODAN_NOISE_RE = re.compile(r"^[0-9a-f]{20,}$|^<|</|requested resource")
+_SHODAN_PER_BLOCK = 40      # example dorks kept per bucket block
+_SHODAN_BODY_CAP = 8000
+
+
+def _shodan_bucket(dork: str) -> str:
+    for name, rx in _SHODAN_BUCKETS:
+        if rx.search(dork):
+            return name
+    return "Banner / keyword dorks"
+
+
+def parse_shodan(txt_path: Path, readme: Path | None) -> Entry | None:
+    text = _safe_read(txt_path)
+    if text is None:
+        return None
+    dorks: list[str] = []
+    seen: set[str] = set()
+    for ln in text.splitlines():
+        s = ln.strip()
+        if len(s) < 2 or _SHODAN_NOISE_RE.search(s) or s in seen:
+            continue
+        seen.add(s)
+        dorks.append(s)
+    if len(dorks) < 10:
+        return None
+
+    buckets: dict[str, list[str]] = defaultdict(list)
+    for d in dorks:
+        buckets[_shodan_bucket(d)].append(d)
+
+    summary = ("Curated Shodan search queries ('dorks') for discovering "
+               "internet-exposed devices, services, and known-vulnerable "
+               f"software versions — {len(dorks)} queries across "
+               f"{len(buckets)} categories.")
+    order = [n for n, _ in _SHODAN_BUCKETS] + ["Banner / keyword dorks"]
+    steps: list[Step] = []
+    body_parts = [f"# Shodan Dorks\n\n> {summary}\n"]
+    for name in order:
+        items = buckets.get(name)
+        if not items:
+            continue
+        sample = items[:_SHODAN_PER_BLOCK]
+        block = "\n".join(sample)
+        steps.append(Step(n=len(steps) + 1,
+                          text=f"{name} ({len(items)} queries)",
+                          code=[Code(lang="text", cmd=block[:MAX_CODE_CHARS * 3])]))
+        body_parts.append(f"\n## {name} ({len(items)})\n\n```\n{block}\n```")
+    body = "\n".join(body_parts)[:_SHODAN_BODY_CAP]
+    return Entry(
+        id="shodan-dorks", title="Shodan Dorks", category="recon",
+        source="shodan-dorks", tier=3,
+        tags=_dedup(["recon", "shodan", "dorks", "attack-surface",
+                     "asset-discovery", "reconnaissance"]),
+        tools=["shodan"], summary=summary, steps=steps, body_md=body,
+        references=["https://www.shodan.io/", "https://github.com/humblelad/Shodan-Dorks"],
+        meta={"src_file": txt_path.name, "kind": "reference",
+              "source_label": SOURCE_LABELS["shodan-dorks"], "canonical_keys": [],
+              "also_covered_in": ["shodan-dorks"], "total_dorks": len(dorks)},
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def discover_shodan(root: Path, failures: list | None = None,
+                    flagged: list | None = None) -> list[Entry]:
+    """Fold the whole dork list into ONE reference entry."""
+    txt = root / "dorks.txt"
+    if not txt.exists():
+        cands = list(root.rglob("*.txt"))
+        txt = cands[0] if cands else txt
+    e = parse_shodan(txt, root / "README.md")
+    if e is None:
+        if failures is not None:
+            failures.append(txt.name)
+        return []
+    return [e]
+
+
 # --------------------------------------------------------------------------- #
 # source registry
 # --------------------------------------------------------------------------- #
@@ -1719,6 +1813,10 @@ SPECS: dict[str, SourceSpec] = {
         "htb-cheatsheets", SOURCE_LABELS["htb-cheatsheets"],
         r"C:\Users\zaid_\Downloads\hacks\new resources",
         discover_htb_pdf),
+    "shodan": SourceSpec(
+        "shodan-dorks", SOURCE_LABELS["shodan-dorks"],
+        r"C:\Users\zaid_\Downloads\hacks\new resources\shodan-dorks",
+        discover_shodan),
 }
 
 

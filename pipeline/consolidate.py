@@ -51,6 +51,7 @@ import argparse
 import datetime as dt
 import json
 import re
+import subprocess
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,6 +75,7 @@ SOURCE_LABELS = {
     "claude-red": "claude-red skills",
     "hacktricks": "HackTricks",
     "claude-bug-bounty": "claude-bug-bounty",
+    "galaxy-checklist": "Galaxy Bug Bounty Checklist",
 }
 
 # Zaid's OWN notes — the trusted tier-1 sources. When one of these is the
@@ -245,7 +247,9 @@ ACRONYMS = {
     "lfi": "LFI", "rfi": "RFI", "jwt": "JWT", "xss": "XSS", "csrf": "CSRF",
     "rce": "RCE", "api": "API", "graphql": "GraphQL", "ad": "AD", "smb": "SMB",
     "ntlm": "NTLM", "spn": "SPN", "suid": "SUID", "nfs": "NFS", "dns": "DNS",
-    "rdp": "RDP", "ld": "LD", "os": "OS",
+    "rdp": "RDP", "ld": "LD", "os": "OS", "crlf": "CRLF", "iis": "IIS",
+    "dos": "DoS", "2fa": "2FA", "cors": "CORS", "ssti": "SSTI", "ssrf": "SSRF",
+    "waf": "WAF", "oauth": "OAuth", "hpp": "HPP", "iot": "IoT", "ble": "BLE",
 }
 
 
@@ -484,16 +488,96 @@ def _oscp_group(path: Path, root: Path) -> tuple[str, str, str | None]:
     return rel.as_posix(), "", None  # singleton (title from the file heading)
 
 
+_GIT_ROOT_CACHE: dict[str, Path | None] = {}
+
+
+def _git_root(path: Path) -> Path | None:
+    """Nearest ancestor containing a .git (memoised per directory)."""
+    d = path.parent
+    key = str(d)
+    if key in _GIT_ROOT_CACHE:
+        return _GIT_ROOT_CACHE[key]
+    root = None
+    for anc in [d, *d.parents]:
+        if (anc / ".git").exists():
+            root = anc
+            break
+    _GIT_ROOT_CACHE[key] = root
+    return root
+
+
+def _git_recover(path: Path) -> str | None:
+    """Recover a file's committed content when its on-disk copy is a dehydrated
+    OneDrive placeholder (present in `git ls-files`, empty/unreadable on disk).
+    Returns None if the file isn't git-tracked or git isn't available."""
+    repo = _git_root(path)
+    if repo is None:
+        return None
+    try:
+        rel = path.relative_to(repo).as_posix()
+    except ValueError:
+        return None
+    try:
+        out = subprocess.run(["git", "-C", str(repo), "show", f"HEAD:{rel}"],
+                             capture_output=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0 or not out.stdout:
+        return None
+    return out.stdout.decode("utf-8", "replace")
+
+
 def _safe_read(path: Path) -> str | None:
     """Read text, tolerating the odd unreadable Windows/OneDrive placeholder
-    (OSError 22) — a bad file is skipped, never aborts the run."""
+    (OSError 22) — a bad file is skipped, never aborts the run. When the on-disk
+    copy is missing/unreadable or dehydrated to whitespace, fall back to the
+    file's git-committed content (these sources are all git repos)."""
+    disk: str | None
     try:
-        return path.read_text(encoding="utf-8", errors="replace")
+        disk = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         try:
-            return path.read_bytes().decode("utf-8", "replace")
+            disk = path.read_bytes().decode("utf-8", "replace")
         except OSError:
-            return None
+            disk = None
+    if disk is not None and disk.strip():
+        return disk
+    return _git_recover(path) or disk
+
+
+def _all_md(root: Path, name: str = "*.md") -> list[Path]:
+    """Every markdown file under `root`: the UNION of the on-disk tree (rglob)
+    and the git index (`git ls-files`). OneDrive can dehydrate a file so far it
+    vanishes from directory listings — rglob then can't see it, but it's still
+    in git, and _safe_read git-recovers its content. Non-git sources fall back
+    to rglob alone."""
+    found: dict[str, Path] = {}
+    for p in root.rglob(name):
+        found[p.as_posix().lower()] = p
+    repo = None
+    for anc in [root, *root.parents]:
+        if (anc / ".git").exists():
+            repo = anc
+            break
+    if repo is not None:
+        try:
+            out = subprocess.run(["git", "-C", str(repo), "ls-files", "*.md"],
+                                 capture_output=True, timeout=30)
+            if out.returncode == 0:
+                import fnmatch
+                for line in out.stdout.decode("utf-8", "replace").splitlines():
+                    rel = line.strip()
+                    if not rel or not fnmatch.fnmatch(Path(rel).name, name):
+                        continue
+                    fp = repo / rel
+                    try:
+                        fp.relative_to(root)
+                    except ValueError:
+                        continue  # tracked file outside this source subtree
+                    found.setdefault(fp.as_posix().lower(), fp)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return sorted(found.values(), key=lambda p: p.as_posix())
 
 
 def _parse_oscp_file(path: Path, root: Path) -> dict | None:
@@ -1163,7 +1247,7 @@ def discover_claudered(root: Path, failures: list | None = None,
     """One candidate per SKILL.md (skip empty/unreadable — recorded), then fold
     same-class skills (e.g. the two OSINT skills) into one candidate."""
     out: list[Entry] = []
-    for p in sorted(root.rglob("SKILL.md")):
+    for p in _all_md(root, "SKILL.md"):
         e = parse_claudered(p, root)
         if e is None:
             if failures is not None:
@@ -1347,7 +1431,7 @@ def discover_bugbounty(root: Path, failures: list | None = None,
     """Ingest skills/ + web3/ + technique command docs; skip scaffolding dirs and
     pure-utility commands (recorded), then fold same-class docs."""
     out: list[Entry] = []
-    for p in sorted(root.rglob("*.md")):
+    for p in _all_md(root):
         parts = p.relative_to(root).parts
         if parts[0] not in _BB_DIRS:
             continue  # scaffolding dir or root meta file — not methodology
@@ -1362,6 +1446,90 @@ def discover_bugbounty(root: Path, failures: list | None = None,
             if flagged is not None:
                 flagged.append({"file": p.relative_to(root).as_posix(),
                                 "reason": "empty/nav stub — skipped"})
+            continue
+        out.append(e)
+    return _group_madstuff_by_class(out)
+
+
+# =========================================================================== #
+#  SOURCE 9 — Galaxy-Bugbounty-Checklist (per-class checklists, tier 3)
+# =========================================================================== #
+# 22 plain-markdown checklists, one per `<Topic>/README.md`. The FOLDER NAME is
+# the technique (and the reliable canonical class), so titles/keys come from it,
+# not from the sometimes-typo'd inner headings. Many are bare numbered lists
+# with no code — so the full cleaned body is PRESERVED (searchable, nothing
+# lost) plus payload blocks lifted into steps. Class checklists (SQLi/CSRF/SSRF/
+# file-upload/oauth/xss/…) fold into their existing homes; the rest are new.
+_GALAXY_CATEGORY = {"osint": "recon", "wordpress": "web",
+                    "internet-information-services-iis": "web", "dos": "web"}
+_GALAXY_BODY_CAP = 3500
+
+
+def parse_galaxy(path: Path, root: Path) -> Entry | None:
+    text = _safe_read(path)
+    if text is None:
+        return None
+    text = _IMG_RE.sub("", text)
+    text, _n = _strip_gitbook(text)
+    text = text.strip()
+    lines = text.splitlines()
+
+    folder = path.relative_to(root).parts[0]
+    title = humanize(folder)
+
+    summary = ""
+    for para in text.split("\n\n"):
+        p = " ".join(para.split())
+        if p and not p.startswith(("#", ">", "```", "|", "!")):
+            summary = p[:300].rstrip()
+            break
+
+    steps: list[Step] = []
+    for sec in _walk_sections(lines):
+        code = _section_code(sec, MAX_CODE_PER_SECTION, MAX_CODE_CHARS)
+        prose = " ".join(sec["prose"]).strip()
+        head = sec["heading"].strip() or "checklist"
+        text_i = f"{head} — {prose}"[:600] if prose else head
+        if code or prose:
+            steps.append(Step(n=len(steps) + 1, text=text_i.strip(), code=code))
+        if len(steps) >= MAX_STEPS_NEW:
+            break
+
+    # a genuinely empty stub (e.g. an unfinished to-do page) — skip + record
+    if not steps and len(text) < 80:
+        return None
+
+    keys = sorted(canonical_keys(f"{title} {folder}"))
+    category = _GALAXY_CATEGORY.get(slugify(folder), "web")
+    refs = _dedup(_section_urls(lines))
+    return Entry(
+        id="galaxy-" + slugify(folder), title=title, category=category,
+        source="galaxy-checklist", tier=3,
+        tags=_dedup([category, "checklist"] + keys + [slugify(title)]),
+        tools=_oscp_tools(text), summary=summary or title, steps=steps,
+        body_md=text[:_GALAXY_BODY_CAP],  # full checklist preserved (searchable)
+        references=refs,
+        meta={"src_file": path.relative_to(root).as_posix(), "kind": "checklist",
+              "source_label": SOURCE_LABELS["galaxy-checklist"],
+              "canonical_keys": keys, "also_covered_in": ["galaxy-checklist"]},
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def discover_galaxy(root: Path, failures: list | None = None,
+                    flagged: list | None = None) -> list[Entry]:
+    """One candidate per topic checklist (skip the root index + empty stubs,
+    recorded), then fold same-class checklists."""
+    out: list[Entry] = []
+    for p in _all_md(root):
+        rel = p.relative_to(root)
+        if len(rel.parts) == 1:  # root README = repo index/nav
+            continue
+        e = parse_galaxy(p, root)
+        if e is None:
+            if flagged is not None:
+                flagged.append({"file": rel.as_posix(),
+                                "reason": "empty/unfinished checklist stub — skipped"})
             continue
         out.append(e)
     return _group_madstuff_by_class(out)
@@ -1411,6 +1579,10 @@ SPECS: dict[str, SourceSpec] = {
         "claude-bug-bounty", SOURCE_LABELS["claude-bug-bounty"],
         r"C:\Users\zaid_\cyber\claude-bug-bounty",
         discover_bugbounty),
+    "galaxy": SourceSpec(
+        "galaxy-checklist", SOURCE_LABELS["galaxy-checklist"],
+        r"C:\Users\zaid_\cyber\Galaxy-Bugbounty-Checklist",
+        discover_galaxy),
 }
 
 

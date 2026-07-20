@@ -26,3 +26,19 @@ export function sourceHue(label: string): number {
 export function sourceTint(label: string): string {
   return `hsl(${sourceHue(label)} 52% 66%)`;
 }
+
+/**
+ * Full attribution for short chip aliases, shown as the element's `title`
+ * tooltip so provenance stays traceable even when the chip is terse. "sec" is
+ * x3m1Sec's public notes (José Miguel Romero); every other label is its own
+ * tooltip. Keyed on both the short label and the raw source slug so it works
+ * wherever the chip is rendered.
+ */
+const SOURCE_FULL: Record<string, string> = {
+  sec: "x3m1Sec — José Miguel Romero (x3m1sec.gitbook.io), used with permission",
+  madstuff: "x3m1Sec — José Miguel Romero (x3m1sec.gitbook.io), used with permission",
+};
+
+export function sourceTooltip(label: string): string {
+  return SOURCE_FULL[label] ?? label;
+}

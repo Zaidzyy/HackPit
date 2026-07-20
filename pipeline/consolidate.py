@@ -70,7 +70,7 @@ SOURCE_LABELS = {
     "payloadsallthethings": "PayloadsAllTheThings",
     "oscp-cpts-notes": "oscp-cpts-notes",
     "htb-academy": "HTB Academy",
-    "madstuff": "x3m1Sec's notes",  # José Miguel Romero, x3m1sec.gitbook.io (used with permission)
+    "madstuff": "sec",  # short chip label; full attribution in SOURCE_LABELS_FULL / meta.source_full
     "htb-my-resources": "your notes (htb my resources)",
     "claude-red": "claude-red skills",
     "hacktricks": "HackTricks",
@@ -81,6 +81,13 @@ SOURCE_LABELS = {
     "decepticon": "Decepticon",
     "writeups": "your writeups",
     "htb-writeups": "htb-writeups",
+}
+
+# Full attribution for sources whose chip label is a short alias — surfaced as a
+# tooltip / in meta.source_full so provenance stays traceable despite the short
+# on-screen chip. (madstuff's chip is "sec"; it is x3m1Sec's public notes.)
+SOURCE_LABELS_FULL = {
+    "madstuff": "x3m1Sec — José Miguel Romero (x3m1sec.gitbook.io), used with permission",
 }
 
 # Zaid's OWN notes — the trusted tier-1 sources. When one of these is the
@@ -1029,6 +1036,7 @@ def parse_madstuff(path: Path, notes_root: Path, base: str) -> Entry | None:
         body_md=_adapted_body(title, summary, steps), references=refs,
         meta={"src_file": "notes/" + base + ".md", "canonical_keys": keys,
               "source_label": SOURCE_LABELS["madstuff"],
+              "source_full": SOURCE_LABELS_FULL["madstuff"],
               "also_covered_in": ["madstuff"]},
         schema_version=SCHEMA_VERSION,
     )

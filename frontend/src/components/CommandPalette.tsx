@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { ApiError, search, type SearchResponse } from "@/lib/api";
+import { sourceTooltip } from "@/lib/source";
 import { OPEN_PALETTE_EVENT } from "@/lib/paletteBus";
 import { useReducedMotion } from "@/lib/useReducedMotion";
 
@@ -272,8 +273,9 @@ export function CommandPalette() {
                         className={`hp-badge-src${
                           hit.tier === 1 ? " is-notes" : ""
                         }`}
+                        title={sourceTooltip(hit.source_label || hit.source)}
                       >
-                        {hit.tier === 1 ? "notes" : hit.source}
+                        {hit.tier === 1 ? "notes" : hit.source_label || hit.source}
                       </span>
                     </span>
                   </div>

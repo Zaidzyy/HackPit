@@ -15,7 +15,7 @@ import {
   type Step,
 } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
-import { sourceTint } from "@/lib/source";
+import { sourceTint, sourceTooltip } from "@/lib/source";
 
 type OpenImage = (src: string, alt: string) => void;
 
@@ -91,6 +91,7 @@ export function EntryScreen({ id }: { id: string }) {
             <span
               className={`hp-badge-primary${e.from_your_notes ? " is-notes" : ""}`}
               style={{ ["--st" as string]: sourceTint(e.primary_source_label) }}
+              title={e.primary_source_full || e.primary_source_label}
             >
               {e.primary_source_label}
             </span>
@@ -118,6 +119,7 @@ export function EntryScreen({ id }: { id: string }) {
                   key={label}
                   className="hp-src-chip"
                   style={{ ["--st" as string]: sourceTint(label) }}
+                  title={sourceTooltip(label)}
                 >
                   {label}
                 </span>

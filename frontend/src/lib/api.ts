@@ -35,6 +35,8 @@ export type EntrySummary = {
   tags: string[];
   tier: number;
   source: string;
+  /** Short friendly source label for the chip (e.g. "sec", "HackTricks"). */
+  source_label: string;
   category: string;
   /** Distinct sources consolidated into this entry (>=1). */
   source_count: number;
@@ -79,8 +81,10 @@ export type Entry = {
   meta: Record<string, unknown>;
   schema_version: string;
   // ---- resolved source-provenance facets (added by GET /entry) ---------- //
-  /** Friendly label for the spine source (e.g. "your notes", "HackTricks"). */
+  /** Short friendly label for the spine source (e.g. "your notes", "sec"). */
   primary_source_label: string;
+  /** Full attribution for the spine source, shown as a tooltip. */
+  primary_source_full: string;
   /** Friendly labels for the other sources folded in (spine excluded). */
   also_covered_in_labels: string[];
   /** Distinct sources covering this entry (>=1). */
@@ -99,6 +103,8 @@ export type SearchHit = {
   title: string;
   category: string;
   source: string;
+  /** Short friendly source label for the chip (e.g. "sec", "HackTricks"). */
+  source_label: string;
   tier: number | null;
   snippet: string;
   /** Distinct sources consolidated into this entry (>=1). */

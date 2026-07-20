@@ -102,8 +102,31 @@ CATEGORY_META: dict[str, tuple[str, str, str]] = {
     "exploitation": ("Exploitation", "#f07a6a", "✷"),            # ✷
     "reference": ("Reference", "#8b938d", "≡"),                   # ≡
     "wireless": ("Wireless", "#5ad3c8", "⌁"),                     # ⌁
+    # categories introduced by the round-2/3 enrichment batches — each gets a
+    # distinct on-theme icon+colour so no card falls through to the grey diamond.
+    "network-services": ("Network services", "#3fb0c9", "⇆"),
+    "pwn": ("Binary exploitation", "#e05563", "⊗"),
+    "windows": ("Windows", "#6d8ef2", "⊞"),
+    "methodology": ("Methodology", "#b7a3f0", "❖"),
+    "writeup": ("Writeups", "#f0a24a", "▤"),
+    "ctf": ("CTF", "#7ec98a", "⌖"),
+    "linux": ("Linux", "#edb64a", "⊙"),
+    "ai": ("AI / LLM", "#57d1cf", "✧"),
+    "web3": ("Web3", "#9d8cf5", "⬢"),
+    "reversing": ("Reversing", "#cf9a55", "↺"),
+    "exploit-dev": ("Exploit dev", "#e0785a", "⟐"),
+    "stego": ("Steganography", "#74aee6", "◑"),
+    "pivoting": ("Pivoting", "#4fd0b8", "⤳"),
+    "fuzzing": ("Fuzzing", "#c3d15a", "⁘"),
+    "cloud": ("Cloud", "#62b6ef", "⌬"),
+    "iot": ("IoT", "#5ec7ad", "⎔"),
+    "mobile": ("Mobile", "#94cf68", "▢"),
+    "forensics": ("Forensics", "#aab3bd", "⌕"),
+    "ics": ("ICS / OT", "#e0a35c", "⎓"),
+    "phishing": ("Phishing", "#dd8ac2", "◗"),
+    "supply-chain": ("Supply chain", "#9aa4ac", "⧟"),
 }
-FALLBACK_META = ("#8b938d", "◆")  # grey diamond
+FALLBACK_META = ("#8b938d", "◆")  # grey diamond (last-resort only)
 
 
 def category_meta(slug: str) -> tuple[str, str, str]:
@@ -119,8 +142,15 @@ def category_meta(slug: str) -> tuple[str, str, str]:
 # divergent copy, so a slug renamed in the ingester stays in sync on the API.
 # --------------------------------------------------------------------------- #
 def source_label(slug: str) -> str:
-    """Friendly label for a source slug ("madstuff" -> "x3m1Sec's notes")."""
+    """Short friendly chip label for a source slug ("madstuff" -> "sec")."""
     return consolidate.SOURCE_LABELS.get(slug, slug)
+
+
+def source_full(slug: str) -> str:
+    """Full attribution for a source whose chip is a short alias (tooltip). Falls
+    back to the friendly label when no distinct full form is registered."""
+    full = getattr(consolidate, "SOURCE_LABELS_FULL", {})
+    return full.get(slug, source_label(slug))
 
 
 def source_facets(e: dict) -> dict[str, Any]:
@@ -151,6 +181,7 @@ def source_facets(e: dict) -> dict[str, Any]:
 
     return {
         "primary_source_label": source_label(spine),
+        "primary_source_full": source_full(spine),
         "also_covered_in_labels": others,
         "source_count": max(distinct, 1),
         "from_your_notes": from_notes,
@@ -341,6 +372,7 @@ class EntrySummary(BaseModel):
     tags: list[str]
     tier: int
     source: str
+    source_label: str = Field(default="", description="Short friendly source label (chip text).")
     category: str
     source_count: int = Field(
         default=1, description="Distinct sources consolidated into this entry (>=1)."
@@ -351,7 +383,10 @@ class EntryOut(Entry):
     """The canonical Entry plus the resolved source-provenance facets the entry
     view renders (friendly labels, source count, from-your-notes)."""
 
-    primary_source_label: str = Field(description="Friendly label for the spine source.")
+    primary_source_label: str = Field(description="Short friendly label for the spine source (chip).")
+    primary_source_full: str = Field(
+        default="", description="Full attribution for the spine source (tooltip)."
+    )
     also_covered_in_labels: list[str] = Field(
         default_factory=list,
         description="Friendly labels for the other sources folded in (spine excluded).",
@@ -372,6 +407,7 @@ class SearchHit(BaseModel):
     title: str
     category: str
     source: str
+    source_label: str = Field(default="", description="Short friendly source label (chip text).")
     tier: int | None = None
     snippet: str
     source_count: int = Field(
@@ -563,6 +599,7 @@ def category_entries(slug: str) -> list[EntrySummary]:
             tags=e.get("tags", []),
             tier=int(e.get("tier", 2)),
             source=e.get("source", ""),
+            source_label=source_label(e.get("source", "")),
             category=e.get("category", slug),
             source_count=source_facets(e)["source_count"],
         )
@@ -623,6 +660,7 @@ def search(
             title=h["title"],
             category=h["category"],
             source=h["source"],
+            source_label=source_label(h["source"]),
             tier=h.get("tier"),
             snippet=h["snippet"],
             source_count=source_facets(STATE.by_id[h["id"]])["source_count"]

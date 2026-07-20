@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { PageShell } from "./PageShell";
 import { getCategories, getCategory } from "@/lib/api";
+import { sourceTooltip } from "@/lib/source";
 import { useApi } from "@/lib/useApi";
 
 function prettySlug(slug: string) {
@@ -88,8 +89,9 @@ export function CategoryScreen({ slug }: { slug: string }) {
                     )}
                     <span
                       className={`hp-badge-src${e.tier === 1 ? " is-notes" : ""}`}
+                      title={sourceTooltip(e.source_label || e.source)}
                     >
-                      {e.tier === 1 ? "notes" : e.source}
+                      {e.tier === 1 ? "notes" : e.source_label || e.source}
                     </span>
                     <span className="hp-row-arrow">→</span>
                   </div>

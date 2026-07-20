@@ -72,6 +72,7 @@ SOURCE_LABELS = {
     "madstuff": "x3m1Sec's notes",  # José Miguel Romero, x3m1sec.gitbook.io (used with permission)
     "htb-my-resources": "your notes (htb my resources)",
     "claude-red": "claude-red skills",
+    "hacktricks": "HackTricks",
 }
 
 # Zaid's OWN notes — the trusted tier-1 sources. When one of these is the
@@ -234,6 +235,9 @@ _FIGURE_RE = re.compile(r"<figure[\s\S]*?</figure>", re.IGNORECASE)
 _HTMLTAG_RE = re.compile(r"</?(?:figure|figcaption|img|mark|details|summary)\b[^>]*>",
                          re.IGNORECASE)
 _HINT_RE = re.compile(r"\{%[^%]*%\}")
+# mdBook directives HackTricks uses instead of GitBook hints, e.g.
+# `{{#include ../banners/hacktricks-training.md}}` / `{{#ref …}}` — noise.
+_MDBOOK_RE = re.compile(r"\{\{#[^}]*\}\}")
 
 ACRONYMS = {
     "sql": "SQL", "sqli": "SQLi", "idor": "IDOR", "ssrf": "SSRF", "xxe": "XXE",
@@ -447,6 +451,7 @@ def _strip_gitbook(text: str) -> tuple[str, int]:
     n_images = len(_FIGURE_RE.findall(text)) + len(_IMG_RE.findall(text))
     text = _FIGURE_RE.sub("", text)
     text = _HINT_RE.sub("", text)
+    text = _MDBOOK_RE.sub("", text)
     text = _HTMLTAG_RE.sub("", text)
     return text, n_images
 
@@ -1167,6 +1172,88 @@ def discover_claudered(root: Path, failures: list | None = None,
     return _group_madstuff_by_class(out)
 
 
+# =========================================================================== #
+#  SOURCE 7 — HackTricks (811-page GitBook; non-commercial → adapt/cap, tier 3)
+# =========================================================================== #
+# Same GitBook markdown as oscp-cpts-notes, so _parse_oscp_file does the heavy
+# lifting. The directory tree IS the SUMMARY.md taxonomy — the top folder gives
+# the category. UNLIKE oscp, a `<topic>/README.md` here is the topic's MAIN
+# content page (sql-injection/README.md = the SQLi page), so READMEs are KEPT;
+# only SUMMARY.md and content-free nav stubs are skipped (and recorded). Same-
+# class sub-pages (mysql-/mssql-/postgresql-injection …) fold into ONE candidate
+# so a whole class consolidates once instead of piling onto its target. Non-
+# commercial licensed: adapted/capped digests only, never raw (data/ gitignored).
+HACKTRICKS_CATEGORY = {
+    "pentesting-web": "web",
+    "network-services-pentesting": "network-services",
+    "windows-hardening": "windows",
+    "linux-hardening": "linux",
+    "binary-exploitation": "pwn",
+    "generic-methodologies-and-resources": "methodology",
+    "generic-hacking": "reference",
+    "reversing": "reversing",
+    "stego": "stego",
+    "AI": "ai",
+    "todo": "reference",
+}
+
+
+def parse_hacktricks(path: Path, root: Path) -> Entry | None:
+    """Adapt one HackTricks page into a canonical Entry. Returns None for an
+    unreadable file or a content-free nav stub (skipped, recorded upstream)."""
+    pf = _parse_oscp_file(path, root)  # generic GitBook -> structured parts
+    if pf is None:
+        return None
+    steps = pf["steps"][:MAX_STEPS_NEW]
+    summary = pf["summary"]
+    # a page with no copyable steps and only a stub summary is a nav/index page
+    if not steps and len(summary) < 40:
+        return None
+
+    rel = path.relative_to(root)
+    top = rel.parts[0]
+    category = HACKTRICKS_CATEGORY.get(top, "reference")
+    stem = path.stem
+    base = path.parent.name if stem.lower() == "readme" else stem
+    title = (pf["title"] or "").lstrip("#").strip() or humanize(base)
+    keys = sorted(canonical_keys(f"{title} {base}"))
+    return Entry(
+        id="ht-" + slugify(base), title=title, category=category,
+        source="hacktricks", tier=3,
+        tags=_dedup([category] + keys + [slugify(title)]),
+        tools=pf["tools"], summary=summary or title, steps=steps,
+        body_md=_adapted_body(title, summary, steps),
+        references=_dedup(pf["refs"]),
+        meta={"src_file": rel.as_posix(), "kind": "reference",
+              "source_label": SOURCE_LABELS["hacktricks"], "canonical_keys": keys,
+              "also_covered_in": ["hacktricks"]},
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def discover_hacktricks(root: Path, failures: list | None = None,
+                        flagged: list | None = None) -> list[Entry]:
+    """Parse every page (skip SUMMARY.md + unreadable + nav stubs, all recorded),
+    then fold same-class sub-pages into one candidate each."""
+    out: list[Entry] = []
+    for p in sorted(root.rglob("*.md")):
+        if p.name.lower() == "summary.md":
+            continue
+        text = _safe_read(p)
+        if text is None:
+            if failures is not None:
+                failures.append(p.relative_to(root).as_posix())
+            continue
+        e = parse_hacktricks(p, root)
+        if e is None:
+            if flagged is not None:
+                flagged.append({"file": p.relative_to(root).as_posix(),
+                                "reason": "nav/index stub or empty — skipped"})
+            continue
+        out.append(e)
+    return _group_madstuff_by_class(out)
+
+
 # --------------------------------------------------------------------------- #
 # source registry
 # --------------------------------------------------------------------------- #
@@ -1203,6 +1290,10 @@ SPECS: dict[str, SourceSpec] = {
         "claude-red", SOURCE_LABELS["claude-red"],
         r"C:\Users\zaid_\cyber\claude-red\Skills",
         discover_claudered),
+    "hacktricks": SourceSpec(
+        "hacktricks", SOURCE_LABELS["hacktricks"],
+        r"C:\Users\zaid_\Downloads\hacks\hackdic",
+        discover_hacktricks),
 }
 
 

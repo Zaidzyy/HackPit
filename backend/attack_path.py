@@ -139,6 +139,17 @@ _GRABBAG_TITLE_RE = re.compile(
     r"links?|index|methodolog(?:y|ies)|case\s?stud(?:y|ies))\b",
     re.I,
 )
+# generic "how to approach a machine" / process-overview meta-notes (e.g. the
+# HTB-walkthrough "Machine Approach" / "HTB Attack Paths" notes, engagement
+# workflow, threat-modeling). Like grab-bags, these are broad framing pages, not
+# a single technique — so they are hard-deprioritized: a step only when no
+# focused technique fits the phase. Distinct from _GRABBAG_TITLE_RE because these
+# don't carry the "resource/methodology" title words but read the same way.
+_BROAD_METHODOLOGY_RE = re.compile(
+    r"\b(?:(?:machine|general|overall)\s+approach|attack\s?paths?|"
+    r"engagement\s+workflow|threat\s+model(?:ing)?)\b",
+    re.I,
+)
 
 
 def is_step_eligible(entry: dict) -> bool:
@@ -177,7 +188,8 @@ def is_broad_reference(entry: dict) -> bool:
         return True
     if len(entry.get("body_md") or "") >= _BROAD_BODY_CHARS:
         return True
-    return bool(_GRABBAG_TITLE_RE.search(entry.get("title") or ""))
+    title = entry.get("title") or ""
+    return bool(_GRABBAG_TITLE_RE.search(title) or _BROAD_METHODOLOGY_RE.search(title))
 
 
 def _cap_command(cmd: str) -> tuple[str, bool]:

@@ -171,6 +171,11 @@ def build(entries: list[dict]) -> dict:
     buckets: dict[str, "OrderedDict[str, dict]"] = {t: OrderedDict() for t in TYPES}
     scanned = 0
     for e in entries:
+        # skip entries whose source export mangled code whitespace — their
+        # commands are corrupted (spaceless flags / collapsed lines) and must not
+        # enter the copy-ready arsenal.
+        if (e.get("meta") or {}).get("source_damaged"):
+            continue
         eid, title, cat = e.get("id", ""), e.get("title", ""), e.get("category", "")
         seen_here: set[tuple[str, str]] = set()
         for lang, code in _iter_code(e):

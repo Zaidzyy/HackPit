@@ -3542,6 +3542,27 @@ a.hp-card {
   color: var(--cc);
 }
 
+/* entry: source-formatting-damaged warning */
+.hp-damaged {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  margin: 0 0 22px;
+  padding: 12px 15px;
+  border: 1px solid color-mix(in srgb, #e0a35c 40%, transparent);
+  background: color-mix(in srgb, #e0a35c 10%, transparent);
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #e7d8c4;
+}
+.hp-damaged-ic {
+  color: #e0a35c;
+  font-size: 15px;
+  flex: none;
+  line-height: 1.5;
+}
+
 /* attack-path: "full writeup available for this box" link */
 .hp-ap-writeup {
   display: flex;

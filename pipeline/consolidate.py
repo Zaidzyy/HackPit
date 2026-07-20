@@ -2029,6 +2029,15 @@ def discover_decepticon(root: Path, failures: list | None = None,
 # (searchable) + key command blocks as steps; box name + techniques as tags.
 WRITEUP_BODY_CAP = 60000
 _NOTION_ANCHOR_RE = re.compile(r"\[[#¶][^\]]*\]\([^)]*\)")
+# Source exports whose code whitespace/line breaks are known-lost (an HTML->text
+# conversion artifact — commands read `smbclient-N-L'`, multi-line output is
+# collapsed onto one line). Entries from these files are FLAGGED (meta.source_
+# damaged) so the UI can warn and the scripts index skips their code. We do NOT
+# auto-"repair" the spacing: that provably corrupts valid commands (`"-c"` quoted
+# args, `drwxr-xr-x` permissions) and can't restore the collapsed newlines. Keyed
+# by file basename because per-command heuristics false-positive on legitimate
+# kebab-case names, date formats (Y-m-d), and dotted hostnames.
+_DAMAGED_SOURCE_FILES = {"more writeups 3a3e923e36d480248484eb77fcf666de.md"}
 _TPN_SLUG_RE = re.compile(r"blog\.thepentesting\.ninja/([a-z0-9][a-z0-9-]+)")
 _HTB_MARK_RE = re.compile(
     r"\bHTB\s+([A-Za-z][A-Za-z0-9]+)\b[^\n]*?(?:Walkthrough|Writeup|Guide)", re.I)
@@ -2189,6 +2198,12 @@ def _writeup_entry(box_disp: str, seg_text: str, *, source: str, tier: int,
             "also_covered_in": [source]}
     if flag_reason:
         meta["flag_reason"] = flag_reason
+    # flag entries from a known whitespace-damaged source export so the UI can
+    # warn and the scripts index can skip their corrupted commands.
+    if Path(src_file).name in _DAMAGED_SOURCE_FILES:
+        meta["source_damaged"] = ("code whitespace/line breaks were lost in the "
+                                  "source export — some commands may be missing "
+                                  "spaces or newlines; verify before use")
     return Entry(
         id=f"{id_prefix}-" + slugify(key), title=box_disp, category=category,
         source=source, tier=tier,

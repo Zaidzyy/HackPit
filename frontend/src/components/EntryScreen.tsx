@@ -162,6 +162,15 @@ export function EntryScreen({ id }: { id: string }) {
           {e.summary && <p className="hp-entry-summary">{e.summary}</p>}
         </header>
 
+        {typeof e.meta?.source_damaged === "string" && (
+          <div className="hp-damaged" role="note">
+            <span className="hp-damaged-ic">⚠</span>
+            <span>
+              <b>Source formatting damaged.</b> {e.meta.source_damaged as string}
+            </span>
+          </div>
+        )}
+
         {e.steps.length > 0 ? (
           <ol className="hp-steps">
             {e.steps.map((s) => (

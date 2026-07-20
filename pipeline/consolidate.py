@@ -69,14 +69,16 @@ SOURCE_LABELS = {
     "payloadsallthethings": "PayloadsAllTheThings",
     "oscp-cpts-notes": "oscp-cpts-notes",
     "htb-academy": "HTB Academy",
-    "madstuff": "your notes (madstuff)",
+    "madstuff": "x3m1Sec's notes",  # José Miguel Romero, x3m1sec.gitbook.io (used with permission)
     "htb-my-resources": "your notes (htb my resources)",
 }
 
 # Zaid's OWN notes — the trusted tier-1 sources. When one of these is the
 # INCOMING side of a merge, its content is the trusted/primary variant and the
 # entry is marked "from your notes" (its tested commands are preferred).
-PERSONAL_SOURCES = {"peh-notes", "madstuff", "htb-my-resources"}
+# NOTE: madstuff is x3m1Sec's public notes, NOT Zaid's own — it is a tier-3
+# reference source and is deliberately NOT listed here.
+PERSONAL_SOURCES = {"peh-notes", "htb-my-resources"}
 
 # --------------------------------------------------------------------------- #
 # matching knobs
@@ -719,8 +721,10 @@ def discover_htb(root: Path, failures: list | None = None,
 
 
 # =========================================================================== #
-#  SOURCE 4 — madstuff (Zaid's own Obsidian/GitBook vault; tier 1)
+#  SOURCE 4 — madstuff (x3m1Sec's public Obsidian/GitBook notes; tier 3 ref)
 # =========================================================================== #
+# x3m1Sec = José Miguel Romero (x3m1sec.gitbook.io), used with permission — a
+# REFERENCE source, not Zaid's own notes (so tier 3, no "from your notes" mark).
 # Every note ships as a PAIR: `<name>.md` (rendered, no title) and
 # `<name>-md.md` (raw source, has the `# title`, ~2.6x fuller, backslash-escaped
 # markdown). We dedupe each pair to the titled `-md.md` and unescape it.
@@ -794,7 +798,7 @@ def parse_madstuff(path: Path, notes_root: Path, base: str) -> Entry | None:
     n_code = sum(len(s.code) for s in steps)
     entry = Entry(
         id="mad-" + slugify(base), title=title, category=category,
-        source="madstuff", tier=1,
+        source="madstuff", tier=3,  # x3m1Sec's public notes — reference tier
         tags=_dedup([category] + keys + [slugify(title)]),
         tools=_oscp_tools(text), summary=summary or title, steps=steps,
         body_md=_adapted_body(title, summary, steps), references=refs,
@@ -1104,7 +1108,14 @@ def revert_source(entry: dict, name: str, label: str) -> dict:
         meta.pop("merged_sources", None)
     if not meta.get("also_covered_in"):
         meta.pop("also_covered_in", None)
-    if not meta.get("merged_sources") and meta.get("author_notes"):
+    # author_notes is legitimate only on an entry whose SPINE is Zaid's own
+    # notes. On any other spine it can only be a stale transient from an
+    # incoming-personal merge, so clear it; on a personal spine, clear only once
+    # no merges remain.
+    if entry.get("source") in PERSONAL_SOURCES:
+        if not meta.get("merged_sources"):
+            meta.pop("author_notes", None)
+    else:
         meta.pop("author_notes", None)
     return entry
 
@@ -1172,10 +1183,11 @@ def merge_into(target: dict, cand: dict, name: str, label: str) -> dict:
         f"## Also covered in — {label}\n\n{note}\n\n" + cand.get("body_md", "")
     target["body_md"] = target.get("body_md", "") + section
 
+    # author_notes is tied to the entry's SPINE being Zaid's own notes — an
+    # incoming personal source's trustedness is conveyed by the body note above,
+    # not a top-level mark (which would be hard to revert cleanly).
     if target.get("source") in PERSONAL_SOURCES:
         meta["author_notes"] = "preserved — primary content is your own notes"
-    elif personal:
-        meta["author_notes"] = f"your own notes folded in from {label} (trusted variant)"
 
     # Accumulate — several candidates of one source can merge into the same
     # target in a single run (e.g. "IDOR" and "GraphQL IDOR"); revert must be

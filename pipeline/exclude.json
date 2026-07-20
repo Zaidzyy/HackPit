@@ -10,6 +10,122 @@
       "id": "exploitation-privilage-escalation-win-prev-esc-extra-resources",
       "file": "Exploitation/privilage escalation/win prev esc extra resources 3a0e923e36d480749e36f235b029233b.md",
       "reason": "Dead/outdated Windows privesc tool links; the note's own author annotation says it is very old."
+    },
+    {
+      "id": "checklist-ad-enum-17-check-sysvol",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-ad-enum-20-bruteforce-different-protocols",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-ad-persistence-01-disable-defender-admin",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-ad-persistence-02-disable-amsi-admin",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-ad-privesc-17-responder-on-compromised-host-context",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-ad-privesc-21-certificate-based-attacks-with-certipy",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "pointer-dnsadmins",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "pointer-spray-hashes",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-privesc-15-check-linpeas-writable-output",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-privesc-21-check-vulnerable-library-in-cron-script",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "ht-heap-memory-functions",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-enumeration-07-reuse-passwords-and-usernames-everywhere",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-enumeration-10-identify-web-framework",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-enumeration-12-check-absolute-vs-relative-paths",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-enumeration-16-check-program-files",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-enumeration-19-check-for-firewall-or-block-device",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-recon-08-check-page-source-and-response",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-recon-12-analyze-every-request-with-burp-suite",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-recon-16-check-for-version-number-leaks",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-recon-17-check-for-vulnerabilities-on-kits-packages",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "checklist-recon-18-map-out-how-the-website-works",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "ex-windows-installed-applications",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "pointer-internal-reenum",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "pointer-nmap-twice",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "pointer-why-it-exists",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "ht-flipper-zero",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "ht-cypher-injection-neo4j",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "ht-rdpexec",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
+    },
+    {
+      "id": "ht-scmexec",
+      "reason": "near-empty checklist stub (no commands, tiny body) — curation drop"
     }
   ]
 }

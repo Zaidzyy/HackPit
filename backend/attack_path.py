@@ -93,8 +93,19 @@ _TARGET_CONTEXT: dict[str, str] = {
 _PER_PHASE_CAP = 6          # techniques kept per phase for the prompt
 _MIN_PER_PHASE = 2          # keep this many even if only overview entries exist
 _CMDS_PER_ENTRY = 4         # commands shown per technique in the prompt
+_STEP_CMD_CAP = 4           # code blocks kept on a GROUNDED step (concise, not a dump)
 _SUMMARY_CHARS = 260
 _CMD_CHARS = 320
+
+# a single step is a concise pointer, not the whole entry: cap one code block so
+# a technique that pastes a 300-line helper script surfaces as a short excerpt +
+# a "full script in the technique →" pointer (the step card already links out).
+_MAX_CMD_LINES = 40
+_MAX_CMD_CHARS = 1200
+# broad/reference pages that are still citeable but should rank BELOW focused
+# techniques, and the body size at which an unfocused entry reads as a grab-bag.
+_BROAD_BODY_CHARS = 12000
+GRAB_BAG_BODY_CHARS = 20000
 
 SearchFn = Callable[[str, int, str], list[dict]]
 
@@ -104,6 +115,89 @@ SearchFn = Callable[[str, int, str], list[dict]]
 # they are excluded from the retrieval/grounding pool entirely (a writeup for the
 # *current* box is surfaced separately, as a link, by find_box_writeup()).
 EXCLUDED_STEP_CATEGORIES = {"writeup", "ctf"}
+
+# ingestion flag_reason values that mark a coarse, monolithic, multi-topic page
+# (the big "Htb My Resources" / "More Resources" Notion dumps and multi-box raw
+# dumps kept whole "for splitting"). These are grab-bags, not techniques.
+_COARSE_FLAG_RE = re.compile(
+    r"multi-topic|coarse|one-per-page|review for splitting|raw .*dump", re.I
+)
+# personal / meta / log pages — cert-completion logs, "My review", note-taking
+# journals. Not techniques; excluded from steps entirely (still browsable).
+_PERSONAL_LOG_RE = re.compile(
+    r"\b(?:my review|my resources|my certifications|note[-\s]?taking|"
+    r"cert(?:ification)?s?\s+(?:log|notes|journal)|(?:completion|progress)\s+log|"
+    r"journal|diary)\b",
+    re.I,
+)
+# broad-reference title words used only for RANKING (not exclusion): a
+# cheatsheet/resource page is fine to cite, it just shouldn't outrank a focused
+# single technique. Cheatsheets are deliberately NOT excluded.
+_GRABBAG_TITLE_RE = re.compile(
+    r"\b(?:resources?|cheat\s?sheets?|grab\s?bag|assorted|misc(?:ellaneous)?|"
+    r"links?|index)\b",
+    re.I,
+)
+
+
+def is_step_eligible(entry: dict) -> bool:
+    """Whether a KB entry may be GROUNDED as an attack-path / chat step.
+
+    Rejects worked examples (writeup/ctf), coarse multi-topic pages flagged at
+    ingestion, personal/meta/log pages, and — as a backstop — any very large body
+    with no single-technique focus (an un-flagged grab-bag). Everything rejected
+    here stays fully searchable/browsable; it just can't become a step, so a step
+    is always a focused technique instead of a wall of unrelated content.
+    """
+    if entry.get("category", "") in EXCLUDED_STEP_CATEGORIES:
+        return False
+    meta = entry.get("meta") or {}
+    if _COARSE_FLAG_RE.search(meta.get("flag_reason") or ""):
+        return False
+    if _PERSONAL_LOG_RE.search(entry.get("title") or ""):
+        return False
+    # backstop heuristic: large body AND no canonical single-technique focus →
+    # grab-bag. Focused entries in this KB are concise; the 20 KB+ ones are all
+    # "resources"/"review" dumps, none a single technique.
+    if len(entry.get("body_md") or "") >= GRAB_BAG_BODY_CHARS and not meta.get(
+        "canonical_keys"
+    ):
+        return False
+    return True
+
+
+def is_broad_reference(entry: dict) -> bool:
+    """Eligible but broad: a reference/cheatsheet/large-topic page. Used only to
+    rank focused single techniques ABOVE these when composing a path — they are
+    still citeable, just not first."""
+    if (entry.get("meta") or {}).get("canonical_keys"):
+        return False  # explicit single-technique focus
+    if entry.get("category") == "reference":
+        return True
+    if len(entry.get("body_md") or "") >= _BROAD_BODY_CHARS:
+        return True
+    return bool(_GRABBAG_TITLE_RE.search(entry.get("title") or ""))
+
+
+def _cap_command(cmd: str) -> tuple[str, bool]:
+    """Cap one code block to a short excerpt. Returns (text, truncated).
+
+    A step is a pointer, not a mirror of the entry: an over-long block (e.g. a
+    pasted 300-line script) is cut to its first lines with a marker directing the
+    reader to the full technique. Returns the command unchanged when within caps.
+    """
+    lines = cmd.split("\n")
+    if len(lines) <= _MAX_CMD_LINES and len(cmd) <= _MAX_CMD_CHARS:
+        return cmd, False
+    excerpt = "\n".join(lines[:_MAX_CMD_LINES])
+    if len(excerpt) > _MAX_CMD_CHARS:
+        excerpt = excerpt[:_MAX_CMD_CHARS].rstrip()
+    dropped = len(lines) - excerpt.count("\n") - 1
+    tail = f" ({dropped} more lines)" if dropped > 0 else ""
+    return (
+        excerpt.rstrip()
+        + f"\n# … truncated{tail} — open the technique ↑ for the full script"
+    ), True
 
 
 # --------------------------------------------------------------------------- #
@@ -243,13 +337,13 @@ def canonical_phase(entry: dict) -> str:
     return _CATEGORY_MAP.get(cat, "enumeration")
 
 
-def entry_commands(entry: dict, cap: int = _CMDS_PER_ENTRY) -> list[dict[str, str]]:
+def entry_commands(entry: dict, cap: int = _CMDS_PER_ENTRY) -> list[dict[str, Any]]:
     """Flatten an entry's step code blocks into copyable {lang, cmd} commands.
 
     Deduplicated (some entries repeat a command across steps) and capped so a
     single technique can't dominate the prompt or a rendered card.
     """
-    out: list[dict[str, str]] = []
+    out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for step in entry.get("steps", []) or []:
         for code in step.get("code", []) or []:
@@ -257,7 +351,11 @@ def entry_commands(entry: dict, cap: int = _CMDS_PER_ENTRY) -> list[dict[str, st
             if not cmd or cmd in seen:
                 continue
             seen.add(cmd)
-            out.append({"lang": code.get("lang") or "bash", "cmd": cmd})
+            capped, truncated = _cap_command(cmd)
+            item: dict[str, Any] = {"lang": code.get("lang") or "bash", "cmd": capped}
+            if truncated:
+                item["truncated"] = True
+            out.append(item)
             if len(out) >= cap:
                 return out
     return out
@@ -289,8 +387,8 @@ def retrieve(
             eid = h.get("id")
             if not eid or eid not in by_id:
                 continue
-            if by_id[eid].get("category") in EXCLUDED_STEP_CATEGORIES:
-                continue  # whole-box writeup / CTF index — not a technique
+            if not is_step_eligible(by_id[eid]):
+                continue  # writeup/ctf, coarse grab-bag, or personal/log page
             score = float(h.get("score") or 0.0)
             if eid not in best or score > best[eid]:
                 best[eid] = score
@@ -326,7 +424,13 @@ def retrieve(
         with_cmds.sort(key=lambda x: x[0], reverse=True)
         without_cmds.sort(key=lambda x: x[0], reverse=True)
 
-        chosen = with_cmds[:_PER_PHASE_CAP]
+        # Prefer FOCUSED single techniques over broad reference/cheatsheet pages:
+        # partition the command-bearing entries and take focused ones first, so a
+        # step grounds on "Kerberoasting" rather than a "resources" grab-bag even
+        # when both matched. Broad pages only fill the leftover slots.
+        focused = [t for t in with_cmds if not is_broad_reference(t[1])]
+        broad = [t for t in with_cmds if is_broad_reference(t[1])]
+        chosen = (focused + broad)[:_PER_PHASE_CAP]
         # top up with a couple of overview entries only if we're short on
         # actionable ones — this is the "phase has only overview content" safety.
         if len(chosen) < _MIN_PER_PHASE:
@@ -470,14 +574,14 @@ def _ground(
             eid = _resolve_entry_id(str(st.get("entry_id") or ""), by_id, norm_map)
             if eid is None or eid in used:
                 continue
-            if by_id[eid].get("category") in EXCLUDED_STEP_CATEGORIES:
-                continue  # never ground a step on a whole-box writeup / CTF index
+            if not is_step_eligible(by_id[eid]):
+                continue  # never ground on a writeup, grab-bag, or personal/log page
             used.add(eid)
             e = by_id[eid]
             why = str(st.get("why") or "").strip()
             cmds = [
                 {**c, "cmd": substitute_target(c["cmd"], target)}
-                for c in entry_commands(e, cap=6)
+                for c in entry_commands(e, cap=_STEP_CMD_CAP)
             ]
             per_phase[phase].append(
                 {

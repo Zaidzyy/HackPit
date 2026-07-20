@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -153,6 +154,13 @@ def save_config(
 # --------------------------------------------------------------------------- #
 # transport — zero-dependency JSON POST (mirrors pipeline/embed.py's style)
 # --------------------------------------------------------------------------- #
+# server-busy statuses worth one retry — a local Ollama loading/serving another
+# request returns these transiently (seen under concurrent load). Permanent
+# errors (400 bad-request, 401/403 auth, 404, 422) are NOT retried.
+_RETRY_STATUS = {502, 503, 504}
+_MAX_ATTEMPTS = 2
+
+
 def _post_json(
     url: str, payload: dict, headers: dict[str, str], timeout: int = 300
 ) -> dict:
@@ -162,14 +170,25 @@ def _post_json(
         headers={"Content-Type": "application/json", **headers},
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", "replace")[:400]
-        raise LLMError(f"{url} → HTTP {e.code}: {body}") from e
-    except (urllib.error.URLError, ConnectionError, OSError) as e:
-        raise LLMError(f"cannot reach LLM endpoint {url} ({e})") from e
+    for attempt in range(_MAX_ATTEMPTS):
+        last = attempt + 1 == _MAX_ATTEMPTS
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")[:400]
+            # Retry only transient server-busy statuses; surface the rest (incl.
+            # the 400 the ollama adapter special-cases) immediately.
+            if e.code in _RETRY_STATUS and not last:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            raise LLMError(f"{url} → HTTP {e.code}: {body}") from e
+        except (urllib.error.URLError, ConnectionError, OSError) as e:
+            if not last:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            raise LLMError(f"cannot reach LLM endpoint {url} ({e})") from e
+    raise LLMError(f"cannot reach LLM endpoint {url}")  # unreachable
 
 
 # --------------------------------------------------------------------------- #

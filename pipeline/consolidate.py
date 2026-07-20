@@ -78,6 +78,7 @@ SOURCE_LABELS = {
     "galaxy-checklist": "Galaxy Bug Bounty Checklist",
     "htb-cheatsheets": "HTB Academy cheat sheet",
     "shodan-dorks": "shodan-dorks",
+    "decepticon": "Decepticon",
 }
 
 # Zaid's OWN notes — the trusted tier-1 sources. When one of these is the
@@ -1761,6 +1762,125 @@ def discover_shodan(root: Path, failures: list | None = None,
     return [e]
 
 
+# =========================================================================== #
+#  SOURCE 12 — Decepticon (a code repo — extract ONLY the methodology docs)
+# =========================================================================== #
+# Mostly an autonomous-red-team tool's code + benchmark result dumps. We take
+# ONLY the genuine methodology prose: the engagement-workflow / RoE / OPPLAN /
+# recon-methodology docs and the per-domain operator & plugin playbooks (which
+# carry real per-phase TTPs). Everything else — benchmark/results dumps, ADRs,
+# CLI/architecture/contributing scaffolding, orchestrator prompts — is skipped.
+_DECEP_INCLUDE_FILES = [
+    "docs/engagement-workflow.md", "docs/red-team/*.md",
+    "docs/security/roe-machine-enforcement.md",
+    "docs/security/prompt-injection-defense.md",
+    "docs/architecture/red-team-infrastructure.md",
+    "docs/design/opplan-middleware.md", "docs/design/attack-graph-schema.md",
+]
+_DECEP_INCLUDE_DIRS = ("agents/prompts/standard/", "agents/prompts/plugins/")
+_DECEP_SKIP_STEMS = {"decepticon", "soundwave"}  # orchestrators, not attack TTPs
+_DECEP_CATEGORY = {
+    "ad_operator": "active-directory", "cloud_hunter": "cloud",
+    "wireless_operator": "wireless", "mobile_operator": "mobile",
+    "iot_operator": "iot", "ics_operator": "ics", "osint_operator": "recon",
+    "recon": "recon", "phisher": "phishing", "exploit": "web",
+    "exploiter": "web", "postexploit": "post-exploitation", "reverser": "reversing",
+    "forensicator": "forensics", "contract_auditor": "web3",
+    "supply_chain_operator": "supply-chain", "scanner": "recon",
+    "detector": "web", "verifier": "web", "patcher": "web",
+    "vulnresearch": "exploit-dev", "analyst": "reference", "blue_cell": "reference",
+    "recon-methodology": "recon", "opplan-domain-knowledge": "methodology",
+}
+_XMLTAG_RE = re.compile(r"</?[A-Z][A-Z0-9_]*>")
+
+
+def parse_decepticon(path: Path, root: Path) -> Entry | None:
+    text = _safe_read(path)
+    if text is None or not text.strip():
+        return None
+    text = _XMLTAG_RE.sub("", text)          # <IDENTITY> … prompt section tags
+    text, _n = _strip_gitbook(text)
+    lines = text.splitlines()
+    sections = _walk_sections(lines)
+
+    stem = path.stem
+    is_operator = "/prompts/" in path.as_posix()
+    # operator/plugin prompts have noisy inner headings ("Loop", "RoE GATE …");
+    # their filename is the clean name. Docs use their real H1.
+    if is_operator:
+        title = humanize(stem)
+    else:
+        first_h1 = next((s["heading"].strip() for s in sections
+                         if s["level"] == 1 and s["heading"].strip()), "")
+        title = (first_h1 or humanize(stem)).lstrip("#").strip() or humanize(stem)
+        # several red-team docs have non-English (Korean) H1s — use the clean
+        # filename instead so the KB title is searchable in English
+        if title and sum(ord(c) > 0x7f for c in title) > len(title) * 0.3:
+            title = humanize(stem)
+
+    summary = ""
+    for para in text.split("\n\n"):
+        p = " ".join(para.split())
+        if p and not p.startswith(("#", ">", "```", "|", "*", "-", "!", "<")):
+            summary = p[:300].rstrip()
+            break
+
+    steps: list[Step] = []
+    for sec in sections:
+        h = sec["heading"].strip()
+        if not h or h.lower() in _CRED_SKIP:
+            continue
+        code = _cred_code(sec)
+        prose = " ".join(sec["prose"]).strip()
+        text_i = f"{h} — {prose}"[:600] if prose else h
+        if code or prose:
+            steps.append(Step(n=len(steps) + 1, text=text_i.strip(), code=code))
+        if len(steps) >= MAX_STEPS_NEW:
+            break
+    if not steps and len(summary) < 40:
+        return None
+
+    category = _DECEP_CATEGORY.get(stem, "methodology")
+    keys = sorted(canonical_keys(f"{title} {stem}"))
+    disp = f"{title} (Decepticon operator)" if is_operator else title
+    return Entry(
+        id="decep-" + slugify(stem), title=disp, category=category,
+        source="decepticon", tier=3,
+        tags=_dedup([category, "red-team", "methodology"] + keys + [slugify(stem)]),
+        tools=_oscp_tools(text), summary=summary or title, steps=steps,
+        # preserve the full cleaned methodology prose (many prompt playbooks
+        # carry their value as prose, not in `##`-sectioned steps)
+        body_md=text.strip()[:MAX_ADAPTED_BODY],
+        references=_dedup(_section_urls(lines)),
+        meta={"src_file": path.relative_to(root).as_posix(), "kind": "methodology",
+              "source_label": SOURCE_LABELS["decepticon"], "canonical_keys": keys,
+              "also_covered_in": ["decepticon"]},
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def discover_decepticon(root: Path, failures: list | None = None,
+                        flagged: list | None = None) -> list[Entry]:
+    """Whitelist the methodology docs + operator/plugin playbooks; skip code,
+    benchmark dumps, ADRs, and orchestrator prompts (recorded), then fold same-
+    class docs."""
+    import fnmatch
+    out: list[Entry] = []
+    for p in _all_md(root):
+        rel = p.relative_to(root).as_posix()
+        keep = (any(fnmatch.fnmatch(rel, pat) for pat in _DECEP_INCLUDE_FILES)
+                or any(d in rel for d in _DECEP_INCLUDE_DIRS))
+        if not keep or p.stem in _DECEP_SKIP_STEMS:
+            continue
+        e = parse_decepticon(p, root)
+        if e is None:
+            if flagged is not None:
+                flagged.append({"file": rel, "reason": "empty/thin methodology doc — skipped"})
+            continue
+        out.append(e)
+    return _group_madstuff_by_class(out)
+
+
 # --------------------------------------------------------------------------- #
 # source registry
 # --------------------------------------------------------------------------- #
@@ -1817,6 +1937,10 @@ SPECS: dict[str, SourceSpec] = {
         "shodan-dorks", SOURCE_LABELS["shodan-dorks"],
         r"C:\Users\zaid_\Downloads\hacks\new resources\shodan-dorks",
         discover_shodan),
+    "decepticon": SourceSpec(
+        "decepticon", SOURCE_LABELS["decepticon"],
+        r"C:\Users\zaid_\Downloads\hacks\Decepticon",
+        discover_decepticon),
 }
 
 

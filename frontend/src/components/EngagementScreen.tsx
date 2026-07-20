@@ -220,9 +220,14 @@ function StepCard({
   onSaveResult: (text: string) => Promise<StepState>;
 }) {
   const [notesOpen, setNotesOpen] = useState(!!initialResult);
+  const ai = step.ai_suggested === true;
 
   return (
-    <article className={`hp-ap-step hp-eng-step${checked ? " is-done" : ""}`}>
+    <article
+      className={`hp-ap-step hp-eng-step${checked ? " is-done" : ""}${
+        ai ? " hp-ap-step-ai" : ""
+      }`}
+    >
       <div className="hp-eng-step-top">
         <button
           type="button"
@@ -239,12 +244,23 @@ function StepCard({
           <div className="hp-ap-step-head">
             <span className="hp-ap-step-id">{step.id}</span>
             <h3 className="hp-ap-step-title">{step.title}</h3>
-            <Link
-              href={`/entry/${encodeURIComponent(step.entry_id)}`}
-              className="hp-ap-step-link"
-            >
-              technique →
-            </Link>
+            {ai ? (
+              <span
+                className="hp-ap-ai-badge"
+                title="Not from your knowledge base — general-knowledge suggestion; verify before running."
+              >
+                AI-suggested · verify
+              </span>
+            ) : (
+              step.entry_id && (
+                <Link
+                  href={`/entry/${encodeURIComponent(step.entry_id)}`}
+                  className="hp-ap-step-link"
+                >
+                  technique →
+                </Link>
+              )
+            )}
           </div>
 
           {step.why && <p className="hp-ap-why">{step.why}</p>}
@@ -261,6 +277,10 @@ function StepCard({
                 </pre>
               </div>
             ))
+          ) : ai ? (
+            <div className="hp-ap-nocode">
+              No commands suggested — verify this step against a trusted source.
+            </div>
           ) : (
             <div className="hp-ap-nocode">
               No commands on this entry —{" "}

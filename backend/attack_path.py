@@ -91,9 +91,10 @@ _TARGET_CONTEXT: dict[str, str] = {
 
 # tuning
 _PER_PHASE_CAP = 6          # techniques kept per phase for the prompt
-_MIN_PER_PHASE = 2          # keep this many even if only overview entries exist
 _CMDS_PER_ENTRY = 4         # commands shown per technique in the prompt
 _STEP_CMD_CAP = 4           # code blocks kept on a GROUNDED step (concise, not a dump)
+_AI_STEPS_PER_PHASE = 3     # cap AI-suggested (gap-fill) steps per phase
+_AI_CMDS_PER_STEP = 4       # cap commands on one AI-suggested step
 _SUMMARY_CHARS = 260
 _CMD_CHARS = 320
 
@@ -131,11 +132,11 @@ _PERSONAL_LOG_RE = re.compile(
     re.I,
 )
 # broad-reference title words used only for RANKING (not exclusion): a
-# cheatsheet/resource page is fine to cite, it just shouldn't outrank a focused
-# single technique. Cheatsheets are deliberately NOT excluded.
+# cheatsheet/resource/methodology/case-study page is fine to cite, it just
+# shouldn't outrank a focused single technique. Cheatsheets are NOT excluded.
 _GRABBAG_TITLE_RE = re.compile(
     r"\b(?:resources?|cheat\s?sheets?|grab\s?bag|assorted|misc(?:ellaneous)?|"
-    r"links?|index)\b",
+    r"links?|index|methodolog(?:y|ies)|case\s?stud(?:y|ies))\b",
     re.I,
 )
 
@@ -369,15 +370,21 @@ def retrieve(
     goal: str,
     target_type: str | None,
     search_fn: SearchFn,
+    ctx: dict[str, Any] | None = None,
 ) -> dict[str, list[dict]]:
     """Gather candidate techniques from the KB, bucketed by canonical phase.
 
     Runs one broad hybrid query on the goal plus one phase-seeded query per
     canonical phase, unions the hits (keeping the best score seen per entry),
     then buckets each entry into its phase and keeps the top few per phase.
+
+    ``ctx`` (from ``parse_goal_context``) adds box-type/creds terms so retrieval
+    is weighted toward the right playbook (AD+creds → BloodHound/kerberoast/
+    credentialed enum; Linux → linux enum/privesc; web → web).
     """
-    ctx = _TARGET_CONTEXT.get((target_type or "").lower(), "")
-    base = f"{goal} {ctx}".strip()
+    tctx = _TARGET_CONTEXT.get((target_type or "").lower(), "")
+    box_terms = (ctx or {}).get("terms", "")
+    base = " ".join(x for x in (goal, tctx, box_terms) if x).strip()
 
     # entry_id -> best score seen across all queries
     best: dict[str, float] = {}
@@ -407,34 +414,25 @@ def retrieve(
 
     grouped: dict[str, list[dict]] = {}
     for phase in PHASE_ORDER:
-        # Prefer entries that actually carry commands: a step grounded on a
-        # command-less overview note (e.g. the "Active Directory" landing page)
-        # gives the user nothing to run. Partition by whether the entry has
-        # commands, rank each partition by score, and take command-bearing
-        # entries first. Command-less entries are only kept as a fallback when a
-        # phase has too few actionable ones, so no phase silently disappears.
+        # A step must give the user something to RUN: drop command-less overview
+        # notes entirely (they never become steps — the LLM gap-fills instead).
         cmds: dict[str, list[dict]] = {}
         with_cmds: list[tuple[float, dict]] = []
-        without_cmds: list[tuple[float, dict]] = []
         for score, e in buckets[phase]:
             c = entry_commands(e)
+            if not c:
+                continue
             cmds[e["id"]] = c
-            (with_cmds if c else without_cmds).append((score, e))
+            with_cmds.append((score, e))
 
         with_cmds.sort(key=lambda x: x[0], reverse=True)
-        without_cmds.sort(key=lambda x: x[0], reverse=True)
 
-        # Prefer FOCUSED single techniques over broad reference/cheatsheet pages:
-        # partition the command-bearing entries and take focused ones first, so a
-        # step grounds on "Kerberoasting" rather than a "resources" grab-bag even
-        # when both matched. Broad pages only fill the leftover slots.
+        # HARD-deprioritize broad grab-bag / methodology / resource / case-study
+        # pages: a focused single technique ("Kerberoasting") always wins, and a
+        # broad page is used ONLY when the phase has no focused technique at all.
         focused = [t for t in with_cmds if not is_broad_reference(t[1])]
         broad = [t for t in with_cmds if is_broad_reference(t[1])]
-        chosen = (focused + broad)[:_PER_PHASE_CAP]
-        # top up with a couple of overview entries only if we're short on
-        # actionable ones — this is the "phase has only overview content" safety.
-        if len(chosen) < _MIN_PER_PHASE:
-            chosen += without_cmds[: _MIN_PER_PHASE - len(chosen)]
+        chosen = (focused or broad)[:_PER_PHASE_CAP]
 
         techs = []
         for _score, e in chosen:
@@ -457,46 +455,67 @@ def retrieve(
 # --------------------------------------------------------------------------- #
 _SYSTEM = (
     "You are a penetration-testing methodology guide helping a security "
-    "professional on an AUTHORIZED engagement. You compose an ordered attack "
-    "path strictly from a provided library of the user's own techniques. "
+    "professional on an AUTHORIZED engagement. You compose an ordered, "
+    "phase-by-phase attack path. You are given a LIBRARY of the user's OWN "
+    "techniques (each has an entry_id and real, tested commands).\n"
     "Hard rules:\n"
-    "- Use ONLY the entry_id values given to you. Never invent an entry_id, a "
-    "command, or a technique that is not in the library.\n"
-    "- Adapt the ordering and selection to the stated goal; skip techniques "
-    "that do not fit.\n"
-    "- For each step give the entry_id and a 1-2 sentence rationale ('why') "
-    "explaining what it achieves at that point in the engagement.\n"
-    "- Group steps under the phase they belong to and order phases as: recon, "
-    "enumeration, exploitation, privesc, post-exploitation.\n"
-    "- WITHIN each phase, order the steps by PRIORITY: what a tester should do "
-    "first / what matters most goes first, later or optional actions last. The "
-    "order you return is preserved verbatim, so rank deliberately.\n"
-    "- Do NOT restate commands; the system attaches the real commands from each "
-    "cited entry. Just cite the entry_id.\n"
+    "- PREFER THE LIBRARY. For every step you can, cite a library entry_id — the "
+    "system attaches that entry's real commands, so do NOT restate commands for a "
+    "cited step; just give the entry_id and a 1-2 sentence 'why'.\n"
+    "- Order phases as: recon, enumeration, exploitation, privesc, "
+    "post-exploitation. Within a phase, put the highest-priority / earliest "
+    "actions first; the order you return is preserved verbatim.\n"
+    "- GAP-FILL ONLY WHERE NEEDED: if a phase has a real gap the library does not "
+    "cover (a specific service, vuln, or tool named in the goal), you MAY add an "
+    "AI-suggested step from your own general knowledge. Mark it EXACTLY as: "
+    '{"ai_suggested": true, "title": "...", "why": "...", "commands": '
+    '[{"lang": "bash", "cmd": "..."}]}. Give the concrete command(s). These are '
+    "UNVERIFIED, so use them sparingly and NEVER to duplicate a library technique.\n"
+    "- Grounded (entry_id) steps are trusted and come FIRST in each phase; "
+    "AI-suggested steps are a clearly-marked fallback and come after.\n"
+    "- Never invent an entry_id. A step is EITHER {\"entry_id\": \"<library id>\", "
+    "\"why\": \"...\"} OR an ai_suggested step exactly as shown above.\n"
     "Respond with ONLY a JSON object, no prose."
 )
 
 _SCHEMA_HINT = (
-    '{"phases": [{"phase": "recon", "steps": '
-    '[{"entry_id": "<one of the provided ids>", "why": "<1-2 sentences>"}]}]}'
+    '{"phases": [{"phase": "recon", "steps": ['
+    '{"entry_id": "<library id>", "why": "<1-2 sentences>"}, '
+    '{"ai_suggested": true, "title": "<short title>", "why": "<why>", '
+    '"commands": [{"lang": "bash", "cmd": "<command>"}]}'
+    ']}]}'
 )
 
 
 def build_user_prompt(
-    goal: str, target_type: str | None, grouped: dict[str, list[dict]]
+    goal: str,
+    target_type: str | None,
+    grouped: dict[str, list[dict]],
+    ctx: dict[str, Any] | None = None,
 ) -> str:
+    ctx = ctx or {}
     lines: list[str] = []
     lines.append(f"GOAL: {goal}")
     if target_type:
         lines.append(f"TARGET TYPE: {target_type}")
+    box_type = ctx.get("box_type")
+    if box_type:
+        creds = " with valid credentials" if ctx.get("has_creds") else ""
+        lead = f"{box_type}{'/credentialed' if ctx.get('has_creds') else ''}"
+        lines.append(
+            f"CONTEXT: this reads as a {box_type.upper()} target{creds} — lead with "
+            f"the {lead} playbook."
+        )
     lines.append("")
     lines.append(
-        "TECHNIQUE LIBRARY (only these entry_ids may be cited), grouped by phase:"
+        "TECHNIQUE LIBRARY (cite these entry_ids for grounded steps), by phase:"
     )
+    any_lib = False
     for phase in PHASE_ORDER:
         techs = grouped.get(phase)
         if not techs:
             continue
+        any_lib = True
         lines.append("")
         lines.append(f"## {phase}")
         for t in techs:
@@ -507,12 +526,17 @@ def build_user_prompt(
             if t["commands"]:
                 preview = t["commands"][0]["cmd"].splitlines()[0][:_CMD_CHARS]
                 lines.append(f"  sample_cmd: {preview}")
+    if not any_lib:
+        lines.append(
+            "(the library is thin for this goal — rely more on clearly-marked "
+            "ai_suggested steps, but never fabricate an entry_id.)"
+        )
     lines.append("")
+    gap = f" relevant to a {box_type} target" if box_type else ""
     lines.append(
-        "Compose the ordered attack path for the goal above. "
-        "Select the most relevant techniques (2-5 per phase where useful), and "
-        "within each phase order the steps by priority — highest-impact / "
-        "earliest actions first. Give each a 'why'. "
+        "Compose the ordered attack path. In each phase, place grounded library "
+        "steps FIRST (cite entry_id, highest-priority first), then add "
+        f"clearly-marked ai_suggested steps ONLY for genuine gaps{gap}. "
         f"Return JSON exactly shaped like: {_SCHEMA_HINT}"
     )
     return "\n".join(lines)
@@ -539,17 +563,50 @@ def _resolve_entry_id(cited: str, by_id: dict[str, dict], norm_map: dict[str, st
     return hit if hit and hit in by_id else None
 
 
+def _ai_commands(raw: Any, target: str | None) -> list[dict[str, Any]]:
+    """Normalise the model's OWN commands for an AI-suggested step: dedupe, cap
+    count/length, substitute the target. Marked ``unverified`` (the step itself
+    carries ``ai_suggested`` — these are general-knowledge, not the user's KB)."""
+    out: list[dict[str, Any]] = []
+    if not isinstance(raw, list):
+        return out
+    seen: set[str] = set()
+    for c in raw:
+        if isinstance(c, str):
+            cmd, lang = c, "bash"
+        elif isinstance(c, dict):
+            cmd, lang = str(c.get("cmd") or ""), (c.get("lang") or "bash")
+        else:
+            continue
+        cmd = substitute_target(cmd.strip(), target)
+        if not cmd or cmd in seen:
+            continue
+        seen.add(cmd)
+        capped, truncated = _cap_command(cmd)
+        item: dict[str, Any] = {
+            "lang": lang, "cmd": capped, "copyable": True, "unverified": True,
+        }
+        if truncated:
+            item["truncated"] = True
+        out.append(item)
+        if len(out) >= _AI_CMDS_PER_STEP:
+            break
+    return out
+
+
 def _ground(
     parsed: Any, by_id: dict[str, dict], target: str | None
 ) -> list[dict[str, Any]]:
-    """Turn the model's JSON into validated, KB-grounded phases.
+    """Turn the model's JSON into validated phases: KB-grounded steps FIRST, then
+    clearly-marked AI-suggested gap steps.
 
-    Resolves each cited entry_id to a REAL servable id (exact, else a normalised
-    match), drops steps that can't be resolved, replaces the model's commands
-    with the real entry's commands (with the user's ``target`` substituted in),
-    assigns a stable ``{phase}-{n}`` id, and reorders phases canonically while
-    preserving the model's within-phase priority order. Duplicate entries are
-    collapsed to the first occurrence so the path doesn't repeat a technique.
+    A GROUNDED step resolves its cited entry_id to a REAL, eligible, servable KB
+    entry that actually carries commands, and uses that entry's real commands
+    (target substituted) — never the model's. An AI-SUGGESTED step (flagged by
+    the model, or a step whose entry_id can't be resolved) is kept with
+    ``ai_suggested=True``, no entry citation, and the model's own commands marked
+    unverified — the UI renders it distinctly. Grounded steps are trusted and
+    ordered before AI-suggested ones within each phase.
     """
     raw_phases = parsed.get("phases") if isinstance(parsed, dict) else None
     if not isinstance(raw_phases, list):
@@ -558,9 +615,10 @@ def _ground(
     # normalised-id lookup for fuzzy resolution of near-miss citations
     norm_map = {_norm_id(k): k for k in by_id}
 
-    # collect steps per canonical phase, preserving model (priority) order
-    per_phase: dict[str, list[dict]] = {p: [] for p in PHASE_ORDER}
+    grounded: dict[str, list[dict]] = {p: [] for p in PHASE_ORDER}
+    ai: dict[str, list[dict]] = {p: [] for p in PHASE_ORDER}
     used: set[str] = set()
+    ai_seen: set[str] = set()
 
     for rp in raw_phases:
         if not isinstance(rp, dict):
@@ -572,25 +630,190 @@ def _ground(
             if not isinstance(st, dict):
                 continue
             eid = _resolve_entry_id(str(st.get("entry_id") or ""), by_id, norm_map)
-            if eid is None or eid in used:
+            # GROUNDED: resolvable + eligible + actually has commands.
+            if eid is not None and eid not in used and is_step_eligible(by_id[eid]):
+                e = by_id[eid]
+                cmds = [
+                    {**c, "cmd": substitute_target(c["cmd"], target)}
+                    for c in entry_commands(e, cap=_STEP_CMD_CAP)
+                ]
+                if not cmds:
+                    continue  # no-command entry — never a step
+                used.add(eid)
+                grounded[phase].append(
+                    {
+                        "title": e["title"],
+                        "entry_id": eid,
+                        "why": str(st.get("why") or "").strip(),
+                        "commands": cmds,
+                        "ai_suggested": False,
+                    }
+                )
                 continue
-            if not is_step_eligible(by_id[eid]):
-                continue  # never ground on a writeup, grab-bag, or personal/log page
-            used.add(eid)
-            e = by_id[eid]
-            why = str(st.get("why") or "").strip()
-            cmds = [
-                {**c, "cmd": substitute_target(c["cmd"], target)}
-                for c in entry_commands(e, cap=_STEP_CMD_CAP)
-            ]
-            per_phase[phase].append(
-                {
-                    "title": e["title"],
-                    "entry_id": eid,
-                    "why": why,
-                    "commands": cmds,
-                }
-            )
+            # AI-SUGGESTED gap step: model-flagged, or an unresolvable citation
+            # that still carries a title. Kept, marked, capped.
+            if st.get("ai_suggested") or (eid is None and st.get("title")):
+                title = str(st.get("title") or "").strip()
+                key = _norm_id(title)
+                if not title or key in ai_seen or len(ai[phase]) >= _AI_STEPS_PER_PHASE:
+                    continue
+                ai_seen.add(key)
+                ai[phase].append(
+                    {
+                        "title": title,
+                        "entry_id": "",
+                        "why": str(st.get("why") or "").strip(),
+                        "commands": _ai_commands(st.get("commands"), target),
+                        "ai_suggested": True,
+                    }
+                )
+
+    out: list[dict[str, Any]] = []
+    for phase in PHASE_ORDER:
+        steps = grounded[phase] + ai[phase]  # trusted KB steps first, AI last
+        if not steps:
+            continue
+        for i, step in enumerate(steps, 1):
+            step["id"] = f"{phase}-{i}"  # STABLE per-step id for later layers
+        out.append({"phase": phase, "label": PHASE_LABEL[phase], "steps": steps})
+
+    # every GROUNDED step must be servable by /entry/{id}; AI steps carry no id.
+    assert all(
+        s["entry_id"] in by_id
+        for ph in out
+        for s in ph["steps"]
+        if s["entry_id"]
+    ), "grounding emitted a non-servable entry_id"
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# goal context — box type + creds, weighting retrieval and AI-suggested steps
+# --------------------------------------------------------------------------- #
+_CREDS_RE = re.compile(
+    r"\b(?:credentials?|creds?|password|passwd|login|user(?:name)?\s*[:=]|"
+    r"authenticated)\b",
+    re.I,
+)
+_AD_RE = re.compile(
+    r"\b(?:active\s?directory|AD|domain\s?controller|DC|kerberos|ldap|"
+    r"bloodhound|ntlm|windows\s?domain)\b",
+    re.I,
+)
+_WIN_RE = re.compile(r"\bwindows\b", re.I)
+_LINUX_RE = re.compile(r"\b(?:linux|unix|ubuntu|debian|centos)\b", re.I)
+_WEB_RE = re.compile(r"\b(?:web\s?app(?:lication)?|website|https?|\bapi\b|\bweb\b)\b", re.I)
+
+# box-type (+creds) → extra retrieval/gap-fill terms
+_CONTEXT_TERMS: dict[str, str] = {
+    "ad": "active directory ldap smb kerberos bloodhound domain enumeration",
+    "ad+creds": "credentialed active directory enumeration bloodhound kerberoasting "
+                "ldap smb domain users authenticated",
+    "windows": "windows privilege escalation enumeration",
+    "linux": "linux enumeration privilege escalation linpeas sudo suid",
+    "web": "web application http api enumeration",
+}
+
+
+def parse_goal_context(goal: str) -> dict[str, Any]:
+    """Best-effort box-type + creds signal parsed from the goal, used to weight
+    both retrieval and the AI-suggested gap steps toward the right playbook
+    (AD+creds → credentialed enum / BloodHound / kerberoast; Linux → linux enum /
+    privesc; web → web)."""
+    has_creds = bool(_CREDS_RE.search(goal))
+    if _AD_RE.search(goal):
+        box_type = "ad"
+    elif _WIN_RE.search(goal):
+        box_type = "windows"
+    elif _LINUX_RE.search(goal):
+        box_type = "linux"
+    elif _WEB_RE.search(goal):
+        box_type = "web"
+    else:
+        box_type = None
+    key = "ad+creds" if (box_type == "ad" and has_creds) else box_type
+    return {
+        "box_type": box_type,
+        "has_creds": has_creds,
+        "terms": _CONTEXT_TERMS.get(key or "", ""),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# writeup-first path — build the path from the user's own per-box walkthrough
+# --------------------------------------------------------------------------- #
+# keyword → canonical phase index. A linear writeup is split into phases WITHOUT
+# reordering: the assigned index is monotonic non-decreasing, so the walkthrough
+# order is preserved even if a later step's keyword maps to an earlier phase.
+_WU_PHASE_KEYWORDS: list[tuple[int, re.Pattern[str]]] = [
+    (0, re.compile(r"\b(?:scan|nmap|port|recon|discover|ping|masscan|rustscan|"
+                   r"fingerprint|initial)\b", re.I)),
+    (1, re.compile(r"\b(?:enum|smb|share|ldap|bloodhound|dns|vhost|subdomain|"
+                   r"director|gobuster|ffuf|rpc|snmp|nfs|users?)\b", re.I)),
+    (2, re.compile(r"\b(?:exploit|foothold|shell|rce|inject|upload|payload|cve|"
+                   r"credential|kerberoast|asrep|crack|hash|tgt|login|winrm|"
+                   r"reverse|access)\b", re.I)),
+    (3, re.compile(r"\b(?:privesc|privilege|\broot\b|admin|system|sudo|suid|"
+                   r"dpapi|secretsdump|escalat|token|impersonat|dcsync)\b", re.I)),
+    (4, re.compile(r"\b(?:persist|lateral|pivot|loot|backup|exfil|cleanup|flag|"
+                   r"post[- ]?exploit)\b", re.I)),
+]
+
+
+def _wu_phase_index(text: str) -> int | None:
+    for idx, pat in _WU_PHASE_KEYWORDS:
+        if pat.search(text):
+            return idx
+    return None
+
+
+def build_writeup_path(entry: dict, target: str | None) -> list[dict[str, Any]]:
+    """Build attack-path phases directly from a per-box WRITEUP's ordered steps.
+
+    The writeup is the real walkthrough for THIS box and the user's own work, so
+    its steps are trusted and used verbatim (order preserved, target substituted,
+    over-long blocks capped). Steps are split into canonical phases by keyword,
+    but the split is monotonic — the phase index never decreases — so the
+    walkthrough's linear ordering is never scrambled. Every step is grounded
+    (``ai_suggested=False``) and links back to the full writeup.
+    """
+    per_phase: dict[str, list[dict]] = {p: [] for p in PHASE_ORDER}
+    running = 0
+    for st in entry.get("steps") or []:
+        text = (st.get("text") or "").strip()
+        guess = _wu_phase_index(text)
+        if guess is not None and guess > running:
+            running = guess
+        phase = PHASE_ORDER[running]
+
+        cmds: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for c in st.get("code") or []:
+            cmd = (c.get("cmd") or "").strip()
+            if not cmd or cmd in seen:
+                continue
+            seen.add(cmd)
+            capped, truncated = _cap_command(substitute_target(cmd, target))
+            item: dict[str, Any] = {
+                "lang": c.get("lang") or "bash",
+                "cmd": capped,
+                "copyable": c.get("copyable", True),
+            }
+            if truncated:
+                item["truncated"] = True
+            cmds.append(item)
+            if len(cmds) >= _STEP_CMD_CAP:
+                break
+
+        per_phase[phase].append(
+            {
+                "title": text or f"Step {st.get('n', '')}".strip(),
+                "entry_id": entry["id"],  # "technique →" opens the full writeup
+                "why": "",
+                "commands": cmds,
+                "ai_suggested": False,
+            }
+        )
 
     out: list[dict[str, Any]] = []
     for phase in PHASE_ORDER:
@@ -598,13 +821,8 @@ def _ground(
         if not steps:
             continue
         for i, step in enumerate(steps, 1):
-            step["id"] = f"{phase}-{i}"  # STABLE per-step id for later layers
+            step["id"] = f"{phase}-{i}"
         out.append({"phase": phase, "label": PHASE_LABEL[phase], "steps": steps})
-
-    # belt-and-suspenders: every emitted step must be servable by /entry/{id}
-    assert all(
-        s["entry_id"] in by_id for ph in out for s in ph["steps"]
-    ), "grounding emitted a non-servable entry_id"
     return out
 
 
@@ -617,34 +835,65 @@ def compose(
     target_type: str | None,
     search_fn: SearchFn,
 ) -> dict[str, Any]:
-    """Retrieve → compose (LLM) → ground. Returns the frontend response dict.
+    """Compose an attack path for the goal. Two modes:
 
-    Raises ``llm.LLMError`` if the LLM is unreachable / produces no usable path
-    (the API layer maps that to a clean 503 for the frontend to render).
+    1. **Writeup-first** — if the goal names a box we have a writeup for, build
+       the path from that writeup's real ordered walkthrough (trusted; no LLM).
+    2. **KB-first + AI-suggested fallback** — otherwise retrieve grounded KB
+       techniques (weighted by box-type context) and let the LLM order them and
+       add clearly-marked ai_suggested steps for genuine gaps.
+
+    Raises ``llm.LLMError`` (only in mode 2) if the LLM is unreachable / produces
+    no usable path — the API layer maps that to a clean 503.
     """
-    cfg = llm.load_config()
-    grouped = retrieve(by_id, goal, target_type, search_fn)
-    if not grouped:
-        raise llm.LLMError("no relevant techniques found in the knowledge base")
-
     target = extract_target(goal)
+    ctx = parse_goal_context(goal)
+    box_writeup = find_box_writeup(by_id, goal)
 
-    user = build_user_prompt(goal, target_type, grouped)
+    # (1) WRITEUP-FIRST
+    if box_writeup and box_writeup["id"] in by_id:
+        wu = by_id[box_writeup["id"]]
+        phases = build_writeup_path(wu, target)
+        if phases:
+            damaged = bool((wu.get("meta") or {}).get("source_damaged"))
+            return {
+                "goal": goal,
+                "target_type": target_type,
+                "target": target,
+                "phases": phases,
+                "box_writeup": box_writeup,
+                "origin": "writeup",
+                "origin_label": f"from your writeup: {wu['title']}",
+                "origin_note": (
+                    "source formatting damaged — some commands may be mangled; "
+                    "open the writeup to verify"
+                )
+                if damaged
+                else None,
+                "model_used": "your writeup",
+                "provider": "writeup",
+            }
+
+    # (2) KB-FIRST + AI-SUGGESTED FALLBACK
+    cfg = llm.load_config()
+    grouped = retrieve(by_id, goal, target_type, search_fn, ctx)
+    user = build_user_prompt(goal, target_type, grouped, ctx)
     raw = llm.chat(_SYSTEM, user, cfg)
     parsed = llm.extract_json(raw)
     phases = _ground(parsed, by_id, target)
 
     if not phases:
-        raise llm.LLMError(
-            "the model did not cite any valid technique from the knowledge base"
-        )
+        raise llm.LLMError("the model did not produce any usable steps")
 
     return {
         "goal": goal,
         "target_type": target_type,
         "target": target,
         "phases": phases,
-        "box_writeup": find_box_writeup(by_id, goal),
+        "box_writeup": box_writeup,
+        "origin": "composed",
+        "origin_label": None,
+        "origin_note": None,
         "model_used": cfg["model"],
         "provider": cfg["provider"],
     }

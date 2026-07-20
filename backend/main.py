@@ -450,9 +450,22 @@ class AttackPathIn(BaseModel):
 class AttackStep(BaseModel):
     id: str = Field(description="Stable per-step id ({phase}-{n}) for engagement state.")
     title: str
-    entry_id: str = Field(description="Cited KB entry — links to /entry/{id}.")
+    entry_id: str = Field(
+        default="",
+        description="Cited KB entry — links to /entry/{id}. Empty for an "
+        "AI-suggested step (no KB citation).",
+    )
     why: str = Field(description="1–2 line rationale for this step.")
-    commands: list[Code] = Field(description="Real commands from the cited KB entry.")
+    commands: list[Code] = Field(
+        description="Commands for this step. For grounded/writeup steps these are "
+        "the entry's real commands; for AI-suggested steps they are the model's "
+        "own, unverified."
+    )
+    ai_suggested: bool = Field(
+        default=False,
+        description="True = general-knowledge gap-fill (not from the KB), render "
+        "distinctly with a 'verify' badge. False = grounded in the KB / writeup.",
+    )
 
 
 class AttackPhase(BaseModel):
@@ -478,8 +491,24 @@ class AttackPathOut(BaseModel):
     phases: list[AttackPhase]
     box_writeup: BoxWriteup | None = Field(
         default=None,
-        description="A full writeup for the named box, surfaced as a link (never "
-        "as steps); null when the goal doesn't name a box we have a writeup for.",
+        description="A full writeup for the named box, surfaced as a link; also "
+        "the source when origin=='writeup'. Null when the goal doesn't name a box "
+        "we have a writeup for.",
+    )
+    origin: str = Field(
+        default="composed",
+        description="'writeup' = path built from the user's own box walkthrough; "
+        "'composed' = KB-grounded + AI-suggested composition.",
+    )
+    origin_label: str | None = Field(
+        default=None,
+        description="Banner label when origin=='writeup', e.g. 'from your "
+        "writeup: <box>'.",
+    )
+    origin_note: str | None = Field(
+        default=None,
+        description="Caveat for the origin, e.g. a 'source formatting damaged' "
+        "note when the writeup's export was mangled.",
     )
     model_used: str
     provider: str

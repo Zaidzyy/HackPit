@@ -138,11 +138,19 @@ export type AttackStep = {
   /** Stable id ("{phase}-{n}") — safe to key engagement/check-off state on. */
   id: string;
   title: string;
-  /** The cited KB entry — links to /entry/{entry_id}. */
+  /** Cited KB entry — links to /entry/{entry_id}. Empty for an AI-suggested step. */
   entry_id: string;
   why: string;
-  /** Real commands lifted from the cited KB entry (never model-invented). */
+  /**
+   * Commands for this step. Grounded/writeup steps carry the entry's real
+   * commands; AI-suggested steps carry the model's own, unverified.
+   */
   commands: Code[];
+  /**
+   * True = general-knowledge gap-fill, NOT from the KB (render distinctly with a
+   * "verify" badge). False/absent = grounded in the KB or the user's writeup.
+   */
+  ai_suggested?: boolean;
 };
 
 export type AttackPhase = {
@@ -165,9 +173,21 @@ export type AttackPath = {
   /** Target (IP/host/URL) parsed from the goal + substituted into commands. */
   target: string | null;
   phases: AttackPhase[];
-  /** Set when the goal named a box we have a writeup for — link, not steps. */
+  /**
+   * Set when the goal named a box we have a writeup for. It's the link target,
+   * and the SOURCE of the path when origin === "writeup".
+   */
   box_writeup: BoxWriteup | null;
-  /** Model that composed the path (e.g. "qwen3:8b"). */
+  /**
+   * "writeup" = path built from the user's own box walkthrough (trusted steps);
+   * "composed" = KB-grounded + AI-suggested composition.
+   */
+  origin?: "writeup" | "composed";
+  /** Banner label when origin === "writeup", e.g. "from your writeup: Voleur". */
+  origin_label?: string | null;
+  /** Caveat, e.g. a "source formatting damaged" note for a mangled writeup. */
+  origin_note?: string | null;
+  /** Model that composed the path (e.g. "qwen3:8b"); "your writeup" for writeups. */
   model_used: string;
   provider: string;
 };

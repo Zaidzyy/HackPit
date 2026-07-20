@@ -227,14 +227,20 @@ export function AttackPathScreen() {
                 )}
               </div>
               <div className="hp-ap-byline">
-                <span className="hp-ap-model">
-                  composed by <b>{result.model_used}</b>
-                  {result.provider === "ollama" ? (
-                    <span className="hp-ap-local"> · local</span>
-                  ) : (
-                    <span className="hp-ap-local"> · {result.provider}</span>
-                  )}
-                </span>
+                {result.origin === "writeup" ? (
+                  <span className="hp-ap-model hp-ap-model-wu">
+                    built from <b>your writeup</b>
+                  </span>
+                ) : (
+                  <span className="hp-ap-model">
+                    composed by <b>{result.model_used}</b>
+                    {result.provider === "ollama" ? (
+                      <span className="hp-ap-local"> · local</span>
+                    ) : (
+                      <span className="hp-ap-local"> · {result.provider}</span>
+                    )}
+                  </span>
+                )}
                 <button
                   type="button"
                   className="hp-ap-gear"
@@ -246,7 +252,36 @@ export function AttackPathScreen() {
               </div>
             </div>
 
-            {result.box_writeup && (
+            {result.origin === "writeup" && (
+              <div className="hp-ap-origin">
+                <span className="hp-ap-origin-ic">▤</span>
+                <div className="hp-ap-origin-txt">
+                  <b>
+                    {result.origin_label ??
+                      `from your writeup${
+                        result.box_writeup ? `: ${result.box_writeup.title}` : ""
+                      }`}
+                  </b>
+                  <span className="hp-ap-origin-sub">
+                    These steps are your own recorded walkthrough for this box —
+                    trusted, in order.
+                  </span>
+                  {result.origin_note && (
+                    <span className="hp-ap-origin-warn">⚠ {result.origin_note}</span>
+                  )}
+                </div>
+                {result.box_writeup && (
+                  <Link
+                    href={`/entry/${encodeURIComponent(result.box_writeup.id)}`}
+                    className="hp-ap-origin-go"
+                  >
+                    open writeup →
+                  </Link>
+                )}
+              </div>
+            )}
+
+            {result.origin !== "writeup" && result.box_writeup && (
               <Link
                 href={`/entry/${encodeURIComponent(result.box_writeup.id)}`}
                 className="hp-ap-writeup"
@@ -342,19 +377,38 @@ export function AttackPathScreen() {
   );
 }
 
-/** One grounded step: title, rationale, copyable commands, technique link. */
+/**
+ * One step. Grounded/writeup steps (ai_suggested falsy) cite a KB entry and
+ * reuse its real commands. AI-suggested steps carry no entry link and are tinted
+ * with a "verify" badge — the commands are the model's own, unverified.
+ */
 function StepCard({ step }: { step: AttackStep }) {
+  const ai = step.ai_suggested === true;
   return (
-    <article className="hp-ap-step" id={step.id}>
+    <article
+      className={`hp-ap-step${ai ? " hp-ap-step-ai" : ""}`}
+      id={step.id}
+    >
       <div className="hp-ap-step-head">
         <span className="hp-ap-step-id">{step.id}</span>
         <h3 className="hp-ap-step-title">{step.title}</h3>
-        <Link
-          href={`/entry/${encodeURIComponent(step.entry_id)}`}
-          className="hp-ap-step-link"
-        >
-          technique →
-        </Link>
+        {ai ? (
+          <span
+            className="hp-ap-ai-badge"
+            title="Not from your knowledge base — general-knowledge suggestion; verify before running."
+          >
+            AI-suggested · verify
+          </span>
+        ) : (
+          step.entry_id && (
+            <Link
+              href={`/entry/${encodeURIComponent(step.entry_id)}`}
+              className="hp-ap-step-link"
+            >
+              technique →
+            </Link>
+          )
+        )}
       </div>
 
       {step.why && <p className="hp-ap-why">{step.why}</p>}
@@ -371,6 +425,10 @@ function StepCard({ step }: { step: AttackStep }) {
             </pre>
           </div>
         ))
+      ) : ai ? (
+        <div className="hp-ap-nocode">
+          No commands suggested — verify this step against a trusted source.
+        </div>
       ) : (
         <div className="hp-ap-nocode">
           No commands on this entry —{" "}

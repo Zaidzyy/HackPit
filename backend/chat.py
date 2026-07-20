@@ -53,17 +53,18 @@ _SYSTEM = (
     "are done, and the output they pasted) and a set of TECHNIQUES retrieved from "
     "their own knowledge base.\n"
     "Hard rules:\n"
-    "- Ground every recommendation in the RETRIEVED TECHNIQUES. Reuse their real "
-    "commands (they are the tester's own tested commands) — copy them, do not "
-    "rewrite them. NEVER invent commands, flags, tools, or techniques that are "
-    "not in the retrieved techniques.\n"
-    "- When you use a technique, cite it by writing its entry_id in backticks, "
-    "e.g. `ad-kerberoasting`, so the tester can open it.\n"
+    "- KB-FIRST. Prefer the RETRIEVED TECHNIQUES (the tester's own tested "
+    "commands): reuse their commands verbatim — copy them, do not rewrite them — "
+    "and cite the technique by writing its entry_id in backticks, e.g. "
+    "`ad-kerberoasting`, so the tester can open it.\n"
+    "- AI-SUGGESTED FALLBACK: only if the retrieved techniques genuinely do not "
+    "cover the question, you MAY give general-knowledge guidance — but you MUST "
+    "mark it clearly by prefixing that part with "
+    "**AI-suggested (not from your KB — verify):** and keep it minimal. NEVER "
+    "present general-knowledge commands as if they came from the tester's KB.\n"
     "- Use the pasted RESULTS to decide the next move (e.g. 'you found 445 open "
     "and got a null session -> enumerate shares with ...'). If a step failed or "
-    "returned nothing, suggest a grounded ALTERNATIVE from the techniques.\n"
-    "- If the retrieved techniques do not cover the question, say so briefly "
-    "instead of inventing an answer.\n"
+    "returned nothing, suggest a grounded ALTERNATIVE from the techniques first.\n"
     "- Be practical and concise: a short direct answer, then the concrete next "
     "command(s). This is a working tool, not a lecture.\n"
     "Formatting (GitHub-flavoured Markdown):\n"
@@ -157,7 +158,12 @@ def retrieve(
             if eid not in best or score > best[eid]:
                 best[eid] = score
 
-    ingest(search_fn(f"{message} {_salient(session)}".strip(), 16, "hybrid"))
+    # weight retrieval toward the box type (AD/Windows/Linux/web + creds) parsed
+    # from the engagement goal, same signal the attack-path composer uses.
+    terms = attack_path.parse_goal_context(
+        f"{session.get('goal', '')} {message}"
+    ).get("terms", "")
+    ingest(search_fn(f"{message} {_salient(session)} {terms}".strip(), 16, "hybrid"))
     ingest(search_fn(message, 10, "hybrid"))
 
     # the engagement's own techniques are always relevant candidates
@@ -195,8 +201,9 @@ def build_prompt(
     lines: list[str] = ["SESSION CONTEXT", build_session_context(session), ""]
 
     lines.append(
-        "RETRIEVED TECHNIQUES (from the tester's knowledge base — cite these by "
-        "entry_id, reuse their commands, invent nothing else):"
+        "RETRIEVED TECHNIQUES (from the tester's knowledge base — prefer these: "
+        "cite by entry_id and reuse their commands; only fall back to "
+        "clearly-marked AI-suggested guidance for genuine gaps):"
     )
     if not techniques:
         lines.append(

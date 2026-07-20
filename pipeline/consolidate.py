@@ -73,6 +73,7 @@ SOURCE_LABELS = {
     "htb-my-resources": "your notes (htb my resources)",
     "claude-red": "claude-red skills",
     "hacktricks": "HackTricks",
+    "claude-bug-bounty": "claude-bug-bounty",
 }
 
 # Zaid's OWN notes — the trusted tier-1 sources. When one of these is the
@@ -1254,6 +1255,118 @@ def discover_hacktricks(root: Path, failures: list | None = None,
     return _group_madstuff_by_class(out)
 
 
+# =========================================================================== #
+#  SOURCE 8 — claude-bug-bounty (methodology docs only; skip scaffolding)
+# =========================================================================== #
+# A bug-bounty plugin repo. Only the technique/methodology docs are ingested —
+# skills/ (YAML-frontmatter SKILL.md packs), web3/ (smart-contract KB), and the
+# technique command docs under commands/. Agent/tooling scaffolding (agents/,
+# hooks/, mcp/, rules/, docs/, tools/, root meta) and pure session-utility
+# commands are skipped (recorded). Same YAML-frontmatter layout as claude-red's
+# format B, so the same helpers apply.
+_BB_DIRS = ("skills", "web3", "commands")
+# commands that are session/tooling utilities, not security technique
+_BB_SKIP_CMD = {"readme", "memory-gc", "pickup", "remember", "intel",
+                "scope", "scope-aggregate", "arsenal"}
+_BB_NAV = {"00-start-here", "readme", "summary", "index"}
+
+
+def parse_bugbounty(path: Path, root: Path) -> Entry | None:
+    raw_text = _safe_read(path)
+    if raw_text is None or not raw_text.strip():
+        return None
+    fm, body_src = _frontmatter(raw_text)
+    body_src, _n = _strip_gitbook(body_src)
+    lines = body_src.splitlines()
+    sections = _walk_sections(lines)
+
+    parts = path.relative_to(root).parts
+    top = parts[0]
+    # skill packs live one folder deep (skills/<name>/SKILL.md); everything else
+    # is named by its own stem
+    if top == "skills" and len(parts) > 2:
+        base = parts[1] if path.name == "SKILL.md" else f"{parts[1]}-{path.stem}"
+    else:
+        base = path.stem
+
+    first_h1 = ""
+    for sec in sections:
+        h = sec["heading"].strip()
+        if sec["level"] == 1 and h:
+            first_h1 = h
+            break
+    # command pages title as "# /hunt" — normalise to the technique name
+    title = (first_h1 or humanize(fm.get("name") or base)).lstrip("/#").strip()
+    title = title or humanize(base)
+
+    summary = ""
+    if fm.get("description"):
+        summary = " ".join(fm["description"].split())[:300].rstrip()
+    else:
+        for para in body_src.split("\n\n"):
+            p = " ".join(para.split())
+            if p and not p.startswith(("#", ">", "```", "|", "*", "-", "!", "_")):
+                summary = p[:300].rstrip()
+                break
+
+    steps: list[Step] = []
+    for sec in sections:
+        h = sec["heading"].strip()
+        if not h or h.lower() in _CRED_SKIP:
+            continue
+        code = _cred_code(sec)
+        prose = " ".join(sec["prose"]).strip()
+        text_i = f"{h} — {prose}"[:600] if prose else h
+        if code or prose:
+            steps.append(Step(n=len(steps) + 1, text=text_i.strip(), code=code))
+        if len(steps) >= MAX_STEPS_NEW:
+            break
+    if not steps and len(summary) < 40:
+        return None  # nav/index stub
+
+    keys = sorted(canonical_keys(f"{title} {base}"))
+    low = (base + " " + "/".join(parts)).lower()
+    category = "web3" if ("web3" in low or "token" in low or "smart-contract" in low
+                          or top == "web3") else ("web" if keys else "reference")
+    refs = _dedup(_section_urls(lines))
+    return Entry(
+        id="cbb-" + slugify(base), title=title, category=category,
+        source="claude-bug-bounty", tier=3,
+        tags=_dedup([category] + keys + [slugify(title)]),
+        tools=_oscp_tools(body_src), summary=summary or title, steps=steps,
+        body_md=_adapted_body(title, summary, steps), references=refs,
+        meta={"src_file": path.relative_to(root).as_posix(), "kind": "reference",
+              "source_label": SOURCE_LABELS["claude-bug-bounty"],
+              "canonical_keys": keys, "also_covered_in": ["claude-bug-bounty"]},
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def discover_bugbounty(root: Path, failures: list | None = None,
+                       flagged: list | None = None) -> list[Entry]:
+    """Ingest skills/ + web3/ + technique command docs; skip scaffolding dirs and
+    pure-utility commands (recorded), then fold same-class docs."""
+    out: list[Entry] = []
+    for p in sorted(root.rglob("*.md")):
+        parts = p.relative_to(root).parts
+        if parts[0] not in _BB_DIRS:
+            continue  # scaffolding dir or root meta file — not methodology
+        stem = p.stem.lower()
+        if stem in _BB_NAV or (parts[0] == "commands" and stem in _BB_SKIP_CMD):
+            if flagged is not None:
+                flagged.append({"file": p.relative_to(root).as_posix(),
+                                "reason": "index/nav or session-utility doc — skipped"})
+            continue
+        e = parse_bugbounty(p, root)
+        if e is None:
+            if flagged is not None:
+                flagged.append({"file": p.relative_to(root).as_posix(),
+                                "reason": "empty/nav stub — skipped"})
+            continue
+        out.append(e)
+    return _group_madstuff_by_class(out)
+
+
 # --------------------------------------------------------------------------- #
 # source registry
 # --------------------------------------------------------------------------- #
@@ -1294,6 +1407,10 @@ SPECS: dict[str, SourceSpec] = {
         "hacktricks", SOURCE_LABELS["hacktricks"],
         r"C:\Users\zaid_\Downloads\hacks\hackdic",
         discover_hacktricks),
+    "bugbounty": SourceSpec(
+        "claude-bug-bounty", SOURCE_LABELS["claude-bug-bounty"],
+        r"C:\Users\zaid_\cyber\claude-bug-bounty",
+        discover_bugbounty),
 }
 
 

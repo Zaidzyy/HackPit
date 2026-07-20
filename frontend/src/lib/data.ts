@@ -30,8 +30,9 @@ export const ACCENTS: AccentSwatch[] = [
   { hex: "#4fe0d0", title: "cyan" },
 ];
 
-/** Placeholder shown in the ⌘K affordance (search wiring is the next step). */
-export const ENTRY_COUNT = 431;
+/** Pre-load fallback for the ⌘K affordance; TopBar shows the live /stats
+ * total_entries once loaded. Kept roughly current so the flash isn't stale. */
+export const ENTRY_COUNT = 1551;
 
 /** The home counters, in order, mapped to /stats fields. */
 export const STAT_FIELDS: { key: keyof Stats; label: string }[] = [

@@ -4,6 +4,8 @@ import Link from "next/link";
 import { Wordmark } from "./Wordmark";
 import { ACCENTS, ENTRY_COUNT, NAV } from "@/lib/data";
 import { openPalette } from "@/lib/paletteBus";
+import { getStats } from "@/lib/api";
+import { useApi } from "@/lib/useApi";
 
 /**
  * Swaps the single signature accent at runtime by rewriting the three
@@ -23,6 +25,11 @@ function setAccent(hex: string) {
 
 /** Top bar: wordmark · mono nav · ⌘K affordance (visual only) · accent swatches. */
 export function TopBar() {
+  // Real KB size from the backend; ENTRY_COUNT is just the pre-load fallback so
+  // the affordance never flashes an obviously-stale hardcoded number.
+  const stats = useApi(getStats, []);
+  const entryCount = stats.data?.total_entries ?? ENTRY_COUNT;
+
   return (
     <div className="hp-topbar">
       <Wordmark />
@@ -44,7 +51,7 @@ export function TopBar() {
         onClick={openPalette}
         aria-label="Open search"
       >
-        search {ENTRY_COUNT} entries <kbd>⌘</kbd>
+        search {entryCount} entries <kbd>⌘</kbd>
         <kbd>K</kbd>
       </button>
 

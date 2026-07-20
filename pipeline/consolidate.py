@@ -888,6 +888,102 @@ def discover_madstuff(root: Path, failures: list | None = None,
     return _group_madstuff_by_class(parsed)
 
 
+# =========================================================================== #
+#  SOURCE 5 — htb my resources (Zaid's own Notion export; tier 1)
+# =========================================================================== #
+# 5 monolithic Notion pages (50-400 KB, hundreds of `#` headings — real topics
+# mixed with command-comment "headings"). The format does NOT split cleanly into
+# per-technique entries without producing junk, and hard caps would DROP most of
+# Zaid's content. Compromise: one entry per page with the FULL cleaned body
+# preserved (lexically searchable — nothing dropped) + capped key-command steps,
+# and EVERY page flagged for morning refinement (split into per-technique
+# entries). Coarse but honest; never forces bad structure, never drops his notes.
+_NOTION_HASH_RE = re.compile(r"\s+[0-9a-f]{32}$")
+_NBSP_RE = re.compile(r"[\xa0​]")
+
+
+def _clean_notion(text: str) -> str:
+    text = _NBSP_RE.sub(" ", text)
+    text, _n = _strip_gitbook(text)  # drops ![]() images + html tags
+    text = _MD_UNESCAPE_RE.sub(r"\1", text)
+    return text
+
+
+def parse_htb_my_resources(path: Path, root: Path) -> Entry | None:
+    text = _safe_read(path)
+    if text is None or not text.strip():
+        return None
+    text = _clean_notion(text)
+    lines = text.splitlines()
+    stem = _NOTION_HASH_RE.sub("", path.stem).strip()
+
+    # page title = the page (file) name; only for a bare "Untitled" page do we
+    # fall back to its first meaningful H1.
+    title = humanize(stem)
+    if stem.lower() == "untitled":
+        for line in lines:
+            m = re.match(r"^#\s+(.*)$", line)
+            if m:
+                h = m.group(1).strip().strip("*").strip()
+                if h and h.lower() != "untitled":
+                    title = h
+                    break
+
+    summary = ""
+    for para in text.split("\n\n"):
+        p = " ".join(para.split())
+        if p and not p.startswith(("#", ">", "```", "|", "*", "-", "!")):
+            summary = p[:300].rstrip()
+            break
+
+    steps: list[Step] = []
+    for sec in _walk_sections(lines):
+        code = _section_code(sec, MAX_CODE_PER_SECTION, MAX_CODE_CHARS)
+        if not code:
+            continue
+        head = sec["heading"] or "commands"
+        steps.append(Step(n=len(steps) + 1, text=head[:300], code=code))
+        if len(steps) >= MAX_STEPS_NEW:
+            break
+
+    refs = [u for u in _dedup(_section_urls(lines)) if _MAD_SELFHOST not in u]
+    low = (title + " " + stem).lower()
+    category = "web" if any(w in low for w in ("wordpress", "word press", "web")) else "reference"
+    keys = sorted(canonical_keys(title))
+    # full cleaned body preserved (searchable) — strip only the leading title echo
+    body = re.sub(r"^#\s+.*?\n", "", text, count=1).strip()
+    return Entry(
+        id="htbmine-" + slugify(stem), title=title, category=category,
+        source="htb-my-resources", tier=1,
+        tags=_dedup([category] + keys + [slugify(title)]),
+        tools=_oscp_tools(text), summary=summary or title, steps=steps,
+        body_md=body, references=refs,
+        meta={"src_file": path.name, "canonical_keys": keys,
+              "source_label": SOURCE_LABELS["htb-my-resources"],
+              "also_covered_in": ["htb-my-resources"],
+              "flag_reason": "large multi-topic Notion page — coarse one-per-page "
+                             "ingestion (full body preserved); review for splitting "
+                             "into per-technique entries"},
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def discover_htb_my_resources(root: Path, failures: list | None = None,
+                              flagged: list | None = None) -> list[Entry]:
+    out: list[Entry] = []
+    for p in sorted(root.rglob("*.md")):
+        e = parse_htb_my_resources(p, root)
+        if e is None:
+            if failures is not None:
+                failures.append(p.name)
+            continue
+        if flagged is not None:
+            flagged.append({"file": e.meta["src_file"], "reason": e.meta["flag_reason"],
+                            "ingested": True, "id": e.id})
+        out.append(e)
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # source registry
 # --------------------------------------------------------------------------- #
@@ -916,6 +1012,10 @@ SPECS: dict[str, SourceSpec] = {
         "madstuff", SOURCE_LABELS["madstuff"],
         r"C:\Users\zaid_\Downloads\hacks\new resources\madstuff",
         discover_madstuff),
+    "htbmine": SourceSpec(
+        "htb-my-resources", SOURCE_LABELS["htb-my-resources"],
+        r"C:\Users\zaid_\Downloads\hacks\new resources\htb my resources",
+        discover_htb_my_resources),
 }
 
 

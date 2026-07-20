@@ -151,13 +151,40 @@ CANON: dict[str, list[list[str]]] = {
     "cors": [["cors"], ["cross", "origin", "resource", "sharing"]],
     "osint": [["osint"], ["open", "source", "intelligence"]],
     # --- active directory / OSCP (batch 2: oscp-cpts-notes) ---
-    "kerberoasting": [["kerberoasting"]],
+    "kerberoasting": [["kerberoasting"], ["kerberoast"]],
     "asrep-roasting": [["asreproasting"], ["asrep", "roasting"], ["as", "rep", "roasting"]],
     "password-spraying": [["password", "spraying"], ["password", "spray"]],
     "credentialed-enumeration": [["credentialed", "enumeration"]],
     "dcsync": [["dcsync"]],
     "pass-the-hash": [["pass", "the", "hash"], ["pth"]],
     "pass-the-ticket": [["pass", "the", "ticket"], ["ptt"]],
+    # --- consolidation cleanup: technique classes that were duplicating across
+    # sources (each key resolved through a SPECIFIC multi-token alias so a
+    # coincidental collision is impossible; single-token keys are reserved for
+    # unambiguous product/tool names). NOTE: linux-/windows-privilege-escalation
+    # are deliberately NOT keyed here — those "duplicates" are empty section-nav
+    # stubs (dropped in discover_madstuff), and a broad "…privilege escalation"
+    # alias would falsely collapse dozens of distinct privesc child techniques
+    # whose hierarchical ids contain that phrase. ---
+    "account-takeover": [["account", "takeover"]],
+    "broken-access-control": [["broken", "access", "control"]],
+    "broken-authentication": [["broken", "authentication"]],
+    "client-side-path-traversal": [["client", "side", "path", "traversal"]],
+    "dependency-confusion": [["dependency", "confusion"]],
+    "dom-clobbering": [["dom", "clobbering"]],
+    "ldap-injection": [["ldap", "injection"]],
+    "nosql-injection": [["nosql", "injection"], ["no", "sql", "injection"]],
+    "xpath-injection": [["xpath", "injection"], ["xpath"]],
+    "web-cache-deception": [["web", "cache", "deception"]],
+    "web-cache-poisoning": [["web", "cache", "poisoning"], ["cache", "poisoning"]],
+    "crlf-injection": [["crlf", "injection"], ["crlf"]],
+    "rate-limit-bypass": [["rate", "limit", "bypass"]],
+    "ligolo-ng": [["ligolo", "ng"], ["ligolo"]],
+    # CMS / app-server enumeration classes (product names — unambiguous tokens)
+    "wordpress": [["wordpress"]],
+    "drupal": [["drupal"]],
+    "joomla": [["joomla"]],
+    "tomcat": [["tomcat"]],
 }
 
 # --------------------------------------------------------------------------- #
@@ -273,6 +300,91 @@ def _adapted_body(title: str, summary: str, steps: list[Step]) -> str:
             parts.append(f"```{c.lang}\n{c.cmd}\n```")
     body = "\n".join(parts).strip()
     return body[:MAX_ADAPTED_BODY]
+
+
+# --------------------------------------------------------------------------- #
+# consolidation-cleanup helpers (nav-stub drop + within-source title repair)
+# --------------------------------------------------------------------------- #
+# A parsed note that carries NO code and less than this much adapted content is
+# a section-index / folder / difficulty / nav page that leaked in as an entry
+# (e.g. madstuff's Obsidian chapter-header pages "4.Attacking the OS", CTF
+# difficulty folders "Easy"/"Hard"). Real technique notes clear this comfortably
+# (the smallest kept madstuff note is ~300 chars; the stubs are all < 260, a
+# clean natural gap). Dropping them is content-lossless — they hold only a title
+# and child-page links — and is recorded in the flagged report (reversible).
+NAV_STUB_MAX = 260
+# Generic personal / review titles that are navigation, not technique, content.
+_NAV_TITLE_SLUGS = {"my-review"}
+
+
+def _n_code(e: "Entry") -> int:
+    return sum(len(s.code) for s in e.steps)
+
+
+def is_nav_stub(e: "Entry") -> bool:
+    """True for a leaked index/nav/section-header page (not a technique)."""
+    if slugify(e.title) in _NAV_TITLE_SLUGS:
+        return True
+    return _n_code(e) == 0 and content_len(e.model_dump()) < NAV_STUB_MAX
+
+
+def _norm_body(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "")).strip()
+
+
+def _disambiguate_titles(cands: list["Entry"]) -> list["Entry"]:
+    """Resolve WITHIN-a-source exact-title collisions (the merge engine only
+    consolidates ACROSS sources). Two cases:
+
+      * identical adapted content (e.g. a HackTricks page reachable under two
+        include aliases) — a true duplicate: keep the richest, drop the rest.
+      * distinct content sharing a title because a heading was mis-grabbed as
+        the title (its slug isn't reflected in the page's own filename) — repair
+        the title from the authoritative filename so the pages stop colliding.
+
+    Genuinely different pages that legitimately share a name (two SELinux pages,
+    an OS-split checklist) are still made unique so they stop registering as
+    exact-title duplicates: the richest keeps the clean title, the rest are
+    suffixed. (Cross-source name clashes are NOT touched here — those are left
+    for the report to judge as distinct techniques.)"""
+    groups: dict[str, list["Entry"]] = defaultdict(list)
+    for c in cands:
+        groups[c.title.strip().lower()].append(c)
+    kept: list["Entry"] = []
+    for members in groups.values():
+        if len(members) == 1:
+            kept.append(members[0])
+            continue
+        members.sort(key=lambda e: (content_len(e.model_dump()), e.id), reverse=True)
+        seen_bodies: set[str] = set()
+        uniq: list["Entry"] = []
+        for m in members:
+            h = _norm_body(m.body_md)
+            if h and h in seen_bodies:
+                continue  # byte-identical body -> true duplicate, drop
+            seen_bodies.add(h)
+            uniq.append(m)
+        # richest keeps its (clean) title; repair mis-grabbed titles from the
+        # filename, then guarantee uniqueness with a numeric suffix as a last
+        # resort so two genuinely-distinct same-source pages don't collide.
+        used = {uniq[0].title.strip().lower()}
+        for m in uniq[1:]:
+            base = m.id.split("-", 1)[1] if "-" in m.id else m.id
+            if slugify(m.title) not in base:      # heading mis-grabbed -> filename
+                repaired = humanize(base)
+                if repaired and slugify(repaired) != slugify(m.title):
+                    m.title = repaired
+            if m.title.strip().lower() in used:   # still colliding -> suffix
+                k = 2
+                stem = m.title
+                while f"{stem} ({k})".strip().lower() in used:
+                    k += 1
+                m.title = f"{stem} ({k})"
+            used.add(m.title.strip().lower())
+            m.tags = _dedup(list(m.tags) + [slugify(m.title)])
+            m.summary = m.summary or m.title
+        kept.extend(uniq)
+    return kept
 
 
 # =========================================================================== #
@@ -719,7 +831,7 @@ def discover_oscp(root: Path, failures: list | None = None,
             order.append(gk)
         groups[gk].append((p, title, variant))
     cands = [_oscp_candidate(gk, groups[gk], root, failures) for gk in order]
-    return [c for c in cands if c is not None]
+    return _disambiguate_titles([c for c in cands if c is not None])
 
 
 # =========================================================================== #
@@ -996,11 +1108,20 @@ def discover_madstuff(root: Path, failures: list | None = None,
             if failures is not None:
                 failures.append("notes/" + base + ".md")
             continue
+        # drop leaked section-index / nav / folder-review pages that parse to a
+        # content-free stub (numbered chapter headers, CTF difficulty folders,
+        # "My review") — they are not techniques and would only duplicate titles.
+        if is_nav_stub(e):
+            if flagged is not None:
+                flagged.append({"file": e.meta["src_file"],
+                                "reason": "nav/index/section-header stub — not a "
+                                          "technique (not ingested)", "id": e.id})
+            continue
         if flagged is not None and e.meta.get("flag_reason"):
             flagged.append({"file": e.meta["src_file"], "reason": e.meta["flag_reason"],
                             "ingested": True, "id": e.id})
         parsed.append(e)
-    return _group_madstuff_by_class(parsed)
+    return _disambiguate_titles(_group_madstuff_by_class(parsed))
 
 
 # =========================================================================== #
@@ -1257,7 +1378,7 @@ def discover_claudered(root: Path, failures: list | None = None,
                 failures.append(p.relative_to(root).as_posix())
             continue
         out.append(e)
-    return _group_madstuff_by_class(out)
+    return _disambiguate_titles(_group_madstuff_by_class(out))
 
 
 # =========================================================================== #
@@ -1339,7 +1460,7 @@ def discover_hacktricks(root: Path, failures: list | None = None,
                                 "reason": "nav/index stub or empty — skipped"})
             continue
         out.append(e)
-    return _group_madstuff_by_class(out)
+    return _disambiguate_titles(_group_madstuff_by_class(out))
 
 
 # =========================================================================== #

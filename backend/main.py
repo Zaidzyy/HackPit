@@ -661,7 +661,12 @@ def category_entries(slug: str) -> list[EntrySummary]:
 def scripts() -> dict[str, Any]:
     """The full Scripts Arsenal — every runnable script/payload extracted and
     deduped from the KB, grouped by type, with per-script source attribution."""
-    return STATE.scripts or {"total": 0, "kb_entries": 0, "groups": []}
+    data = STATE.scripts or {"total": 0, "kb_entries": 0, "groups": []}
+    # kb_entries is a build-time count over the raw entries file (pre-exclusion).
+    # Report the actual *served* KB size so the arsenal's "deduped from N entries"
+    # line always matches /stats total_entries and the home counter, regardless of
+    # when the arsenal index was last built.
+    return {**data, "kb_entries": len(STATE.entries)}
 
 
 @app.get("/scripts/summary", response_model=ScriptsSummary)

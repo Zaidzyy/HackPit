@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState, type CSSProperties } from "react";
 import { CategoryCard } from "./CategoryCard";
+import { ScriptsCard } from "./ScriptsCard";
 import { FEATURED } from "@/lib/data";
 import type { Category } from "@/lib/api";
 import { useReducedMotion } from "@/lib/useReducedMotion";
@@ -28,7 +29,7 @@ export function CategoryGrid({
   const reduced = useReducedMotion();
   const [shownCount, setShownCount] = useState(0);
 
-  const total = 1 + (categories?.length ?? 0); // featured + categories
+  const total = 2 + (categories?.length ?? 0); // featured + scripts + categories
 
   useEffect(() => {
     if (!active) return;
@@ -65,11 +66,14 @@ export function CategoryGrid({
         <div className="hp-go">{FEATURED.cta}</div>
       </Link>
 
+      {/* Scripts arsenal — the copy-ready operator view of the whole KB */}
+      <ScriptsCard shown={shownCount > 1} />
+
       {categories?.map((cat, i) => (
         <CategoryCard
           key={cat.slug}
           category={cat}
-          shown={shownCount > i + 1}
+          shown={shownCount > i + 2}
         />
       ))}
 

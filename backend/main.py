@@ -54,6 +54,7 @@ import sessions as sessions_db  # noqa: E402  (backend/sessions.py — SQLite st
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
 CAPTIONS_PATH = REPO_ROOT / "data" / "images" / "captions.json"
+SCRIPTS_PATH = REPO_ROOT / "data" / "kb" / "scripts.json"  # built by pipeline/scripts_index.py
 
 
 # --------------------------------------------------------------------------- #
@@ -165,9 +166,20 @@ class _State:
     by_id: dict[str, dict] = {}
     by_category: dict[str, list[dict]] = {}
     stats: dict[str, int] = {}
+    scripts: dict = {}  # the Scripts Arsenal index (pipeline/scripts_index.py)
 
 
 STATE = _State()
+
+
+def _load_scripts() -> dict:
+    """Load the built Scripts Arsenal index (empty skeleton if not built yet)."""
+    if SCRIPTS_PATH.exists():
+        try:
+            return json.loads(SCRIPTS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"total": 0, "kb_entries": 0, "groups": []}
 
 
 def _load_stats(entries: list[dict]) -> dict[str, int]:
@@ -215,6 +227,7 @@ async def lifespan(app: FastAPI):
         by_cat.setdefault(e.get("category", "uncategorized"), []).append(e)
     STATE.by_category = by_cat
     STATE.stats = _load_stats(entries)
+    STATE.scripts = _load_scripts()
 
     # engagement sessions live in a local SQLite file (gitignored).
     sessions_db.init_db()
@@ -223,6 +236,7 @@ async def lifespan(app: FastAPI):
     STATE.by_id = {}
     STATE.by_category = {}
     STATE.stats = {}
+    STATE.scripts = {}
 
 
 app = FastAPI(
@@ -272,6 +286,52 @@ class CategoryOut(BaseModel):
     count: int
     color: str = Field(description="Per-category accent hex (mock palette).")
     icon: str = Field(description="Glyph shown on the category card.")
+
+
+class ScriptSource(BaseModel):
+    id: str
+    title: str
+    category: str = ""
+
+
+class ScriptItem(BaseModel):
+    id: str = Field(description="Stable per-group id ({type}-{n}).")
+    label: str = Field(description="Short human label ('bash · reverse shell').")
+    lang: str
+    code: str = Field(description="The copyable script/payload, verbatim.")
+    type: str
+    reuse: int = Field(description="How many entries this script appears in.")
+    sources: list[ScriptSource] = Field(description="Entries it was lifted from (capped).")
+    source_total: int = Field(description="Total distinct source entries (>= len(sources)).")
+
+
+class ScriptGroup(BaseModel):
+    type: str
+    label: str
+    icon: str
+    color: str
+    count: int = Field(description="Distinct scripts of this type.")
+    shown: int = Field(description="Scripts included (may be < count under the cap).")
+    scripts: list[ScriptItem] = Field(default_factory=list)
+
+
+class ScriptsResponse(BaseModel):
+    total: int
+    kb_entries: int = Field(default=0, description="Entries scanned to build the arsenal.")
+    groups: list[ScriptGroup] = Field(default_factory=list)
+
+
+class ScriptGroupSummary(BaseModel):
+    type: str
+    label: str
+    icon: str
+    color: str
+    count: int
+
+
+class ScriptsSummary(BaseModel):
+    total: int
+    groups: list[ScriptGroupSummary] = Field(default_factory=list)
 
 
 class EntrySummary(BaseModel):
@@ -508,6 +568,24 @@ def category_entries(slug: str) -> list[EntrySummary]:
         )
         for e in items
     ]
+
+
+@app.get("/scripts", response_model=ScriptsResponse)
+def scripts() -> dict[str, Any]:
+    """The full Scripts Arsenal — every runnable script/payload extracted and
+    deduped from the KB, grouped by type, with per-script source attribution."""
+    return STATE.scripts or {"total": 0, "kb_entries": 0, "groups": []}
+
+
+@app.get("/scripts/summary", response_model=ScriptsSummary)
+def scripts_summary() -> dict[str, Any]:
+    """Lightweight arsenal counts (no script bodies) — feeds the home card."""
+    groups = [
+        {"type": g["type"], "label": g["label"], "icon": g["icon"],
+         "color": g["color"], "count": g["count"]}
+        for g in (STATE.scripts.get("groups") or [])
+    ]
+    return {"total": STATE.scripts.get("total", 0), "groups": groups}
 
 
 @app.get("/search", response_model=SearchResponse)

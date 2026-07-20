@@ -3369,3 +3369,175 @@ a.hp-card {
   color: var(--accent);
   border-color: var(--accent-line);
 }
+
+/* ---------------------------------------------------------------------------
+   Scripts Arsenal — /scripts view + home card
+   --------------------------------------------------------------------------- */
+.hp-scripts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hp-scripts-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 8px;
+}
+.hp-scripts-filter {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  padding: 11px 15px;
+  color: var(--white);
+  font-family: var(--font-jetbrains-mono), "JetBrains Mono", monospace;
+  font-size: 13px;
+  backdrop-filter: blur(6px);
+  transition: border-color 0.15s;
+}
+.hp-scripts-filter:focus {
+  outline: none;
+  border-color: var(--accent-line);
+}
+.hp-scripts-filter::placeholder {
+  color: var(--dim);
+}
+.hp-scripts-count {
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--grey);
+  white-space: nowrap;
+}
+.hp-scripts-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 22px;
+}
+.hp-scripts-navchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--cc, var(--accent)) 30%, transparent);
+  background: color-mix(in srgb, var(--cc, var(--accent)) 8%, transparent);
+  color: var(--white);
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+.hp-scripts-navchip:hover {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--cc, var(--accent)) 16%, transparent);
+}
+.hp-scripts-navic {
+  color: var(--cc, var(--accent));
+  font-size: 13px;
+}
+.hp-scripts-navct {
+  font-size: 10px;
+  color: var(--dim);
+  border-left: 1px solid var(--border-2);
+  padding-left: 8px;
+}
+.hp-scripts-group {
+  margin: 10px 0 34px;
+  scroll-margin-top: 24px;
+}
+.hp-scripts-grouphead {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  font-family: var(--font-space-grotesk), "Space Grotesk", sans-serif;
+  font-weight: 400;
+  font-size: 20px;
+  letter-spacing: -0.2px;
+  color: var(--white);
+  padding-bottom: 10px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.hp-scripts-groupic {
+  color: var(--cc, var(--accent));
+  font-size: 18px;
+}
+.hp-scripts-groupct {
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  color: var(--dim);
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  padding: 1px 9px;
+}
+.hp-scripts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.hp-scriptcard {
+  border-left: 2px solid color-mix(in srgb, var(--cc, var(--accent)) 55%, transparent);
+  padding-left: 14px;
+}
+.hp-scriptcode {
+  margin: 0;
+}
+.hp-scriptcode .hp-code-bar {
+  justify-content: flex-start;
+  gap: 10px;
+}
+.hp-scriptcode .hp-copy {
+  margin-left: auto;
+}
+.hp-script-label {
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: var(--grey);
+  font-family: var(--font-jetbrains-mono), "JetBrains Mono", monospace;
+}
+.hp-script-reuse {
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: var(--cc, var(--accent));
+  border: 1px solid color-mix(in srgb, var(--cc, var(--accent)) 35%, transparent);
+  background: color-mix(in srgb, var(--cc, var(--accent)) 10%, transparent);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.hp-script-srcs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+}
+.hp-script-srcs-label {
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.hp-script-srcchip {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-decoration: none;
+  transition: color 0.15s, border-color 0.15s;
+}
+.hp-script-srcchip:hover {
+  color: var(--cc, var(--accent));
+  border-color: color-mix(in srgb, var(--cc, var(--accent)) 45%, transparent);
+}
+.hp-script-srcmore {
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: var(--dim);
+}
+/* home bento card */
+.hp-scriptscard .hp-ic {
+  color: var(--cc);
+}

@@ -267,6 +267,52 @@ export const getEntry = (id: string, signal?: AbortSignal) =>
 export const imageUrl = (path: string) =>
   `${API_URL}/image?path=${encodeURIComponent(path)}`;
 
+// ---- scripts arsenal ----------------------------------------------------- //
+
+/** One entry a script was lifted from (links to /entry/{id}). */
+export type ScriptSource = { id: string; title: string; category: string };
+
+/** One deduped, copy-ready script/payload in the arsenal. */
+export type ScriptItem = {
+  id: string;
+  label: string;
+  lang: string;
+  code: string;
+  type: string;
+  /** How many entries this script appears in. */
+  reuse: number;
+  sources: ScriptSource[];
+  source_total: number;
+};
+
+export type ScriptGroup = {
+  type: string;
+  label: string;
+  icon: string;
+  color: string;
+  count: number;
+  shown: number;
+  scripts: ScriptItem[];
+};
+
+export type ScriptsResponse = {
+  total: number;
+  kb_entries: number;
+  groups: ScriptGroup[];
+};
+
+/** Group counts only (no script bodies) — feeds the home card. */
+export type ScriptsSummary = {
+  total: number;
+  groups: { type: string; label: string; icon: string; color: string; count: number }[];
+};
+
+export const getScripts = (signal?: AbortSignal) =>
+  getJSON<ScriptsResponse>("/scripts", signal);
+
+export const getScriptsSummary = (signal?: AbortSignal) =>
+  getJSON<ScriptsSummary>("/scripts/summary", signal);
+
 export const search = (
   q: string,
   opts: { mode?: string; top?: number } = {},

@@ -71,6 +71,7 @@ SOURCE_LABELS = {
     "htb-academy": "HTB Academy",
     "madstuff": "x3m1Sec's notes",  # José Miguel Romero, x3m1sec.gitbook.io (used with permission)
     "htb-my-resources": "your notes (htb my resources)",
+    "claude-red": "claude-red skills",
 }
 
 # Zaid's OWN notes — the trusted tier-1 sources. When one of these is the
@@ -123,8 +124,25 @@ CANON: dict[str, list[list[str]]] = {
              ["insecure", "direct", "object", "references"]],
     "ssrf": [["ssrf"], ["server", "side", "request", "forgery"]],
     "mass-assignment": [["mass", "assignment"]],
-    "race-condition": [["race", "condition"]],
+    "race-condition": [["race", "condition"], ["race", "conditions"]],
     "jwt": [["jwt"], ["json", "web", "token"]],
+    # web classes first homed as batch-6 reference entries (claude-red skills),
+    # also the overlap targets for the HackTricks fold (batch 7).
+    "ssti": [["ssti"], ["server", "side", "template", "injection"],
+             ["template", "injection"]],
+    "open-redirect": [["open", "redirect"], ["open", "redirects"]],
+    "request-smuggling": [["request", "smuggling"],
+                          ["http", "request", "smuggling"], ["desync"]],
+    "deserialization": [["deserialization"], ["deserialisation"],
+                        ["insecure", "deserialization"]],
+    "graphql": [["graphql"]],
+    "waf-bypass": [["waf", "bypass"], ["waf", "bypasses"]],
+    "business-logic": [["business", "logic"]],
+    "parameter-pollution": [["parameter", "pollution"], ["hpp"]],
+    "oauth": [["oauth"], ["oauth2"]],
+    "clickjacking": [["clickjacking"]],
+    "cors": [["cors"], ["cross", "origin", "resource", "sharing"]],
+    "osint": [["osint"], ["open", "source", "intelligence"]],
     # --- active directory / OSCP (batch 2: oscp-cpts-notes) ---
     "kerberoasting": [["kerberoasting"]],
     "asrep-roasting": [["asreproasting"], ["asrep", "roasting"], ["as", "rep", "roasting"]],
@@ -988,6 +1006,167 @@ def discover_htb_my_resources(root: Path, failures: list | None = None,
     return out
 
 
+# =========================================================================== #
+#  SOURCE 6 — claude-red (offensive skill packs; two markdown layouts, tier 3)
+# =========================================================================== #
+# Each skill is Skills/<category>/<folder>/SKILL.md in ONE of two layouts:
+#   A) templated: "# SKILL: <title>" + ## Metadata/Description/Trigger Phrases/
+#      Instructions + "---" + "## Full Methodology" (the real content).
+#   B) frontmatter: a YAML "---\nname:…\ndescription:…\n---" header then a
+#      "# <title>" and the content directly (no Full-Methodology wrapper).
+# The parser normalises both to (title, summary, methodology-body) and adapts.
+# Category comes from the top folder; canonical class from the folder+title, so
+# offensive-idor/ssti/ssrf/… fold into their existing KB homes while AD / cloud
+# / wireless / exploit-dev / etc. become new tier-3 entries.
+CLAUDERED_CATEGORY = {
+    "web": "web", "auth": "web", "active-directory": "active-directory",
+    "cloud": "cloud", "recon": "recon", "exploit-dev": "exploit-dev",
+    "fuzzing": "fuzzing", "infrastructure": "post-exploitation", "iot": "iot",
+    "mobile": "mobile", "wireless": "wireless", "ai": "ai", "utility": "reference",
+}
+_FM_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.S)
+_MERMAID_HEADS = ("flowchart", "graph ", "graph\n", "graph t", "graph l",
+                  "sequencediagram", "statediagram", "classdiagram", "erdiagram",
+                  "gantt", "pie ", "mindmap", "journey", "gitgraph", "%%{")
+
+
+def _frontmatter(text: str) -> tuple[dict, str]:
+    """Split a leading YAML `--- … ---` block into (fields, remaining-body)."""
+    m = _FM_RE.match(text)
+    if not m:
+        return {}, text
+    fields: dict = {}
+    for line in m.group(1).splitlines():
+        mm = re.match(r"^(\w[\w-]*):\s*(.*)$", line)
+        if mm:
+            fields[mm.group(1)] = mm.group(2).strip().strip('"').strip("'").strip()
+    return fields, text[m.end():]
+
+
+def _is_mermaid(lang: str, code: str) -> bool:
+    if (lang or "").lower() == "mermaid":
+        return True
+    head = code.strip().lower()[:24]
+    return any(head.startswith(h) for h in _MERMAID_HEADS)
+
+
+def _cred_code(sec: dict) -> list[Code]:
+    """Section code = fenced blocks (mermaid diagrams dropped) + inline command
+    bullets, capped like every other reference source."""
+    blocks: list[Code] = []
+    for lg, cd in sec["code"]:
+        if _is_mermaid(lg, cd):
+            continue
+        blocks.append(Code(lang=(lg or "text"), cmd=cd[:MAX_CODE_CHARS]))
+    for ln in sec["raw"]:
+        m = _INLINE_CMD_RE.match(ln)
+        if m:
+            cmd = _PROMPT_RE.sub("", m.group(1).strip())
+            if cmd:
+                blocks.append(Code(lang="bash", cmd=cmd[:MAX_CODE_CHARS]))
+    return blocks[:MAX_CODE_PER_SECTION]
+
+
+_CRED_SKIP = _SKIP_HEADINGS | {"metadata", "trigger phrases",
+                               "instructions for claude", "overview", "shortcut",
+                               "mechanisms"}
+
+
+def parse_claudered(path: Path, root: Path) -> Entry | None:
+    """Adapt one claude-red SKILL.md (either layout) into a canonical Entry."""
+    raw_text = _safe_read(path)
+    if raw_text is None or not raw_text.strip():
+        return None
+    fm, after_fm = _frontmatter(raw_text)
+
+    # source URL + templated title come from the metadata block (layout A)
+    src_url = None
+    ms = re.search(r"\*\*Source\*\*:\s*(\S+)", raw_text)
+    if ms:
+        src_url = ms.group(1).strip()
+    skill_title = None
+    mt = re.search(r"^#\s*SKILL:\s*(.+)$", raw_text, re.M)
+    if mt:
+        skill_title = mt.group(1).strip()
+
+    # methodology body: after "## Full Methodology" (A) else the post-frontmatter
+    # text (B); strip GitBook/html noise either way
+    if "## Full Methodology" in raw_text:
+        body_src = raw_text.split("## Full Methodology", 1)[1]
+    else:
+        body_src = after_fm
+    body_src, _n = _strip_gitbook(body_src)
+    lines = body_src.splitlines()
+    sections = _walk_sections(lines)  # fence-aware: headings only, not code comments
+
+    folder = path.relative_to(root).parts[-2]
+    category_folder = path.relative_to(root).parts[0]
+    first_h1 = ""
+    for sec in sections:
+        h = sec["heading"].strip()
+        if sec["level"] == 1 and h and not h.upper().startswith("SKILL"):
+            first_h1 = h
+            break
+    title = skill_title or first_h1 or humanize(fm.get("name") or folder)
+    title = re.sub(r"^Week\s+\d+:\s*", "", title).strip() or humanize(folder)
+
+    summary = ""
+    md = re.search(r"^##\s*Description\s*\n+(.+)$", raw_text, re.M)
+    if md:
+        summary = " ".join(md.group(1).split())[:300].rstrip()
+    elif fm.get("description"):
+        summary = " ".join(fm["description"].split())[:300].rstrip()
+    else:
+        for para in body_src.split("\n\n"):
+            p = " ".join(para.split())
+            if p and not p.startswith(("#", ">", "```", "|", "*", "-", "!", "_")):
+                summary = p[:300].rstrip()
+                break
+
+    steps: list[Step] = []
+    for sec in sections:
+        h = sec["heading"].strip()
+        if not h or h.lower() in _CRED_SKIP:
+            continue
+        code = _cred_code(sec)
+        prose = " ".join(sec["prose"]).strip()
+        text_i = f"{h} — {prose}"[:600] if prose else h
+        if code or prose:
+            steps.append(Step(n=len(steps) + 1, text=text_i.strip(), code=code))
+        if len(steps) >= MAX_STEPS_NEW:
+            break
+
+    category = CLAUDERED_CATEGORY.get(category_folder, "reference")
+    keys = sorted(canonical_keys(f"{title} {folder}"))
+    refs = _dedup(([src_url] if src_url else []) + _section_urls(lines))
+    return Entry(
+        id="cred-" + slugify(folder.replace("offensive-", "") or folder),
+        title=title, category=category, source="claude-red", tier=3,
+        tags=_dedup([category] + keys + [slugify(title)]),
+        tools=_oscp_tools(body_src), summary=summary or title, steps=steps,
+        body_md=_adapted_body(title, summary, steps), references=refs,
+        meta={"src_file": path.relative_to(root).as_posix(), "kind": "reference",
+              "source_label": SOURCE_LABELS["claude-red"], "canonical_keys": keys,
+              "also_covered_in": ["claude-red"], "skill_folder": folder},
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def discover_claudered(root: Path, failures: list | None = None,
+                       flagged: list | None = None) -> list[Entry]:
+    """One candidate per SKILL.md (skip empty/unreadable — recorded), then fold
+    same-class skills (e.g. the two OSINT skills) into one candidate."""
+    out: list[Entry] = []
+    for p in sorted(root.rglob("SKILL.md")):
+        e = parse_claudered(p, root)
+        if e is None:
+            if failures is not None:
+                failures.append(p.relative_to(root).as_posix())
+            continue
+        out.append(e)
+    return _group_madstuff_by_class(out)
+
+
 # --------------------------------------------------------------------------- #
 # source registry
 # --------------------------------------------------------------------------- #
@@ -1020,6 +1199,10 @@ SPECS: dict[str, SourceSpec] = {
         "htb-my-resources", SOURCE_LABELS["htb-my-resources"],
         r"C:\Users\zaid_\Downloads\hacks\new resources\htb my resources",
         discover_htb_my_resources),
+    "claudered": SourceSpec(
+        "claude-red", SOURCE_LABELS["claude-red"],
+        r"C:\Users\zaid_\cyber\claude-red\Skills",
+        discover_claudered),
 }
 
 

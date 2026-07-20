@@ -3541,3 +3541,46 @@ a.hp-card {
 .hp-scriptscard .hp-ic {
   color: var(--cc);
 }
+
+/* attack-path: "full writeup available for this box" link */
+.hp-ap-writeup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 12px 16px;
+  border: 1px solid color-mix(in srgb, #f0a24a 34%, transparent);
+  background: color-mix(in srgb, #f0a24a 9%, transparent);
+  border-radius: 12px;
+  text-decoration: none;
+  color: var(--white);
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+.hp-ap-writeup:hover {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, #f0a24a 15%, transparent);
+  border-color: color-mix(in srgb, #f0a24a 55%, transparent);
+}
+.hp-ap-writeup-ic {
+  color: #f0a24a;
+  font-size: 18px;
+  flex: none;
+}
+.hp-ap-writeup-txt {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  letter-spacing: 0.2px;
+}
+.hp-ap-writeup-mine {
+  color: #f0a24a;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+.hp-ap-writeup-go {
+  flex: none;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #f0a24a;
+}

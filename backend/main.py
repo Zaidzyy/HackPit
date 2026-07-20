@@ -461,6 +461,12 @@ class AttackPhase(BaseModel):
     steps: list[AttackStep]
 
 
+class BoxWriteup(BaseModel):
+    id: str = Field(description="Writeup entry id — links to /entry/{id}.")
+    title: str
+    tier: int
+
+
 class AttackPathOut(BaseModel):
     goal: str
     target_type: str | None
@@ -470,6 +476,11 @@ class AttackPathOut(BaseModel):
         "into step commands; null if none was detectable.",
     )
     phases: list[AttackPhase]
+    box_writeup: BoxWriteup | None = Field(
+        default=None,
+        description="A full writeup for the named box, surfaced as a link (never "
+        "as steps); null when the goal doesn't name a box we have a writeup for.",
+    )
     model_used: str
     provider: str
 

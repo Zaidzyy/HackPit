@@ -152,12 +152,21 @@ export type AttackPhase = {
   steps: AttackStep[];
 };
 
+/** A full box writeup surfaced as a link above a composed path (never as steps). */
+export type BoxWriteup = {
+  id: string;
+  title: string;
+  tier: number;
+};
+
 export type AttackPath = {
   goal: string;
   target_type: string | null;
   /** Target (IP/host/URL) parsed from the goal + substituted into commands. */
   target: string | null;
   phases: AttackPhase[];
+  /** Set when the goal named a box we have a writeup for — link, not steps. */
+  box_writeup: BoxWriteup | null;
   /** Model that composed the path (e.g. "qwen3:8b"). */
   model_used: string;
   provider: string;

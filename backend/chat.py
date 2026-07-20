@@ -151,6 +151,8 @@ def retrieve(
             eid = h.get("id")
             if not eid or eid not in by_id:
                 continue
+            if by_id[eid].get("category") in attack_path.EXCLUDED_STEP_CATEGORIES:
+                continue  # never cite a whole-box writeup / CTF index as the technique
             score = float(h.get("score") or 0.0)
             if eid not in best or score > best[eid]:
                 best[eid] = score
@@ -162,7 +164,8 @@ def retrieve(
     for phase in (session.get("path") or {}).get("phases", []) or []:
         for step in phase.get("steps", []) or []:
             eid = step.get("entry_id")
-            if eid and eid in by_id and eid not in best:
+            if (eid and eid in by_id and eid not in best
+                    and by_id[eid].get("category") not in attack_path.EXCLUDED_STEP_CATEGORIES):
                 best[eid] = _PATH_BASELINE
 
     ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)

@@ -246,6 +246,23 @@ export function AttackPathScreen() {
               </div>
             </div>
 
+            {result.box_writeup && (
+              <Link
+                href={`/entry/${encodeURIComponent(result.box_writeup.id)}`}
+                className="hp-ap-writeup"
+              >
+                <span className="hp-ap-writeup-ic">▤</span>
+                <span className="hp-ap-writeup-txt">
+                  Full writeup available for this box —{" "}
+                  <b>{result.box_writeup.title}</b>
+                  {result.box_writeup.tier === 1 && (
+                    <span className="hp-ap-writeup-mine"> · your notes</span>
+                  )}
+                </span>
+                <span className="hp-ap-writeup-go">open →</span>
+              </Link>
+            )}
+
             <div className="hp-ap-startbar">
               <div className="hp-ap-starttext">
                 <span className="hp-ap-startbadge">preview</span>

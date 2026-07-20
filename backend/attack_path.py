@@ -98,6 +98,13 @@ _CMD_CHARS = 320
 
 SearchFn = Callable[[str, int, str], list[dict]]
 
+# Categories that are worked EXAMPLES, not techniques: whole-box writeups and
+# CTF-challenge indexes. They must never become path steps — grounding a step on
+# "Querier" would dump another box's commands instead of the actual technique. So
+# they are excluded from the retrieval/grounding pool entirely (a writeup for the
+# *current* box is surfaced separately, as a link, by find_box_writeup()).
+EXCLUDED_STEP_CATEGORIES = {"writeup", "ctf"}
+
 
 # --------------------------------------------------------------------------- #
 # target extraction + substitution
@@ -154,6 +161,42 @@ def extract_target(goal: str) -> str | None:
     if m:
         return m.group(0)
     return None
+
+
+# box-context guard + generic goal words that must not be treated as a box name
+_BOX_CONTEXT_RE = re.compile(
+    r"\b(?:htb|hack\s?the\s?box|box|machine|thm|try\s?hack\s?me|vulnhub|"
+    r"proving\s?grounds?|\bpg\b)\b", re.I)
+_GOAL_STOP = {"htb", "hackthebox", "box", "machine", "thm", "tryhackme", "vulnhub",
+              "root", "user", "flag", "flags", "exploit", "attack", "hack", "pwn",
+              "compromise", "http", "https", "www", "com", "org", "net", "shell"}
+
+
+def find_box_writeup(by_id: dict[str, dict], goal: str) -> dict | None:
+    """If the goal names a box we have a WRITEUP for, return that one writeup
+    ({id, title, tier}) to surface as a prominent link — never as a step. Gated
+    on box-context wording so a generic web goal can't trigger it; prefers your
+    own (tier-1) writeup, then the fuller one. Returns None otherwise."""
+    if not _BOX_CONTEXT_RE.search(goal):
+        return None
+    goal_words = {w for w in re.findall(r"[a-z0-9]+", goal.lower())
+                  if len(w) >= 4 and w not in _GOAL_STOP}
+    if not goal_words:
+        return None
+    best: tuple[tuple[int, int], dict] | None = None
+    for e in by_id.values():
+        if e.get("category") != "writeup":
+            continue
+        title_words = [w for w in re.findall(r"[a-z0-9]+", (e.get("title") or "").lower())
+                       if len(w) >= 4]
+        if any(w in goal_words for w in title_words):
+            rank = (0 if e.get("tier") == 1 else 1, -len(e.get("body_md") or ""))
+            if best is None or rank < best[0]:
+                best = (rank, e)
+    if best is None:
+        return None
+    e = best[1]
+    return {"id": e["id"], "title": e["title"], "tier": int(e.get("tier", 3))}
 
 
 def _target_host(target: str) -> str:
@@ -246,6 +289,8 @@ def retrieve(
             eid = h.get("id")
             if not eid or eid not in by_id:
                 continue
+            if by_id[eid].get("category") in EXCLUDED_STEP_CATEGORIES:
+                continue  # whole-box writeup / CTF index — not a technique
             score = float(h.get("score") or 0.0)
             if eid not in best or score > best[eid]:
                 best[eid] = score
@@ -425,6 +470,8 @@ def _ground(
             eid = _resolve_entry_id(str(st.get("entry_id") or ""), by_id, norm_map)
             if eid is None or eid in used:
                 continue
+            if by_id[eid].get("category") in EXCLUDED_STEP_CATEGORIES:
+                continue  # never ground a step on a whole-box writeup / CTF index
             used.add(eid)
             e = by_id[eid]
             why = str(st.get("why") or "").strip()
@@ -493,6 +540,7 @@ def compose(
         "target_type": target_type,
         "target": target,
         "phases": phases,
+        "box_writeup": find_box_writeup(by_id, goal),
         "model_used": cfg["model"],
         "provider": cfg["provider"],
     }

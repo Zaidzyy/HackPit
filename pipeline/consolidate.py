@@ -1648,8 +1648,18 @@ def revert_source(entry: dict, name: str, label: str) -> dict:
         return entry
     mark, prefix = _mark(name), _prefix(label)
     body = entry.get("body_md", "") or ""
-    if mark in body:
-        entry["body_md"] = body.split("\n\n---\n\n" + mark, 1)[0].rstrip()
+    sep = "\n\n---\n\n"
+    start = body.find(sep + mark)
+    if start != -1:
+        # excise ONLY this source's section (from its `---`+mark up to the next
+        # merged-source section or EOF). Splitting on the mark alone would drop
+        # every later source's section too — a re-run of an early source must
+        # not delete the body a later source contributed.
+        nxt = body.find(sep + "<!-- merged:", start + len(sep + mark))
+        if nxt == -1:
+            entry["body_md"] = body[:start].rstrip()
+        else:
+            entry["body_md"] = (body[:start] + body[nxt:]).rstrip()
     kept = [s for s in entry.get("steps", [])
             if not (s.get("text", "") or "").startswith(prefix)]
     for i, s in enumerate(kept, 1):
@@ -1769,6 +1779,9 @@ def merge_into(target: dict, cand: dict, name: str, label: str) -> dict:
         "variants": (cand.get("meta") or {}).get("variants", []),
         "conflicts": conflicts,
     })
+    # deterministic order so a re-run (which reverts then re-appends this source's
+    # rows) yields a byte-identical log regardless of source run order.
+    meta["merge_log"].sort(key=lambda x: (x.get("source", ""), x.get("cand_id", "")))
     return target
 
 

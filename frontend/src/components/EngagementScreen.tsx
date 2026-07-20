@@ -30,8 +30,12 @@ export function EngagementScreen({ id }: { id: string }) {
   const [state, setState] = useState<Record<string, StepState>>({});
   const [label, setLabel] = useState("");
 
-  useEffect(() => {
-    if (!fetched.data) return;
+  // Seed local state from the fetched session DURING RENDER (React's sanctioned
+  // "adjust state when a prop changes" pattern) rather than in an effect — the
+  // guard fires exactly once per new session object, so no loop and no
+  // effect-cascade. fetched.data is referentially stable between fetches.
+  const [seededFrom, setSeededFrom] = useState<Session | null>(null);
+  if (fetched.data && fetched.data !== seededFrom) {
     const map: Record<string, StepState> = {};
     for (const ph of fetched.data.path.phases) {
       for (const st of ph.steps) {
@@ -40,7 +44,8 @@ export function EngagementScreen({ id }: { id: string }) {
     }
     setState(map);
     setLabel(fetched.data.label);
-  }, [fetched.data]);
+    setSeededFrom(fetched.data);
+  }
 
   const toggle = useCallback(
     (stepId: string) => {

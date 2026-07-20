@@ -69,7 +69,14 @@ SOURCE_LABELS = {
     "payloadsallthethings": "PayloadsAllTheThings",
     "oscp-cpts-notes": "oscp-cpts-notes",
     "htb-academy": "HTB Academy",
+    "madstuff": "your notes (madstuff)",
+    "htb-my-resources": "your notes (htb my resources)",
 }
+
+# Zaid's OWN notes — the trusted tier-1 sources. When one of these is the
+# INCOMING side of a merge, its content is the trusted/primary variant and the
+# entry is marked "from your notes" (its tested commands are preferred).
+PERSONAL_SOURCES = {"peh-notes", "madstuff", "htb-my-resources"}
 
 # --------------------------------------------------------------------------- #
 # matching knobs
@@ -374,7 +381,8 @@ def parse_patt(path: Path, root: Path) -> Entry:
     )
 
 
-def discover_patt(root: Path, failures: list | None = None) -> list[Entry]:
+def discover_patt(root: Path, failures: list | None = None,
+                  flagged: list | None = None) -> list[Entry]:
     out: list[Entry] = []
     for p in sorted(root.rglob("README.md")):
         rel = p.relative_to(root)
@@ -584,7 +592,8 @@ def _oscp_candidate(group_key: str, members: list[tuple[Path, str, str | None]],
     )
 
 
-def discover_oscp(root: Path, failures: list | None = None) -> list[Entry]:
+def discover_oscp(root: Path, failures: list | None = None,
+                  flagged: list | None = None) -> list[Entry]:
     """Group the GitBook files (skipping index/nav READMEs + SUMMARY) and emit
     one consolidated candidate per technique group."""
     groups: dict[str, list[tuple[Path, str, str | None]]] = defaultdict(list)
@@ -695,7 +704,8 @@ def parse_htb(path: Path, root: Path) -> Entry | None:
     )
 
 
-def discover_htb(root: Path, failures: list | None = None) -> list[Entry]:
+def discover_htb(root: Path, failures: list | None = None,
+                 flagged: list | None = None) -> list[Entry]:
     """One candidate per HTB module README; skip empty/unreadable (recorded)."""
     out: list[Entry] = []
     for p in sorted(root.rglob("README.md")):
@@ -706,6 +716,176 @@ def discover_htb(root: Path, failures: list | None = None) -> list[Entry]:
             continue
         out.append(e)
     return out
+
+
+# =========================================================================== #
+#  SOURCE 4 — madstuff (Zaid's own Obsidian/GitBook vault; tier 1)
+# =========================================================================== #
+# Every note ships as a PAIR: `<name>.md` (rendered, no title) and
+# `<name>-md.md` (raw source, has the `# title`, ~2.6x fuller, backslash-escaped
+# markdown). We dedupe each pair to the titled `-md.md` and unescape it.
+_MD_UNESCAPE_RE = re.compile(r"\\([\\`*_{}\[\]()#+.!|>~=-])")
+_WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
+_MAD_BOILER_RE = re.compile(
+    r"^\s*>?\s*For the complete documentation index.*$", re.MULTILINE)
+_MAD_SELFHOST = "x3m1sec.gitbook.io"
+
+
+def _mad_category(base: str) -> str:
+    low = base.lower()
+    if "active-directory" in low or "kerberos" in low or "/ad-" in low:
+        return "active-directory"
+    if low.startswith("ctfs/") or "/ctfs/" in low:
+        return "ctf"
+    if "privilege-escalation" in low or "privesc" in low:
+        return "privesc"
+    if "pivot" in low or "tunnel" in low:
+        return "pivoting"
+    if "web" in low:
+        return "web"
+    if "cheat" in low or low.startswith("resources/"):
+        return "reference"
+    return "reference"
+
+
+def parse_madstuff(path: Path, notes_root: Path, base: str) -> Entry | None:
+    """Adapt one madstuff note (the chosen member of a pair) into an Entry."""
+    text = _safe_read(path)
+    if text is None:
+        return None
+    text = _MD_UNESCAPE_RE.sub(r"\1", text)
+    text = _WIKILINK_RE.sub(lambda m: m.group(2) or m.group(1), text)
+    text = _MAD_BOILER_RE.sub("", text)
+    text, _n = _strip_gitbook(text)
+    if not text.strip():
+        return None
+    lines = text.splitlines()
+
+    stem = Path(base).name
+    title = humanize(stem)
+    for line in lines:
+        if line.startswith("# "):
+            title = line[2:].strip()
+            break
+
+    summary = ""
+    for para in text.split("\n\n"):
+        p = " ".join(para.split())
+        if p and not p.startswith(("#", ">", "```", "|", "*", "-", "!")):
+            summary = p[:300].rstrip()
+            break
+
+    steps: list[Step] = []
+    for sec in _walk_sections(lines):
+        if not sec["heading"] or sec["heading"].lower() in _SKIP_HEADINGS:
+            continue
+        code = _section_code(sec, MAX_CODE_PER_SECTION, MAX_CODE_CHARS)
+        prose = " ".join(sec["prose"]).strip()
+        text_i = f"{sec['heading']} — {prose}"[:600] if prose else sec["heading"]
+        if code or prose:
+            steps.append(Step(n=len(steps) + 1, text=text_i.strip(), code=code))
+        if len(steps) >= MAX_STEPS_NEW:
+            break
+
+    # external refs only — drop the author's own gitbook self-index links
+    refs = [u for u in _dedup(_section_urls(lines)) if _MAD_SELFHOST not in u]
+    keys = sorted(canonical_keys(title))
+    category = _mad_category(base)
+    n_code = sum(len(s.code) for s in steps)
+    entry = Entry(
+        id="mad-" + slugify(base), title=title, category=category,
+        source="madstuff", tier=1,
+        tags=_dedup([category] + keys + [slugify(title)]),
+        tools=_oscp_tools(text), summary=summary or title, steps=steps,
+        body_md=_adapted_body(title, summary, steps), references=refs,
+        meta={"src_file": "notes/" + base + ".md", "canonical_keys": keys,
+              "source_label": SOURCE_LABELS["madstuff"],
+              "also_covered_in": ["madstuff"]},
+        schema_version=SCHEMA_VERSION,
+    )
+    # low-value flag (still ingested — Zaid's rule: never silently drop)
+    if n_code == 0 and (len(refs) >= 3 or len(text.strip()) < 250):
+        entry.meta["flag_reason"] = "prose/link-only, no commands — low technique value"
+    return entry
+
+
+def _group_madstuff_by_class(cands: list[Entry]) -> list[Entry]:
+    """Fold madstuff notes that resolve to the SAME canonical class into one
+    candidate (fullest primary + the rest as labelled variants), so a whole
+    course module — e.g. the file-inclusion notes — consolidates into ONE merge
+    instead of spawning many duplicate-class entries. Notes with no class are
+    left as individual candidates."""
+    keyed: dict[tuple, list[Entry]] = defaultdict(list)
+    singles: list[Entry] = []
+    for c in cands:
+        ck = entry_keys(c.model_dump())
+        if ck:
+            keyed[tuple(sorted(ck))].append(c)
+        else:
+            singles.append(c)
+    out: list[Entry] = list(singles)
+    for keys, members in keyed.items():
+        if len(members) == 1:
+            out.append(members[0])
+            continue
+        members.sort(key=lambda c: content_len(c.model_dump()), reverse=True)
+        primary = members[0]
+        steps = list(primary.steps)
+        variants, refs, tools = [], list(primary.references), list(primary.tools)
+        for m in members[1:]:
+            variants.append(m.title)
+            for s in m.steps:
+                if len(steps) >= MAX_STEPS_NEW:
+                    break
+                steps.append(Step(n=len(steps) + 1,
+                                  text=f"{m.title} — {s.text}"[:600], code=s.code))
+            refs += m.references
+            tools += m.tools
+        primary.steps = steps[:MAX_STEPS_NEW]
+        primary.references = _dedup(refs)
+        primary.tools = _dedup(tools)
+        primary.meta["variants"] = _dedup(variants)
+        primary.meta["canonical_keys"] = list(keys)
+        primary.body_md = _adapted_body(primary.title, primary.summary, primary.steps)
+        out.append(primary)
+    return out
+
+
+def discover_madstuff(root: Path, failures: list | None = None,
+                      flagged: list | None = None) -> list[Entry]:
+    """Dedupe each note pair (prefer the titled `-md.md`), skip+flag index/nav/
+    folder-review pages, emit one tier-1 candidate per note, then consolidate
+    same-class notes. Nothing is silently dropped: skipped pages and low-value
+    notes are recorded in `flagged`."""
+    notes = root / "notes" if (root / "notes").is_dir() else root
+    groups: dict[str, dict] = {}
+    for p in sorted(notes.rglob("*.md")):
+        rel = p.relative_to(notes).as_posix()
+        base = rel[:-6] if rel.endswith("-md.md") else rel[:-3]
+        g = groups.setdefault(base, {})
+        g["md" if rel.endswith("-md.md") else "plain"] = p
+
+    parsed: list[Entry] = []
+    for base, g in sorted(groups.items()):
+        chosen = g.get("md") or g.get("plain")
+        parts = Path(base).parts
+        is_root_index = len(parts) == 1
+        is_folder_index = len(parts) > 1 and slugify(parts[-1]) == slugify(parts[-2])
+        if is_root_index or is_folder_index:
+            if flagged is not None:
+                flagged.append({"file": "notes/" + base + ".md",
+                                "reason": "index / nav / folder-review page (not ingested)"})
+            continue
+        e = parse_madstuff(chosen, notes, base)
+        if e is None:
+            if failures is not None:
+                failures.append("notes/" + base + ".md")
+            continue
+        if flagged is not None and e.meta.get("flag_reason"):
+            flagged.append({"file": e.meta["src_file"], "reason": e.meta["flag_reason"],
+                            "ingested": True, "id": e.id})
+        parsed.append(e)
+    return _group_madstuff_by_class(parsed)
 
 
 # --------------------------------------------------------------------------- #
@@ -732,6 +912,10 @@ SPECS: dict[str, SourceSpec] = {
         "htb-academy", SOURCE_LABELS["htb-academy"],
         r"C:\Users\zaid_\Downloads\hacks\new resources\HTB_academy",
         discover_htb),
+    "madstuff": SourceSpec(
+        "madstuff", SOURCE_LABELS["madstuff"],
+        r"C:\Users\zaid_\Downloads\hacks\new resources\madstuff",
+        discover_madstuff),
 }
 
 
@@ -748,8 +932,11 @@ def match_candidate(cand: dict, cand_vec, existing: list[dict],
     """
     import numpy as np
 
-    ck = canonical_keys(cand.get("title", "")) | set(
-        (cand.get("meta") or {}).get("canonical_keys", []))
+    # Key on the WHOLE candidate (title + tags + id/path), identical to how
+    # entry_keys() classifies existing entries — so a note whose class shows in
+    # its path but not its terse title (e.g. .../file-inclusion/php-filters.md)
+    # still consolidates instead of duplicating the class.
+    ck = entry_keys(cand) | set((cand.get("meta") or {}).get("canonical_keys", []))
     idx_by_id = {eid: i for i, eid in enumerate(id_order)}
     v = np.asarray(cand_vec, dtype=np.float32)
     v = v / max(float(np.linalg.norm(v)), 1e-9)
@@ -874,14 +1061,21 @@ def merge_into(target: dict, cand: dict, name: str, label: str) -> dict:
 
     primary_target = pre_len >= content_len(cand)
     src_label = SOURCE_LABELS.get(target.get("source"), target.get("source"))
-    note = (f"_Primary content above is from {src_label}; the key payloads "
-            f"below are adapted from {label}._")
+    personal = name in PERSONAL_SOURCES
+    if personal:
+        note = (f"_The following are YOUR OWN tested commands, folded in from "
+                f"{label} — prefer these._")
+    else:
+        note = (f"_Primary content above is from {src_label}; the key payloads "
+                f"below are adapted from {label}._")
     section = "\n\n---\n\n" + _mark(name) + "\n" + \
         f"## Also covered in — {label}\n\n{note}\n\n" + cand.get("body_md", "")
     target["body_md"] = target.get("body_md", "") + section
 
-    if target.get("source") == "peh-notes":
+    if target.get("source") in PERSONAL_SOURCES:
         meta["author_notes"] = "preserved — primary content is your own notes"
+    elif personal:
+        meta["author_notes"] = f"your own notes folded in from {label} (trusted variant)"
 
     # Accumulate — several candidates of one source can merge into the same
     # target in a single run (e.g. "IDOR" and "GraphQL IDOR"); revert must be
@@ -933,7 +1127,8 @@ def run(spec: SourceSpec, source_path: Path, out_dir: Path, host: str,
     unit = vectors / np.clip(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-9, None)
 
     failures: list[str] = []
-    candidates = spec.discover(source_path, failures)
+    flagged: list[dict] = []
+    candidates = spec.discover(source_path, failures, flagged)
 
     merged_rows: list[dict] = []
     created: list[dict] = []
@@ -986,6 +1181,7 @@ def run(spec: SourceSpec, source_path: Path, out_dir: Path, host: str,
         "kb_after": len(merged_kb),
         "kb_by_source": dict(Counter(e.get("source") for e in merged_kb)),
         "unreadable_files": failures,
+        "flagged_for_review": flagged,
         "merged_into_existing": merged_rows, "created_new": created,
     }
 
@@ -1029,6 +1225,10 @@ def main() -> None:
         print(f"    - {m['candidate']}{v}  ->  {m['into_title']} [{m['into_id']}]"
               f"  (cos {m['cosine']}, primary={m['primary']})")
     print(f"\n  created new: {r['created_count']} entries")
+    if r.get("unreadable_files"):
+        print(f"  unreadable/skipped: {len(r['unreadable_files'])}")
+    if r.get("flagged_for_review"):
+        print(f"  flagged for review: {len(r['flagged_for_review'])}")
     if not args.dry_run:
         print("\n  Re-embed incrementally:  uv run python embed.py")
 

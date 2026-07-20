@@ -50,6 +50,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import subprocess
 from collections import Counter, defaultdict
@@ -2458,62 +2459,75 @@ class SourceSpec:
     discover: Callable[..., list[Entry]]
 
 
+# Raw source trees live OUTSIDE the repo (gitignored, never committed — only the
+# consolidated KB in data/ is built from them, and that is gitignored too). The
+# base directory resolves to the current user's home by default, so a fresh
+# clone carries no hardcoded username; point HACKPIT_SOURCES_ROOT at wherever the
+# raw sources actually live, or override any single source with --source-path.
+SOURCES_ROOT = Path(os.environ.get("HACKPIT_SOURCES_ROOT") or Path.home())
+
+
+def _src(*parts: str) -> str:
+    """A default source path under SOURCES_ROOT (POSIX-style parts, any OS)."""
+    return str(SOURCES_ROOT.joinpath(*parts))
+
+
 SPECS: dict[str, SourceSpec] = {
     "patt": SourceSpec(
         "payloadsallthethings", SOURCE_LABELS["payloadsallthethings"],
-        r"C:\Users\zaid_\Downloads\hacks\new resources\PayloadsAllTheThings",
+        _src("Downloads", "hacks", "new resources", "PayloadsAllTheThings"),
         discover_patt),
     "oscp": SourceSpec(
         "oscp-cpts-notes", SOURCE_LABELS["oscp-cpts-notes"],
-        r"C:\Users\zaid_\Downloads\hacks\new resources\oscp-cpts-notes",
+        _src("Downloads", "hacks", "new resources", "oscp-cpts-notes"),
         discover_oscp),
     "htb": SourceSpec(
         "htb-academy", SOURCE_LABELS["htb-academy"],
-        r"C:\Users\zaid_\Downloads\hacks\new resources\HTB_academy",
+        _src("Downloads", "hacks", "new resources", "HTB_academy"),
         discover_htb),
     "madstuff": SourceSpec(
         "madstuff", SOURCE_LABELS["madstuff"],
-        r"C:\Users\zaid_\Downloads\hacks\new resources\madstuff",
+        _src("Downloads", "hacks", "new resources", "madstuff"),
         discover_madstuff),
     "htbmine": SourceSpec(
         "htb-my-resources", SOURCE_LABELS["htb-my-resources"],
-        r"C:\Users\zaid_\Downloads\hacks\new resources\htb my resources",
+        _src("Downloads", "hacks", "new resources", "htb my resources"),
         discover_htb_my_resources),
     "claudered": SourceSpec(
         "claude-red", SOURCE_LABELS["claude-red"],
-        r"C:\Users\zaid_\cyber\claude-red\Skills",
+        _src("cyber", "claude-red", "Skills"),
         discover_claudered),
     "hacktricks": SourceSpec(
         "hacktricks", SOURCE_LABELS["hacktricks"],
-        r"C:\Users\zaid_\Downloads\hacks\hackdic",
+        _src("Downloads", "hacks", "hackdic"),
         discover_hacktricks),
     "bugbounty": SourceSpec(
         "claude-bug-bounty", SOURCE_LABELS["claude-bug-bounty"],
-        r"C:\Users\zaid_\cyber\claude-bug-bounty",
+        _src("cyber", "claude-bug-bounty"),
         discover_bugbounty),
     "galaxy": SourceSpec(
         "galaxy-checklist", SOURCE_LABELS["galaxy-checklist"],
-        r"C:\Users\zaid_\cyber\Galaxy-Bugbounty-Checklist",
+        _src("cyber", "Galaxy-Bugbounty-Checklist"),
         discover_galaxy),
     "htbpdf": SourceSpec(
         "htb-cheatsheets", SOURCE_LABELS["htb-cheatsheets"],
-        r"C:\Users\zaid_\Downloads\hacks\new resources",
+        _src("Downloads", "hacks", "new resources"),
         discover_htb_pdf),
     "shodan": SourceSpec(
         "shodan-dorks", SOURCE_LABELS["shodan-dorks"],
-        r"C:\Users\zaid_\Downloads\hacks\new resources\shodan-dorks",
+        _src("Downloads", "hacks", "new resources", "shodan-dorks"),
         discover_shodan),
     "decepticon": SourceSpec(
         "decepticon", SOURCE_LABELS["decepticon"],
-        r"C:\Users\zaid_\Downloads\hacks\Decepticon",
+        _src("Downloads", "hacks", "Decepticon"),
         discover_decepticon),
     "writeups": SourceSpec(
         "writeups", SOURCE_LABELS["writeups"],
-        r"C:\Users\zaid_\Downloads\hacks\more new resources\writeups",
+        _src("Downloads", "hacks", "more new resources", "writeups"),
         discover_writeups),
     "htbwriteups": SourceSpec(
         "htb-writeups", SOURCE_LABELS["htb-writeups"],
-        r"C:\Users\zaid_\Downloads\hacks\more new resources\htb-writeups",
+        _src("Downloads", "hacks", "more new resources", "htb-writeups"),
         discover_htbwriteups),
 }
 

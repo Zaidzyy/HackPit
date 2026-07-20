@@ -22,14 +22,18 @@ import datetime as dt
 import json
 import re
 from collections import Counter
+import os
 from pathlib import Path
 
 import yaml
 
 from schema import SCHEMA_VERSION, Code, Entry, Step, emit_json_schema
 
-# Default external source location (NOT in the repo).
-DEFAULT_SOURCE_PATH = r"C:\Users\zaid_\Downloads\hacks\some hacking resources"
+# Default external source location (NOT in the repo). Resolves under the current
+# user's home so no username is hardcoded; override with HACKPIT_SOURCES_ROOT or
+# the --source-path CLI argument.
+_SOURCES_ROOT = Path(os.environ.get("HACKPIT_SOURCES_ROOT") or Path.home())
+DEFAULT_SOURCE_PATH = str(_SOURCES_ROOT / "Downloads" / "hacks" / "some hacking resources")
 SOURCE_NAME = "some-hacking-resources"
 DEFAULT_TIER = 2
 

@@ -41,13 +41,17 @@ import datetime as dt
 import json
 import re
 import urllib.parse
+import os
 from collections import Counter
 from pathlib import Path
 
 from images import load_manual_captions
 from schema import SCHEMA_VERSION, Code, Entry, Step, emit_json_schema
 
-DEFAULT_NOTES_PATH = r"C:\Users\zaid_\Downloads\hacks\PRACTICAL ETHICAL HACKING COMPLETE NOTES"
+# External notes tree (NOT in the repo). Resolves under the current user's home
+# so no username is hardcoded; override with the HACKPIT_SOURCES_ROOT env var.
+_SOURCES_ROOT = Path(os.environ.get("HACKPIT_SOURCES_ROOT") or Path.home())
+DEFAULT_NOTES_PATH = str(_SOURCES_ROOT / "Downloads" / "hacks" / "PRACTICAL ETHICAL HACKING COMPLETE NOTES")
 SOURCE_NAME = "peh-notes"
 TIER = 1  # author's own notes — the most-trusted tier.
 

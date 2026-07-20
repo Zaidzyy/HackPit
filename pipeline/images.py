@@ -31,12 +31,16 @@ import argparse
 import base64
 import datetime as dt
 import json
+import os
 import shutil
 import subprocess
 import urllib.request
 from pathlib import Path
 
-DEFAULT_NOTES_PATH = r"C:\Users\zaid_\Downloads\hacks\PRACTICAL ETHICAL HACKING COMPLETE NOTES"
+# External notes tree (NOT in the repo). Resolves under the current user's home
+# so no username is hardcoded; override with the HACKPIT_SOURCES_ROOT env var.
+_SOURCES_ROOT = Path(os.environ.get("HACKPIT_SOURCES_ROOT") or Path.home())
+DEFAULT_NOTES_PATH = str(_SOURCES_ROOT / "Downloads" / "hacks" / "PRACTICAL ETHICAL HACKING COMPLETE NOTES")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = REPO_ROOT / "data" / "images"
 # Hand-authored caption overrides (committed — our own tiny authored text).

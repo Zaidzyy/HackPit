@@ -76,6 +76,7 @@ SOURCE_LABELS = {
     "hacktricks": "HackTricks",
     "claude-bug-bounty": "claude-bug-bounty",
     "galaxy-checklist": "Galaxy Bug Bounty Checklist",
+    "htb-cheatsheets": "HTB Academy cheat sheet",
 }
 
 # Zaid's OWN notes — the trusted tier-1 sources. When one of these is the
@@ -1535,6 +1536,137 @@ def discover_galaxy(root: Path, failures: list | None = None,
     return _group_madstuff_by_class(out)
 
 
+# =========================================================================== #
+#  SOURCE 10 — HTB Academy cheat-sheet PDFs (image-only; OCR, adapt, HARD cap)
+# =========================================================================== #
+# Two proprietary HTB cheat sheets, each an image-per-page PDF (no text layer).
+# We OCR the page images, adapt the "label: payload" pairs into a hard-capped
+# digest, and let them MERGE into the existing file-inclusion / sql-injection
+# entries. PROPRIETARY: OCR'd, restructured, capped — never the raw PDF, never
+# committed (data/ is gitignored). Deps (pypdf, pytesseract, tesseract on PATH)
+# are imported lazily so the rest of the engine never needs them.
+PDF_MAX_STEPS = 8
+PDF_CODE_CAP = 400
+PDF_BODY_CAP = 1600
+_PDF_CODE_RE = re.compile(
+    r"(SELECT|UNION|INSERT|UPDATE|ALTER|DROP|CREATE|SHOW\s|DESCRIBE|FROM\s|WHERE\s|"
+    r"mysql|sqlmap|LOAD_FILE|OUTFILE|information_schema|GROUP_CONCAT|SLEEP\(|"
+    r"php://|data://|file://|expect://|zip://|/etc/passwd|\.\./|base64|<\?php|"
+    r"include\(|allow_url|LIMIT\s|ORDER\s+BY|--\s|@@version|xp_cmdshell)", re.I)
+_PDF_BANNER_RE = re.compile(r"hack\s?the\s?box|cheat\s?sheet|htb\s?academy", re.I)
+
+
+def _clean_ocr(text: str) -> list[str]:
+    """Drop OCR garbage lines (mostly non-alphanumeric decoration) and the
+    repeated HTB/CHEAT-SHEET banner; return the usable lines."""
+    out: list[str] = []
+    for ln in text.splitlines():
+        s = " ".join(ln.split())
+        if len(s) < 3 or _PDF_BANNER_RE.search(s):
+            continue
+        good = sum(c.isalnum() or c.isspace() or c in "_./:-()<>?=*,'\";" for c in s)
+        if good / len(s) < 0.7:
+            continue
+        out.append(s)
+    return out
+
+
+def _ocr_image(im) -> str:
+    """OCR a PIL image via tesseract. Uses a subprocess with a controlled temp
+    dir (pytesseract's own temp handling intermittently hits OSError 22 when
+    OneDrive/AV locks the temp file); retries a couple of times."""
+    import tempfile
+    for _ in range(3):
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                ip = Path(d) / "page.png"
+                im.save(ip)
+                out = subprocess.run(["tesseract", str(ip), "stdout"],
+                                     capture_output=True, timeout=120)
+                if out.returncode == 0:
+                    return out.stdout.decode("utf-8", "replace")
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return ""
+
+
+def parse_htb_pdf(path: Path, lang: str) -> Entry | None:
+    try:
+        import pypdf  # noqa: F401
+    except ImportError:
+        return None
+    try:
+        reader = pypdf.PdfReader(str(path))
+        pages: list[str] = []
+        for pg in reader.pages:
+            for img in pg.images:
+                pages.append(_ocr_image(img.image))
+    except Exception:
+        return None
+    lines = _clean_ocr("\n".join(pages))
+    if len(lines) < 5:
+        return None
+
+    # pair descriptive labels with the payload lines that follow
+    steps: list[Step] = []
+    label, buf = "", []
+
+    def flush():
+        if buf and len(steps) < PDF_MAX_STEPS:
+            cmd = "\n".join(buf)[:PDF_CODE_CAP]
+            steps.append(Step(n=len(steps) + 1, text=(label or "commands")[:200],
+                              code=[Code(lang=lang, cmd=cmd)]))
+
+    for ln in lines:
+        if _PDF_CODE_RE.search(ln):
+            buf.append(ln)
+        else:
+            flush()
+            buf = []
+            label = ln.rstrip(":")
+        if len(steps) >= PDF_MAX_STEPS:
+            break
+    flush()
+
+    stem = path.stem.replace("cheatsheet-", "")
+    title = humanize(stem.replace("-fundamentals", ""))
+    keys = sorted(canonical_keys(f"{title} {stem}"))
+    summary = (f"HTB Academy {title} cheat sheet — key commands and payloads "
+               f"(OCR-adapted digest of the proprietary PDF).")
+    body = _htb_body(title, summary, steps)[:PDF_BODY_CAP]
+    return Entry(
+        id="htbcs-" + slugify(stem), title=f"{title} Cheat Sheet", category="web",
+        source="htb-cheatsheets", tier=3,
+        tags=_dedup(["web", "cheatsheet"] + keys + [slugify(title)]),
+        tools=_oscp_tools(" ".join(lines)), summary=summary, steps=steps,
+        body_md=body, references=[],
+        meta={"src_file": path.name, "kind": "cheatsheet",
+              "source_label": SOURCE_LABELS["htb-cheatsheets"],
+              "canonical_keys": keys, "also_covered_in": ["htb-cheatsheets"]},
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+_HTB_PDF_LANG = {"cheatsheet-sql-injection-fundamentals": "sql",
+                 "cheatsheet-file-inclusion": "bash"}
+
+
+def discover_htb_pdf(root: Path, failures: list | None = None,
+                     flagged: list | None = None) -> list[Entry]:
+    """OCR each cheat-sheet PDF into one candidate (skip if OCR yields nothing —
+    recorded). `root` is the folder holding the two PDFs."""
+    out: list[Entry] = []
+    for p in sorted(root.glob("cheatsheet-*.pdf")):
+        lang = _HTB_PDF_LANG.get(p.stem, "text")
+        e = parse_htb_pdf(p, lang)
+        if e is None:
+            if failures is not None:
+                failures.append(p.name)
+            continue
+        out.append(e)
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # source registry
 # --------------------------------------------------------------------------- #
@@ -1583,6 +1715,10 @@ SPECS: dict[str, SourceSpec] = {
         "galaxy-checklist", SOURCE_LABELS["galaxy-checklist"],
         r"C:\Users\zaid_\cyber\Galaxy-Bugbounty-Checklist",
         discover_galaxy),
+    "htbpdf": SourceSpec(
+        "htb-cheatsheets", SOURCE_LABELS["htb-cheatsheets"],
+        r"C:\Users\zaid_\Downloads\hacks\new resources",
+        discover_htb_pdf),
 }
 
 

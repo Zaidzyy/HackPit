@@ -466,6 +466,11 @@ class AttackStep(BaseModel):
         description="True = general-knowledge gap-fill (not from the KB), render "
         "distinctly with a 'verify' badge. False = grounded in the KB / writeup.",
     )
+    from_writeup: bool = Field(
+        default=False,
+        description="True = a PRIMARY step lifted from the user's own box writeup "
+        "(trusted). False = a composed/supplement step.",
+    )
 
 
 class AttackPhase(BaseModel):
@@ -509,6 +514,11 @@ class AttackPathOut(BaseModel):
         default=None,
         description="Caveat for the origin, e.g. a 'source formatting damaged' "
         "note when the writeup's export was mangled.",
+    )
+    augmented: bool = Field(
+        default=False,
+        description="Writeup origin only: True when the LLM added grounded/"
+        "AI-suggested supplement steps beyond the writeup's own steps.",
     )
     model_used: str
     provider: str

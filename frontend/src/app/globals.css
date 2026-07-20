@@ -1971,6 +1971,25 @@ a.hp-card {
   padding: 2px 8px;
 }
 
+/* PRIMARY step lifted from the user's own writeup — trusted. Green accent (left
+ * rail + chip) marks it primary; composed KB supplements have no rail, and
+ * AI-suggested steps use the violet tint above. */
+.hp-ap-step-wu {
+  border-left: 2px solid color-mix(in srgb, #5bd6a0 55%, transparent);
+}
+.hp-ap-wu-chip {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: #5bd6a0;
+  border: 1px solid color-mix(in srgb, #5bd6a0 42%, transparent);
+  background: color-mix(in srgb, #5bd6a0 12%, transparent);
+  border-radius: 5px;
+  padding: 2px 8px;
+}
+
 /* "from your writeup" origin banner — the path IS the user's own recorded
  * walkthrough (trusted). Green to set it apart from the amber "writeup
  * available" link and the violet AI-suggested tint. */

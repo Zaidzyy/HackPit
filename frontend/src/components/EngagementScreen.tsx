@@ -221,12 +221,13 @@ function StepCard({
 }) {
   const [notesOpen, setNotesOpen] = useState(!!initialResult);
   const ai = step.ai_suggested === true;
+  const wu = step.from_writeup === true;
 
   return (
     <article
       className={`hp-ap-step hp-eng-step${checked ? " is-done" : ""}${
         ai ? " hp-ap-step-ai" : ""
-      }`}
+      }${wu ? " hp-ap-step-wu" : ""}`}
     >
       <div className="hp-eng-step-top">
         <button
@@ -244,6 +245,14 @@ function StepCard({
           <div className="hp-ap-step-head">
             <span className="hp-ap-step-id">{step.id}</span>
             <h3 className="hp-ap-step-title">{step.title}</h3>
+            {wu && (
+              <span
+                className="hp-ap-wu-chip"
+                title="From your own writeup for this box — trusted, in order."
+              >
+                writeup
+              </span>
+            )}
             {ai ? (
               <span
                 className="hp-ap-ai-badge"
@@ -257,7 +266,7 @@ function StepCard({
                   href={`/entry/${encodeURIComponent(step.entry_id)}`}
                   className="hp-ap-step-link"
                 >
-                  technique →
+                  {wu ? "writeup →" : "technique →"}
                 </Link>
               )
             )}

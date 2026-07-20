@@ -232,6 +232,17 @@ _EXAMPLE_IP_RE = re.compile(
     r"|192\.168\.\d{1,3}\.\d{1,3}"
     r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})" + _PORT + r"(?!\d)"
 )
+# lab/example IPs written with a PLACEHOLDER octet instead of a number — the
+# forms writeups love: 10.10.11.x, 10.10.10.XX, 192.168.1.<ip>, 172.16.5.{target}.
+# A recognised private/lab prefix (0-2 numeric octets) then a placeholder final
+# octet (x/XX, <…ip…>, {…}). Only the last octet is a placeholder, so loopback
+# (127.*), bind-all, version literals and bare {lhost}/YOUR_IP are left untouched.
+_PH_OCTET = r"(?:x{1,3}|<[^<>\s/]{1,24}>|\{[^}\s/]{1,24}\})"
+_EXAMPLE_IP_PH_RE = re.compile(
+    r"(?<![\w.])(?:10|192\.168|172\.(?:1[6-9]|2\d|3[01]))"
+    r"(?:\.\d{1,3}){0,2}\." + _PH_OCTET + r"(?!\w)",
+    re.I,
+)
 # obvious example hostnames (lab TLDs + example.*)
 _EXAMPLE_HOST_RE = re.compile(
     r"\b(?:[a-zA-Z0-9-]+\.)+(?:htb|thm|box|vh|lab|local|example|test)"
@@ -312,19 +323,32 @@ def substitute_target(cmd: str, target: str | None) -> str:
     host = _target_host(target)
     is_url = bool(_URL_RE.match(target))
 
-    # 1) explicit placeholders → full target for URL-ish, host for the rest
     def _ph(m: re.Match[str]) -> str:
         tok = m.group(0).lower()
         return target if ("url" in tok and is_url) else host
 
-    out = _PLACEHOLDER_RE.sub(_ph, cmd)
+    # Keep a trailing :port when swapping in the host — the service port belongs
+    # to the target, not the example address (e.g. .../inspect on :6274). Without
+    # this the substituted target (itself often a 10.x IP) gets re-matched and its
+    # port stripped.
+    def _to_host(m: re.Match[str]) -> str:
+        tail = re.search(r":\d{1,5}$", m.group(0))
+        return host + (tail.group(0) if tail else "")
 
-    # 2) obvious example IPs → target host (only when our host is an IP)
+    # 1) lab/example IPs with a PLACEHOLDER octet (10.10.11.x, 192.168.1.<ip>) —
+    #    replaced WHOLE first so a trailing <ip>/{target} octet isn't picked apart
+    #    by the generic placeholder-token rule below.
+    out = _EXAMPLE_IP_PH_RE.sub(host, cmd)
+
+    # 2) explicit placeholder tokens → full target for URL-ish, host for the rest
+    out = _PLACEHOLDER_RE.sub(_ph, out)
+
+    # 3) obvious example IPs → target host (only when our host is an IP)
     if _is_ipv4(host.split(":", 1)[0]):
-        out = _EXAMPLE_IP_RE.sub(host, out)
+        out = _EXAMPLE_IP_RE.sub(_to_host, out)
 
-    # 3) obvious example hostnames → target host
-    out = _EXAMPLE_HOST_RE.sub(host, out)
+    # 4) obvious example hostnames → target host
+    out = _EXAMPLE_HOST_RE.sub(_to_host, out)
     return out
 
 
@@ -647,6 +671,7 @@ def _ground(
                         "why": str(st.get("why") or "").strip(),
                         "commands": cmds,
                         "ai_suggested": False,
+                        "from_writeup": False,
                     }
                 )
                 continue
@@ -665,6 +690,7 @@ def _ground(
                         "why": str(st.get("why") or "").strip(),
                         "commands": _ai_commands(st.get("commands"), target),
                         "ai_suggested": True,
+                        "from_writeup": False,
                     }
                 )
 
@@ -812,6 +838,7 @@ def build_writeup_path(entry: dict, target: str | None) -> list[dict[str, Any]]:
                 "why": "",
                 "commands": cmds,
                 "ai_suggested": False,
+                "from_writeup": True,  # PRIMARY — the user's own trusted step
             }
         )
 
@@ -827,6 +854,125 @@ def build_writeup_path(entry: dict, target: str | None) -> list[dict[str, Any]]:
 
 
 # --------------------------------------------------------------------------- #
+# writeup augmentation — supplement a (possibly terse) writeup with KB + AI steps
+# --------------------------------------------------------------------------- #
+_AUGMENT_SYSTEM = (
+    "You are a penetration-testing methodology guide AUGMENTING the user's OWN box "
+    "writeup on an AUTHORIZED engagement. The writeup's ordered steps are the "
+    "PRIMARY, trusted path — you must NOT repeat them. Your only job is to "
+    "SUPPLEMENT it: fill gaps where the writeup is terse, skips a jump, or omits a "
+    "useful technique.\n"
+    "You are given (A) the step titles the writeup ALREADY covers, per phase, and "
+    "(B) a LIBRARY of the user's other techniques (entry_id + real commands).\n"
+    "Rules:\n"
+    "- Prefer the LIBRARY: cite an entry_id for a grounded supplement (the system "
+    "attaches its real commands — don't restate them).\n"
+    "- Only where the library has no fit AND there is a real gap, add an "
+    "ai_suggested step from general knowledge, marked EXACTLY as "
+    '{"ai_suggested": true, "title": "...", "why": "...", "commands": '
+    '[{"lang": "bash", "cmd": "..."}]}, with concrete command(s); these are '
+    "UNVERIFIED.\n"
+    "- Add supplements ONLY where they genuinely help. A thorough writeup needs "
+    "FEW or NONE — returning empty phases is correct then. NEVER duplicate a "
+    "writeup step or a technique it already implies.\n"
+    "- Group under phases recon, enumeration, exploitation, privesc, "
+    "post-exploitation. A step is EITHER {\"entry_id\": \"<library id>\", "
+    "\"why\": \"...\"} OR an ai_suggested step as shown.\n"
+    "Respond with ONLY a JSON object, no prose."
+)
+
+
+def build_augment_prompt(
+    goal: str,
+    ctx: dict[str, Any],
+    covered: dict[str, list[str]],
+    grouped: dict[str, list[dict]],
+) -> str:
+    lines: list[str] = [f"GOAL: {goal}"]
+    box_type = ctx.get("box_type")
+    if box_type:
+        creds = " with valid credentials" if ctx.get("has_creds") else ""
+        lines.append(f"CONTEXT: {box_type.upper()} target{creds}.")
+    lines.append("")
+    lines.append("WRITEUP ALREADY COVERS (do NOT repeat these), by phase:")
+    for phase in PHASE_ORDER:
+        titles = covered.get(phase)
+        if not titles:
+            continue
+        lines.append(f"## {phase}")
+        for t in titles:
+            lines.append(f"- {t}")
+    lines.append("")
+    lines.append("TECHNIQUE LIBRARY (cite entry_ids for grounded supplements), by phase:")
+    any_lib = False
+    for phase in PHASE_ORDER:
+        techs = grouped.get(phase)
+        if not techs:
+            continue
+        any_lib = True
+        lines.append(f"## {phase}")
+        for t in techs:
+            lines.append(f"- entry_id: {t['entry_id']}  ({t['title']})")
+    if not any_lib:
+        lines.append("(no close library matches — only add ai_suggested steps for real gaps.)")
+    lines.append("")
+    lines.append(
+        "Return ONLY supplements that fill genuine gaps in the writeup above — "
+        "grounded (entry_id) steps first, then clearly-marked ai_suggested steps. "
+        "If the writeup is already thorough, return few or none. "
+        f"Return JSON exactly shaped like: {_SCHEMA_HINT}"
+    )
+    return "\n".join(lines)
+
+
+def _merge_phases(
+    primary: list[dict[str, Any]], supp: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Merge writeup phases (primary) with supplement phases. Within each phase:
+    writeup steps first (unchanged, primary), then grounded KB supplements, then
+    AI-suggested gap steps. Stable ids are re-assigned across the merged order."""
+    prim = {p["phase"]: list(p["steps"]) for p in primary}
+    extra = {p["phase"]: p["steps"] for p in supp}
+    out: list[dict[str, Any]] = []
+    for phase in PHASE_ORDER:
+        steps = prim.get(phase, [])
+        s = extra.get(phase, [])
+        steps = (
+            steps
+            + [x for x in s if not x.get("ai_suggested")]
+            + [x for x in s if x.get("ai_suggested")]
+        )
+        if not steps:
+            continue
+        for i, step in enumerate(steps, 1):
+            step["id"] = f"{phase}-{i}"
+        out.append({"phase": phase, "label": PHASE_LABEL[phase], "steps": steps})
+    return out
+
+
+def _augment_writeup(
+    phases: list[dict[str, Any]],
+    by_id: dict[str, dict],
+    goal: str,
+    target_type: str | None,
+    ctx: dict[str, Any],
+    target: str | None,
+    search_fn: SearchFn,
+    cfg: dict,
+) -> list[dict[str, Any]]:
+    """Best-effort: supplement the writeup path with grounded KB steps + marked
+    ai_suggested gap steps. Returns the merged phases; on any LLM failure the
+    original writeup phases are returned unchanged (writeup stands alone)."""
+    grouped = retrieve(by_id, goal, target_type, search_fn, ctx)
+    covered = {p["phase"]: [s["title"] for s in p["steps"]] for p in phases}
+    user = build_augment_prompt(goal, ctx, covered, grouped)
+    raw = llm.chat(_AUGMENT_SYSTEM, user, cfg)
+    parsed = llm.extract_json(raw)
+    supp = _ground(parsed, by_id, target)
+    return _merge_phases(phases, supp)
+
+
+# --------------------------------------------------------------------------- #
 # public entry point
 # --------------------------------------------------------------------------- #
 def compose(
@@ -837,8 +983,12 @@ def compose(
 ) -> dict[str, Any]:
     """Compose an attack path for the goal. Two modes:
 
-    1. **Writeup-first** — if the goal names a box we have a writeup for, build
-       the path from that writeup's real ordered walkthrough (trusted; no LLM).
+    1. **Writeup-first (+ augmentation)** — if the goal names a box we have a
+       writeup for, build the path from that writeup's real ordered walkthrough
+       (trusted, PRIMARY), then best-effort AUGMENT it with grounded KB
+       supplements and clearly-marked ai_suggested gap steps for what the writeup
+       is missing or too terse on. If the LLM is unreachable the writeup stands
+       alone.
     2. **KB-first + AI-suggested fallback** — otherwise retrieve grounded KB
        techniques (weighted by box-type context) and let the LLM order them and
        add clearly-marked ai_suggested steps for genuine gaps.
@@ -846,15 +996,29 @@ def compose(
     Raises ``llm.LLMError`` (only in mode 2) if the LLM is unreachable / produces
     no usable path — the API layer maps that to a clean 503.
     """
+    cfg = llm.load_config()
     target = extract_target(goal)
     ctx = parse_goal_context(goal)
     box_writeup = find_box_writeup(by_id, goal)
 
-    # (1) WRITEUP-FIRST
+    # (1) WRITEUP-FIRST (+ augmentation)
     if box_writeup and box_writeup["id"] in by_id:
         wu = by_id[box_writeup["id"]]
         phases = build_writeup_path(wu, target)
         if phases:
+            augmented = False
+            try:  # best-effort supplements; the writeup stands alone on failure
+                merged = _augment_writeup(
+                    phases, by_id, goal, target_type, ctx, target, search_fn, cfg
+                )
+                augmented = any(
+                    s.get("from_writeup") is False
+                    for ph in merged
+                    for s in ph["steps"]
+                )
+                phases = merged
+            except llm.LLMError:
+                pass
             damaged = bool((wu.get("meta") or {}).get("source_damaged"))
             return {
                 "goal": goal,
@@ -870,12 +1034,13 @@ def compose(
                 )
                 if damaged
                 else None,
-                "model_used": "your writeup",
-                "provider": "writeup",
+                "augmented": augmented,
+                "model_used": cfg["model"] if augmented else "your writeup",
+                "provider": cfg["provider"] if augmented else "writeup",
             }
 
     # (2) KB-FIRST + AI-SUGGESTED FALLBACK
-    cfg = llm.load_config()
+    grouped = retrieve(by_id, goal, target_type, search_fn, ctx)
     grouped = retrieve(by_id, goal, target_type, search_fn, ctx)
     user = build_user_prompt(goal, target_type, grouped, ctx)
     raw = llm.chat(_SYSTEM, user, cfg)

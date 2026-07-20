@@ -151,6 +151,11 @@ export type AttackStep = {
    * "verify" badge). False/absent = grounded in the KB or the user's writeup.
    */
   ai_suggested?: boolean;
+  /**
+   * True = a PRIMARY step from the user's own box writeup (trusted). Absent/false
+   * = a composed or supplement step.
+   */
+  from_writeup?: boolean;
 };
 
 export type AttackPhase = {
@@ -187,6 +192,8 @@ export type AttackPath = {
   origin_label?: string | null;
   /** Caveat, e.g. a "source formatting damaged" note for a mangled writeup. */
   origin_note?: string | null;
+  /** Writeup origin: true when supplement steps were added beyond the writeup. */
+  augmented?: boolean;
   /** Model that composed the path (e.g. "qwen3:8b"); "your writeup" for writeups. */
   model_used: string;
   provider: string;

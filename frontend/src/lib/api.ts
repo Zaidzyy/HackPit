@@ -325,6 +325,15 @@ export type EngagementPath = {
   provider: string;
 };
 
+/** One turn of the engagement assistant conversation. */
+export type ChatTurn = {
+  role: "user" | "assistant";
+  content: string;
+  ts: string;
+  /** KB entries the assistant cited (assistant turns only) — link to /entry/{id}. */
+  cited_entry_ids?: string[];
+};
+
 /** Full engagement session (GET /sessions/{id}). */
 export type Session = {
   id: string;
@@ -339,6 +348,16 @@ export type Session = {
   /** Last generated report (Markdown) + when, if any. */
   report_md: string | null;
   report_generated_at: string | null;
+  /** The engagement assistant's persisted conversation. */
+  chat_history: ChatTurn[];
+};
+
+/** The assistant's reply to one chat message (POST /sessions/{id}/chat). */
+export type ChatReply = {
+  reply: string;
+  cited_entry_ids: string[];
+  model_used: string;
+  ts: string;
 };
 
 /** A freshly generated report (POST /sessions/{id}/report). */
@@ -411,3 +430,12 @@ export const deleteSession = (id: string, signal?: AbortSignal) =>
 /** Draft (or re-draft) a pentest report for the session. Slow on local models. */
 export const generateReport = (id: string, signal?: AbortSignal) =>
   postJSON<Report>(`/sessions/${encodeURIComponent(id)}/report`, {}, signal);
+
+/** Ask the engagement assistant one question. Slow: the local model composes
+ *  a grounded reply from the session context + KB (can take 20-60s). */
+export const sendChat = (id: string, message: string, signal?: AbortSignal) =>
+  postJSON<ChatReply>(
+    `/sessions/${encodeURIComponent(id)}/chat`,
+    { message },
+    signal
+  );

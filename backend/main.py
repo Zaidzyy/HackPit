@@ -47,6 +47,7 @@ from schema import Code, Entry  # noqa: E402  (pipeline/schema.py — canonical 
 
 # generative layer (backend/llm.py + backend/attack_path.py) — provider-swappable
 import attack_path  # noqa: E402
+import chat as chat_assistant  # noqa: E402  (backend/chat.py — engagement assistant)
 import llm  # noqa: E402
 import report as report_gen  # noqa: E402  (backend/report.py — LLM report drafting)
 import sessions as sessions_db  # noqa: E402  (backend/sessions.py — SQLite store)
@@ -399,6 +400,16 @@ class SessionSummary(BaseModel):
     updated_at: str
 
 
+class ChatTurn(BaseModel):
+    role: str = Field(description='"user" | "assistant".')
+    content: str
+    ts: str
+    cited_entry_ids: list[str] = Field(
+        default_factory=list,
+        description="KB entries the assistant cited (assistant turns only).",
+    )
+
+
 class SessionDetail(BaseModel):
     id: str
     label: str
@@ -413,6 +424,22 @@ class SessionDetail(BaseModel):
     # the last generated report (Markdown) + when, if any
     report_md: str | None = None
     report_generated_at: str | None = None
+    # the engagement assistant's persisted conversation
+    chat_history: list[ChatTurn] = Field(default_factory=list)
+
+
+class ChatIn(BaseModel):
+    message: str = Field(min_length=1, description="The tester's chat message.")
+
+
+class ChatOut(BaseModel):
+    reply: str = Field(description="The assistant's reply, as Markdown.")
+    cited_entry_ids: list[str] = Field(
+        default_factory=list,
+        description="Grounded KB entries the reply drew on (link to /entry/{id}).",
+    )
+    model_used: str
+    ts: str
 
 
 class ReportOut(BaseModel):
@@ -714,4 +741,38 @@ def generate_report(session_id: str) -> dict[str, Any]:
         "report_md": report_md,
         "report_generated_at": ts,
         "model_used": model_used,
+    }
+
+
+@app.post("/sessions/{session_id}/chat", response_model=ChatOut)
+def session_chat(session_id: str, req: ChatIn = Body(...)) -> dict[str, Any]:
+    """One assistant turn for an engagement: answer the tester's message, grounded
+    in the session context + the KB, then persist both turns on the session.
+
+    Retrieval reuses the hybrid search; composition uses the configured LLM
+    (default local Ollama). The reply reuses real KB commands and cites real
+    entries — nothing is invented (see ``chat.py``).
+    """
+    message = req.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+    session = sessions_db.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    try:
+        reply, cited, model_used = chat_assistant.answer(
+            STATE.by_id, session, message, _resilient_search
+        )
+    except llm.LLMError as e:
+        # Ollama offline / no key / unparseable output.
+        raise HTTPException(status_code=503, detail=str(e))
+
+    ts = sessions_db.append_chat(session_id, message, reply, cited)
+    if ts is None:  # deleted between fetch and append — unlikely
+        raise HTTPException(status_code=404, detail="session not found")
+    return {
+        "reply": reply,
+        "cited_entry_ids": cited,
+        "model_used": model_used,
+        "ts": ts,
     }

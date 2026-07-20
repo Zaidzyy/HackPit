@@ -59,7 +59,8 @@ def init_db() -> None:
                 created_at          TEXT NOT NULL,
                 updated_at          TEXT NOT NULL,
                 report_md           TEXT,
-                report_generated_at TEXT
+                report_generated_at TEXT,
+                chat_history        TEXT NOT NULL DEFAULT '[]'
             );
 
             CREATE TABLE IF NOT EXISTS step_state (
@@ -79,6 +80,13 @@ def init_db() -> None:
         if "report_generated_at" not in cols:
             conn.execute(
                 "ALTER TABLE sessions ADD COLUMN report_generated_at TEXT"
+            )
+        # migrate DBs created before the assistant chat existed — existing
+        # sessions get an empty history (the NOT NULL default backfills them).
+        if "chat_history" not in cols:
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN chat_history "
+                "TEXT NOT NULL DEFAULT '[]'"
             )
 
 
@@ -100,6 +108,18 @@ def _touch(conn: sqlite3.Connection, session_id: str) -> None:
     conn.execute(
         "UPDATE sessions SET updated_at=? WHERE id=?", (_now(), session_id)
     )
+
+
+def _load_chat(row: sqlite3.Row) -> list[dict[str, Any]]:
+    """Parse a session row's ``chat_history`` JSON into a list (empty on any
+    problem — a corrupt blob must never break loading the engagement)."""
+    if "chat_history" not in row.keys():
+        return []
+    try:
+        hist = json.loads(row["chat_history"] or "[]")
+    except (TypeError, ValueError):
+        return []
+    return hist if isinstance(hist, list) else []
 
 
 # --------------------------------------------------------------------------- #
@@ -219,6 +239,7 @@ def get_session(session_id: str) -> dict[str, Any] | None:
         "report_generated_at": (
             row["report_generated_at"] if "report_generated_at" in keys else None
         ),
+        "chat_history": _load_chat(row),
     }
 
 
@@ -297,6 +318,43 @@ def save_report(session_id: str, report_md: str) -> str | None:
         )
         if cur.rowcount == 0:
             return None
+    return ts
+
+
+def append_chat(
+    session_id: str,
+    user_message: str,
+    assistant_reply: str,
+    cited_entry_ids: list[str] | None = None,
+) -> str | None:
+    """Append a user turn + the assistant's reply to the session's chat history.
+
+    Both turns are stored as ``{role, content, ts, cited_entry_ids?}`` (the user
+    turn carries no citations). Returns the shared timestamp, or ``None`` if the
+    session doesn't exist. The read-modify-write is inside the writer lock so
+    concurrent chats can't clobber each other's history.
+    """
+    with _write_lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT chat_history FROM sessions WHERE id=?", (session_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        hist = _load_chat(row)
+        ts = _now()
+        hist.append({"role": "user", "content": user_message, "ts": ts})
+        hist.append(
+            {
+                "role": "assistant",
+                "content": assistant_reply,
+                "ts": ts,
+                "cited_entry_ids": list(cited_entry_ids or []),
+            }
+        )
+        conn.execute(
+            "UPDATE sessions SET chat_history=?, updated_at=? WHERE id=?",
+            (json.dumps(hist, ensure_ascii=False), ts, session_id),
+        )
     return ts
 
 

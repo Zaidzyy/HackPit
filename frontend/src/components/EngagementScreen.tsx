@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PageShell } from "./PageShell";
 import { CopyButton } from "./CopyButton";
+import { EngagementAssistant } from "./EngagementAssistant";
 import {
   getSession,
   renameSession,
@@ -195,6 +196,11 @@ export function EngagementScreen({ id }: { id: string }) {
           ))}
         </ol>
       </div>
+
+      <EngagementAssistant
+        sessionId={id}
+        initialHistory={session.chat_history}
+      />
     </PageShell>
   );
 }

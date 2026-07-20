@@ -3,8 +3,24 @@
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
+import type { ReactNode } from "react";
 import { CopyButton } from "./CopyButton";
 import { imageUrl } from "@/lib/api";
+import { sourceTint } from "@/lib/source";
+
+/** Flatten a markdown heading's children down to its plain text. */
+function nodeText(node: ReactNode): string {
+  if (node == null || node === false) return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(nodeText).join("");
+  if (typeof node === "object" && "props" in node) {
+    return nodeText((node as { props?: { children?: ReactNode } }).props?.children);
+  }
+  return "";
+}
+
+/** Matches the merge pipeline's "## Also covered in — {Source}" section heads. */
+const ALSO_COVERED_RE = /^Also covered in\s+—\s+(.+)$/;
 
 function safeDecode(s: string): string {
   try {
@@ -40,6 +56,25 @@ const components: Components = {
     }
     const lang = /language-(\w+)/.exec(className ?? "")?.[1] ?? "sh";
     return <MdCodeBlock lang={lang} text={text} />;
+  },
+  // Render the merge pipeline's "Also covered in — {Source}" section heads as a
+  // tinted source divider (icon + label) rather than a plain heading.
+  h2: ({ children }) => {
+    const m = nodeText(children).match(ALSO_COVERED_RE);
+    if (!m) return <h2>{children}</h2>;
+    const src = m[1].trim();
+    return (
+      <div
+        className="hp-src-divider"
+        style={{ ["--st" as string]: sourceTint(src) }}
+      >
+        <span className="hp-src-divider-ic" aria-hidden>
+          ⧉
+        </span>
+        <span className="hp-src-divider-label">also covered in</span>
+        <span className="hp-src-divider-src">{src}</span>
+      </div>
+    );
   },
   a: ({ children, href }) => (
     <a href={href} target="_blank" rel="noopener noreferrer">

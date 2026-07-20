@@ -1,8 +1,23 @@
 "use client";
 
 import { Markdown } from "./Markdown";
+import { sourceTint } from "@/lib/source";
 
 type Segment = { type: "md" | "aside"; content: string };
+
+/**
+ * Consolidated steps folded in from another source carry a `[Source · variant]`
+ * prefix in their text (written by the merge pipeline). Pull the source label
+ * out so it can render as a small provenance chip instead of raw brackets; the
+ * variant/heading stays in the prose, so nothing is lost or duplicated.
+ */
+const SOURCE_PREFIX_RE = /^\[([^\]]+?) · [^\]]*\]\s?/;
+
+function splitSourcePrefix(text: string): { source: string | null; body: string } {
+  const m = text.match(SOURCE_PREFIX_RE);
+  if (!m) return { source: null, body: text };
+  return { source: m[1].trim(), body: text.slice(m[0].length) };
+}
 
 /**
  * Split step prose into markdown runs and Notion `<aside>…</aside>` callouts.
@@ -41,9 +56,19 @@ function splitAsides(text: string): Segment[] {
  * code[] blocks are rendered separately by the parent and untouched here.
  */
 export function StepText({ text }: { text: string }) {
-  const segments = splitAsides(stripInlineImages(text));
+  const { source, body } = splitSourcePrefix(text);
+  const segments = splitAsides(stripInlineImages(body));
   return (
     <div className="hp-step-prose">
+      {source && (
+        <span
+          className="hp-src-chip hp-src-chip-step"
+          style={{ ["--st" as string]: sourceTint(source) }}
+          title={`Folded in from ${source}`}
+        >
+          {source}
+        </span>
+      )}
       {segments.map((seg, i) =>
         seg.type === "aside" ? (
           <div className="hp-callout" key={i}>

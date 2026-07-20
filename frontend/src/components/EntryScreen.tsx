@@ -15,6 +15,7 @@ import {
   type Step,
 } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import { sourceTint } from "@/lib/source";
 
 type OpenImage = (src: string, alt: string) => void;
 
@@ -87,14 +88,53 @@ export function EntryScreen({ id }: { id: string }) {
           <h1 className="hp-entry-title">{e.title}</h1>
 
           <div className="hp-entry-badges">
-            <span className={`hp-badge-src${e.tier === 1 ? " is-notes" : ""}`}>
-              {e.source}
+            <span
+              className={`hp-badge-primary${e.from_your_notes ? " is-notes" : ""}`}
+              style={{ ["--st" as string]: sourceTint(e.primary_source_label) }}
+            >
+              {e.primary_source_label}
             </span>
+            {e.from_your_notes && (
+              <span className="hp-badge-notes" title="Your own tested notes">
+                ✦ from your notes
+              </span>
+            )}
+            {e.source_count > 1 && (
+              <span className="hp-badge-count">
+                {e.source_count} sources
+              </span>
+            )}
             <span className="hp-badge-tier">
               tier {e.tier}
               {e.tier === 1 ? " · your notes" : " · curated"}
             </span>
           </div>
+
+          {e.source_count > 1 && e.also_covered_in_labels.length > 0 && (
+            <div className="hp-alsorow">
+              <span className="hp-alsorow-label">also covered in</span>
+              {e.also_covered_in_labels.map((label) => (
+                <span
+                  key={label}
+                  className="hp-src-chip"
+                  style={{ ["--st" as string]: sourceTint(label) }}
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {e.variants.length > 0 && (
+            <div className="hp-varrow">
+              <span className="hp-varrow-label">variants</span>
+              {e.variants.map((v) => (
+                <span key={v} className="hp-chip hp-chip-dim">
+                  {v}
+                </span>
+              ))}
+            </div>
+          )}
 
           {e.tags.length > 0 && (
             <div className="hp-tagrow">

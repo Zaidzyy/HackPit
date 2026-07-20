@@ -512,6 +512,127 @@ body {
   background: var(--accent-soft);
 }
 
+/* ---------- source provenance / consolidation richness ---------- */
+/* source-tinted primary badge; `--st` (set inline) is the per-source hue */
+.hp-badge-primary {
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: var(--st, var(--grey));
+  border: 1px solid color-mix(in srgb, var(--st, var(--grey)) 42%, transparent);
+  background: color-mix(in srgb, var(--st, var(--grey)) 12%, transparent);
+  white-space: nowrap;
+}
+/* your own notes: pin the tint to the signature accent */
+.hp-badge-primary.is-notes {
+  --st: var(--accent);
+}
+/* "from your notes" — the tested-content marker */
+.hp-badge-notes {
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  white-space: nowrap;
+}
+.hp-badge-count {
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: var(--grey);
+  border: 1px solid var(--border-2);
+  white-space: nowrap;
+}
+
+/* "also covered in" + "variants" rows under the header badges */
+.hp-alsorow,
+.hp-varrow {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.hp-alsorow-label,
+.hp-varrow-label {
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-right: 2px;
+}
+
+/* source-tinted pill — header "also covered in" + per-step provenance chip */
+.hp-src-chip {
+  display: inline-block;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  color: var(--st, var(--grey));
+  border: 1px solid color-mix(in srgb, var(--st, var(--grey)) 40%, transparent);
+  background: color-mix(in srgb, var(--st, var(--grey)) 10%, transparent);
+  white-space: nowrap;
+}
+.hp-src-chip-step {
+  margin-bottom: 8px;
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  padding: 1px 8px;
+}
+
+/* "Also covered in — {Source}" body section header → tinted source divider */
+.hp-src-divider {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 22px 0 12px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--st, var(--grey)) 30%, transparent);
+  border-left: 3px solid color-mix(in srgb, var(--st, var(--grey)) 60%, transparent);
+  background: color-mix(in srgb, var(--st, var(--grey)) 8%, transparent);
+}
+.hp-src-divider-ic {
+  color: var(--st, var(--grey));
+  font-size: 14px;
+  line-height: 1;
+}
+.hp-src-divider-label {
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.hp-src-divider-src {
+  font-family: var(--font-space-grotesk), "Space Grotesk", sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--st, var(--white));
+}
+
+/* multi-source indicator in the category listing + command-palette results */
+.hp-multi {
+  font-size: 9.5px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  white-space: nowrap;
+}
+
 .hp-error-box {
   border: 1px solid var(--border-2);
   border-radius: 12px;

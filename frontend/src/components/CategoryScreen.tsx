@@ -78,6 +78,14 @@ export function CategoryScreen({ slug }: { slug: string }) {
                     )}
                   </div>
                   <div className="hp-row-meta">
+                    {e.source_count > 1 && (
+                      <span
+                        className="hp-multi"
+                        title={`Consolidated from ${e.source_count} sources`}
+                      >
+                        {e.source_count} src
+                      </span>
+                    )}
                     <span
                       className={`hp-badge-src${e.tier === 1 ? " is-notes" : ""}`}
                     >

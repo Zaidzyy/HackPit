@@ -36,6 +36,8 @@ export type EntrySummary = {
   tier: number;
   source: string;
   category: string;
+  /** Distinct sources consolidated into this entry (>=1). */
+  source_count: number;
 };
 
 export type Code = {
@@ -76,6 +78,17 @@ export type Entry = {
   references: string[];
   meta: Record<string, unknown>;
   schema_version: string;
+  // ---- resolved source-provenance facets (added by GET /entry) ---------- //
+  /** Friendly label for the spine source (e.g. "your notes", "HackTricks"). */
+  primary_source_label: string;
+  /** Friendly labels for the other sources folded in (spine excluded). */
+  also_covered_in_labels: string[];
+  /** Distinct sources covering this entry (>=1). */
+  source_count: number;
+  /** True when the entry's tested content is your own notes. */
+  from_your_notes: boolean;
+  /** Labelled technique variants recorded during consolidation. */
+  variants: string[];
 };
 
 /** One ranked search result (snippet emphasises matches with **markers**). */
@@ -88,6 +101,8 @@ export type SearchHit = {
   source: string;
   tier: number | null;
   snippet: string;
+  /** Distinct sources consolidated into this entry (>=1). */
+  source_count: number;
 };
 
 export type SearchResponse = {

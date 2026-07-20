@@ -260,6 +260,14 @@ export function CommandPalette() {
                     <span className="hp-cmdk-item-title">{hit.title}</span>
                     <span className="hp-cmdk-item-meta">
                       <span className="hp-cmdk-cat">{prettyCat(hit.category)}</span>
+                      {hit.source_count > 1 && (
+                        <span
+                          className="hp-multi"
+                          title={`Consolidated from ${hit.source_count} sources`}
+                        >
+                          {hit.source_count} src
+                        </span>
+                      )}
                       <span
                         className={`hp-badge-src${
                           hit.tier === 1 ? " is-notes" : ""

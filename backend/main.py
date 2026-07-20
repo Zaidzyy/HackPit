@@ -41,6 +41,7 @@ if str(PIPELINE_DIR) not in sys.path:
     # search.py does a bare `import embed`, so the pipeline dir must be importable.
     sys.path.insert(0, str(PIPELINE_DIR))
 
+import consolidate  # noqa: E402  (pipeline/consolidate.py — SOURCE_LABELS, PERSONAL_SOURCES)
 import search as kb_search  # noqa: E402  (pipeline/search.py)
 from schema import Code, Entry  # noqa: E402  (pipeline/schema.py — canonical models)
 
@@ -108,6 +109,51 @@ def category_meta(slug: str) -> tuple[str, str, str]:
         return CATEGORY_META[slug]
     name = slug.replace("-", " ").title()
     return (name, *FALLBACK_META)
+
+
+# --------------------------------------------------------------------------- #
+# source provenance — friendly labels for the consolidation richness.
+# We reuse the pipeline's SOURCE_LABELS / PERSONAL_SOURCES rather than keeping a
+# divergent copy, so a slug renamed in the ingester stays in sync on the API.
+# --------------------------------------------------------------------------- #
+def source_label(slug: str) -> str:
+    """Friendly label for a source slug ("madstuff" -> "x3m1Sec's notes")."""
+    return consolidate.SOURCE_LABELS.get(slug, slug)
+
+
+def source_facets(e: dict) -> dict[str, Any]:
+    """Derive the consolidation-provenance facets the entry view surfaces.
+
+    * ``primary_source_label`` — the spine source's friendly label.
+    * ``also_covered_in_labels`` — friendly labels for the OTHER sources folded
+      in (``meta.also_covered_in`` minus the spine, order-preserving, deduped).
+    * ``source_count`` — distinct sources covering this entry (>=1).
+    * ``from_your_notes`` — the entry's tested content is Zaid's own (spine is a
+      personal source, or a personal source was folded in as trusted content).
+    * ``variants`` — any labelled technique variants recorded during merge.
+    """
+    meta = e.get("meta") or {}
+    spine = e.get("source", "")
+    also = meta.get("also_covered_in") or []
+
+    others: list[str] = []
+    seen = {spine}
+    for slug in also:
+        if slug not in seen:
+            seen.add(slug)
+            others.append(source_label(slug))
+
+    distinct = len(dict.fromkeys(also)) if also else 1
+    from_notes = bool(meta.get("author_notes")) or spine in consolidate.PERSONAL_SOURCES
+    variants = meta.get("variants") or []
+
+    return {
+        "primary_source_label": source_label(spine),
+        "also_covered_in_labels": others,
+        "source_count": max(distinct, 1),
+        "from_your_notes": from_notes,
+        "variants": [str(v) for v in variants],
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -235,6 +281,27 @@ class EntrySummary(BaseModel):
     tier: int
     source: str
     category: str
+    source_count: int = Field(
+        default=1, description="Distinct sources consolidated into this entry (>=1)."
+    )
+
+
+class EntryOut(Entry):
+    """The canonical Entry plus the resolved source-provenance facets the entry
+    view renders (friendly labels, source count, from-your-notes)."""
+
+    primary_source_label: str = Field(description="Friendly label for the spine source.")
+    also_covered_in_labels: list[str] = Field(
+        default_factory=list,
+        description="Friendly labels for the other sources folded in (spine excluded).",
+    )
+    source_count: int = Field(default=1, description="Distinct sources covering this entry.")
+    from_your_notes: bool = Field(
+        default=False, description="True when the entry's tested content is your own notes."
+    )
+    variants: list[str] = Field(
+        default_factory=list, description="Labelled technique variants recorded on merge."
+    )
 
 
 class SearchHit(BaseModel):
@@ -246,6 +313,9 @@ class SearchHit(BaseModel):
     source: str
     tier: int | None = None
     snippet: str
+    source_count: int = Field(
+        default=1, description="Distinct sources consolidated into this entry (>=1)."
+    )
 
 
 class SearchResponse(BaseModel):
@@ -407,6 +477,7 @@ def category_entries(slug: str) -> list[EntrySummary]:
             tier=int(e.get("tier", 2)),
             source=e.get("source", ""),
             category=e.get("category", slug),
+            source_count=source_facets(e)["source_count"],
         )
         for e in items
     ]
@@ -449,6 +520,9 @@ def search(
             source=h["source"],
             tier=h.get("tier"),
             snippet=h["snippet"],
+            source_count=source_facets(STATE.by_id[h["id"]])["source_count"]
+            if h["id"] in STATE.by_id
+            else 1,
         )
         for h in hits
     ]
@@ -462,13 +536,15 @@ def search(
     )
 
 
-@app.get("/entry/{entry_id}", response_model=Entry)
+@app.get("/entry/{entry_id}", response_model=EntryOut)
 def entry(entry_id: str) -> dict[str, Any]:
-    """The full canonical Entry (steps, copyable commands, body, refs, meta)."""
+    """The full canonical Entry (steps, copyable commands, body, refs, meta) plus
+    resolved source-provenance facets (friendly labels, source count, from-your-
+    notes) so the entry view can surface the consolidation richness."""
     e = STATE.by_id.get(entry_id)
     if e is None:
         raise HTTPException(status_code=404, detail=f"unknown entry: {entry_id}")
-    return e
+    return {**e, **source_facets(e)}
 
 
 @app.get("/image")

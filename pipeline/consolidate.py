@@ -2025,6 +2025,41 @@ _TPN_SLUG_RE = re.compile(r"blog\.thepentesting\.ninja/([a-z0-9][a-z0-9-]+)")
 _HTB_MARK_RE = re.compile(
     r"\bHTB\s+([A-Za-z][A-Za-z0-9]+)\b[^\n]*?(?:Walkthrough|Writeup|Guide)", re.I)
 _CONTAINER_TITLE_RE = re.compile(r"^#\s+more\s+write\s?ups\s*$", re.I | re.M)
+# style 3: a raw-notes container where each box opens with a full-range rustscan
+# port scan (`rustscan -a $targetIp … -r 1-65535`). That line is the ONE reliable
+# per-box boundary in such files (headings are just code comments).
+_RUSTSCAN_RE = re.compile(r"rustscan\s+-a\s+\$target[a-z_]*\b.*\b1-65535", re.I)
+_REDIRECT_HOST_RE = re.compile(r"redirect to https?://([a-z0-9.-]+)\.htb", re.I)
+_PLAIN_TITLE_RE = re.compile(r"http-title:\s*([A-Za-z][A-Za-z0-9 _-]{1,38})\s*$", re.M)
+_HTB_HOST_RE = re.compile(r"\b([a-z0-9-]+)\.htb\b")
+
+
+def _box_name_from_segment(text: str) -> str | None:
+    """Best-effort box name for a rustscan-delimited segment. The box's own
+    `.htb` hostname is the reliable identity; the nmap `http-title` is usually
+    the WEB-APP name (e.g. "Mirth Connect Administrator", "Image Gallery"), so
+    it is used only as a last resort. Order: nmap redirect-host -> most-frequent
+    `.htb` root label (with internal vhost families folded into their base, e.g.
+    browsedinternals -> browsed) -> plain http-title."""
+    m = _REDIRECT_HOST_RE.search(text)
+    if m:
+        return m.group(1).split(".")[-1]
+    roots = [r for r in _HTB_HOST_RE.findall(text.lower())
+             if r not in ("target", "attacker", "www")]
+    if roots:
+        cnt = Counter(roots)
+        for r in sorted(cnt, key=len, reverse=True):   # fold vhost variants
+            if r not in cnt:
+                continue
+            for base in list(cnt):
+                if base != r and base in cnt and r.startswith(base):
+                    cnt[base] += cnt.pop(r)
+                    break
+        return cnt.most_common(1)[0][0]
+    m = _PLAIN_TITLE_RE.search(text)
+    if m and "http" not in m.group(1).lower() and len(m.group(1).split()) <= 3:
+        return m.group(1).strip()
+    return None
 
 
 def _strip_md(s: str) -> str:
@@ -2079,6 +2114,28 @@ def _segment_writeups(text: str) -> list[tuple[str, str, str]] | None:
             grouped[k][1].append("\n".join(lines[i0:i1]))
         return [(grouped[k][0], "htb-" + k, "\n\n".join(grouped[k][1]))
                 for k in order]
+
+    rust = [i for i, ln in enumerate(lines) if _RUSTSCAN_RE.search(ln)]
+    if len(rust) >= 2:                                    # style 3
+        starts: list[int] = []
+        for idx in rust:
+            j, k = idx, 0
+            # back up over a short "1 RECON / 1.1 Port Scan" heading preamble so
+            # the box keeps its opening label (max 4 lines, blanks/numbered heads)
+            while j - 1 >= 0 and k < 4 and (
+                    not lines[j - 1].strip()
+                    or re.match(r"^#{0,3}\s*\d", lines[j - 1].strip())):
+                j -= 1
+                k += 1
+            starts.append(j)
+        starts = sorted(set(starts))
+        bounds = starts + [len(lines)]
+        out = []
+        for a, s in enumerate(starts):
+            seg = "\n".join(lines[s:bounds[a + 1]])
+            name = _box_name_from_segment(seg) or f"box-{a + 1}"
+            out.append((humanize(name), slugify(name), seg))
+        return out
 
     return None
 

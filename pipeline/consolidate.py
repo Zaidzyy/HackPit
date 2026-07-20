@@ -79,6 +79,8 @@ SOURCE_LABELS = {
     "htb-cheatsheets": "HTB Academy cheat sheet",
     "shodan-dorks": "shodan-dorks",
     "decepticon": "Decepticon",
+    "writeups": "your writeups",
+    "htb-writeups": "htb-writeups",
 }
 
 # Zaid's OWN notes — the trusted tier-1 sources. When one of these is the
@@ -86,7 +88,7 @@ SOURCE_LABELS = {
 # entry is marked "from your notes" (its tested commands are preferred).
 # NOTE: madstuff is x3m1Sec's public notes, NOT Zaid's own — it is a tier-3
 # reference source and is deliberately NOT listed here.
-PERSONAL_SOURCES = {"peh-notes", "htb-my-resources"}
+PERSONAL_SOURCES = {"peh-notes", "htb-my-resources", "writeups"}
 
 # --------------------------------------------------------------------------- #
 # matching knobs
@@ -2002,6 +2004,369 @@ def discover_decepticon(root: Path, failures: list | None = None,
     return _group_madstuff_by_class(out)
 
 
+# =========================================================================== #
+#  SOURCE 13 — writeups (Zaid's OWN box walkthroughs; Notion export, tier 1)
+# =========================================================================== #
+# 6 Notion exports, each a CONTAINER of many box walkthroughs (not one box per
+# file). Boxes are delimited three ways, so we segment each file into per-box
+# sub-documents and emit ONE tier-1 "writeup" entry PER box (never lump):
+#   1) blog.thepentesting.ninja/<slug> anchors on the headings (4 files) — the
+#      slug names the box; a slug change starts a new box.
+#   2) bold / heading "HTB <Name> … Walkthrough|Guide|Writeup" markers (1 file);
+#      same-name segments are concatenated (e.g. a box written up twice).
+#   3) no reliable delimiter (1 raw-notes file) — kept as ONE entry and FLAGGED
+#      for manual splitting (honest, never a silent coarse-lump of the rest).
+# Whole-box chains, so category "writeup" + meta.no_merge: they are standalone
+# entries, never folded into a single technique. Full cleaned body preserved
+# (searchable) + key command blocks as steps; box name + techniques as tags.
+WRITEUP_BODY_CAP = 60000
+_NOTION_ANCHOR_RE = re.compile(r"\[[#¶][^\]]*\]\([^)]*\)")
+_TPN_SLUG_RE = re.compile(r"blog\.thepentesting\.ninja/([a-z0-9][a-z0-9-]+)")
+_HTB_MARK_RE = re.compile(
+    r"\bHTB\s+([A-Za-z][A-Za-z0-9]+)\b[^\n]*?(?:Walkthrough|Writeup|Guide)", re.I)
+_CONTAINER_TITLE_RE = re.compile(r"^#\s+more\s+write\s?ups\s*$", re.I | re.M)
+
+
+def _strip_md(s: str) -> str:
+    s = _NOTION_ANCHOR_RE.sub("", s or "")
+    return re.sub(r"[*`]+", "", s).strip()
+
+
+def _is_box_marker(line: str) -> bool:
+    """A style-2 box title line: an `HTB <Name> … Walkthrough` in bold or a
+    heading (not a passing prose mention)."""
+    return bool(_HTB_MARK_RE.search(line)
+                and ("**" in line or line.lstrip().startswith("#")))
+
+
+def _segment_writeups(text: str) -> list[tuple[str, str, str]] | None:
+    """Split one Notion container into [(box_display, box_key, seg_text)] or
+    None when the file has no reliable per-box delimiter (caller lumps + flags).
+    """
+    lines = text.splitlines()
+    slug_heads = sum(1 for ln in lines
+                     if re.match(r"^#{1,6}\s", ln) and _TPN_SLUG_RE.search(ln))
+    marks = [i for i, ln in enumerate(lines) if _is_box_marker(ln)]
+
+    if slug_heads >= 2:                                   # style 1
+        segs: list[tuple[str, list[str]]] = []
+        cur_key: str | None = None
+        for ln in lines:
+            if re.match(r"^#{1,6}\s", ln):
+                m = _TPN_SLUG_RE.search(ln)
+                if m and m.group(1) != "assets" and m.group(1) != cur_key:
+                    cur_key = m.group(1)
+                    segs.append((cur_key, []))
+            if cur_key is not None:
+                segs[-1][1].append(ln)
+        out = []
+        for slug, buf in segs:
+            name = slug[4:] if slug.startswith("htb-") else slug
+            out.append((humanize(name), slug, "\n".join(buf)))
+        return out
+
+    if len(marks) >= 2:                                   # style 2
+        bounds = marks + [len(lines)]
+        grouped: dict[str, list] = {}
+        order: list[str] = []
+        for j, i0 in enumerate(marks):
+            i1 = bounds[j + 1]
+            name = _HTB_MARK_RE.search(lines[i0]).group(1)
+            k = name.lower()
+            if k not in grouped:
+                grouped[k] = [name, []]
+                order.append(k)
+            grouped[k][1].append("\n".join(lines[i0:i1]))
+        return [(grouped[k][0], "htb-" + k, "\n\n".join(grouped[k][1]))
+                for k in order]
+
+    return None
+
+
+def _writeup_entry(box_disp: str, seg_text: str, *, source: str, tier: int,
+                   id_prefix: str, src_file: str, key: str,
+                   category: str = "writeup",
+                   flag_reason: str | None = None) -> Entry | None:
+    """Adapt one box/challenge walkthrough into a standalone (no-merge) Entry:
+    full cleaned body preserved (lexically searchable) + capped command steps."""
+    text = _NOTION_ANCHOR_RE.sub("", _clean_notion(seg_text))
+    if not text.strip():
+        return None
+    lines = text.splitlines()
+
+    summary = ""
+    for para in text.split("\n\n"):
+        p = " ".join(para.split())
+        if p and not p.startswith(("#", ">", "```", "|", "*", "-", "!")):
+            summary = p[:300].rstrip()
+            break
+
+    steps: list[Step] = []
+    for sec in _walk_sections(lines):
+        code = _section_code(sec, MAX_CODE_PER_SECTION, MAX_CODE_CHARS)
+        if not code:
+            continue
+        head = _strip_md(sec["heading"]) or "commands"
+        steps.append(Step(n=len(steps) + 1, text=head[:300], code=code))
+        if len(steps) >= MAX_STEPS_NEW:
+            break
+
+    hashtags = re.findall(r"(?<![\w])#([a-z][a-z0-9\-]{2,})\b", text.lower())
+    keys = sorted(canonical_keys(
+        box_disp + " " + summary + " " + " ".join(s.text for s in steps)))
+    refs = _dedup(_section_urls(lines))[:40]
+
+    b = _CONTAINER_TITLE_RE.sub("", text, count=1).strip()
+    body = (b if b.lstrip().startswith("# ") else f"# {box_disp}\n\n{b}")[:WRITEUP_BODY_CAP]
+
+    meta = {"src_file": src_file, "canonical_keys": keys, "kind": "writeup",
+            "no_merge": True, "source_label": SOURCE_LABELS[source],
+            "also_covered_in": [source]}
+    if flag_reason:
+        meta["flag_reason"] = flag_reason
+    return Entry(
+        id=f"{id_prefix}-" + slugify(key), title=box_disp, category=category,
+        source=source, tier=tier,
+        tags=_dedup([category, slugify(box_disp)] + keys + hashtags[:12]),
+        tools=_oscp_tools(text), summary=summary or box_disp, steps=steps,
+        body_md=body, references=refs, meta=meta, schema_version=SCHEMA_VERSION,
+    )
+
+
+def discover_writeups(root: Path, failures: list | None = None,
+                      flagged: list | None = None) -> list[Entry]:
+    """Segment each Notion container into per-box tier-1 writeup entries; a file
+    with no clean delimiter becomes ONE flagged entry (never a silent lump)."""
+    out: list[Entry] = []
+    for p in sorted(root.glob("*.md")):
+        text = _safe_read(p)
+        if text is None or not text.strip():
+            if failures is not None:
+                failures.append(p.name)
+            continue
+        segs = _segment_writeups(text)
+        if segs is None:
+            e = _writeup_entry(
+                "HTB Writeups — Raw Notes (mixed boxes)", text, source="writeups",
+                tier=1, id_prefix="wu", src_file=p.name,
+                key="mixed-notes-" + p.stem.split()[-1][:8],
+                flag_reason="multi-box raw Notion dump with no reliable per-box "
+                            "delimiter — kept as one entry; review for splitting")
+            if e is not None:
+                if flagged is not None:
+                    flagged.append({"file": p.name, "reason": e.meta["flag_reason"],
+                                    "ingested": True, "id": e.id})
+                out.append(e)
+            continue
+        for disp, key, seg in segs:
+            e = _writeup_entry(disp, seg, source="writeups", tier=1,
+                               id_prefix="wu", src_file=p.name, key=key)
+            if e is None:
+                continue
+            if is_nav_stub(e):
+                if flagged is not None:
+                    flagged.append({"file": f"{p.name}#{key}",
+                                    "reason": "empty box segment stub — not ingested",
+                                    "id": e.id})
+                continue
+            out.append(e)
+    return _disambiguate_titles(out)
+
+
+# =========================================================================== #
+#  SOURCE 14 — htb-writeups (third-party git repo; box writeups + cheatsheets)
+# =========================================================================== #
+# A community HTB writeup repo. Ingest ONLY the real content, tier 3:
+#   * machines/<diff>/<Box>/README.md — per-box writeups (Summary + Key
+#     Techniques + external links) -> "writeup" entries (no-merge, like above).
+#   * challenges/<cat>/README.md — per-category technique-tagged challenge
+#     indexes -> one "writeup" entry per category (NOT exploded per challenge).
+#   * resources/cheatsheets/*.md — broad cheat sheets; MERGE into a matching
+#     technique via CANON, else become a standalone cheatsheet reference entry.
+#   * resources/methodology/*.md + attack-paths.md -> methodology entries.
+# SKIP + record: the 0xdf & ippsec link indexes (pure link lists, no technique
+# content), .github/assets/templates/_includes scaffolding, and every nav/index
+# README (machines/, challenges/, resources/ landing pages).
+_HTBWU_CS_CATEGORY = {
+    "web-application": "web", "active-directory": "active-directory",
+    "privesc-linux": "privesc", "privesc-windows": "privesc",
+    "linux-enumeration": "recon", "windows-enumeration": "recon",
+    "password-attacks": "reference", "pivoting": "pivoting",
+    "file-transfers": "reference", "reverse-shells": "reference",
+}
+_HTBWU_SKIP_DIRS = (".github", "assets", "templates", "_includes")
+_HTBWU_SKIP_FILES = {
+    "0xdf-htb-machines.md", "ippsec-video-index.md", "readme.md", "index.md",
+    "contributing.md", "skill-trees.md",
+}
+_HTBWU_CS_BODY_CAP = 10000  # small files (<8KB) — preserve each cheat sheet in full
+
+
+def parse_htbwu_writeup(path: Path, root: Path, *, box: str, key: str,
+                        category: str = "writeup") -> Entry | None:
+    text = _safe_read(path)
+    if text is None or not text.strip():
+        return None
+    _fm, body = _frontmatter(text)
+    return _writeup_entry(box, body, source="htb-writeups", tier=3,
+                          id_prefix="htbwu", key=key, category=category,
+                          src_file=path.relative_to(root).as_posix())
+
+
+def parse_htbwu_cheatsheet(path: Path, root: Path) -> Entry | None:
+    text = _safe_read(path)
+    if text is None or not text.strip():
+        return None
+    _fm, body = _frontmatter(text)
+    body = _IMG_RE.sub("", body)
+    body, _n = _strip_gitbook(body)
+    body = body.strip()
+    lines = body.splitlines()
+    folder = slugify(path.stem)
+    title = (_fm.get("title") or humanize(path.stem)).strip('"')
+
+    summary = ""
+    for para in body.split("\n\n"):
+        p = " ".join(para.split())
+        if p and not p.startswith(("#", ">", "```", "|", "!")):
+            summary = p[:300].rstrip()
+            break
+
+    steps: list[Step] = []
+    for sec in _walk_sections(lines):
+        code = _section_code(sec, MAX_CODE_PER_SECTION, MAX_CODE_CHARS)
+        prose = " ".join(sec["prose"]).strip()
+        head = _strip_md(sec["heading"]) or "cheatsheet"
+        text_i = f"{head} — {prose}"[:600] if prose else head
+        if code or prose:
+            steps.append(Step(n=len(steps) + 1, text=text_i.strip(), code=code))
+        if len(steps) >= MAX_STEPS_NEW:
+            break
+    if not steps and len(body) < 80:
+        return None
+
+    keys = sorted(canonical_keys(f"{title} {folder}"))
+    category = _HTBWU_CS_CATEGORY.get(folder, "web" if keys else "reference")
+    return Entry(
+        id="htbwu-cs-" + folder, title=f"{title} Cheat Sheet", category=category,
+        source="htb-writeups", tier=3,
+        tags=_dedup([category, "cheatsheet"] + keys + [slugify(title)]),
+        tools=_oscp_tools(body), summary=summary or title, steps=steps,
+        body_md=body[:_HTBWU_CS_BODY_CAP],  # full cheat sheet preserved (searchable)
+        references=_dedup(_section_urls(lines)),
+        meta={"src_file": path.relative_to(root).as_posix(), "kind": "cheatsheet",
+              "source_label": SOURCE_LABELS["htb-writeups"], "canonical_keys": keys,
+              "also_covered_in": ["htb-writeups"]},
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def parse_htbwu_methodology(path: Path, root: Path, *, title: str | None = None,
+                            stem_key: str | None = None) -> Entry | None:
+    text = _safe_read(path)
+    if text is None or not text.strip():
+        return None
+    _fm, body = _frontmatter(text)
+    body, _n = _strip_gitbook(_IMG_RE.sub("", body))
+    body = body.strip()
+    lines = body.splitlines()
+    stem = stem_key or path.stem
+    disp = (title or _fm.get("title") or humanize(stem)).strip('"')
+
+    summary = ""
+    for para in body.split("\n\n"):
+        p = " ".join(para.split())
+        if p and not p.startswith(("#", ">", "```", "|", "!")):
+            summary = p[:300].rstrip()
+            break
+
+    steps: list[Step] = []
+    for sec in _walk_sections(lines):
+        code = _section_code(sec, MAX_CODE_PER_SECTION, MAX_CODE_CHARS)
+        prose = " ".join(sec["prose"]).strip()
+        head = _strip_md(sec["heading"]) or "notes"
+        text_i = f"{head} — {prose}"[:600] if prose else head
+        if code or prose:
+            steps.append(Step(n=len(steps) + 1, text=text_i.strip(), code=code))
+        if len(steps) >= MAX_STEPS_NEW:
+            break
+
+    keys = sorted(canonical_keys(f"{disp} {stem}"))
+    return Entry(
+        id="htbwu-meth-" + slugify(stem), title=disp, category="methodology",
+        source="htb-writeups", tier=3,
+        tags=_dedup(["methodology"] + keys + [slugify(disp)]),
+        tools=_oscp_tools(body), summary=summary or disp, steps=steps,
+        body_md=body[:MAX_ADAPTED_BODY * 2], references=_dedup(_section_urls(lines)),
+        meta={"src_file": path.relative_to(root).as_posix(), "kind": "methodology",
+              "source_label": SOURCE_LABELS["htb-writeups"], "canonical_keys": keys,
+              "also_covered_in": ["htb-writeups"]},
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def discover_htbwriteups(root: Path, failures: list | None = None,
+                         flagged: list | None = None) -> list[Entry]:
+    """Route each file: box/challenge writeups + cheatsheets + methodology in;
+    scaffolding, link indexes, and nav READMEs skipped (recorded)."""
+    def _skip(rel: str, reason: str):
+        if flagged is not None:
+            flagged.append({"file": rel, "reason": reason})
+
+    out: list[Entry] = []
+    for p in _all_md(root):
+        rel = p.relative_to(root)
+        parts = rel.parts
+        posix = rel.as_posix()
+        top = parts[0]
+
+        if top in _HTBWU_SKIP_DIRS:
+            _skip(posix, "scaffolding dir — skipped")
+            continue
+        if len(parts) == 1 and p.name.lower() in _HTBWU_SKIP_FILES:
+            reason = ("pure link-index (no technique content) — skipped"
+                      if p.name.lower() in ("0xdf-htb-machines.md",
+                                            "ippsec-video-index.md")
+                      else "repo index/nav page — skipped")
+            _skip(posix, reason)
+            continue
+
+        e: Entry | None = None
+        if top == "machines":
+            if len(parts) == 4 and p.name.lower() == "readme.md":
+                box = humanize(parts[2])
+                e = parse_htbwu_writeup(p, root, box=box, key="m-" + slugify(parts[2]))
+            else:
+                _skip(posix, "machines nav/index page — skipped")
+                continue
+        elif top == "challenges":
+            if len(parts) == 3 and p.name.lower() == "readme.md":
+                cat = humanize(parts[1])
+                e = parse_htbwu_writeup(p, root, box=f"{cat} Challenges",
+                                        key="c-" + slugify(parts[1]))
+            else:
+                _skip(posix, "challenges nav/index page — skipped")
+                continue
+        elif top == "resources" and len(parts) >= 3 and parts[1] == "cheatsheets" \
+                and p.name.lower() != "readme.md":
+            e = parse_htbwu_cheatsheet(p, root)
+        elif top == "resources" and len(parts) >= 3 and parts[1] == "methodology" \
+                and p.name.lower() != "readme.md":
+            e = parse_htbwu_methodology(p, root)
+        elif posix == "attack-paths.md":
+            e = parse_htbwu_methodology(p, root, title="HTB Attack Paths",
+                                        stem_key="attack-paths")
+        else:
+            _skip(posix, "not in ingest whitelist (nav/scaffolding/other) — skipped")
+            continue
+
+        if e is None:
+            _skip(posix, "empty/unparseable — skipped")
+            continue
+        out.append(e)
+    return _disambiguate_titles(out)
+
+
 # --------------------------------------------------------------------------- #
 # source registry
 # --------------------------------------------------------------------------- #
@@ -2062,6 +2427,14 @@ SPECS: dict[str, SourceSpec] = {
         "decepticon", SOURCE_LABELS["decepticon"],
         r"C:\Users\zaid_\Downloads\hacks\Decepticon",
         discover_decepticon),
+    "writeups": SourceSpec(
+        "writeups", SOURCE_LABELS["writeups"],
+        r"C:\Users\zaid_\Downloads\hacks\more new resources\writeups",
+        discover_writeups),
+    "htbwriteups": SourceSpec(
+        "htb-writeups", SOURCE_LABELS["htb-writeups"],
+        r"C:\Users\zaid_\Downloads\hacks\more new resources\htb-writeups",
+        discover_htbwriteups),
 }
 
 
@@ -2087,6 +2460,15 @@ def match_candidate(cand: dict, cand_vec, existing: list[dict],
     v = np.asarray(cand_vec, dtype=np.float32)
     v = v / max(float(np.linalg.norm(v)), 1e-9)
 
+    # Whole-box walkthroughs (category "writeup" / meta.no_merge) are standalone
+    # entries: a full box/challenge chain must never be folded INTO a single
+    # technique, nor act as the fold TARGET for one (its technique tags exist for
+    # search, not consolidation). They are still embedded, so `best_any` is kept
+    # for the report's nearest-neighbour signal.
+    def _no_merge(x: dict) -> bool:
+        return x.get("category") == "writeup" or bool((x.get("meta") or {}).get("no_merge"))
+
+    cand_no_merge = _no_merge(cand)
     best_any = (-1.0, None)
     keyed: list[tuple[int, float, str]] = []
     for e in existing:
@@ -2094,6 +2476,8 @@ def match_candidate(cand: dict, cand_vec, existing: list[dict],
         cos = float(unit_vecs[row] @ v) if row is not None else 0.0
         if cos > best_any[0]:
             best_any = (cos, e["id"])
+        if cand_no_merge or _no_merge(e):
+            continue
         if (ck and (ck & entry_keys(e)) and cos >= SEM_FLOOR
                 and content_len(e) >= MIN_TARGET_LEN):
             keyed.append((content_len(e), cos, e["id"]))

@@ -14,7 +14,7 @@ HackPit turns a career's worth of scattered pentest notes into a single, dedupli
 
 Offensive-security practitioners accumulate technique notes everywhere: personal course notes, HackTricks, PayloadsAllTheThings, OSCP/CPTS write-ups, box walkthroughs, cheat sheets. Over time it becomes **scattered, duplicated, and impossible to recall mid-engagement** — the exact `impacket-GetUserSPNs` invocation is in one file, the hashcat mode in another, the follow-up in a box write-up you half-remember.
 
-HackPit fixes that. A normalization pipeline folds **15+ sources into one consolidated knowledge base** — 1,551 entries, deduplicated and source-attributed — and a companion UI makes it instantly usable:
+HackPit fixes that. A normalization pipeline folds **15+ sources into one consolidated knowledge base** — 1,593 entries, deduplicated and source-attributed — and a companion UI makes it instantly usable:
 
 - **Recall** any technique with hybrid semantic search (⌘K, anywhere).
 - **Plan** with guided attack paths composed from your own tested commands.
@@ -37,6 +37,12 @@ Every entry is a focused, copy-ready technique with real commands, tool tags, an
   <img src="assets/screenshots/04-consolidated-entry.png" alt="A consolidated Kerberoasting entry — 4 sources, also-covered-in chips, tool tags, copy-ready steps" width="49%">
 </p>
 
+Some entries are **your own authored techniques** — original methodology written for your library, badged `HACKPIT-AUTHORED` and tier-1 "your notes."
+
+<p align="center">
+  <img src="assets/screenshots/11-authored-entry.jpg" alt="An authored technique — Broken Function-Level Authorization — badged HACKPIT-AUTHORED, tier-1, with copy-ready curl steps" width="80%">
+</p>
+
 ### Guided attack paths — writeup-first, KB-grounded, AI-gap-filled
 
 Describe a target ("how do I root the Voleur box", "compromise an AD domain with creds") and HackPit composes an ordered **recon → enumeration → exploitation → privesc → post-ex** walkthrough. The grounding hierarchy is deliberate:
@@ -45,11 +51,16 @@ Describe a target ("how do I root the Voleur box", "compromise an AD domain with
 2. **KB-grounded next.** Every other step cites a real technique from your library and reuses its exact commands.
 3. **AI-suggested gap-fill, clearly marked.** Where the library has a gap, the model may add a step — but it's badged **`AI-SUGGESTED · VERIFY`** so grounded fact is never confused with generation.
 
+Before any of that, a **target-profiler** reads your goal (and optional scope / rules of engagement) and classes the target — so a multi-tenant SaaS and a WordPress blog get different playbooks, not the same generic checklist. The **"why these steps"** chips surface the inferred target class and priority bug classes; pivotal steps carry **conditional branches** (green *if it works →*, amber *if blocked →*); and any out-of-scope host you paste is dropped from the path.
+
 Placeholder IPs/hosts in grounded commands are substituted with the target from your goal, so the commands come out ready to run.
 
 <p align="center">
   <img src="assets/screenshots/05-attack-path-writeup.png" alt="Writeup-first attack path with the green 'from your writeup' banner" width="49%">
-  <img src="assets/screenshots/06-attack-path-composed-ad.png" alt="Composed AD attack path showing a grounded technique step next to an AI-suggested step" width="49%">
+  <img src="assets/screenshots/06-attack-path-profiled.jpg" alt="A profiled attack path for a multi-tenant SaaS — 'why these steps' chips show the inferred target class and priority bug classes" width="49%">
+</p>
+<p align="center">
+  <img src="assets/screenshots/06b-attack-path-branches.jpg" alt="A grounded step with copy-ready commands and conditional branches — green 'if it works', amber 'if blocked'" width="80%">
 </p>
 
 ### Engagements — checklist + evidence capture + persistence
@@ -86,7 +97,7 @@ Every runnable script and payload across the whole KB, **extracted, deduped, and
 
 ### Multi-provider LLM — local-first, key-swappable
 
-HackPit defaults to a **local Ollama** runtime — `qwen3:8b` for composition/chat, `nomic-embed-text` for embeddings, `llava` for note-image captions — so your engagement data never leaves your machine. Prefer a hosted model? Drop a key for OpenAI, Anthropic, Groq, OpenRouter, or xAI and swap providers without touching code.
+HackPit defaults to a **local Ollama** runtime — `qwen3:8b` for composition/chat, `nomic-embed-text` for embeddings, `llava` for note-image captions — so your engagement data never leaves your machine. Prefer a hosted model? Drop a key for OpenAI, Anthropic, Groq, OpenRouter, or xAI and swap providers without touching code. There's also a **Claude Agent SDK** provider that reuses your local Claude Code login to reach a frontier model with **no API key** — worth it for the reasoning-heavy target-profiler, where a small local model under-performs.
 
 ---
 
@@ -126,7 +137,7 @@ The core design rule: **answers cite real techniques from the knowledge base, an
 
 ## Knowledge base
 
-The KB is the heart of HackPit: **1,551 entries synthesized from 15+ sources** into one deduplicated, source-attributed library spanning 33 categories — web & bug bounty, Active Directory, network services, privilege escalation, reference, and more.
+The KB is the heart of HackPit: **1,593 entries synthesized from 15+ sources** into one deduplicated, source-attributed library spanning 33 categories — web & bug bounty, Active Directory, network services, privilege escalation, reference, and more.
 
 The consolidation pipeline:
 

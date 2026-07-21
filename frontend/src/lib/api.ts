@@ -157,6 +157,14 @@ export type AttackStep = {
    */
   from_writeup?: boolean;
   /**
+   * Optional one-line "adapt to this target" guidance for a grounded step —
+   * bridges the technique's generic example commands to THIS target by naming real
+   * hosts/endpoints/accounts from the goal/scope. Prose guidance, NOT a runnable
+   * command; the step's real commands are unchanged. Absent when it couldn't be
+   * adapted confidently.
+   */
+  target_adaptation?: string;
+  /**
    * Optional branch hints (static, pre-execution). on_success = what this finding
    * unlocks / the next action; on_blocked = the pivot if it 403s or fails. Present
    * only where the model saw a real decision point.

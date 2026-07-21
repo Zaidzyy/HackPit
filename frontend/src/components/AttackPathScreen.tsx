@@ -486,6 +486,13 @@ function StepCard({ step }: { step: AttackStep }) {
 
       {step.why && <p className="hp-ap-why">{step.why}</p>}
 
+      {step.target_adaptation && (
+        <p className="hp-ap-adapt">
+          <span className="hp-ap-adapt-lead">→ for this target</span>
+          {step.target_adaptation}
+        </p>
+      )}
+
       {step.commands.length > 0 ? (
         step.commands.map((c, i) => (
           <div className="hp-code" key={i}>

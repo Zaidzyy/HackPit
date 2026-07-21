@@ -2058,6 +2058,26 @@ a.hp-card {
   text-decoration: underline;
 }
 
+/* "→ for this target" — one-line guidance bridging a grounded technique's generic
+ * commands to the real target. Accent-tinted so it reads as distinct from the
+ * grey rationale (.hp-ap-why) directly above it. */
+.hp-ap-adapt {
+  margin: 4px 0 6px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--white);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-left: 2px solid var(--accent-line);
+  border-radius: 0 4px 4px 0;
+}
+.hp-ap-adapt-lead {
+  font-weight: 600;
+  margin-right: 6px;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+
 /* Static branch hints under a step: green "if it works →", amber "if blocked →".
  * Pre-execution decision-tree cues — small, quiet sub-lines. */
 .hp-ap-branches {

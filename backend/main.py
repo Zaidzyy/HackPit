@@ -481,6 +481,16 @@ class AttackStep(BaseModel):
         description="True = a PRIMARY step lifted from the user's own box writeup "
         "(trusted). False = a composed/supplement step.",
     )
+    on_success: str | None = Field(
+        default=None,
+        description="Optional branch hint — what this finding unlocks / the next "
+        "action or step to jump to. Present only where a real branch exists.",
+    )
+    on_blocked: str | None = Field(
+        default=None,
+        description="Optional branch hint — the pivot if this step 403s or fails. "
+        "Present only where a real branch exists.",
+    )
 
 
 class AttackPhase(BaseModel):

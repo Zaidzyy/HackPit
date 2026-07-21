@@ -156,6 +156,13 @@ export type AttackStep = {
    * = a composed or supplement step.
    */
   from_writeup?: boolean;
+  /**
+   * Optional branch hints (static, pre-execution). on_success = what this finding
+   * unlocks / the next action; on_blocked = the pivot if it 403s or fails. Present
+   * only where the model saw a real decision point.
+   */
+  on_success?: string;
+  on_blocked?: string;
 };
 
 export type AttackPhase = {

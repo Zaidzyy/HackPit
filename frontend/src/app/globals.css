@@ -2058,6 +2058,50 @@ a.hp-card {
   text-decoration: underline;
 }
 
+/* Static branch hints under a step: green "if it works →", amber "if blocked →".
+ * Pre-execution decision-tree cues — small, quiet sub-lines. */
+.hp-ap-branches {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.hp-ap-branch {
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-2);
+}
+.hp-ap-branch-lead {
+  font-weight: 600;
+  margin-right: 6px;
+  letter-spacing: 0.02em;
+}
+.hp-ap-branch-ok {
+  border-left-color: color-mix(in srgb, #5fd08a 55%, transparent);
+}
+.hp-ap-branch-ok .hp-ap-branch-lead {
+  color: #5fd08a;
+}
+.hp-ap-branch-blocked {
+  border-left-color: var(--accent-line);
+}
+.hp-ap-branch-blocked .hp-ap-branch-lead {
+  color: var(--accent);
+}
+.hp-ap-branch-text {
+  color: var(--grey);
+}
+.hp-ap-branch-jump {
+  color: var(--white);
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+}
+.hp-ap-branch-jump:hover {
+  color: var(--accent);
+}
+
 /* AI-suggested (gap-fill) step — general knowledge, NOT from the KB. Tinted
  * violet and badged so it reads as clearly distinct from a grounded step. */
 .hp-ap-step-ai {

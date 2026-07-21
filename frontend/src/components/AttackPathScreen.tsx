@@ -511,6 +511,56 @@ function StepCard({ step }: { step: AttackStep }) {
           .
         </div>
       )}
+
+      {(step.on_success || step.on_blocked) && (
+        <div className="hp-ap-branches">
+          {step.on_success && (
+            <p className="hp-ap-branch hp-ap-branch-ok">
+              <span className="hp-ap-branch-lead">if it works →</span>
+              <Branch text={step.on_success} />
+            </p>
+          )}
+          {step.on_blocked && (
+            <p className="hp-ap-branch hp-ap-branch-blocked">
+              <span className="hp-ap-branch-lead">if blocked →</span>
+              <Branch text={step.on_blocked} />
+            </p>
+          )}
+        </div>
+      )}
     </article>
   );
+}
+
+// A step id embedded in a branch hint (e.g. "pivot to privesc-2") becomes an
+// in-page jump link to that step card; everything else renders as plain prose.
+const STEP_ID_RE =
+  /\b(recon|enumeration|exploitation|privesc|post-exploitation)-\d+\b/g;
+
+function Branch({ text }: { text: string }) {
+  const parts: React.ReactNode[] = [];
+  let last = 0;
+  for (const m of text.matchAll(STEP_ID_RE)) {
+    const id = m[0];
+    const start = m.index ?? 0;
+    if (start > last) parts.push(text.slice(last, start));
+    parts.push(
+      <a
+        key={`${id}-${start}`}
+        href={`#${id}`}
+        className="hp-ap-branch-jump"
+        onClick={(e) => {
+          e.preventDefault();
+          document
+            .getElementById(id)
+            ?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }}
+      >
+        {id}
+      </a>
+    );
+    last = start + id.length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return <span className="hp-ap-branch-text">{parts}</span>;
 }

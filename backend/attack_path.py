@@ -595,12 +595,22 @@ _SYSTEM = (
     "AI-suggested steps are a clearly-marked fallback and come after.\n"
     "- Never invent an entry_id. A step is EITHER {\"entry_id\": \"<library id>\", "
     "\"why\": \"...\"} OR an ai_suggested step exactly as shown above.\n"
+    "- BRANCHES: a step that reveals something or tests an access control has a "
+    "natural next move. For such PIVOTAL steps (vuln probes, access-control / auth "
+    "tests, exploitation) ADD two short prose hints — \"on_success\": what this "
+    "finding unlocks / the next action or which step id to jump to; \"on_blocked\": "
+    "the pivot if it 403s or fails. ONE sentence each. Include them on the pivotal "
+    "steps; SKIP them on purely mechanical steps (a plain port scan, a directory "
+    "brute) — do NOT force a branch onto every step, but DO add them where a real "
+    "decision exists.\n"
     "Respond with ONLY a JSON object, no prose."
 )
 
 _SCHEMA_HINT = (
     '{"phases": [{"phase": "recon", "steps": ['
-    '{"entry_id": "<library id>", "why": "<1-2 sentences>"}, '
+    '{"entry_id": "<library id>", "why": "<1-2 sentences>", '
+    '"on_success": "<optional: what it unlocks / next step>", '
+    '"on_blocked": "<optional: pivot if it fails>"}, '
     '{"ai_suggested": true, "title": "<short title>", "why": "<why>", '
     '"commands": [{"lang": "bash", "cmd": "<command>"}]}'
     ']}]}'
@@ -672,6 +682,9 @@ def build_user_prompt(
         "Compose the ordered attack path. In each phase, place grounded library "
         "steps FIRST (cite entry_id, highest-priority first), then add "
         f"clearly-marked ai_suggested steps ONLY for genuine gaps{gap}. "
+        "For pivotal steps (a vuln probe, an access-control or auth test, an "
+        "exploit) include on_success / on_blocked branch hints; skip them on "
+        "routine steps. "
         f"Return JSON exactly shaped like: {_SCHEMA_HINT}"
     )
     return "\n".join(lines)
@@ -729,6 +742,19 @@ def _ai_commands(raw: Any, target: str | None) -> list[dict[str, Any]]:
     return out
 
 
+def _branch_hints(st: dict) -> dict[str, str]:
+    """Pass the model's OPTIONAL branch hints (on_success / on_blocked) through as
+    trimmed prose. They are advisory next-action / pivot notes — nothing to
+    validate against the KB — so a step keeps whichever it supplied and neither
+    otherwise. A missing branch never affects whether the step survives."""
+    out: dict[str, str] = {}
+    for key in ("on_success", "on_blocked"):
+        val = str(st.get(key) or "").strip()
+        if val:
+            out[key] = val[:240]
+    return out
+
+
 def _ground(
     parsed: Any, by_id: dict[str, dict], target: str | None
 ) -> list[dict[str, Any]]:
@@ -783,6 +809,7 @@ def _ground(
                         "commands": cmds,
                         "ai_suggested": False,
                         "from_writeup": False,
+                        **_branch_hints(st),
                     }
                 )
                 continue
@@ -802,6 +829,7 @@ def _ground(
                         "commands": _ai_commands(st.get("commands"), target),
                         "ai_suggested": True,
                         "from_writeup": False,
+                        **_branch_hints(st),
                     }
                 )
 

@@ -18,6 +18,7 @@ their return values / ``None`` to HTTP.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 import uuid
@@ -28,6 +29,43 @@ from typing import Any
 DB_PATH = Path(__file__).with_name("sessions.db")
 
 _write_lock = threading.Lock()
+
+# A session's LABEL is a short editable title (shown large in the header), NOT the
+# full goal paragraph — the full goal is kept separately in ``goal``. New labels
+# are capped here; legacy sessions whose label IS the whole goal are re-derived
+# once at startup (see init_db) when longer than this legacy threshold.
+_LABEL_MAX = 60
+_LEGACY_LABEL_MAX = 80
+
+
+def _truncate_label(text: str, limit: int = _LABEL_MAX) -> str:
+    """Collapse whitespace and clip to a single readable title, ellipsised."""
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _derive_label(goal: str, path: dict) -> str:
+    """A CONCISE engagement title derived from the goal + composed path.
+
+    Priority: the named box the path identified (writeup title, e.g. "DevHub") →
+    the parsed target (IP/host/URL) → the goal's first clause, truncated. The full
+    goal is never used verbatim as the title — it stays in ``goal``.
+    """
+    goal = (goal or "").strip()
+    bw = path.get("box_writeup") if isinstance(path, dict) else None
+    if isinstance(bw, dict):
+        title = (bw.get("title") or "").strip()
+        if title:
+            return _truncate_label(title)
+    target = path.get("target") if isinstance(path, dict) else None
+    if isinstance(target, str) and target.strip():
+        return _truncate_label(target.strip())
+    if goal:
+        first = re.split(r"[\n.;]", goal, 1)[0].strip() or goal
+        return _truncate_label(first)
+    return "untitled engagement"
 
 
 def _now() -> str:
@@ -89,6 +127,26 @@ def init_db() -> None:
                 "TEXT NOT NULL DEFAULT '[]'"
             )
 
+        # one-time backfill: early sessions stored the FULL goal as the label,
+        # which renders as a giant overflowing title. Re-derive a concise label
+        # for those — but ONLY where the label still equals the goal (i.e. never
+        # renamed), so a user's chosen name is never clobbered.
+        legacy = conn.execute(
+            "SELECT id, goal, path_json FROM sessions "
+            "WHERE label = goal AND length(label) > ?",
+            (_LEGACY_LABEL_MAX,),
+        ).fetchall()
+        for r in legacy:
+            try:
+                path = json.loads(r["path_json"])
+            except (TypeError, ValueError):
+                path = {}
+            new_label = _derive_label(r["goal"], path)
+            if new_label and new_label != r["goal"]:  # label == goal per WHERE
+                conn.execute(
+                    "UPDATE sessions SET label=? WHERE id=?", (new_label, r["id"])
+                )
+
 
 # --------------------------------------------------------------------------- #
 # helpers
@@ -130,12 +188,13 @@ def create_session(
 ) -> str:
     """Persist a composed path as a new session. Returns the new session id.
 
-    The label defaults to the goal. Step state rows are lazily created on first
-    update, so creation just stores the path + metadata.
+    The label is a CONCISE title derived from the goal + path (box/target name),
+    NOT the full goal paragraph — see ``_derive_label``. Step state rows are lazily
+    created on first update, so creation just stores the path + metadata.
     """
     sid = uuid.uuid4().hex[:12]
     now = _now()
-    label = (goal or "").strip() or "untitled engagement"
+    label = _derive_label(goal, path)
     with _write_lock, _connect() as conn:
         conn.execute(
             "INSERT INTO sessions "

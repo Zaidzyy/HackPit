@@ -2373,18 +2373,26 @@ a.hp-card {
   margin-bottom: 10px;
 }
 .hp-eng-label {
+  display: block;
   width: 100%;
+  box-sizing: border-box;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 8px;
-  margin: -6px -10px 4px;
+  margin: -6px 0 4px;
   padding: 6px 10px;
   color: var(--white);
   font-family: var(--font-space-grotesk), sans-serif;
   font-size: clamp(24px, 4vw, 32px);
   font-weight: 500;
+  line-height: 1.25;
   letter-spacing: -0.01em;
   outline: none;
+  /* single-line title: a long value (incl. legacy full-goal labels) is clipped to
+     one line with an ellipsis so it can never wrap or overlap the goal body below. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: border-color 0.15s, background 0.15s;
 }
 .hp-eng-label:hover {
@@ -2404,6 +2412,8 @@ a.hp-card {
 .hp-eng-goal {
   color: var(--grey);
   font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 .hp-eng-progress {
   display: flex;

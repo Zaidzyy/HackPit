@@ -17,6 +17,12 @@ import { useApi } from "@/lib/useApi";
 
 const RESULT_DEBOUNCE_MS = 700;
 
+/** Keep the breadcrumb compact — a long (or legacy full-goal) label is clipped. */
+function crumbText(label: string): string {
+  const t = label.trim();
+  return t.length > 42 ? `${t.slice(0, 41).trimEnd()}…` : t;
+}
+
 /**
  * The interactive engagement view: a saved attack-path you work through.
  * Per-step checked + pasted results persist to the backend (SQLite), so the
@@ -121,7 +127,7 @@ export function EngagementScreen({ id }: { id: string }) {
       crumbs={[
         { label: "home", href: "/" },
         { label: "engagements", href: "/engagements" },
-        { label: session.label },
+        { label: crumbText(session.label) },
       ]}
     >
       <div className="hp-eng">

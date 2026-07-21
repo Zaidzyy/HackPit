@@ -151,18 +151,77 @@ _BROAD_METHODOLOGY_RE = re.compile(
     re.I,
 )
 
+# Defensive / hardening / secure-deployment guides — content about how to SECURELY
+# DEPLOY or LOCK DOWN a system (nginx request allowlists, rootless podman,
+# SELinux/AppArmor confinement, device-node minimization, mitigation checklists).
+# These are NOT attacks: grounding one as a step would surface a hardening config
+# where an exploit belongs (e.g. "AI Risks" matching an offensive AI query). They
+# are excluded from step eligibility while staying fully searchable/browsable.
+_DEFENSIVE_TITLE_RE = re.compile(
+    r"\b(?:hardening|harden(?:ed|ing)?|securely\s+deploy(?:ing|ment)?|"
+    r"secure\s+deployment|defen[cs]e[- ]in[- ]depth|"
+    r"defensive\s+(?:guide|checklist|controls?)|mitigation\s+(?:guide|checklist))\b",
+    re.I,
+)
+_DEFENSIVE_BODY_RE = re.compile(
+    r"\b(?:hardening|harden(?:ed|ing)?|mitigations?|defen[cs]e[- ]in[- ]depth|"
+    r"defensive|confinement|rootless|least\s+privilege|minimi[sz]ation|"
+    r"securely\s+deploy|secure\s+deployment|lock(?:ing)?\s+down)\b",
+    re.I,
+)
+
+
+def is_defensive_hardening(entry: dict) -> bool:
+    """True when the entry is a DEFENSIVE hardening / secure-deployment guide (how
+    to lock a system down) rather than an attack technique.
+
+    Detection, in order:
+      * an explicit ``meta.defensive`` flag → defensive;
+      * a focused single technique (``canonical_keys``) → NOT defensive (trusted
+        offensive), so a lone "Mitigation" aside can never misclassify it;
+      * a hardening/secure-deployment TITLE → defensive;
+      * otherwise the discriminator is the entry's COMMAND-bearing steps — the only
+        thing it can contribute as a step. If (nearly) every command-bearing step is
+        framed as hardening/config, the entry could only ever surface a defensive
+        config where an attack step belongs → defensive. Offensive pages fail this:
+        their command steps are attack commands, and a trailing "Mitigations"
+        section is prose with no commands, so it doesn't count.
+    """
+    meta = entry.get("meta") or {}
+    if meta.get("defensive"):
+        return True
+    if meta.get("canonical_keys"):
+        return False
+    if _DEFENSIVE_TITLE_RE.search(entry.get("title") or ""):
+        return True
+    cmd_steps = [
+        s
+        for s in (entry.get("steps") or [])
+        if any((c.get("cmd") or "").strip() for c in (s.get("code") or []))
+    ]
+    if len(cmd_steps) < 3:
+        return False  # too little to read the whole entry as a hardening guide
+    defensive = sum(1 for s in cmd_steps if _DEFENSIVE_BODY_RE.search(s.get("text") or ""))
+    # STRONG majority required: an offensive exploit whose steps merely mention
+    # bypassing a mitigation (e.g. PrintNightmare) sits near 50% and must NOT trip;
+    # a genuine hardening guide is >=2/3 config steps.
+    return defensive >= 3 and defensive * 3 >= len(cmd_steps) * 2
+
 
 def is_step_eligible(entry: dict) -> bool:
     """Whether a KB entry may be GROUNDED as an attack-path / chat step.
 
-    Rejects worked examples (writeup/ctf), coarse multi-topic pages flagged at
-    ingestion, personal/meta/log pages, and — as a backstop — any very large body
-    with no single-technique focus (an un-flagged grab-bag). Everything rejected
-    here stays fully searchable/browsable; it just can't become a step, so a step
-    is always a focused technique instead of a wall of unrelated content.
+    Rejects worked examples (writeup/ctf), defensive hardening / secure-deployment
+    guides, coarse multi-topic pages flagged at ingestion, personal/meta/log pages,
+    and — as a backstop — any very large body with no single-technique focus (an
+    un-flagged grab-bag). Everything rejected here stays fully searchable/browsable;
+    it just can't become a step, so a step is always a focused ATTACK technique
+    instead of a wall of unrelated content or a defensive config.
     """
     if entry.get("category", "") in EXCLUDED_STEP_CATEGORIES:
         return False
+    if is_defensive_hardening(entry):
+        return False  # hardening / secure-deployment guide — not an attack step
     meta = entry.get("meta") or {}
     if _COARSE_FLAG_RE.search(meta.get("flag_reason") or ""):
         return False
@@ -356,11 +415,18 @@ def substitute_target(cmd: str, target: str | None) -> str:
     out = _PLACEHOLDER_RE.sub(_ph, out)
 
     # 3) obvious example IPs → target host (only when our host is an IP)
-    if _is_ipv4(host.split(":", 1)[0]):
+    host_is_ip = _is_ipv4(host.split(":", 1)[0])
+    if host_is_ip:
         out = _EXAMPLE_IP_RE.sub(_to_host, out)
 
-    # 4) obvious example hostnames → target host
-    out = _EXAMPLE_HOST_RE.sub(_to_host, out)
+    # 4) obvious example hostnames → target host — ONLY when the target is itself a
+    #    host/URL. When the target is a bare IP, a note's hostname (e.g. devhub.htb)
+    #    is a NAME, not an address: rewriting it to the IP breaks name-based usage
+    #    and, in an "IP hostname" /etc/hosts line, collapses the two columns into a
+    #    nonsensical "IP IP". Leaving the hostname intact keeps that line correct —
+    #    the IP column was already substituted in step 3.
+    if not host_is_ip:
+        out = _EXAMPLE_HOST_RE.sub(_to_host, out)
     return out
 
 
@@ -884,9 +950,13 @@ _AUGMENT_SYSTEM = (
     '{"ai_suggested": true, "title": "...", "why": "...", "commands": '
     '[{"lang": "bash", "cmd": "..."}]}, with concrete command(s); these are '
     "UNVERIFIED.\n"
-    "- Add supplements ONLY where they genuinely help. A thorough writeup needs "
-    "FEW or NONE — returning empty phases is correct then. NEVER duplicate a "
-    "writeup step or a technique it already implies.\n"
+    "- Supplement ONLY the phases explicitly listed as MISSING/THIN. A phase the "
+    "writeup already covers substantively is COMPLETE — add nothing there, even if "
+    "you can think of a related technique. A thorough writeup needs FEW or NONE; "
+    "returning empty phases is the correct, expected outcome.\n"
+    "- NEVER duplicate a writeup step or a technique it already implies, and never "
+    "add a tangential 'nice to have' — a supplement must fill a REAL gap in a "
+    "missing/thin phase.\n"
     "- Group under phases recon, enumeration, exploitation, privesc, "
     "post-exploitation. A step is EITHER {\"entry_id\": \"<library id>\", "
     "\"why\": \"...\"} OR an ai_suggested step as shown.\n"
@@ -899,12 +969,20 @@ def build_augment_prompt(
     ctx: dict[str, Any],
     covered: dict[str, list[str]],
     grouped: dict[str, list[dict]],
+    thin: set[str],
 ) -> str:
     lines: list[str] = [f"GOAL: {goal}"]
     box_type = ctx.get("box_type")
     if box_type:
         creds = " with valid credentials" if ctx.get("has_creds") else ""
         lines.append(f"CONTEXT: {box_type.upper()} target{creds}.")
+    lines.append("")
+    eligible = [p for p in PHASE_ORDER if p in thin]
+    lines.append(
+        "SUPPLEMENT ONLY THESE missing/thin phases: "
+        + (", ".join(eligible) or "(none — the writeup is complete; return {})")
+        + ". Every other phase is already covered substantively — add NOTHING there."
+    )
     lines.append("")
     lines.append("WRITEUP ALREADY COVERS (do NOT repeat these), by phase:")
     for phase in PHASE_ORDER:
@@ -929,9 +1007,10 @@ def build_augment_prompt(
         lines.append("(no close library matches — only add ai_suggested steps for real gaps.)")
     lines.append("")
     lines.append(
-        "Return ONLY supplements that fill genuine gaps in the writeup above — "
-        "grounded (entry_id) steps first, then clearly-marked ai_suggested steps. "
-        "If the writeup is already thorough, return few or none. "
+        "Return ONLY supplements that fill genuine gaps in the missing/thin phases "
+        "listed above — grounded (entry_id) steps first, then clearly-marked "
+        "ai_suggested steps. Add nothing to any other phase. If nothing genuinely "
+        "helps, return an empty object. "
         f"Return JSON exactly shaped like: {_SCHEMA_HINT}"
     )
     return "\n".join(lines)
@@ -962,6 +1041,24 @@ def _merge_phases(
     return out
 
 
+def _thin_phases(primary: list[dict[str, Any]]) -> set[str]:
+    """Phases where the writeup GENUINELY lacks coverage and a supplement may help:
+    an empty phase (no steps at all) or a phase whose steps carry NO commands (pure
+    prose, nothing to run). A phase the writeup already covers substantively — any
+    step with commands — is COMPLETE and eligible for no supplements. This is what
+    keeps augmentation conservative: a thorough writeup exposes few/no thin phases,
+    so it gets few/no supplements."""
+    present: dict[str, list[dict]] = {p["phase"]: (p.get("steps") or []) for p in primary}
+    thin: set[str] = set()
+    for phase in PHASE_ORDER:
+        steps = present.get(phase)
+        if not steps:
+            thin.add(phase)  # empty phase — nothing here at all
+        elif not any(s.get("commands") for s in steps):
+            thin.add(phase)  # steps exist but nothing runnable — very thin
+    return thin
+
+
 def _augment_writeup(
     phases: list[dict[str, Any]],
     by_id: dict[str, dict],
@@ -972,15 +1069,25 @@ def _augment_writeup(
     search_fn: SearchFn,
     cfg: dict,
 ) -> list[dict[str, Any]]:
-    """Best-effort: supplement the writeup path with grounded KB steps + marked
-    ai_suggested gap steps. Returns the merged phases; on any LLM failure the
-    original writeup phases are returned unchanged (writeup stands alone)."""
+    """Best-effort, CONSERVATIVE supplement of the writeup path: only phases the
+    writeup genuinely lacks or is very thin on (empty, or no runnable commands) may
+    receive grounded KB steps + marked ai_suggested gap steps. Phases the writeup
+    already covers substantively get nothing. Returns the merged phases; on any LLM
+    failure the original writeup phases are returned unchanged (writeup stands alone).
+    """
+    thin = _thin_phases(phases)
+    if not thin:
+        return phases  # every phase substantively covered — nothing to supplement
     grouped = retrieve(by_id, goal, target_type, search_fn, ctx)
+    grouped = {p: t for p, t in grouped.items() if p in thin}  # offer library only for thin phases
     covered = {p["phase"]: [s["title"] for s in p["steps"]] for p in phases}
-    user = build_augment_prompt(goal, ctx, covered, grouped)
+    user = build_augment_prompt(goal, ctx, covered, grouped, thin)
     raw = llm.chat(_AUGMENT_SYSTEM, user, cfg)
     parsed = llm.extract_json(raw)
     supp = _ground(parsed, by_id, target)
+    # deterministic backstop: keep supplements ONLY for genuinely thin phases, so a
+    # substantively-covered phase gets nothing even if the model tried to add there.
+    supp = [ph for ph in supp if ph["phase"] in thin]
     return _merge_phases(phases, supp)
 
 
@@ -1052,7 +1159,6 @@ def compose(
             }
 
     # (2) KB-FIRST + AI-SUGGESTED FALLBACK
-    grouped = retrieve(by_id, goal, target_type, search_fn, ctx)
     grouped = retrieve(by_id, goal, target_type, search_fn, ctx)
     user = build_user_prompt(goal, target_type, grouped, ctx)
     raw = llm.chat(_SYSTEM, user, cfg)

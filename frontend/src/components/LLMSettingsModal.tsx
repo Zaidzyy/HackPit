@@ -42,6 +42,16 @@ const PROVIDERS: Provider[] = [
     needsKey: true,
     note: "Routes to many models through one OpenRouter key.",
   },
+  {
+    value: "claude-agent-sdk",
+    label: "Claude (Agent SDK)",
+    defaultModel: "sonnet",
+    needsKey: false,
+    note:
+      "Uses your local Claude subscription (Claude Code login) — no key. " +
+      "Draws on your monthly Agent SDK credit. Falls back to local Ollama " +
+      "if it’s unavailable.",
+  },
 ];
 
 const byValue = (v: string) =>
@@ -183,7 +193,9 @@ export function LLMSettingsModal({
                   >
                     <span className="hp-set-provider-label">{p.label}</span>
                     {!p.needsKey && (
-                      <span className="hp-set-provider-tag">default · no key</span>
+                      <span className="hp-set-provider-tag">
+                        {p.value === "ollama" ? "default · no key" : "local · no key"}
+                      </span>
                     )}
                   </button>
                 ))}

@@ -13,6 +13,13 @@ Design
 * **Swappable** via a *gitignored* config (``backend/llm_config.json``) or env.
   Set ``provider`` + ``api_key`` to route to openai / anthropic / openrouter
   through a thin urllib adapter — no extra dependency, no LiteLLM needed.
+* **Claude Agent SDK** (``provider = "claude-agent-sdk"``) — a frontier option
+  that needs NO api_key: it shells out to the local ``claude`` CLI (Claude Code)
+  in headless print mode, reusing the machine's Claude Code *subscription* login
+  and drawing on the monthly Agent SDK credit. Tools are disabled so it's a
+  single, non-agentic completion (prompt in → text/JSON out). When it's
+  unavailable (not installed / not signed in / credit exhausted) generation
+  degrades gracefully to local Ollama so the feature still works.
 * **Robust JSON parsing**: models wrap JSON in prose or ```code fences``` and
   sometimes emit a reasoning preamble. `extract_json` peels all of that off.
 
@@ -24,6 +31,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -35,7 +44,11 @@ from typing import Any
 # --------------------------------------------------------------------------- #
 CONFIG_PATH = Path(__file__).with_name("llm_config.json")
 
-VALID_PROVIDERS = ("ollama", "openai", "anthropic", "openrouter")
+VALID_PROVIDERS = ("ollama", "openai", "anthropic", "openrouter", "claude-agent-sdk")
+
+# Providers that use LOCAL auth and therefore carry NO api_key: Ollama (offline)
+# and the Claude Agent SDK (the machine's Claude Code subscription login).
+_NO_KEY_PROVIDERS = ("ollama", "claude-agent-sdk")
 
 # Default provider is LOCAL Ollama — free, offline, needs no API key.
 DEFAULTS: dict[str, str] = {
@@ -45,12 +58,14 @@ DEFAULTS: dict[str, str] = {
 }
 
 # Sensible default model per remote provider, applied when a provider is chosen
-# without naming a model.
+# without naming a model. The Agent SDK takes a Claude alias (sonnet/opus/haiku)
+# or a full id; default to Sonnet for a strong, cost-sane frontier completion.
 PROVIDER_DEFAULT_MODEL: dict[str, str] = {
     "ollama": "qwen3:8b",
     "openai": "gpt-4o-mini",
     "anthropic": "claude-opus-4-8",
     "openrouter": "openai/gpt-4o-mini",
+    "claude-agent-sdk": "sonnet",
 }
 
 
@@ -136,8 +151,9 @@ def save_config(
     if existing.get("host"):
         out["host"] = existing["host"]
 
-    if provider == "ollama":
-        # local provider carries no key
+    if provider in _NO_KEY_PROVIDERS:
+        # local providers carry no key (ollama = offline; claude-agent-sdk uses
+        # the machine's Claude Code subscription login, not an API key)
         pass
     else:
         key = (api_key or "").strip()
@@ -276,14 +292,135 @@ def _chat_anthropic(system: str, user: str, cfg: dict, max_tokens: int = 2048) -
         raise LLMError(f"unexpected anthropic response: {str(data)[:200]}") from e
 
 
+# --------------------------------------------------------------------------- #
+# Claude Agent SDK — local Claude Code subscription auth (NO api_key)
+# --------------------------------------------------------------------------- #
+# Reuses the machine's Claude Code login via the `claude` CLI in headless print
+# mode. We request ONE plain completion with tools OFF (`--allowedTools ""`), so
+# it behaves like the other providers: prompt in → text/JSON out, not an agent
+# loop. Auth + billing are the user's local subscription + monthly Agent SDK
+# credit; no API key is ever involved. Sane timeout so it can never hang.
+_AGENT_SDK_TIMEOUT = 240  # seconds — generous for long reports, bounded
+
+# CLI-failure classifiers → specific, actionable messages.
+_AUTH_HINT_RE = re.compile(
+    r"not\s+logged\s+in|unauthenticat|authenticat|\blog\s?in\b|/login|"
+    r"invalid\s+api\s+key|\boauth\b|no\s+credentials|please\s+run\s+claude",
+    re.I,
+)
+_CREDIT_HINT_RE = re.compile(
+    r"usage\s+limit|rate\s?limit|credit|quota|exhaust|insufficient|"
+    r"out\s+of|billing|payment\s+required|too\s+many\s+requests|overloaded",
+    re.I,
+)
+
+# Reason for the most recent Agent-SDK → Ollama fallback (None when the last
+# claude-agent-sdk call succeeded or no fallback happened). Lets the API surface
+# a "used local fallback" note without changing chat()'s return type.
+_LAST_FALLBACK_REASON: str | None = None
+
+
+def last_fallback_reason() -> str | None:
+    """Why the most recent claude-agent-sdk call fell back to Ollama, if it did."""
+    return _LAST_FALLBACK_REASON
+
+
+def _agent_sdk_error(text: str, default: str) -> LLMError:
+    """Map a CLI failure blob to a specific, actionable ``LLMError``."""
+    blob = (text or "")[:600].strip()
+    if _AUTH_HINT_RE.search(blob):
+        return LLMError(
+            "Claude Agent SDK not authenticated — run Claude Code login "
+            "(open `claude` and use /login) on this machine; no API key needed"
+        )
+    if _CREDIT_HINT_RE.search(blob):
+        return LLMError(
+            "Claude Agent SDK unavailable — the monthly Agent SDK credit looks "
+            "exhausted or rate-limited; try later or switch provider"
+        )
+    return LLMError(default + (f": {blob}" if blob else ""))
+
+
+def _chat_claude_agent_sdk(system: str, user: str, cfg: dict) -> str:
+    """One headless `claude -p` completion using the local Claude Code login.
+
+    Tools are disabled so it's a single, non-agentic turn — a plain text/JSON
+    completion. Raises a specific ``LLMError`` when the CLI is missing, not
+    authenticated, or the credit is exhausted (the caller can then fall back).
+    """
+    exe = shutil.which("claude")
+    if not exe:
+        raise LLMError(
+            "Claude Agent SDK CLI not found — install Claude Code and sign in "
+            "(no API key needed)"
+        )
+    model = str(cfg.get("model") or "sonnet").strip() or "sonnet"
+    # --allowedTools "" (LAST, variadic) => no tools => single completion, no loop.
+    # --system-prompt replaces Claude Code's default agent prompt so it behaves
+    # like a plain completion. The user turn is piped on stdin (no arg-length cap).
+    cmd = [
+        exe, "-p",
+        "--output-format", "json",
+        "--model", model,
+        "--system-prompt", system,
+        "--allowedTools", "",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=user,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=_AGENT_SDK_TIMEOUT,
+        )
+    except FileNotFoundError as e:  # exe vanished between which() and run()
+        raise LLMError(f"Claude Agent SDK CLI could not be launched ({e})") from e
+    except subprocess.TimeoutExpired as e:
+        raise LLMError(
+            f"Claude Agent SDK timed out after {_AGENT_SDK_TIMEOUT}s"
+        ) from e
+
+    out = (proc.stdout or "").strip()
+    err = (proc.stderr or "").strip()
+
+    try:
+        data = json.loads(out) if out else None
+    except json.JSONDecodeError:
+        data = None
+    if not isinstance(data, dict):
+        raise _agent_sdk_error(
+            err or out,
+            f"Claude Agent SDK returned no result (exit {proc.returncode})",
+        )
+    if data.get("is_error") or data.get("subtype") != "success":
+        # The CLI reports auth / credit problems inside this JSON envelope.
+        msg = data.get("result") or data.get("error") or err or str(data)[:400]
+        raise _agent_sdk_error(str(msg), "Claude Agent SDK error")
+
+    result = data.get("result")
+    if not isinstance(result, str) or not result.strip():
+        raise LLMError("Claude Agent SDK produced an empty result")
+    return result
+
+
 def chat(
-    system: str, user: str, cfg: dict | None = None, max_tokens: int = 2048
+    system: str,
+    user: str,
+    cfg: dict | None = None,
+    max_tokens: int = 2048,
+    allow_fallback: bool = True,
 ) -> str:
     """Route one system+user turn to the configured provider, return raw text.
 
     ``max_tokens`` caps the output length (num_predict for Ollama, max_tokens
-    for the API providers). Keep it small for short structured output; raise it
-    for long-form output like reports so they aren't truncated.
+    for the API providers; the Agent SDK uses the model's own default cap). Keep
+    it small for short structured output; raise it for long-form output.
+
+    For ``claude-agent-sdk``, an unavailable SDK (not installed / not signed in /
+    credit exhausted) degrades to local Ollama when ``allow_fallback`` — so the
+    feature keeps working — and the specific SDK error is re-raised only if Ollama
+    is also unreachable (or when ``allow_fallback`` is False).
     """
     cfg = cfg or load_config()
     provider = cfg["provider"]
@@ -303,6 +440,22 @@ def chat(
         )
     if provider == "anthropic":
         return _chat_anthropic(system, user, cfg, max_tokens)
+    if provider == "claude-agent-sdk":
+        global _LAST_FALLBACK_REASON
+        _LAST_FALLBACK_REASON = None
+        try:
+            return _chat_claude_agent_sdk(system, user, cfg)
+        except LLMError as e:
+            _LAST_FALLBACK_REASON = str(e)
+            if not allow_fallback:
+                raise
+            # GRACEFUL FALLBACK: keep the feature working on local Ollama.
+            fb = {**DEFAULTS, "provider": "ollama",
+                  "model": PROVIDER_DEFAULT_MODEL["ollama"]}
+            try:
+                return _chat_ollama(system, user, fb, max_tokens)
+            except LLMError:
+                raise e  # surface the specific Agent-SDK reason, not Ollama's
     raise LLMError(f"unsupported provider '{provider}'")
 
 

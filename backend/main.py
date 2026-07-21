@@ -428,9 +428,14 @@ class SearchResponse(BaseModel):
 
 # ---- LLM config (guided attack paths) ------------------------------------ #
 class LLMConfigOut(BaseModel):
-    provider: str = Field(description="ollama | openai | anthropic | openrouter.")
+    provider: str = Field(
+        description="ollama | openai | anthropic | openrouter | claude-agent-sdk."
+    )
     model: str
-    has_key: bool = Field(description="Whether a key is stored (never the key itself).")
+    has_key: bool = Field(
+        description="Whether a key is stored (never the key itself). Always false "
+        "for local providers (ollama, claude-agent-sdk)."
+    )
 
 
 class LLMConfigIn(BaseModel):

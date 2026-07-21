@@ -189,7 +189,7 @@ def build(entries: list[dict]) -> dict:
             seen_here.add((t, key))
             slot = buckets[t].get(key)
             if slot is None:
-                slot = {"code": code[:MAX_CODE_LEN], "lang": _clean_lang(lang),
+                slot = {"code": code[:MAX_CODE_LEN], "lang": _clean_lang(lang, code),
                         "sources": OrderedDict(), "count": 0}
                 buckets[t][key] = slot
             elif len(code) < len(slot["code"]) and len(code) >= 15:
@@ -238,11 +238,63 @@ def build(entries: list[dict]) -> dict:
     }
 
 
-def _clean_lang(lang: str) -> str:
+# Programming-language fence tags that MUST be backed by that language's syntax.
+# Source markdown occasionally fences a payload/polyglot with a wrong language
+# (HackTricks tags a mixed web polyglot `python`); when the tag claims one of
+# these but the block shows none of that language's syntax and is clearly a
+# payload, the tag is relabelled so the arsenal doesn't mislead. Conservative:
+# a real snippet carrying the language's syntax is NEVER touched.
+_PROG_LANGS = {
+    "python", "ruby", "php", "perl", "javascript", "js", "typescript", "ts",
+    "java", "go", "golang", "c", "cpp", "csharp", "cs",
+}
+
+# Minimal "this really is <lang>" signals — presence of ANY keeps the tag.
+_LANG_SYNTAX: dict[str, re.Pattern] = {
+    "python": re.compile(r"\b(?:import|from|def|class|print|lambda|elif|return|"
+                         r"None|True|False|self)\b|__\w+__|:\s*$", re.M),
+    "ruby": re.compile(r"\b(?:require|puts|def|end|nil|do|begin|rescue)\b|=>|@\w|\.each\b"),
+    "php": re.compile(r"<\?php|\becho\b|\bfunction\b|\$_(?:GET|POST|REQUEST|SERVER)|->|::"),
+    "perl": re.compile(r"\buse\s+\w|\bmy\s+[\$@%]|\bprint\b|=~|\bsub\b"),
+    "javascript": re.compile(r"\b(?:function|const|let|var|console|document|require|=>)\b"),
+    "java": re.compile(r"\b(?:public|private|protected|class|void|static|import|System)\b"),
+    "go": re.compile(r"\b(?:func|package|import|fmt|go)\b|:="),
+    "c": re.compile(r"#include\b|\bint\s+main\b|\bprintf\s*\(|\bvoid\b"),
+    "cpp": re.compile(r"#include\b|std::|\bcout\b|\bnamespace\b|\bint\s+main\b"),
+    "csharp": re.compile(r"\b(?:using|namespace|public|void|static|Console)\b"),
+}
+_LANG_SYNTAX["js"] = _LANG_SYNTAX["javascript"]
+_LANG_SYNTAX["ts"] = _LANG_SYNTAX["typescript"] = _LANG_SYNTAX["javascript"]
+_LANG_SYNTAX["golang"] = _LANG_SYNTAX["go"]
+_LANG_SYNTAX["cs"] = _LANG_SYNTAX["csharp"]
+
+# Strong payload/polyglot markers — a block dominated by these (with no host-
+# language syntax) is a payload, not source in the tagged language.
+_PAYLOAD_MARKERS = re.compile(
+    r"\{\{[^\n}]*\}\}|\{\{|%0d%0a|%0a%0d|\$\{IFS\}|<!ENTITY|<!--#\s*(?:exec|echo)|"
+    r"\.\./\.\./|\.\.%2f|%2e%2e|%00|\bUNION\s+SELECT\b|\$\{[^\n}]*\}",
+    re.I,
+)
+# CRLF / HTTP-header-injection blocks read as `http` rather than plain `text`.
+_CRLF_MARKERS = re.compile(
+    r"%0d%0a|%0a%0d|\bLocation:\s|\bSet-Cookie:\s|\bContent-Length:\s", re.I
+)
+
+
+def _clean_lang(lang: str, code: str = "") -> str:
     lang = (lang or "").strip().lower()
     alias = {"ps": "powershell", "ps1": "powershell", "sh": "bash", "shell": "bash",
              "console": "bash", "text": "bash", "": "bash", "py": "python"}
-    return alias.get(lang, lang)
+    lang = alias.get(lang, lang)
+    # Sanity override: a programming-language tag with NONE of that language's
+    # syntax, on an obvious payload/polyglot, is wrong — relabel it. Only fires
+    # when the mismatch is clear, so genuine snippets are left alone.
+    if lang in _PROG_LANGS and code:
+        syntax = _LANG_SYNTAX.get(lang)
+        has_syntax = bool(syntax and syntax.search(code))
+        if not has_syntax and _PAYLOAD_MARKERS.search(code):
+            return "http" if _CRLF_MARKERS.search(code) else "text"
+    return lang
 
 
 def _label_for(t: str, code: str) -> str:

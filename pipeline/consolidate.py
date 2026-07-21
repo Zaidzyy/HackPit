@@ -200,7 +200,10 @@ CANON: dict[str, list[list[str]]] = {
 # --------------------------------------------------------------------------- #
 # adaptation caps — extract key payloads, never dump huge verbatim lists
 # --------------------------------------------------------------------------- #
-MAX_CODE_CHARS = 500        # per copyable block
+MAX_CODE_CHARS = 1500       # per copyable block — lines up with the arsenal's
+                            # scripts_index.MAX_CODE_LEN (1400) so full payloads/
+                            # polyglots aren't clipped mid-block (HTB writeups keep
+                            # their own tighter HTB_MAX_CODE_CHARS via _section_code)
 MAX_SECTIONS = 14           # technique subheadings walked per document
 MAX_CODE_PER_SECTION = 3    # key payload blocks kept per subheading
 MAX_STEPS_NEW = 14          # steps on a brand-new entry

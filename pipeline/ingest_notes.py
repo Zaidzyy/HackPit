@@ -45,6 +45,7 @@ import os
 from collections import Counter
 from pathlib import Path
 
+from consolidate import canonical_keys  # shared technique-key vocabulary (CANON)
 from images import load_manual_captions
 from schema import SCHEMA_VERSION, Code, Entry, Step, emit_json_schema
 
@@ -530,6 +531,19 @@ def normalize(path: Path, notes_root: Path, by_key: dict,
         meta["kind"] = "reference"  # descriptive label only — does NOT hide
     if not matched:
         meta["category_unmatched"] = True
+
+    # Canonical technique keys, derived from the note's TITLE exactly like every
+    # consolidate.py source sets them. Without this, peh-notes entries were the
+    # ONLY source missing meta.canonical_keys, so a large single-topic note (e.g.
+    # the 45 KB "sql injection resource") tripped attack_path's grab-bag backstop
+    # (large body + no canonical_keys -> ineligible) and could never be grounded
+    # as a step. A focused note resolves to its key ("sql injection resource" ->
+    # sql-injection) and becomes eligible; a genuine grab-bag whose title names no
+    # single technique ("privilage escalation resources", "oscp cheatsheet")
+    # resolves to nothing and correctly STAYS ineligible.
+    keys = sorted(canonical_keys(parsed["title"]))
+    if keys:
+        meta["canonical_keys"] = keys
 
     entry = Entry(
         id=slugify(NOTION_HASH_RE.sub("", rel.rsplit(".", 1)[0])),

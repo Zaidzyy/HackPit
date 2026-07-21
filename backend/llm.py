@@ -480,11 +480,35 @@ def strip_think(text: str) -> str:
     return text.strip()
 
 
+# Valid JSON string escapes are \" \\ \/ \b \f \n \r \t \uXXXX. LLMs routinely
+# emit RAW backslashes inside command strings (sqlmap `\d`, Windows paths, regex
+# classes), which are INVALID JSON escapes and make json.loads reject the ENTIRE
+# object — after which the brace scan below would silently return a partial inner
+# object. This repair doubles ONLY the invalid backslashes: the alternation
+# matches (and preserves) a valid escape first — including an already-escaped
+# ``\\`` consumed as a unit — so nothing correct is ever corrupted.
+_BAD_ESCAPE_RE = re.compile(r'\\(["\\/bfnrtu])|\\')
+
+
+def _repair_escapes(s: str) -> str:
+    return _BAD_ESCAPE_RE.sub(lambda m: m.group(0) if m.group(1) else r"\\", s)
+
+
+def _try_load(blob: str) -> Any:
+    """json.loads, retried once with invalid backslash escapes repaired. Raises
+    json.JSONDecodeError if neither the raw nor the repaired blob parses."""
+    try:
+        return json.loads(blob)
+    except json.JSONDecodeError:
+        return json.loads(_repair_escapes(blob))  # raises again if still bad
+
+
 def extract_json(text: str) -> Any:
     """Best-effort parse of a JSON value from a chatty LLM response.
 
-    Handles: plain JSON, ```json fenced``` blocks, a reasoning preamble, and
-    trailing prose after the JSON. Raises `LLMError` if nothing parses.
+    Handles: plain JSON, ```json fenced``` blocks, a reasoning preamble, trailing
+    prose after the JSON, and invalid backslash escapes in command strings (a
+    lenient repair — see ``_repair_escapes``). Raises `LLMError` if nothing parses.
     """
     cleaned = strip_think(text).strip()
 
@@ -497,7 +521,7 @@ def extract_json(text: str) -> Any:
 
     for cand in candidates:
         try:
-            return json.loads(cand)
+            return _try_load(cand)
         except json.JSONDecodeError:
             pass
 
@@ -527,7 +551,7 @@ def extract_json(text: str) -> Any:
                     if depth == 0:
                         blob = cleaned[start : i + 1]
                         try:
-                            return json.loads(blob)
+                            return _try_load(blob)
                         except json.JSONDecodeError:
                             break
             start = cleaned.find(opener, start + 1)

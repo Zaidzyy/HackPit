@@ -358,9 +358,12 @@ _HOST_RE = re.compile(
     r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}" + _PORT + r"\b"
 )
 
-# placeholder tokens the notes/library use for "put the target here"
+# placeholder tokens the notes/library use for "put the target here". The angle
+# form requires the keyword to be WORD-BOUNDED inside <…> so a real HTML tag whose
+# name merely contains a keyword as a substring is never treated as a placeholder
+# (e.g. "<script>" contains "ip" in scr-IP-t — it must NOT match).
 _PLACEHOLDER_RE = re.compile(
-    r"(?:<[^<>\s]*(?:target|rhosts?|ip|url|hostname|host|domain|victim)[^<>\s]*>"
+    r"(?:<[^<>\s]*\b(?:target|rhosts?|ip|url|hostname|host|domain|victim)\b[^<>\s]*>"
     r"|\{\{?\s*(?:TARGET|RHOSTS?|IP|URL|HOSTNAME|HOST|DOMAIN|VICTIM)\s*\}?\}"
     r"|\$\{?(?:TARGET|RHOSTS?|IP|URL|HOSTNAME|HOST|DOMAIN|VICTIM)\}?)",
     re.I,
@@ -386,10 +389,35 @@ _EXAMPLE_IP_PH_RE = re.compile(
     r"(?:\.\d{1,3}){0,2}\." + _PH_OCTET + r"(?!\w)",
     re.I,
 )
-# obvious example hostnames (lab TLDs + example.*)
-_EXAMPLE_HOST_RE = re.compile(
-    r"\b(?:[a-zA-Z0-9-]+\.)+(?:htb|thm|box|vh|lab|local|example|test)"
-    r"(?:\.[a-zA-Z]{2,})?" + _PORT + r"\b",
+# A lab / example hostname that may stand in for the real target:
+#   <labels>.<lab-tld>   (foo.htb, target.local, box.thm)   — or —
+#   [label.]example.(com|org|net)   (example.com, www.example.com)
+# Bare ".example" is deliberately NOT matched: it collides with config filenames
+# (.env.example, config.example, foo.example.json), which are NOT hosts.
+_LAB_TLD = r"(?:htb|thm|box|vh|lab|local|test)"
+_EX_HOST = (
+    r"(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+" + _LAB_TLD + r"(?:\.[a-zA-Z]{2,})?"
+    r"|(?:[a-zA-Z0-9-]+\.)?example\.(?:com|org|net)"
+) + _PORT
+
+# recon / http tools whose bare argument is a target host
+_HOST_TOOL = (
+    r"nmap|masscan|rustscan|nikto|whatweb|wpscan|curl|wget|httpx|httprobe|"
+    r"ffuf|feroxbuster|gobuster|dirb|dirsearch|katana|hakrawler|gau|waybackurls|"
+    r"dig|host|nslookup|ping|fping|nc|ncat|socat|telnet|ssh|scp|sftp|"
+    r"smbclient|smbmap|crackmapexec|netexec|nxc|enum4linux|snmpwalk|rpcclient|"
+    r"nuclei|sqlmap|dalfox|amass|subfinder|dnsx|wfuzz"
+)
+
+# An example host is substituted ONLY in a real HOST POSITION — never as a bare
+# domain-looking substring — so filenames (.env.example) and tokens inside a
+# <script>/tag/payload are left intact. Each pattern captures (pre)(host):
+#   after ://   ·   after @   ·   in a `Host:` header   ·   a host-tool's target arg
+_HOST_AFTER_SCHEME_RE = re.compile(r"(?P<pre>://)(?P<h>" + _EX_HOST + r")")
+_HOST_AFTER_AT_RE = re.compile(r"(?P<pre>@)(?P<h>" + _EX_HOST + r")")
+_HOST_IN_HEADER_RE = re.compile(r"(?P<pre>Host:\s*)(?P<h>" + _EX_HOST + r")", re.I)
+_HOST_AS_TOOL_ARG_RE = re.compile(
+    r"(?P<pre>\b(?:" + _HOST_TOOL + r")\b(?:\s+-{1,2}\S+)*\s+)(?P<h>" + _EX_HOST + r")",
     re.I,
 )
 
@@ -491,14 +519,23 @@ def substitute_target(cmd: str, target: str | None) -> str:
     if host_is_ip:
         out = _EXAMPLE_IP_RE.sub(_to_host, out)
 
-    # 4) obvious example hostnames → target host — ONLY when the target is itself a
-    #    host/URL. When the target is a bare IP, a note's hostname (e.g. devhub.htb)
-    #    is a NAME, not an address: rewriting it to the IP breaks name-based usage
-    #    and, in an "IP hostname" /etc/hosts line, collapses the two columns into a
-    #    nonsensical "IP IP". Leaving the hostname intact keeps that line correct —
-    #    the IP column was already substituted in step 3.
+    # 4) example hostnames → target host, but ONLY in a real HOST POSITION (after
+    #    ://, after @, in a `Host:` header, or as a recon/http tool's target arg) —
+    #    NEVER a bare domain-looking substring. That keeps filenames (.env.example)
+    #    and tokens inside a <script>/tag/payload intact. Gated on a host/URL target:
+    #    when the target is a bare IP, a note's hostname (e.g. devhub.htb) is a NAME
+    #    not an address — rewriting it breaks name-based usage and, in an "IP
+    #    hostname" /etc/hosts line, collapses the two columns into a nonsensical
+    #    "IP IP" (the IP column was already substituted in step 3).
     if not host_is_ip:
-        out = _EXAMPLE_HOST_RE.sub(_to_host, out)
+        def _swap_host(m: re.Match[str]) -> str:
+            h = m.group("h")
+            tail = re.search(r":\d{1,5}$", h)
+            return m.group("pre") + host + (tail.group(0) if tail else "")
+
+        for rx in (_HOST_AFTER_SCHEME_RE, _HOST_AFTER_AT_RE,
+                   _HOST_IN_HEADER_RE, _HOST_AS_TOOL_ARG_RE):
+            out = rx.sub(_swap_host, out)
     return out
 
 

@@ -1,5 +1,11 @@
-"""Unit tests for the attack-path grounding fixes. Self-contained (synthetic
-entries, stdlib only). Run:  python test_attack_path.py
+"""Unit tests for the two attack-path fixes:
+
+  1. meta/workflow docs (tools ARSENAL / "YOUR PLAN" playbooks) are step-INELIGIBLE
+     so they never get grounded as a step, while real techniques stay eligible;
+  2. substitute_target only rewrites an example host in a real HOST POSITION — never
+     inside a filename (.env.example) or a payload/<script> string.
+
+Self-contained (synthetic entries, stdlib only). Run:  python test_attack_path.py
 """
 from __future__ import annotations
 
@@ -19,7 +25,7 @@ def _steps(*cmds: str) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- #
-# meta/workflow docs (tools ARSENAL / "YOUR PLAN") are excluded from grounding
+# FIX 1 — meta/workflow docs excluded from step-grounding
 # --------------------------------------------------------------------------- #
 def test_meta_doc_exclusion() -> None:
     # the reported class: an ARSENAL title whose "commands" are installs / a YOUR
@@ -73,9 +79,47 @@ def test_meta_doc_exclusion() -> None:
     assert AP.is_broad_reference(_entry(title="SECURITY ARSENAL")) is True
     assert AP.is_broad_reference(_entry(title="Google Web Toolkit")) is False
     assert AP.is_broad_reference(_entry(title="SQL injection")) is False
-    print("  meta-doc exclusion: PASS")
+    print("  FIX 1 (meta-doc exclusion): PASS")
+
+
+# --------------------------------------------------------------------------- #
+# FIX 2 — substitute_target scoping
+# --------------------------------------------------------------------------- #
+def test_substitution_scoping() -> None:
+    host = "scanme.sh"
+    # MUST be left untouched (filenames / payloads / installs / unrelated hosts)
+    for cmd in [
+        "cp .env.example .env",
+        "<script>alert('XSS')</script>",
+        "pip install -r requirements.txt",
+        "git clone https://github.com/x/y",
+    ]:
+        got = AP.substitute_target(cmd, host)
+        assert got == cmd, f"must be UNCHANGED: {cmd!r} -> {got!r}"
+
+    # MUST still substitute in a real host position
+    assert AP.substitute_target("curl https://example.com/api", host) == \
+        "curl https://scanme.sh/api"
+    assert AP.substitute_target("-H 'Host: example.com'", host) == \
+        "-H 'Host: scanme.sh'"
+    assert AP.substitute_target("nmap example.com", host) == "nmap scanme.sh"
+    assert AP.substitute_target("ssh user@target.htb", host) == "ssh user@scanme.sh"
+
+    # example IP → target IP still works (target is an IP)
+    assert AP.substitute_target("nmap 10.10.11.5", "10.10.14.9") == "nmap 10.10.14.9"
+
+    # github stays github (not an example host)
+    assert "github.com" in AP.substitute_target("wget https://github.com/a/b", host)
+
+    # the exact MAF regressions must not recur, with the real MAF target
+    maf = "production.maf.auth0.com"
+    assert AP.substitute_target("cp .env.example .env", maf) == "cp .env.example .env"
+    assert AP.substitute_target("<script>alert('XSS')</script>", maf) == \
+        "<script>alert('XSS')</script>"
+    print("  FIX 2 (substitution scoping): PASS")
 
 
 if __name__ == "__main__":
     test_meta_doc_exclusion()
-    print("ALL grounding-fix tests pass")
+    test_substitution_scoping()
+    print("ALL attack-path fix tests pass")

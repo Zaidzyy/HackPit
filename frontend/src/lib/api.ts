@@ -172,12 +172,29 @@ export type BoxWriteup = {
   tier: number;
 };
 
+/**
+ * What KIND of target this is — inferred before retrieval so the path probes the
+ * right bug classes. Drives the "why these steps" chips above the path. All
+ * fields empty when the profiler was unavailable.
+ */
+export type TargetProfile = {
+  target_class: string | null;
+  tech_signals: string[];
+  priority_bug_classes: string[];
+  out_of_scope: string[];
+};
+
 export type AttackPath = {
   goal: string;
   target_type: string | null;
   /** Target (IP/host/URL) parsed from the goal + substituted into commands. */
   target: string | null;
   phases: AttackPhase[];
+  /** Inferred target profile that steered this path (chips show target_class +
+   * priority_bug_classes). Empty when the profiler was unavailable. */
+  profile?: TargetProfile;
+  /** True when steps were dropped for touching an out-of-scope path/host. */
+  scoped?: boolean;
   /**
    * Set when the goal named a box we have a writeup for. It's the link target,
    * and the SOURCE of the path when origin === "writeup".
@@ -381,11 +398,12 @@ export const setLLMConfig = (
 export const composeAttackPath = (
   goal: string,
   target_type?: string | null,
+  scope_text?: string | null,
   signal?: AbortSignal
 ) =>
   postJSON<AttackPath>(
     "/attack-path",
-    { goal, target_type: target_type ?? null },
+    { goal, target_type: target_type ?? null, scope_text: scope_text ?? null },
     signal
   );
 

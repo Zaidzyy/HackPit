@@ -450,6 +450,11 @@ class AttackPathIn(BaseModel):
     target_type: str | None = Field(
         default=None, description="Optional chip: pentest | bugbounty | ctf | ad."
     )
+    scope_text: str | None = Field(
+        default=None,
+        description="Optional pasted scope / Rules of Engagement. Fed to the target "
+        "profiler; forbidden paths/hosts are dropped from the composed path.",
+    )
 
 
 class AttackStep(BaseModel):
@@ -490,6 +495,24 @@ class BoxWriteup(BaseModel):
     tier: int
 
 
+class TargetProfile(BaseModel):
+    """What KIND of target this is — steers retrieval + composition and drives the
+    'why these steps' chips. All fields empty when the profiler was unavailable."""
+
+    target_class: str | None = Field(
+        default=None, description="Short label, e.g. 'multi-tenant SaaS'."
+    )
+    tech_signals: list[str] = Field(default_factory=list)
+    priority_bug_classes: list[str] = Field(
+        default_factory=list,
+        description="Target-specific bug classes to probe first (drives the query "
+        "bias and the 'why these steps' chips).",
+    )
+    out_of_scope: list[str] = Field(
+        default_factory=list, description="Paths/hosts the RoE forbids."
+    )
+
+
 class AttackPathOut(BaseModel):
     goal: str
     target_type: str | None
@@ -499,6 +522,16 @@ class AttackPathOut(BaseModel):
         "into step commands; null if none was detectable.",
     )
     phases: list[AttackPhase]
+    profile: TargetProfile = Field(
+        default_factory=TargetProfile,
+        description="Inferred target profile that steered this path (target class + "
+        "priority bug classes). Empty when the profiler was unavailable.",
+    )
+    scoped: bool = Field(
+        default=False,
+        description="True when one or more steps were dropped for touching an "
+        "out-of-scope path/host from the pasted RoE.",
+    )
     box_writeup: BoxWriteup | None = Field(
         default=None,
         description="A full writeup for the named box, surfaced as a link; also "
@@ -827,7 +860,7 @@ def attack_path_compose(req: AttackPathIn = Body(...)) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="goal is required")
     try:
         return attack_path.compose(
-            STATE.by_id, goal, req.target_type, _resilient_search
+            STATE.by_id, goal, req.target_type, _resilient_search, req.scope_text
         )
     except llm.LLMError as e:
         # Ollama offline / no key / unparseable output / nothing grounded.

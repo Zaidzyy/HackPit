@@ -43,6 +43,8 @@ export function AttackPathScreen() {
 
   const [goal, setGoal] = useState("");
   const [targetType, setTargetType] = useState<string | null>(null);
+  const [scopeText, setScopeText] = useState("");
+  const [scopeOpen, setScopeOpen] = useState(false);
 
   const [result, setResult] = useState<AttackPath | null>(null);
   const [loading, setLoading] = useState(false);
@@ -82,7 +84,7 @@ export function AttackPathScreen() {
       setError(null);
       setResult(null);
 
-      composeAttackPath(g, targetType, ctrl.signal)
+      composeAttackPath(g, targetType, scopeText.trim() || null, ctrl.signal)
         .then((path) => {
           if (ctrl.signal.aborted) return;
           setResult(path);
@@ -98,7 +100,7 @@ export function AttackPathScreen() {
           );
         });
     },
-    [goal, targetType, loading]
+    [goal, targetType, scopeText, loading]
   );
 
   const startEngagement = useCallback(() => {
@@ -177,6 +179,40 @@ export function AttackPathScreen() {
             >
               {loading ? "composing…" : "compose path →"}
             </button>
+          </div>
+
+          <div className="hp-ap-scope">
+            <button
+              type="button"
+              className="hp-ap-scope-toggle"
+              aria-expanded={scopeOpen}
+              onClick={() => setScopeOpen((o) => !o)}
+              disabled={loading}
+            >
+              <span className="hp-ap-scope-sign" aria-hidden>
+                {scopeOpen ? "−" : "+"}
+              </span>
+              Scope / Rules of Engagement{" "}
+              <span className="hp-ap-scope-opt">(optional)</span>
+              {!scopeOpen && scopeText.trim() && (
+                <span className="hp-ap-scope-dot" title="scope text entered" />
+              )}
+            </button>
+            {scopeOpen && (
+              <textarea
+                className="hp-ap-scope-text"
+                value={scopeText}
+                onChange={(e) => setScopeText(e.target.value)}
+                placeholder={
+                  "Paste in-scope / out-of-scope hosts and paths, or the program’s Rules of Engagement.\n" +
+                  "The profiler uses it to prioritise the right bug classes and drop out-of-scope steps."
+                }
+                rows={5}
+                spellCheck={false}
+                disabled={loading}
+                aria-label="Scope / Rules of Engagement"
+              />
+            )}
           </div>
         </form>
 
@@ -319,6 +355,32 @@ export function AttackPathScreen() {
             </div>
             {startError && (
               <p className="hp-note-err hp-ap-starterr">{startError}</p>
+            )}
+
+            {(result.profile?.target_class ||
+              (result.profile?.priority_bug_classes?.length ?? 0) > 0 ||
+              result.scoped) && (
+              <div className="hp-ap-profile">
+                <span className="hp-ap-profile-label">why these steps</span>
+                {result.profile?.target_class && (
+                  <span className="hp-ap-profile-class">
+                    {result.profile.target_class}
+                  </span>
+                )}
+                {result.profile?.priority_bug_classes?.map((b) => (
+                  <span className="hp-ap-profile-chip" key={b}>
+                    {b}
+                  </span>
+                ))}
+                {result.scoped && (
+                  <span
+                    className="hp-ap-scoped-badge"
+                    title="One or more steps were dropped for touching an out-of-scope path/host from your pasted scope."
+                  >
+                    ✓ scoped
+                  </span>
+                )}
+              </div>
             )}
 
             <ol className="hp-ap-phases">

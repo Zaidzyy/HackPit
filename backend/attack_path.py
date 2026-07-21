@@ -473,6 +473,7 @@ def retrieve(
     target_type: str | None,
     search_fn: SearchFn,
     ctx: dict[str, Any] | None = None,
+    profile: dict[str, Any] | None = None,
 ) -> dict[str, list[dict]]:
     """Gather candidate techniques from the KB, bucketed by canonical phase.
 
@@ -480,13 +481,30 @@ def retrieve(
     canonical phase, unions the hits (keeping the best score seen per entry),
     then buckets each entry into its phase and keeps the top few per phase.
 
-    ``ctx`` (from ``parse_goal_context``) adds box-type/creds terms so retrieval
-    is weighted toward the right playbook (AD+creds → BloodHound/kerberoast/
-    credentialed enum; Linux → linux enum/privesc; web → web).
+    ``ctx`` (from ``parse_goal_context``) adds box-type/creds terms. ``profile``
+    (from ``profile_target``) is the STRONGER steer: when it names priority bug
+    classes for THIS target, those become the query bias — so the KB returns
+    target-specific entries (SSRF / tenant-isolation / OAuth) instead of a
+    generic web checklist. The static ``_TARGET_CONTEXT`` string is the fallback
+    only when the profile is empty.
     """
-    tctx = _TARGET_CONTEXT.get((target_type or "").lower(), "")
+    prof = profile or {}
+    # priority bug classes are the dynamic, target-specific seed terms; fall back
+    # to the static target-type context only when the profiler produced nothing.
+    bias = " ".join(prof.get("priority_bug_classes") or [])
+    if not bias:
+        bias = _TARGET_CONTEXT.get((target_type or "").lower(), "")
+    # fold the target class + tech signals in for extra discriminative pull
+    prof_terms = " ".join(
+        x
+        for x in (
+            prof.get("target_class") or "",
+            " ".join(prof.get("tech_signals") or []),
+        )
+        if x
+    ).strip()
     box_terms = (ctx or {}).get("terms", "")
-    base = " ".join(x for x in (goal, tctx, box_terms) if x).strip()
+    base = " ".join(x for x in (goal, bias, prof_terms, box_terms) if x).strip()
 
     # entry_id -> best score seen across all queries
     best: dict[str, float] = {}
@@ -594,6 +612,7 @@ def build_user_prompt(
     target_type: str | None,
     grouped: dict[str, list[dict]],
     ctx: dict[str, Any] | None = None,
+    profile: dict[str, Any] | None = None,
 ) -> str:
     ctx = ctx or {}
     lines: list[str] = []
@@ -607,6 +626,20 @@ def build_user_prompt(
         lines.append(
             f"CONTEXT: this reads as a {box_type.upper()} target{creds} — lead with "
             f"the {lead} playbook."
+        )
+    prof = profile or {}
+    tclass = prof.get("target_class")
+    pbugs = prof.get("priority_bug_classes") or []
+    if tclass or pbugs:
+        lines.append("")
+        lines.append("TARGET PROFILE:")
+        if tclass:
+            lines.append(f"- target class: {tclass}")
+        if pbugs:
+            lines.append("- priority bug classes: " + ", ".join(pbugs))
+        lines.append(
+            "PRIORITISE steps that probe these bug classes for THIS target; do NOT "
+            "emit generic steps that ignore the profile."
         )
     lines.append("")
     lines.append(
@@ -844,6 +877,123 @@ def parse_goal_context(goal: str) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# target profiler — reason about WHAT KIND of target this is, so retrieval and
+# composition probe the RIGHT bug classes instead of a flat web checklist.
+# Optional pasted scope / Rules-of-Engagement is just another input here.
+# --------------------------------------------------------------------------- #
+_PROFILE_SYSTEM = (
+    "You are a penetration-testing TARGET PROFILER. Given a target description "
+    "(and optional Rules-of-Engagement / scope text), infer what KIND of target "
+    "this is and which bug classes matter MOST for it. Output ONLY a JSON object, "
+    "no prose:\n"
+    '{"target_class": "<short label, e.g. multi-tenant SaaS / static site / '
+    'internal API / WordPress / Windows AD>", '
+    '"tech_signals": ["<observed or likely tech, e.g. multi-tenant, OAuth, '
+    'webhooks, GraphQL>"], '
+    '"priority_bug_classes": ["<the SPECIFIC, target-appropriate bug classes to '
+    'probe FIRST — e.g. cross-tenant IDOR, SSRF via server-side integration, '
+    'OAuth/integration token handling, webhook secret leakage>"], '
+    '"out_of_scope": ["<exact paths/hosts the RoE forbids, copied verbatim>"]}\n'
+    "Rules: priority_bug_classes MUST be specific to this target class, NOT a "
+    "generic web checklist — 3 to 6 of them, highest-value first. out_of_scope: "
+    "copy only paths/hosts the scope text explicitly forbids; empty list if none."
+)
+
+# the safe fallback so composition never hard-fails on the profiler
+_EMPTY_PROFILE: dict[str, Any] = {
+    "target_class": None,
+    "tech_signals": [],
+    "priority_bug_classes": [],
+    "out_of_scope": [],
+}
+
+
+def _profile_str_list(value: Any, cap: int) -> list[str]:
+    """Coerce a model value into a deduped list of non-empty trimmed strings."""
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        s = str(item).strip()
+        key = s.lower()
+        if s and key not in seen:
+            seen.add(key)
+            out.append(s)
+        if len(out) >= cap:
+            break
+    return out
+
+
+def _coerce_profile(parsed: dict) -> dict[str, Any]:
+    """Normalise a model profile into the 4-key shape with safe types."""
+    tc = parsed.get("target_class")
+    return {
+        "target_class": (str(tc).strip() or None) if isinstance(tc, str) else None,
+        "tech_signals": _profile_str_list(parsed.get("tech_signals"), 8),
+        "priority_bug_classes": _profile_str_list(
+            parsed.get("priority_bug_classes"), 6
+        ),
+        "out_of_scope": _profile_str_list(parsed.get("out_of_scope"), 20),
+    }
+
+
+def profile_target(
+    goal: str, scope_text: str | None, cfg: dict
+) -> dict[str, Any]:
+    """Infer the target class + priority bug classes (+ out-of-scope paths) that
+    STEER retrieval and composition. Optional ``scope_text`` (pasted RoE) is just
+    another input. Returns a safe empty profile on ANY LLM/parse failure so
+    composition never hard-fails on the profiler (degrading to flat behaviour).
+    """
+    lines = [f"TARGET: {goal.strip()}"]
+    scope = (scope_text or "").strip()
+    if scope:
+        lines.append("")
+        lines.append("SCOPE / RULES OF ENGAGEMENT (verbatim):")
+        lines.append(scope[:4000])
+    try:
+        raw = llm.chat(_PROFILE_SYSTEM, "\n".join(lines), cfg, max_tokens=700)
+        parsed = llm.extract_json(raw)
+    except llm.LLMError:
+        return dict(_EMPTY_PROFILE)
+    if not isinstance(parsed, dict):
+        return dict(_EMPTY_PROFILE)
+    return _coerce_profile(parsed)
+
+
+def _filter_out_of_scope(
+    phases: list[dict[str, Any]], out_of_scope: list[str]
+) -> tuple[list[dict[str, Any]], bool]:
+    """Drop any step whose title / rationale / commands touch an out-of-scope
+    path or host, re-number the survivors, and drop now-empty phases. Returns
+    ``(filtered_phases, any_dropped)`` — the caller tags the response ``scoped``.
+    """
+    tokens = [t.strip().lower() for t in (out_of_scope or []) if len(t.strip()) >= 4]
+    if not tokens:
+        return phases, False
+    dropped = False
+    out: list[dict[str, Any]] = []
+    for ph in phases:
+        kept: list[dict] = []
+        for s in ph.get("steps") or []:
+            hay = " ".join(
+                [s.get("title") or "", s.get("why") or ""]
+                + [c.get("cmd") or "" for c in (s.get("commands") or [])]
+            ).lower()
+            if any(tok in hay for tok in tokens):
+                dropped = True
+                continue
+            kept.append(s)
+        if not kept:
+            continue
+        for i, step in enumerate(kept, 1):
+            step["id"] = f"{ph['phase']}-{i}"
+        out.append({**ph, "steps": kept})
+    return out, dropped
+
+
+# --------------------------------------------------------------------------- #
 # writeup-first path — build the path from the user's own per-box walkthrough
 # --------------------------------------------------------------------------- #
 # keyword → canonical phase index. A linear writeup is split into phases WITHOUT
@@ -1068,6 +1218,7 @@ def _augment_writeup(
     target: str | None,
     search_fn: SearchFn,
     cfg: dict,
+    profile: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Best-effort, CONSERVATIVE supplement of the writeup path: only phases the
     writeup genuinely lacks or is very thin on (empty, or no runnable commands) may
@@ -1078,7 +1229,7 @@ def _augment_writeup(
     thin = _thin_phases(phases)
     if not thin:
         return phases  # every phase substantively covered — nothing to supplement
-    grouped = retrieve(by_id, goal, target_type, search_fn, ctx)
+    grouped = retrieve(by_id, goal, target_type, search_fn, ctx, profile)
     grouped = {p: t for p, t in grouped.items() if p in thin}  # offer library only for thin phases
     covered = {p["phase"]: [s["title"] for s in p["steps"]] for p in phases}
     user = build_augment_prompt(goal, ctx, covered, grouped, thin)
@@ -1099,6 +1250,7 @@ def compose(
     goal: str,
     target_type: str | None,
     search_fn: SearchFn,
+    scope_text: str | None = None,
 ) -> dict[str, Any]:
     """Compose an attack path for the goal. Two modes:
 
@@ -1118,6 +1270,10 @@ def compose(
     cfg = llm.load_config()
     target = extract_target(goal)
     ctx = parse_goal_context(goal)
+    # Profile the target FIRST (safe empty profile on any LLM failure) — it steers
+    # both retrieval and composition, and supplies out-of-scope paths to drop.
+    profile = profile_target(goal, scope_text, cfg)
+    oos = profile.get("out_of_scope") or []
     box_writeup = find_box_writeup(by_id, goal)
 
     # (1) WRITEUP-FIRST (+ augmentation)
@@ -1128,7 +1284,8 @@ def compose(
             augmented = False
             try:  # best-effort supplements; the writeup stands alone on failure
                 merged = _augment_writeup(
-                    phases, by_id, goal, target_type, ctx, target, search_fn, cfg
+                    phases, by_id, goal, target_type, ctx, target, search_fn, cfg,
+                    profile,
                 )
                 augmented = any(
                     s.get("from_writeup") is False
@@ -1138,12 +1295,15 @@ def compose(
                 phases = merged
             except llm.LLMError:
                 pass
+            phases, scoped = _filter_out_of_scope(phases, oos)
             damaged = bool((wu.get("meta") or {}).get("source_damaged"))
             return {
                 "goal": goal,
                 "target_type": target_type,
                 "target": target,
                 "phases": phases,
+                "profile": profile,
+                "scoped": scoped,
                 "box_writeup": box_writeup,
                 "origin": "writeup",
                 "origin_label": f"from your writeup: {wu['title']}",
@@ -1159,8 +1319,8 @@ def compose(
             }
 
     # (2) KB-FIRST + AI-SUGGESTED FALLBACK
-    grouped = retrieve(by_id, goal, target_type, search_fn, ctx)
-    user = build_user_prompt(goal, target_type, grouped, ctx)
+    grouped = retrieve(by_id, goal, target_type, search_fn, ctx, profile)
+    user = build_user_prompt(goal, target_type, grouped, ctx, profile)
     raw = llm.chat(_SYSTEM, user, cfg)
     parsed = llm.extract_json(raw)
     phases = _ground(parsed, by_id, target)
@@ -1168,11 +1328,17 @@ def compose(
     if not phases:
         raise llm.LLMError("the model did not produce any usable steps")
 
+    phases, scoped = _filter_out_of_scope(phases, oos)
+    if not phases:
+        raise llm.LLMError("all composed steps were out of scope")
+
     return {
         "goal": goal,
         "target_type": target_type,
         "target": target,
         "phases": phases,
+        "profile": profile,
+        "scoped": scoped,
         "box_writeup": box_writeup,
         "origin": "composed",
         "origin_label": None,

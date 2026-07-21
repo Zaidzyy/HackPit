@@ -481,6 +481,14 @@ class AttackStep(BaseModel):
         description="True = a PRIMARY step lifted from the user's own box writeup "
         "(trusted). False = a composed/supplement step.",
     )
+    target_adaptation: str | None = Field(
+        default=None,
+        description="Optional one-line guidance (grounded steps only) bridging the "
+        "technique's generic example commands to THIS target, naming only real "
+        "hosts/endpoints/accounts from the goal/scope. Prose, never a runnable "
+        "command; the step's real commands are unchanged. Absent when it can't be "
+        "adapted confidently.",
+    )
     on_success: str | None = Field(
         default=None,
         description="Optional branch hint — what this finding unlocks / the next "

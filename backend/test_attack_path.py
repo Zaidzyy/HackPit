@@ -1,9 +1,13 @@
-"""Unit tests for the two attack-path fixes:
+"""Unit tests for the attack-path composer:
 
   1. meta/workflow docs (tools ARSENAL / "YOUR PLAN" playbooks) are step-INELIGIBLE
      so they never get grounded as a step, while real techniques stay eligible;
   2. substitute_target only rewrites an example host in a real HOST POSITION — never
-     inside a filename (.env.example) or a payload/<script> string.
+     inside a filename (.env.example)/payload/<script>, and never a partial prefix of
+     a longer multi-label host (no Frankenstein "…auth0.comm" / "…auth0.coms-app…");
+  3. a grounded step's target_adaptation may name ONLY real hosts from the goal/scope
+     (invented hosts drop the whole line);
+  4. every profiler priority bug class is guaranteed at least one covering step.
 
 Self-contained (synthetic entries, stdlib only). Run:  python test_attack_path.py
 """
@@ -116,10 +120,116 @@ def test_substitution_scoping() -> None:
     assert AP.substitute_target("cp .env.example .env", maf) == "cp .env.example .env"
     assert AP.substitute_target("<script>alert('XSS')</script>", maf) == \
         "<script>alert('XSS')</script>"
+
+    # Frankenstein-host regressions: an example host that is only a PREFIX of a
+    # longer multi-label token must NOT be partially swapped — no "…auth0.comm"
+    # (double-m) and no "…auth0.coms-app.bugforge.io". Either the WHOLE host swaps
+    # or nothing does; here nothing does (these aren't complete example hosts).
+    for bad in [
+        "Host: example.comm",                       # → used to yield ...auth0.comm
+        "curl https://example.coms-app.bugforge.io/x",  # → ...auth0.coms-app...
+        "nmap example.coms-app.bugforge.io",
+    ]:
+        got = AP.substitute_target(bad, maf)
+        assert "auth0.comm" not in got and "auth0.coms" not in got, \
+            f"mangled host produced from {bad!r}: {got!r}"
+        assert got == bad, f"partial multi-label host must stay intact: {bad!r} -> {got!r}"
+
+    # a COMPLETE example host in the same position still swaps cleanly (boundary
+    # rejects a prefix, not a whole host)
+    assert AP.substitute_target("curl https://example.com/x", maf) == \
+        f"curl https://{maf}/x"
     print("  FIX 2 (substitution scoping): PASS")
+
+
+# --------------------------------------------------------------------------- #
+# CHANGE 1 — per-grounded-step target_adaptation guardrail (no invented hosts)
+# --------------------------------------------------------------------------- #
+def test_target_adaptation_guardrail() -> None:
+    facts = (
+        "Bug bounty on production.maf.auth0.com. In scope: "
+        "maf-holding-prod.apigee.net, endpoint SaveOCRReceipt, two test accounts."
+    )
+    # references only real, in-facts identifiers → kept verbatim (trimmed)
+    ok = ("Use the two test accounts as A/B; swap the card id on "
+          "maf-holding-prod.apigee.net wallet calls to read B's card as A.")
+    assert AP._target_adaptation(ok, facts) == ok
+
+    # an endpoint name (no FQDN) is fine — only hostnames are boundary-checked
+    ep = "Replay SaveOCRReceipt with account B's receipt id."
+    assert AP._target_adaptation(ep, facts) == ep
+
+    # invents a host not present in the facts → the WHOLE line is dropped
+    bad = "Hit admin.evil-invented.com/internal to pivot."
+    assert AP._target_adaptation(bad, facts) == "", "invented host must be dropped"
+
+    # no facts to validate against, or empty adaptation → dropped
+    assert AP._target_adaptation(ok, None) == ""
+    assert AP._target_adaptation("", facts) == ""
+    assert AP._target_adaptation("   ", facts) == ""
+    print("  CHANGE 1 (target_adaptation guardrail): PASS")
+
+
+# --------------------------------------------------------------------------- #
+# CHANGE 3 — every priority bug class is guaranteed >=1 covering step
+# --------------------------------------------------------------------------- #
+def _phase(name: str, *steps: dict) -> dict:
+    return {"phase": name, "label": name.title(), "steps": list(steps)}
+
+
+def _step(title: str, **kw) -> dict:
+    s = {"title": title, "entry_id": "e", "why": "", "commands": [],
+         "ai_suggested": False, "from_writeup": False}
+    s.update(kw)
+    return s
+
+
+def _exploitation_idor() -> list[dict]:
+    # a fresh path each call — _ensure_priority_coverage renumbers/extends in place
+    return [
+        _phase("exploitation",
+               _step("Cross-tenant IDOR on wallet",
+                     commands=[{"lang": "bash", "cmd": "curl .../wallet?id=2"}])),
+    ]
+
+
+def test_priority_coverage() -> None:
+    # IDOR is covered by a real step; "OCR receipt fraud" is NOT → one ai_suggested
+    # step must be added for it (and only it — no duplicate for the covered class).
+    out = AP._ensure_priority_coverage(
+        _exploitation_idor(), ["cross-tenant IDOR", "OCR receipt fraud"]
+    )
+    exp = next(p for p in out if p["phase"] == "exploitation")
+    titles = [s["title"] for s in exp["steps"]]
+    assert "Probe: OCR receipt fraud" in titles, "uncovered class must gain a step"
+    assert not any("IDOR" in t and t.startswith("Probe:") for t in titles), \
+        "covered class must NOT gain a duplicate probe step"
+
+    added = next(s for s in exp["steps"] if s["title"] == "Probe: OCR receipt fraud")
+    assert added["ai_suggested"] is True and added["commands"] == [], \
+        "coverage step must be a clearly-marked, command-less ai_suggested step"
+    # ids re-numbered contiguously within the phase
+    assert [s["id"] for s in exp["steps"]] == ["exploitation-1", "exploitation-2"]
+
+    # fully-covered profile → no step added (no padding)
+    covered = AP._ensure_priority_coverage(_exploitation_idor(), ["cross-tenant IDOR"])
+    assert sum(len(p["steps"]) for p in covered) == 1
+
+    # no priority classes → no-op
+    base = _exploitation_idor()
+    assert AP._ensure_priority_coverage(base, []) is base
+
+    # no exploitation phase yet → one is created in canonical order
+    recon_only = [_phase("recon", _step("port scan"))]
+    out2 = AP._ensure_priority_coverage(recon_only, ["SSRF via metadata"])
+    order = [p["phase"] for p in out2]
+    assert order == ["recon", "exploitation"], f"phase order wrong: {order}"
+    print("  CHANGE 3 (priority-class coverage): PASS")
 
 
 if __name__ == "__main__":
     test_meta_doc_exclusion()
     test_substitution_scoping()
+    test_target_adaptation_guardrail()
+    test_priority_coverage()
     print("ALL attack-path fix tests pass")

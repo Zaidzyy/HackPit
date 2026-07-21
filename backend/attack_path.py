@@ -413,11 +413,21 @@ _HOST_TOOL = (
 # domain-looking substring — so filenames (.env.example) and tokens inside a
 # <script>/tag/payload are left intact. Each pattern captures (pre)(host):
 #   after ://   ·   after @   ·   in a `Host:` header   ·   a host-tool's target arg
-_HOST_AFTER_SCHEME_RE = re.compile(r"(?P<pre>://)(?P<h>" + _EX_HOST + r")")
-_HOST_AFTER_AT_RE = re.compile(r"(?P<pre>@)(?P<h>" + _EX_HOST + r")")
-_HOST_IN_HEADER_RE = re.compile(r"(?P<pre>Host:\s*)(?P<h>" + _EX_HOST + r")", re.I)
+#
+# _EX_HOST_TAIL is a REQUIRED right boundary: the example host must be a COMPLETE
+# token, never a prefix of a longer multi-label host. Without it, `example.com`
+# would match inside `example.comm` (→ …auth0.comm) or `example.coms-app.bugforge.io`
+# (→ …auth0.coms-app.bugforge.io) — Frankenstein hosts. With it, either the WHOLE
+# example host swaps or nothing does (the match fails and backtracks to no match).
+_EX_HOST_TAIL = r"(?![A-Za-z0-9.-])"
+_HOST_AFTER_SCHEME_RE = re.compile(r"(?P<pre>://)(?P<h>" + _EX_HOST + r")" + _EX_HOST_TAIL)
+_HOST_AFTER_AT_RE = re.compile(r"(?P<pre>@)(?P<h>" + _EX_HOST + r")" + _EX_HOST_TAIL)
+_HOST_IN_HEADER_RE = re.compile(
+    r"(?P<pre>Host:\s*)(?P<h>" + _EX_HOST + r")" + _EX_HOST_TAIL, re.I
+)
 _HOST_AS_TOOL_ARG_RE = re.compile(
-    r"(?P<pre>\b(?:" + _HOST_TOOL + r")\b(?:\s+-{1,2}\S+)*\s+)(?P<h>" + _EX_HOST + r")",
+    r"(?P<pre>\b(?:" + _HOST_TOOL + r")\b(?:\s+-{1,2}\S+)*\s+)(?P<h>" + _EX_HOST + r")"
+    + _EX_HOST_TAIL,
     re.I,
 )
 
@@ -702,6 +712,15 @@ _SYSTEM = (
     "UNVERIFIED, so use them sparingly and NEVER to duplicate a library technique.\n"
     "- Grounded (entry_id) steps are trusted and come FIRST in each phase; "
     "AI-suggested steps are a clearly-marked fallback and come after.\n"
+    "- TARGET ADAPTATION (grounded steps only): a library technique shows the "
+    "author's GENERIC example commands. For a grounded step whose technique needs "
+    "bridging to THIS engagement, add a \"target_adaptation\": ONE short sentence "
+    "saying how to apply this technique to the ACTUAL target, using ONLY real hosts, "
+    "endpoints, accounts or functions named in the GOAL / SCOPE / TARGET PROFILE "
+    "above. It is GUIDANCE, never a ready-to-run command, and must NOT invent any "
+    "host, path, or parameter — reference only identifiers actually given. If you "
+    "cannot adapt it confidently from the given facts, OMIT the field. Do NOT restate "
+    "the technique's commands here.\n"
     "- Never invent an entry_id. A step is EITHER {\"entry_id\": \"<library id>\", "
     "\"why\": \"...\"} OR an ai_suggested step exactly as shown above.\n"
     "- BRANCHES: a step that reveals something or tests an access control has a "
@@ -718,6 +737,8 @@ _SYSTEM = (
 _SCHEMA_HINT = (
     '{"phases": [{"phase": "recon", "steps": ['
     '{"entry_id": "<library id>", "why": "<1-2 sentences>", '
+    '"target_adaptation": "<optional: one line mapping this technique to the real '
+    'target, using only named hosts/endpoints/accounts>", '
     '"on_success": "<optional: what it unlocks / next step>", '
     '"on_blocked": "<optional: pivot if it fails>"}, '
     '{"ai_suggested": true, "title": "<short title>", "why": "<why>", '
@@ -732,6 +753,7 @@ def build_user_prompt(
     grouped: dict[str, list[dict]],
     ctx: dict[str, Any] | None = None,
     profile: dict[str, Any] | None = None,
+    scope_text: str | None = None,
 ) -> str:
     ctx = ctx or {}
     lines: list[str] = []
@@ -760,6 +782,14 @@ def build_user_prompt(
             "PRIORITISE steps that probe these bug classes for THIS target; do NOT "
             "emit generic steps that ignore the profile."
         )
+    scope = (scope_text or "").strip()
+    if scope:
+        lines.append("")
+        lines.append(
+            "SCOPE / TARGET FACTS (verbatim — the ONLY real hosts, endpoints, "
+            "accounts and functions you may name in a target_adaptation):"
+        )
+        lines.append(scope[:2000])
     lines.append("")
     lines.append(
         "TECHNIQUE LIBRARY (cite these entry_ids for grounded steps), by phase:"
@@ -791,6 +821,9 @@ def build_user_prompt(
         "Compose the ordered attack path. In each phase, place grounded library "
         "steps FIRST (cite entry_id, highest-priority first), then add "
         f"clearly-marked ai_suggested steps ONLY for genuine gaps{gap}. "
+        "On grounded steps whose generic example commands need bridging, add a "
+        "one-line target_adaptation that names ONLY the real hosts/endpoints/accounts "
+        "from the facts above (omit it when you cannot adapt confidently). "
         "For pivotal steps (a vuln probe, an access-control or auth test, an "
         "exploit) include on_success / on_blocked branch hints; skip them on "
         "routine steps. "
@@ -851,6 +884,29 @@ def _ai_commands(raw: Any, target: str | None) -> list[dict[str, Any]]:
     return out
 
 
+def _target_adaptation(raw: Any, facts: str | None) -> str:
+    """Validate the model's OPTIONAL per-grounded-step ``target_adaptation`` — a ONE
+    line note bridging a generic library technique to THIS target — and return it
+    trimmed, or "" to drop it.
+
+    Guardrail (this must not become a hallucination vector): the adaptation may
+    reference only real identifiers from the goal/scope facts, so every FQDN it
+    names must appear in ``facts``; if any host is invented (or we have no facts to
+    check against), the whole line is dropped. It is prose guidance, never a command
+    — the grounded step's real verified commands are untouched.
+    """
+    text = str(raw or "").strip()
+    if not text or not facts:
+        return ""
+    hay = facts.lower()
+    # every hostname-looking token must be a real one from the facts — otherwise the
+    # model invented a host and the whole adaptation is untrusted.
+    for m in _HOST_RE.finditer(text):
+        if m.group(0).split(":", 1)[0].lower() not in hay:
+            return ""
+    return text[:280]
+
+
 def _branch_hints(st: dict) -> dict[str, str]:
     """Pass the model's OPTIONAL branch hints (on_success / on_blocked) through as
     trimmed prose. They are advisory next-action / pivot notes — nothing to
@@ -865,10 +921,17 @@ def _branch_hints(st: dict) -> dict[str, str]:
 
 
 def _ground(
-    parsed: Any, by_id: dict[str, dict], target: str | None
+    parsed: Any,
+    by_id: dict[str, dict],
+    target: str | None,
+    adapt_facts: str | None = None,
 ) -> list[dict[str, Any]]:
     """Turn the model's JSON into validated phases: KB-grounded steps FIRST, then
     clearly-marked AI-suggested gap steps.
+
+    ``adapt_facts`` (goal + scope + profile signals) is the fact set a grounded
+    step's optional ``target_adaptation`` line is validated against — any FQDN it
+    names must appear there, else the line is dropped (see ``_target_adaptation``).
 
     A GROUNDED step resolves its cited entry_id to a REAL, eligible, servable KB
     entry that actually carries commands, and uses that entry's real commands
@@ -910,6 +973,9 @@ def _ground(
                 if not cmds:
                     continue  # no-command entry — never a step
                 used.add(eid)
+                adaptation = _target_adaptation(
+                    st.get("target_adaptation"), adapt_facts
+                )
                 grounded[phase].append(
                     {
                         "title": e["title"],
@@ -918,6 +984,7 @@ def _ground(
                         "commands": cmds,
                         "ai_suggested": False,
                         "from_writeup": False,
+                        **({"target_adaptation": adaptation} if adaptation else {}),
                         **_branch_hints(st),
                     }
                 )
@@ -1115,7 +1182,8 @@ def _filter_out_of_scope(
         kept: list[dict] = []
         for s in ph.get("steps") or []:
             hay = " ".join(
-                [s.get("title") or "", s.get("why") or ""]
+                [s.get("title") or "", s.get("why") or "",
+                 s.get("target_adaptation") or ""]
                 + [c.get("cmd") or "" for c in (s.get("commands") or [])]
             ).lower()
             if any(tok in hay for tok in tokens):
@@ -1128,6 +1196,90 @@ def _filter_out_of_scope(
             step["id"] = f"{ph['phase']}-{i}"
         out.append({**ph, "steps": kept})
     return out, dropped
+
+
+# generic words that carry no discriminating signal for coverage matching
+_COVERAGE_STOP = {
+    "via", "the", "and", "for", "with", "server", "side", "based", "this", "that",
+    "your", "from", "into", "over", "attack", "attacks", "bug", "bugs", "class",
+    "classes", "issue", "issues", "vuln", "vulns", "vulnerability", "vulnerabilities",
+    "test", "testing", "handling", "abuse", "flaw", "flaws",
+}
+
+
+def _salient_tokens(text: str) -> set[str]:
+    """Discriminating word tokens (>=4 chars, minus generic filler) for coverage."""
+    return {
+        w
+        for w in re.findall(r"[a-z0-9]+", text.lower())
+        if len(w) >= 4 and w not in _COVERAGE_STOP
+    }
+
+
+def _ensure_priority_coverage(
+    phases: list[dict[str, Any]], priority_bug_classes: list[str]
+) -> list[dict[str, Any]]:
+    """Guarantee every profiler priority bug class maps to >=1 step, adding one
+    clearly-marked ai_suggested step per uncovered class.
+
+    Composition is non-deterministic, so a run can silently omit the step for a
+    crown-jewel class (e.g. OCR receipt fraud). A class counts as covered when any
+    of its salient tokens appears anywhere in the composed steps (title / why /
+    adaptation / commands) — lenient, so a genuinely covered class never gets a
+    redundant duplicate. An uncovered class gets ONE minimal, command-less
+    ai_suggested step (verify-and-investigate) appended to exploitation. Minimal by
+    design — one step per uncovered class, never padding."""
+    classes = [c.strip() for c in (priority_bug_classes or []) if c and c.strip()]
+    if not classes:
+        return phases
+    hay = " ".join(
+        " ".join(
+            [s.get("title") or "", s.get("why") or "", s.get("target_adaptation") or ""]
+            + [c.get("cmd") or "" for c in (s.get("commands") or [])]
+        )
+        for ph in phases
+        for s in ph.get("steps") or []
+    ).lower()
+    missing = [c for c in classes if not any(t in hay for t in _salient_tokens(c))]
+    if not missing:
+        return phases
+
+    new_steps = [
+        {
+            "title": f"Probe: {c}",
+            "entry_id": "",
+            "why": (
+                "Priority bug class for this target (from the profile) that no "
+                "composed step covers — investigate it directly against the in-scope "
+                "target. Unverified: no vetted technique matched, so confirm the "
+                "approach before running anything."
+            ),
+            "commands": [],
+            "ai_suggested": True,
+            "from_writeup": False,
+        }
+        for c in missing
+    ]
+
+    by_phase = {ph["phase"]: ph for ph in phases}
+    if "exploitation" in by_phase:
+        by_phase["exploitation"]["steps"].extend(new_steps)
+    else:
+        by_phase["exploitation"] = {
+            "phase": "exploitation",
+            "label": PHASE_LABEL["exploitation"],
+            "steps": list(new_steps),
+        }
+
+    out: list[dict[str, Any]] = []
+    for phase in PHASE_ORDER:
+        ph = by_phase.get(phase)
+        if not ph or not ph.get("steps"):
+            continue
+        for i, step in enumerate(ph["steps"], 1):
+            step["id"] = f"{phase}-{i}"
+        out.append(ph)
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -1356,6 +1508,7 @@ def _augment_writeup(
     search_fn: SearchFn,
     cfg: dict,
     profile: dict[str, Any] | None = None,
+    adapt_facts: str | None = None,
 ) -> list[dict[str, Any]]:
     """Best-effort, CONSERVATIVE supplement of the writeup path: only phases the
     writeup genuinely lacks or is very thin on (empty, or no runnable commands) may
@@ -1372,7 +1525,7 @@ def _augment_writeup(
     user = build_augment_prompt(goal, ctx, covered, grouped, thin)
     raw = llm.chat(_AUGMENT_SYSTEM, user, cfg)
     parsed = llm.extract_json(raw)
-    supp = _ground(parsed, by_id, target)
+    supp = _ground(parsed, by_id, target, adapt_facts)
     # deterministic backstop: keep supplements ONLY for genuinely thin phases, so a
     # substantively-covered phase gets nothing even if the model tried to add there.
     supp = [ph for ph in supp if ph["phase"] in thin]
@@ -1411,7 +1564,23 @@ def compose(
     # both retrieval and composition, and supplies out-of-scope paths to drop.
     profile = profile_target(goal, scope_text, cfg)
     oos = profile.get("out_of_scope") or []
+    priority = profile.get("priority_bug_classes") or []
     box_writeup = find_box_writeup(by_id, goal)
+
+    # The fact set a grounded step's target_adaptation may reference — everything
+    # the model is shown (goal + verbatim scope + profile signals). A FQDN named in
+    # an adaptation but absent here is an invention and the line is dropped.
+    adapt_facts = "\n".join(
+        x
+        for x in (
+            goal,
+            (scope_text or "").strip(),
+            " ".join(profile.get("tech_signals") or []),
+            " ".join(priority),
+            profile.get("target_class") or "",
+        )
+        if x
+    )
 
     # (1) WRITEUP-FIRST (+ augmentation)
     if box_writeup and box_writeup["id"] in by_id:
@@ -1422,7 +1591,7 @@ def compose(
             try:  # best-effort supplements; the writeup stands alone on failure
                 merged = _augment_writeup(
                     phases, by_id, goal, target_type, ctx, target, search_fn, cfg,
-                    profile,
+                    profile, adapt_facts,
                 )
                 augmented = any(
                     s.get("from_writeup") is False
@@ -1432,6 +1601,7 @@ def compose(
                 phases = merged
             except llm.LLMError:
                 pass
+            phases = _ensure_priority_coverage(phases, priority)
             phases, scoped = _filter_out_of_scope(phases, oos)
             damaged = bool((wu.get("meta") or {}).get("source_damaged"))
             return {
@@ -1457,14 +1627,15 @@ def compose(
 
     # (2) KB-FIRST + AI-SUGGESTED FALLBACK
     grouped = retrieve(by_id, goal, target_type, search_fn, ctx, profile)
-    user = build_user_prompt(goal, target_type, grouped, ctx, profile)
+    user = build_user_prompt(goal, target_type, grouped, ctx, profile, scope_text)
     raw = llm.chat(_SYSTEM, user, cfg)
     parsed = llm.extract_json(raw)
-    phases = _ground(parsed, by_id, target)
+    phases = _ground(parsed, by_id, target, adapt_facts)
 
     if not phases:
         raise llm.LLMError("the model did not produce any usable steps")
 
+    phases = _ensure_priority_coverage(phases, priority)
     phases, scoped = _filter_out_of_scope(phases, oos)
     if not phases:
         raise llm.LLMError("all composed steps were out of scope")

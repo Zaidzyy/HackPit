@@ -32,7 +32,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
-import pdfplumber
+from pypdf import PdfReader
 
 from schema import Entry, Step, Code
 
@@ -74,18 +74,24 @@ def _looks_command(line: str) -> bool:
 
 
 def extract_text(pdf_path: Path) -> str:
-    parts: list[str] = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for pg in pdf.pages:
-            parts.append(pg.extract_text() or "")
-    return "\n".join(parts)
+    reader = PdfReader(str(pdf_path))
+    return "\n".join((pg.extract_text() or "") for pg in reader.pages)
+
+
+# a box name is the leading alphabetic token(s) before any digit/date — pypdf
+# sometimes glues the name to the date line ("Principal11th March 2026").
+_NAME_LEAD = re.compile(r"^([A-Za-z][A-Za-z '\-]{0,38}?)(?=\s*\d|\s*$)")
 
 
 def box_name(text: str, fallback: str) -> str:
     for line in text.splitlines():
         s = line.strip()
-        if s and len(s) <= 40 and not s.lower().startswith(("prepared", "document", "classification")):
-            return s
+        if not s or s.lower().startswith(("prepared", "document", "classification", "machine author")):
+            continue
+        m = _NAME_LEAD.match(s)
+        name = (m.group(1).strip() if m else s).strip()
+        if name and len(name) <= 40:
+            return name
     return fallback
 
 

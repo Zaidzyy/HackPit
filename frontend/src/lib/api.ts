@@ -401,6 +401,11 @@ export const setLLMConfig = (
   signal?: AbortSignal
 ) => postJSON<LLMConfig>("/llm-config", cfg, signal);
 
+/** Model names pulled in the local Ollama, for the settings picker. Returns an
+ *  empty list when Ollama is unreachable (the picker degrades to free text). */
+export const getOllamaModels = (signal?: AbortSignal) =>
+  getJSON<{ models: string[] }>("/ollama-models", signal);
+
 /** Compose a guided attack path. Slow: the local model can take a minute+. */
 export const composeAttackPath = (
   goal: string,

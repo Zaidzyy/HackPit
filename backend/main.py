@@ -856,6 +856,20 @@ def set_llm_config(cfg: LLMConfigIn = Body(...)) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(e))
 
 
+class OllamaModelsOut(BaseModel):
+    """Model names pulled in the local Ollama, for the settings model picker."""
+
+    models: list[str] = Field(default_factory=list)
+
+
+@app.get("/ollama-models", response_model=OllamaModelsOut)
+def get_ollama_models() -> dict[str, Any]:
+    """Names of models pulled locally (proxies Ollama /api/tags), so the settings
+    picker offers what's actually installed. Returns an empty list on any error
+    (Ollama down) — never 500 — so the UI degrades to a free-text input."""
+    return {"models": llm.list_ollama_models()}
+
+
 @app.post("/attack-path", response_model=AttackPathOut)
 def attack_path_compose(req: AttackPathIn = Body(...)) -> dict[str, Any]:
     """Compose an ordered, KB-grounded attack walkthrough for a goal.

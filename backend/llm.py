@@ -207,6 +207,31 @@ def _post_json(
     raise LLMError(f"cannot reach LLM endpoint {url}")  # unreachable
 
 
+def list_ollama_models(host: str | None = None) -> list[str]:
+    """Names of the models actually pulled in the local Ollama (GET /api/tags),
+    for the settings model picker.
+
+    Returns ``[]`` on ANY failure (Ollama not running, bad response) and never
+    raises — the caller degrades to a free-text model input instead of breaking.
+    """
+    base = str(host or load_config().get("host") or DEFAULTS["host"]).rstrip("/")
+    try:
+        req = urllib.request.Request(f"{base}/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read())
+    except Exception:  # noqa: BLE001 — any failure → empty list, never a 500
+        return []
+    models = data.get("models") if isinstance(data, dict) else None
+    if not isinstance(models, list):
+        return []
+    out: list[str] = []
+    for m in models:
+        name = m.get("name") if isinstance(m, dict) else None
+        if isinstance(name, str) and name.strip() and name not in out:
+            out.append(name.strip())
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # provider adapters — each takes (system, user, cfg) and returns raw text
 # --------------------------------------------------------------------------- #

@@ -2327,6 +2327,26 @@ a.hp-card {
 .hp-set-input::placeholder {
   color: var(--dim);
 }
+/* Model picker: native <select> restyled to match the text input, with a
+ * custom caret (native arrow removed). Options render dark via color-scheme. */
+.hp-set-select {
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%238b938d' stroke-width='1.6'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 10px;
+}
+.hp-set-select option {
+  background: #0c0e0f;
+  color: var(--white);
+}
+/* Free-text id input revealed under the picker when "Custom…" is chosen. */
+.hp-set-custom {
+  margin-top: 8px;
+}
 .hp-set-keynote {
   margin: 8px 0 0;
   color: var(--dim);

@@ -170,6 +170,29 @@ _DEFENSIVE_BODY_RE = re.compile(
     re.I,
 )
 
+# Meta / workflow docs — a TOOLS/ARSENAL list or a "YOUR PLAN" playbook whose
+# "commands" are tool installs, API keys, plans and checklists, not actions taken
+# against a target. Grounding one as a step dumps SETUP where a technique belongs
+# (the real "AI TOOLS ARSENAL" leak: a Shannon install, a DeFi config, an
+# ANTHROPIC_API_KEY= line, a "YOUR PLAN:" block). Step-INELIGIBLE, still browsable.
+# "toolkit" as a standalone word is deliberately NOT here — it collides with
+# product names (e.g. "Google Web Toolkit"); the real meta docs read "arsenal",
+# "tools list/arsenal", "master workflow", or "your plan".
+_META_DOC_TITLE_RE = re.compile(
+    r"\b(?:arsenal|tools?\s+(?:list|arsenal|kit)|master\s+workflow|your\s+plan)\b",
+    re.I,
+)
+# a "command" that is really tool setup / config / an API key, not a target action
+_SETUP_CMD_RE = re.compile(
+    r"\b(?:git\s+clone|npm\s+(?:install|i)\b|pip\d?\s+install|python[23.]*\s+-m\s+venv|"
+    r"docker\s+(?:run|pull|build|compose)|go\s+install|cargo\s+install|"
+    r"apt(?:-get)?\s+install|brew\s+install|source\s+\S+/bin/activate)\b"
+    r"|(?:ANTHROPIC|OPENAI|LLM|GROQ|OPENROUTER|CAI)_[A-Z0-9_]*(?:API_KEY|MODEL|TYPE)?\s*=",
+    re.I,
+)
+_PLAN_BLOCK_RE = re.compile(r"\bYOUR\s+PLAN\b\s*:", re.I)
+_CHECKLIST_GLYPH_RE = re.compile("[✅❌]")  # ✅ / ❌ used as checklist bullets
+
 
 def is_defensive_hardening(entry: dict) -> bool:
     """True when the entry is a DEFENSIVE hardening / secure-deployment guide (how
@@ -208,20 +231,63 @@ def is_defensive_hardening(entry: dict) -> bool:
     return defensive >= 3 and defensive * 3 >= len(cmd_steps) * 2
 
 
+def is_meta_doc(entry: dict) -> bool:
+    """True when the entry is a meta / workflow doc — a TOOLS/ARSENAL list or a
+    "YOUR PLAN" playbook — rather than a runnable single technique. Its command
+    blocks are tool installs, config/API keys, plans and checklists, so grounding
+    it as a step dumps setup where an attack belongs. Searchable/browsable, but
+    never a step.
+
+    Conservative — a focused single technique (``canonical_keys``) is trusted, and
+    a lone install command never trips it: only a YOUR-PLAN block, an arsenal title
+    whose steps are install/checklist-dominated, or an overwhelming setup dump (a
+    strong majority across several commands) counts.
+    """
+    if (entry.get("meta") or {}).get("canonical_keys"):
+        return False  # explicit single-technique focus — trust it
+    cmds = [
+        cmd
+        for s in (entry.get("steps") or [])
+        for c in (s.get("code") or [])
+        if (cmd := (c.get("cmd") or "").strip())
+    ]
+    # a "YOUR PLAN:" block rendered as a command is an unambiguous workflow/playbook
+    if any(_PLAN_BLOCK_RE.search(c) for c in cmds):
+        return True
+    if not cmds:
+        return False  # nothing runnable to leak (a text-only page is handled by
+        #               is_broad_reference, which also flags arsenal/toolkit titles)
+    setupish = sum(
+        1
+        for c in cmds
+        if _SETUP_CMD_RE.search(c) or len(_CHECKLIST_GLYPH_RE.findall(c)) >= 2
+    )
+    frac = setupish / len(cmds)
+    # a tools ARSENAL/toolkit whose steps are mostly installs/checklists …
+    if _META_DOC_TITLE_RE.search(entry.get("title") or "") and frac >= 0.5:
+        return True
+    # … or an overwhelming setup dump even without a title marker — require several
+    # commands so a real technique that merely installs one tool never trips.
+    return len(cmds) >= 5 and frac >= 0.8
+
+
 def is_step_eligible(entry: dict) -> bool:
     """Whether a KB entry may be GROUNDED as an attack-path / chat step.
 
     Rejects worked examples (writeup/ctf), defensive hardening / secure-deployment
     guides, coarse multi-topic pages flagged at ingestion, personal/meta/log pages,
-    and — as a backstop — any very large body with no single-technique focus (an
-    un-flagged grab-bag). Everything rejected here stays fully searchable/browsable;
-    it just can't become a step, so a step is always a focused ATTACK technique
-    instead of a wall of unrelated content or a defensive config.
+    tools/arsenal & "YOUR PLAN" meta-docs, and — as a backstop — any very large body
+    with no single-technique focus (an un-flagged grab-bag). Everything rejected
+    here stays fully searchable/browsable; it just can't become a step, so a step is
+    always a focused ATTACK technique instead of a wall of unrelated content, a
+    defensive config, or a tool-install list.
     """
     if entry.get("category", "") in EXCLUDED_STEP_CATEGORIES:
         return False
     if is_defensive_hardening(entry):
         return False  # hardening / secure-deployment guide — not an attack step
+    if is_meta_doc(entry):
+        return False  # tools/arsenal list or "YOUR PLAN" playbook — not an attack step
     meta = entry.get("meta") or {}
     if _COARSE_FLAG_RE.search(meta.get("flag_reason") or ""):
         return False
@@ -248,7 +314,13 @@ def is_broad_reference(entry: dict) -> bool:
     if len(entry.get("body_md") or "") >= _BROAD_BODY_CHARS:
         return True
     title = entry.get("title") or ""
-    return bool(_GRABBAG_TITLE_RE.search(title) or _BROAD_METHODOLOGY_RE.search(title))
+    return bool(
+        _GRABBAG_TITLE_RE.search(title)
+        or _BROAD_METHODOLOGY_RE.search(title)
+        # arsenal / toolkit / master-workflow reference pages: a focused single
+        # technique always wins over these, even when they slip step-eligibility.
+        or _META_DOC_TITLE_RE.search(title)
+    )
 
 
 def _cap_command(cmd: str) -> tuple[str, bool]:

@@ -4395,7 +4395,7 @@ a.hp-card {
   gap: 12px;
   width: 100%;
   text-align: left;
-  background: rgba(17, 19, 20, 0.7);
+  background: rgba(14, 16, 17, 0.92);
   border: 1px solid var(--border-2);
   border-radius: 9px;
   padding: 11px 14px;
@@ -4407,7 +4407,7 @@ a.hp-card {
 }
 .hp-cm-node.is-ai {
   border-style: dashed;
-  background: rgba(17, 19, 20, 0.4);
+  background: rgba(14, 16, 17, 0.78);
 }
 .hp-cm-node-pip {
   flex: none;
@@ -4641,4 +4641,96 @@ a.hp-card {
   text-decoration: none;
   border-bottom: 1px solid var(--accent-line);
   padding-bottom: 1px;
+}
+
+/* --- video backdrops (decorative, always with a CSS fallback + scrim) --- */
+.hp-vbd {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.hp-vbd-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.9s ease;
+}
+.hp-vbd-video.is-ready {
+  opacity: 1;
+}
+.hp-vbd-scrim {
+  position: absolute;
+  inset: 0;
+}
+
+/* hero — ambient page background */
+.hp-cv-hero-bg {
+  position: fixed;
+  z-index: 0;
+}
+.hp-vbd.is-hero {
+  background: radial-gradient(
+      1200px 700px at 50% -8%,
+      rgba(255, 176, 58, 0.05),
+      transparent 62%
+    ),
+    #050605;
+}
+.hp-vbd.is-hero .hp-vbd-video.is-ready {
+  opacity: 0.42;
+}
+.hp-vbd.is-hero .hp-vbd-scrim {
+  background: linear-gradient(
+    180deg,
+    rgba(5, 6, 5, 0.66) 0%,
+    rgba(5, 6, 5, 0.82) 55%,
+    rgba(5, 6, 5, 0.9) 100%
+  );
+}
+
+/* map — darkened backdrop behind the attack map */
+.hp-vbd.is-map {
+  background: radial-gradient(
+      700px 420px at 50% 42%,
+      rgba(255, 176, 58, 0.07),
+      transparent 72%
+    ),
+    #060707;
+}
+.hp-vbd.is-map .hp-vbd-video.is-ready {
+  opacity: 0.32;
+}
+.hp-vbd.is-map .hp-vbd-scrim {
+  background: radial-gradient(
+    ellipse at 50% 40%,
+    rgba(6, 7, 7, 0.5),
+    rgba(6, 7, 7, 0.82) 82%
+  );
+}
+
+/* waveform — accent texture under the live-execution panel (M2.4) */
+.hp-vbd.is-waveform {
+  background: linear-gradient(0deg, rgba(255, 176, 58, 0.06), transparent 60%),
+    #050605;
+}
+.hp-vbd.is-waveform .hp-vbd-video.is-ready {
+  opacity: 0.3;
+}
+.hp-vbd.is-waveform .hp-vbd-scrim {
+  background: linear-gradient(0deg, rgba(5, 6, 5, 0.5), rgba(5, 6, 5, 0.8));
+}
+
+/* keep cockpit content above the fixed hero backdrop */
+.hp-cv {
+  position: relative;
+}
+.hp-cv-head,
+.hp-cv-map-section,
+.hp-cv-exec-section {
+  position: relative;
+  z-index: 1;
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PageShell } from "./PageShell";
 import { CockpitAttackMap } from "./CockpitAttackMap";
 import { CockpitScreen } from "./CockpitScreen";
+import { VideoBackdrop } from "./VideoBackdrop";
 import { COCKPIT_SAMPLE } from "@/lib/cockpitSample";
 import { ApiError, composeAttackPath, type AttackPath } from "@/lib/api";
 
@@ -60,6 +61,12 @@ export function CockpitView() {
   return (
     <PageShell crumbs={[{ label: "cockpit" }]}>
       <div className="hp-cv">
+        <VideoBackdrop
+          src="/video/hero-loop.mp4"
+          variant="hero"
+          className="hp-cv-hero-bg"
+        />
+
         <header className="hp-cv-head">
           <h1 className="hp-cv-title">:cockpit</h1>
           <p className="hp-cv-sub">
@@ -95,6 +102,7 @@ export function CockpitView() {
           {error && <p className="hp-cv-error">{error}</p>}
 
           <div className="hp-cv-map-frame">
+            <VideoBackdrop src="/video/cockpit-map.mp4" variant="map" />
             {isSample && (
               <span className="hp-cv-sample-ribbon" title="Composed sample — plot a target above for a live path">
                 sample path

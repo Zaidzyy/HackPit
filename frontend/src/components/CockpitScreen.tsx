@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageShell } from "./PageShell";
+import { CockpitEngagement } from "./CockpitEngagement";
 import {
   ApiError,
   execCockpitStream,
@@ -40,6 +41,9 @@ export function CockpitScreen({
   const [lines, setLines] = useState<Line[]>([]);
   const [running, setRunning] = useState(false);
   const [exitCode, setExitCode] = useState<number | null>(null);
+
+  // Bumped after each recorded run so the engagement panel re-pulls its runs.
+  const [engToken, setEngToken] = useState(0);
 
   const ctrlRef = useRef<AbortController | null>(null);
   const outRef = useRef<HTMLDivElement | null>(null);
@@ -134,7 +138,11 @@ export function CockpitScreen({
         });
       })
       .finally(() => {
-        if (!ctrl.signal.aborted) setRunning(false);
+        if (ctrl.signal.aborted) return;
+        setRunning(false);
+        // The run is now persisted against the engagement — nudge the panel to
+        // re-pull the recorded runs.
+        setEngToken((t) => t + 1);
       });
   }, [running, ready, args, command, preview, sessionId]);
 
@@ -262,6 +270,15 @@ export function CockpitScreen({
             )}
           </div>
         </section>
+
+        {/* engagement — recorded runs + report (only for a composed path) */}
+        {sessionId && (
+          <CockpitEngagement
+            key={sessionId}
+            sessionId={sessionId}
+            refreshToken={engToken}
+          />
+        )}
       </div>
   );
 

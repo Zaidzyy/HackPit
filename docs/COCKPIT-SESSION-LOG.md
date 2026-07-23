@@ -5,6 +5,110 @@ of each section. Zaid reviews this + docs/cockpit-plan.md on return.*
 
 ---
 
+## Session 2026-07-24 (unsupervised, Milestone 3 — engagement integration + polish)
+
+Goal: turn the cockpit from a live-execution demo into a **recorded engagement** — every approved
+run is captured into the existing sessions layer and rolls up into the reused report generator, with
+planning-side scope. **No new execution capability**: same allowlist (recon-only), same sandbox,
+same target-lock, same four gates. Also two UI cleanups (M2 aesthetic preserved: clean gradient, no
+video, progressive disclosure).
+
+### Pre-work this session (before M3 proper)
+- **Removed the video backdrops** from the cockpit (kept `VideoBackdrop.tsx` + the gitignored files
+  for later use) and made the cockpit **progressive**: it opens as just header + plot bar with a
+  "plot a path to begin" hint; the kill-chain map and live-execution panel stay hidden until a real
+  path composes, then reveal in (Framer Motion, skipped under reduced-motion). Removed the default
+  `cockpitSample`. (Commit `cockpit: drop video backdrops + gate map/exec behind a real composed path`.)
+
+### What was built (each committed after verify)
+- **Part A — nav cleanup**: the home top-nav showed dead KB-category spans (`:ad :web :privesc
+  :tools`). Replaced with real **product-section** links — `:library · :attack-paths · :cockpit ·
+  :engagements` — with active-route highlighting (`NAV` in `lib/data.ts`, `TopBar.tsx`,
+  `usePathname`). KB category browsing stays in the library bento (live `/categories`). **No `:kali`
+  link** (not built — adding a dead link is the thing we removed). Verified: home shows the four
+  product links, no category spans, build/lint clean.
+- **B1 — Scope/RoE in the cockpit**: mirrored the attack-path screen's optional collapsible Scope /
+  Rules-of-Engagement field into the plot bar (`CockpitView.tsx`, reusing the `hp-ap-scope` styles),
+  passed as `scope_text` to the existing `composeAttackPath`. Same behaviour as the Companion
+  (profiler biases bug classes; out-of-scope steps dropped). Verified: field expands + is wired.
+- **B2 — record every cockpit run into an engagement**: `CockpitView` now creates a session
+  (`POST /sessions`) from the composed path and threads its id into `CockpitScreen`, which passes
+  `session_id` on `/cockpit/exec`. The **executor already persisted `session_id`/`step_id` into the
+  `cockpit_runs` table** (M1.3), so a run lands as a recorded engagement step with zero change to the
+  exec path. Added the read side: `runstore.list_runs_for_session` + `GET /cockpit/runs?session_id`
+  (read-only) + a `listCockpitRuns` client. Verified at the API level: created a session, ran
+  `curl -sSI http://hackpit-lab-target:3000/` with `session_id` → exit 0, listed back with verbatim
+  HTTP-200 output attached to the session.
+- **B3 — report folds in the recorded runs + scope**: **reused** the existing report generator. The
+  `POST /sessions/{id}/report` endpoint now attaches the session's cockpit runs as `execution_runs`;
+  `report.py` renders each run's command line + captured output **VERBATIM** in the authoritative
+  (code-built, not model-written) Evidence section — same collision-proof fencing as pasted evidence
+  — and lists them in the prompt as first-class, citable evidence (`run-<id>`). The composed path's
+  `profile.out_of_scope` is surfaced in the Scope section. **Additive only**: Companion sessions with
+  no runs / no scope render exactly as before (verified — the new blocks are gated on presence).
+  Verified with **Ollama (`qwen3:8b`)**: generated report carried the `curl` command, the verbatim
+  `HTTP/1.1 200 OK` output, the `run-…` citation, the methodology phase, and the Evidence section.
+- **B4 — engagement UI in the cockpit** (`CockpitEngagement.tsx`): a panel under the exec surface
+  (shown once a path composes) listing the runs recorded against the engagement — each with its
+  command line, exit code, and captured output — plus a **generate report** button that reuses
+  `POST /sessions/{id}/report` and renders the Markdown in the M2 amber/terminal aesthetic. Panel is
+  keyed by `sessionId` (fresh per engagement) and re-pulls its runs after each run via a token — no
+  synchronous `setState` in an effect, so **no new lint debt** was introduced.
+- **B5 — end-to-end verified (Ollama), with screenshots**: on `http://localhost:3000/cockpit`, with
+  scope pasted ("out of scope: /admin, billing.internal") and goal "web app bug bounty on
+  hackpit-lab-target": **plot** → real path composed (~60s, `qwen3:8b`) and an engagement session
+  created; **APPROVE & RUN** `nmap -sT -Pn -p 3000,80,22 hackpit-lab-target` → streamed live
+  (**3000/tcp open**, exit 0) and appeared instantly in the engagement panel as a recorded step with
+  its full output; **generate report** → rendered a report whose Scope & Target section explicitly
+  **excluded `/admin` and `billing.internal`**, Methodology listed the composed path's phases, and the
+  Evidence carried the `nmap` command + verbatim scan output. Screenshots captured at each stage.
+
+### Verification summary (how)
+- Frontend: `npm run build` clean and `npm run lint` shows **no new errors in any touched file** at
+  every increment (the 10 pre-existing `react-hooks/set-state-in-effect` errors are unchanged — see
+  "Deliberately skipped").
+- Backend: `test_cockpit.py` (allowlist / target-lock / gate-order) **all pass** — the execution
+  security model is untouched; all backend modules import clean.
+- Deterministic report check (no LLM variance): `build_prompt` + `build_evidence_section` on a session
+  with a run + out-of-scope → command line, verbatim output, exit code, target, and out-of-scope all
+  present; a session with neither renders byte-identically to before.
+- Full UI e2e (above) exercised over the real streaming endpoint + real Ollama compose/report.
+
+### llm_config.json + running stack (final state)
+- Per gate 3, all compose/report verification used **local Ollama (`qwen3:8b`)** — switched via the
+  app's own `POST /llm-config`. **Restored to its prior value `{provider: claude-agent-sdk, model:
+  opus}`** at the end (confirmed live + on disk). It stays gitignored.
+- Backend runs `uvicorn main:app --reload` (PID observed 22128) — a **reloading** server, so every
+  backend `.py` edit hot-reloaded (confirmed: the new `/cockpit/runs` endpoint went live, and reports
+  picked up the new code). `llm.load_config()` is read **per request**, so the restored config is
+  already in effect with no manual restart needed. **Stack left running**: Docker isolated stack
+  (`hackpit-kali-sandbox` + `hackpit-lab-target`, ready+isolated), backend `:8000`, frontend dev
+  `:3000`.
+- Cleaned up the throwaway B2 API-test session (deleted). The e2e demo session (nmap run + report) is
+  left in the local gitignored `sessions.db` as demo data.
+
+### Deliberately skipped (Part C — optional, low-risk only)
+- **Pre-existing lint debt NOT fixed.** The 10 `react-hooks/set-state-in-effect` errors live in
+  `useApi.ts`, `CommandPalette.tsx`, `EngagementAssistant.tsx`, `Intro.tsx`, `useReducedMotion.ts`,
+  and others. `useApi` is used app-wide; moving its `setState` out of the effect genuinely risks
+  behaviour change, and there is **no test coverage** to catch a regression. Per the gate ("if any
+  fix is non-trivial or risks behaviour change, SKIP and log — do not guess"), left untouched. My own
+  new engagement panel was written to avoid adding to this debt.
+
+### Open questions for Zaid
+- **Mapping runs to path steps?** A cockpit run is recorded against the *engagement* (session) but not
+  tied to a specific composed **path step** (`step_id` left null — the allowlisted recon commands
+  don't cleanly map onto the KB-driven writeup steps). The report treats each run as its own
+  "SANDBOX EXECUTION" evidence block. If you'd rather each run attach to a chosen path step
+  (check it off + fill its evidence), that's a small follow-up — flagging the design choice.
+- **Report system-prompt is shared** between the Companion and the cockpit. I added one additive
+  clause (sandbox runs are authoritative evidence) + one Scope/out-of-scope line; both no-op for
+  Companion sessions. Confirm you're happy with the shared prompt vs a cockpit-specific variant.
+- Roadmap numbering: the Phase-0 plan's roadmap and these build sessions use different M-numbers
+  (noted in `cockpit-plan.md`). Worth reconciling if it bothers you.
+
+---
+
 ## Session 2026-07-24 (unsupervised, Milestone 2 — cinematic UI)
 
 Goal: build the command-center **face** of the Cockpit — visualize existing data (composed

@@ -1,7 +1,14 @@
 # HackPit Cockpit — Scope & Architecture Plan
 
 *Phase 0 deliverable. Owner: Zaid · Drafted by: Claude (unsupervised session, 2026-07-23).*
-*Status: **DRAFT for Zaid's review.** No engine/execution code exists yet. This doc gates the build.*
+*Status (updated 2026-07-24): Phase 0 plan **shipped**. Build progress — **M1 (live human-approved
+execution vs the isolated lab) COMPLETE**; **M2 (cinematic command-center UI) COMPLETE**; **M3
+(engagement integration + polish) COMPLETE** — cockpit runs are recorded into the existing engagement
+sessions layer and roll up into the reused report generator (scope + composed path + recorded
+commands/outputs). See `docs/COCKPIT-SESSION-LOG.md` for the per-increment build + verification log.
+The roadmap table below is the original Phase-0 numbering (M2 there = "guided execution over a path");
+the build sessions numbered differently (M2 = UI, M3 = engagement integration). No autonomy has been
+built; execution stays allowlisted-recon, lab-only, human-approved (the four gates are unchanged).*
 
 > The **Companion** is feature-complete (search → attack-path → engagement → report over a 1480-entry KB).
 > The **Cockpit** is the flagship the name always pointed to: an AI that *executes* a pentest live against

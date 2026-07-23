@@ -2,8 +2,14 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { motion } from "framer-motion";
 import { CopyButton } from "./CopyButton";
+import { useReducedMotion } from "@/lib/useReducedMotion";
 import type { AttackPath, AttackPhase, AttackStep } from "@/lib/api";
+
+/** Seconds between consecutive node/station ignitions (the "watch it think" beat). */
+const IGNITE_STEP = 0.11;
+const IGNITE_DUR = 0.42;
 
 /** The five canonical phases, in kill-chain order — the route's fixed stations. */
 const CANON: { key: string; label: string }[] = [
@@ -55,20 +61,16 @@ function isGrounded(step: AttackStep): boolean {
  * kill-chain route. Five phase stations run down a spine; each step is a node
  * that sits on the route (solid amber = grounded in the KB, dashed/dim =
  * ai_suggested / unverified). on_success / on_blocked hints render as branch
- * forks. Clicking a node opens its detail. `litCount` (used by the ignite
- * animation in M2.2) caps how many nodes are lit; undefined = all lit.
+ * forks. Clicking a node opens its detail. On mount the nodes ignite in
+ * kill-chain order (staggered by global index); under prefers-reduced-motion the
+ * final lit state renders immediately.
  */
-export function CockpitAttackMap({
-  path,
-  litCount,
-}: {
-  path: AttackPath;
-  litCount?: number;
-}) {
+export function CockpitAttackMap({ path }: { path: AttackPath }) {
   const stations = useMemo(() => toStations(path), [path]);
   const [selected, setSelected] = useState<{ step: AttackStep; phase: string } | null>(
     null
   );
+  const reduced = useReducedMotion();
 
   const profile = path.profile;
 
@@ -107,7 +109,16 @@ export function CockpitAttackMap({
               <span className="hp-cm-num">
                 {String(st.index).padStart(2, "0")}
               </span>
-              <span className="hp-cm-dot" />
+              <motion.span
+                className="hp-cm-dot"
+                initial={reduced ? false : { opacity: 0, scale: 0.35 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{
+                  duration: reduced ? 0 : IGNITE_DUR,
+                  delay: reduced ? 0 : st.startIndex * IGNITE_STEP,
+                  ease: "easeOut",
+                }}
+              />
             </div>
 
             <div className="hp-cm-phase">
@@ -122,17 +133,22 @@ export function CockpitAttackMap({
                 <div className="hp-cm-nodes">
                   {st.steps.map((step, localIdx) => {
                     const idx = st.startIndex + localIdx;
-                    const lit = litCount === undefined || idx < litCount;
                     const grounded = isGrounded(step);
                     return (
-                      <button
+                      <motion.button
                         key={step.id}
                         type="button"
-                        className={`hp-cm-node${grounded ? " is-grounded" : " is-ai"}${
-                          lit ? " is-lit" : ""
-                        }`}
+                        className={`hp-cm-node${grounded ? " is-grounded" : " is-ai"}`}
                         onClick={() => setSelected({ step, phase: st.label })}
                         aria-label={`${step.title} — ${grounded ? "grounded" : "unverified"} step`}
+                        initial={reduced ? false : { opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{
+                          duration: reduced ? 0 : IGNITE_DUR,
+                          delay: reduced ? 0 : idx * IGNITE_STEP,
+                          ease: "easeOut",
+                        }}
+                        whileHover={{ x: 3 }}
                       >
                         <span className="hp-cm-node-pip" aria-hidden />
                         <span className="hp-cm-node-body">
@@ -150,7 +166,7 @@ export function CockpitAttackMap({
                             {step.on_blocked && <span className="hp-cm-fork is-blocked">↳ blocked</span>}
                           </span>
                         )}
-                      </button>
+                      </motion.button>
                     );
                   })}
                 </div>

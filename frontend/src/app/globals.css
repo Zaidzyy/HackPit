@@ -4400,11 +4400,10 @@ a.hp-card {
   border-radius: 9px;
   padding: 11px 14px;
   cursor: pointer;
-  transition: border-color 0.15s ease, transform 0.12s ease, background 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 .hp-cm-node:hover {
   border-color: var(--accent-line);
-  transform: translateX(2px);
 }
 .hp-cm-node.is-ai {
   border-style: dashed;
@@ -4423,12 +4422,6 @@ a.hp-card {
 .is-ai .hp-cm-node-pip {
   background: transparent;
   border: 1.5px dashed var(--dim);
-}
-.hp-cm-node:not(.is-lit) {
-  opacity: 0.34;
-}
-.hp-cm-node:not(.is-lit) .hp-cm-node-pip {
-  box-shadow: none;
 }
 .hp-cm-node-body {
   display: flex;

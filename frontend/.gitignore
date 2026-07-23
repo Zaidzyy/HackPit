@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Cockpit video backdrops (large Higgsfield loops, ~22MB). Local assets — the UI
+# falls back to CSS gradients when absent, so the repo stays code-only. Zaid
+# decides whether to commit these or move them to Git LFS / a CDN.
+/public/video/*.mp4
+

@@ -5,7 +5,12 @@ import { motion, useReducedMotion } from "framer-motion";
 import { PageShell } from "./PageShell";
 import { CockpitAttackMap } from "./CockpitAttackMap";
 import { CockpitScreen } from "./CockpitScreen";
-import { ApiError, composeAttackPath, type AttackPath } from "@/lib/api";
+import {
+  ApiError,
+  composeAttackPath,
+  createSession,
+  type AttackPath,
+} from "@/lib/api";
 
 const PLACEHOLDER =
   "Plot a target — e.g. “web app bug bounty”, “HTB Windows AD box”, “Linux host”";
@@ -21,6 +26,7 @@ export function CockpitView() {
   const [scopeText, setScopeText] = useState("");
   const [scopeOpen, setScopeOpen] = useState(false);
   const [path, setPath] = useState<AttackPath | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reduced = useReducedMotion();
@@ -46,6 +52,17 @@ export function CockpitView() {
           if (ctrl.signal.aborted) return;
           setPath(p);
           setLoading(false);
+          // Persist the composed path as an engagement so every cockpit run
+          // below can be recorded against it. Non-fatal: if this fails the map
+          // still shows; execution just won't be recorded to a session.
+          setSessionId(null);
+          createSession(p, ctrl.signal)
+            .then((s) => {
+              if (!ctrl.signal.aborted) setSessionId(s.id);
+            })
+            .catch(() => {
+              /* recording unavailable — map + exec still work */
+            });
         })
         .catch((err: unknown) => {
           if (ctrl.signal.aborted) return;
@@ -159,7 +176,7 @@ export function CockpitView() {
                 : { duration: 0.5, ease: "easeOut", delay: 0.12 }
             }
           >
-            <CockpitScreen embedded />
+            <CockpitScreen embedded sessionId={sessionId} />
           </motion.section>
         )}
       </div>

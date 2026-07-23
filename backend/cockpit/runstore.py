@@ -88,6 +88,21 @@ def get_run(run_id: str) -> RunRecord | None:
     return _row_to_record(row)
 
 
+def list_runs_for_session(session_id: str) -> list[RunRecord]:
+    """All recorded runs attached to an engagement, oldest-first (execution order).
+
+    Read-only view over cockpit_runs — this is how a cockpit run surfaces as a
+    recorded engagement step (in the UI and in the report).
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM cockpit_runs WHERE session_id = ? "
+            "ORDER BY started_at ASC",
+            (session_id,),
+        ).fetchall()
+    return [_row_to_record(r) for r in rows]
+
+
 def _row_to_record(row: sqlite3.Row) -> RunRecord:
     d: dict[str, Any] = dict(row)
     return RunRecord(

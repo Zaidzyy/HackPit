@@ -629,6 +629,14 @@ export const getCockpitStatus = (signal?: AbortSignal) =>
 export const getCockpitRun = (runId: string, signal?: AbortSignal) =>
   getJSON<CockpitRun>(`/cockpit/runs/${encodeURIComponent(runId)}`, signal);
 
+/** Every recorded run attached to an engagement, in execution order. This is
+ *  how a cockpit run surfaces as a recorded engagement step. */
+export const listCockpitRuns = (sessionId: string, signal?: AbortSignal) =>
+  getJSON<CockpitRun[]>(
+    `/cockpit/runs?session_id=${encodeURIComponent(sessionId)}`,
+    signal
+  );
+
 /**
  * Run one approved command and stream its output events.
  *

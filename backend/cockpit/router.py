@@ -13,11 +13,11 @@ from __future__ import annotations
 import json
 from typing import Any, Iterator
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from . import allowlist, config, executor, runstore
-from .models import AllowlistItem, AllowlistResponse, ExecRequest
+from .models import AllowlistItem, AllowlistResponse, ExecRequest, RunRecord
 from .sandbox import SandboxError, assert_isolation_proven, is_sandbox_up
 
 router = APIRouter(prefix="/cockpit", tags=["cockpit"])
@@ -90,6 +90,16 @@ def exec_command(request: ExecRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/runs", response_model=list[RunRecord])
+def list_runs(session_id: str = Query(..., description="Engagement to list runs for.")):
+    """Every recorded run attached to an engagement, in execution order.
+
+    Read-only: this is how the cockpit surfaces a session's runs as recorded
+    engagement steps (UI list + report input). No execution happens here.
+    """
+    return runstore.list_runs_for_session(session_id)
 
 
 @router.get("/runs/{run_id}")

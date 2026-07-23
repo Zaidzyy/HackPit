@@ -29,7 +29,10 @@ type Line = { kind: "stdout" | "stderr" | "meta" | "err"; text: string };
  * isolated sandbox. Every command is gated server-side (allowlist + lab-only
  * target + explicit approval + isolation); the UI just makes the approval real.
  */
-export function CockpitScreen({ embedded = false }: { embedded?: boolean } = {}) {
+export function CockpitScreen({
+  embedded = false,
+  sessionId = null,
+}: { embedded?: boolean; sessionId?: string | null } = {}) {
   const [allow, setAllow] = useState<CockpitAllowlist | null>(null);
   const [status, setStatus] = useState<CockpitStatus | null>(null);
   const [command, setCommand] = useState("nmap");
@@ -97,7 +100,7 @@ export function CockpitScreen({ embedded = false }: { embedded?: boolean } = {})
     const push = (line: Line) => setLines((prev) => [...prev, line]);
 
     execCockpitStream(
-      { command, args, approved: true },
+      { command, args, approved: true, session_id: sessionId },
       (ev: ExecEvent) => {
         switch (ev.type) {
           case "start":
@@ -133,7 +136,7 @@ export function CockpitScreen({ embedded = false }: { embedded?: boolean } = {})
       .finally(() => {
         if (!ctrl.signal.aborted) setRunning(false);
       });
-  }, [running, ready, args, command, preview]);
+  }, [running, ready, args, command, preview, sessionId]);
 
   const inner = (
       <div className="hp-ck">

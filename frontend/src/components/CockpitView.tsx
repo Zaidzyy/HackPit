@@ -1,28 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { motion, useReducedMotion } from "framer-motion";
 import { PageShell } from "./PageShell";
 import { CockpitAttackMap } from "./CockpitAttackMap";
 import { CockpitScreen } from "./CockpitScreen";
-import { VideoBackdrop } from "./VideoBackdrop";
-import { COCKPIT_SAMPLE } from "@/lib/cockpitSample";
 import { ApiError, composeAttackPath, type AttackPath } from "@/lib/api";
 
 const PLACEHOLDER =
   "Plot a target — e.g. “web app bug bounty”, “HTB Windows AD box”, “Linux host”";
 
 /**
- * The Cockpit command-center view: a composed attack-path rendered as a lit
- * kill-chain map (the "watch it think" centerpiece), above the M1 live-execution
- * panel (approve → sandbox → stream). Until a path is composed, a labelled sample
- * path is shown so the map is never empty.
+ * The Cockpit command-center view. It opens as just a header + plot bar: nothing
+ * else is shown until you compose a path. Once a real attack-path composes, the
+ * kill-chain map (the "watch it think" centerpiece) and the M1 live-execution
+ * panel (approve → sandbox → stream) reveal in with the composed data.
  */
 export function CockpitView() {
   const [goal, setGoal] = useState("");
-  const [path, setPath] = useState<AttackPath>(COCKPIT_SAMPLE);
-  const [isSample, setIsSample] = useState(true);
+  const [path, setPath] = useState<AttackPath | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const reduced = useReducedMotion();
 
   const ctrlRef = useRef<AbortController | null>(null);
   useEffect(() => () => ctrlRef.current?.abort(), []);
@@ -44,7 +43,6 @@ export function CockpitView() {
         .then((p) => {
           if (ctrl.signal.aborted) return;
           setPath(p);
-          setIsSample(false);
           setLoading(false);
         })
         .catch((err: unknown) => {
@@ -58,15 +56,18 @@ export function CockpitView() {
     [goal, loading]
   );
 
+  // Sections reveal in once a path exists; skip the motion under reduced-motion.
+  const reveal = reduced
+    ? {}
+    : {
+        initial: { opacity: 0, y: 14 },
+        animate: { opacity: 1, y: 0 },
+        transition: { duration: 0.5, ease: "easeOut" as const },
+      };
+
   return (
     <PageShell crumbs={[{ label: "cockpit" }]}>
       <div className="hp-cv">
-        <VideoBackdrop
-          src="/video/hero-loop.mp4"
-          variant="hero"
-          className="hp-cv-hero-bg"
-        />
-
         <header className="hp-cv-head">
           <h1 className="hp-cv-title">:cockpit</h1>
           <p className="hp-cv-sub">
@@ -101,20 +102,30 @@ export function CockpitView() {
 
           {error && <p className="hp-cv-error">{error}</p>}
 
-          <div className="hp-cv-map-frame">
-            <VideoBackdrop src="/video/cockpit-map.mp4" variant="map" />
-            {isSample && (
-              <span className="hp-cv-sample-ribbon" title="Composed sample — plot a target above for a live path">
-                sample path
-              </span>
-            )}
-            <CockpitAttackMap path={path} />
-          </div>
+          {!path && !error && (
+            <p className="hp-cv-hint">plot a path to begin</p>
+          )}
+
+          {path && (
+            <motion.div className="hp-cv-map-frame" {...reveal}>
+              <CockpitAttackMap path={path} />
+            </motion.div>
+          )}
         </section>
 
-        <section className="hp-cv-exec-section">
-          <CockpitScreen embedded />
-        </section>
+        {path && (
+          <motion.section
+            className="hp-cv-exec-section"
+            {...reveal}
+            transition={
+              reduced
+                ? undefined
+                : { duration: 0.5, ease: "easeOut", delay: 0.12 }
+            }
+          >
+            <CockpitScreen embedded />
+          </motion.section>
+        )}
       </div>
     </PageShell>
   );

@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageShell } from "./PageShell";
-import { VideoBackdrop } from "./VideoBackdrop";
 import {
   ApiError,
   execCockpitStream,
@@ -138,13 +137,6 @@ export function CockpitScreen({ embedded = false }: { embedded?: boolean } = {})
 
   const inner = (
       <div className="hp-ck">
-        {embedded && (
-          <VideoBackdrop
-            src="/video/waveform.mp4"
-            variant="waveform"
-            className="hp-ck-wave"
-          />
-        )}
         <header className="hp-ck-head">
           {embedded ? (
             <h2 className="hp-ck-title hp-ck-title-sm">Live execution</h2>

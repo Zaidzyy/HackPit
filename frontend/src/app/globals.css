@@ -4201,6 +4201,14 @@ a.hp-card {
   font-size: 12.5px;
   margin: 0 0 14px;
 }
+.hp-cv-hint {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 12.5px;
+  letter-spacing: 0.3px;
+  color: var(--dim);
+  opacity: 0.75;
+  margin: 6px 2px 0;
+}
 .hp-cv-map-frame {
   position: relative;
   border: 1px solid var(--border);
@@ -4738,9 +4746,6 @@ a.hp-card {
 /* --- M2.4: cinematic live-execution panel --- */
 .hp-ck {
   position: relative;
-}
-.hp-ck-wave {
-  border-radius: 12px;
 }
 .hp-ck-head,
 .hp-ck-banner,

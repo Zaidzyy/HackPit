@@ -8,7 +8,8 @@ import type { Stats } from "./api";
 export type NavItem = {
   key: string;
   label: string;
-  active?: boolean;
+  /** Route this product section links to. */
+  href: string;
 };
 
 export type AccentSwatch = {
@@ -16,12 +17,14 @@ export type AccentSwatch = {
   title: string;
 };
 
+// Top-nav = PRODUCT SECTIONS, not KB categories. Category browsing (ad/web/
+// privesc/tools/…) lives inside the library, driven by the live /categories
+// counts — it does not belong in the top bar.
 export const NAV: NavItem[] = [
-  { key: "recon", label: ":recon", active: true },
-  { key: "ad", label: ":ad" },
-  { key: "web", label: ":web" },
-  { key: "privesc", label: ":privesc" },
-  { key: "tools", label: ":tools" },
+  { key: "library", label: ":library", href: "/" },
+  { key: "attack-paths", label: ":attack-paths", href: "/attack-path" },
+  { key: "cockpit", label: ":cockpit", href: "/cockpit" },
+  { key: "engagements", label: ":engagements", href: "/engagements" },
 ];
 
 export const ACCENTS: AccentSwatch[] = [

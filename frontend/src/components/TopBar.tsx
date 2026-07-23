@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { Wordmark } from "./Wordmark";
 import { ACCENTS, ENTRY_COUNT, NAV } from "@/lib/data";
 import { openPalette } from "@/lib/paletteBus";
@@ -29,23 +30,29 @@ export function TopBar() {
   // the affordance never flashes an obviously-stale hardcoded number.
   const stats = useApi(getStats, []);
   const entryCount = stats.data?.total_entries ?? ENTRY_COUNT;
+  const pathname = usePathname();
 
   return (
     <div className="hp-topbar">
       <Wordmark />
 
       <nav className="hp-nav">
-        {NAV.map((item) => (
-          <span key={item.key} className={item.active ? "hp-on" : undefined}>
-            {item.label}
-          </span>
-        ))}
-        <Link href="/engagements" className="hp-nav-eng">
-          :engagements
-        </Link>
-        <Link href="/cockpit" className="hp-nav-eng">
-          :cockpit
-        </Link>
+        {NAV.map((item) => {
+          const active =
+            item.href === "/"
+              ? pathname === "/"
+              : pathname === item.href || pathname.startsWith(`${item.href}/`);
+          return (
+            <Link
+              key={item.key}
+              href={item.href}
+              className={active ? "hp-on" : undefined}
+              aria-current={active ? "page" : undefined}
+            >
+              {item.label}
+            </Link>
+          );
+        })}
       </nav>
 
       <button

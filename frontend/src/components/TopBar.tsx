@@ -43,6 +43,9 @@ export function TopBar() {
         <Link href="/engagements" className="hp-nav-eng">
           :engagements
         </Link>
+        <Link href="/cockpit" className="hp-nav-eng">
+          :cockpit
+        </Link>
       </nav>
 
       <button

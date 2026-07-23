@@ -565,3 +565,129 @@ export const sendChat = (id: string, message: string, signal?: AbortSignal) =>
     { message },
     signal
   );
+
+// ---- Cockpit (live, human-approved execution against the isolated lab) ---- //
+
+export type CockpitCommand = {
+  name: string;
+  description: string;
+  allowed_flags: string[];
+};
+
+export type CockpitAllowlist = {
+  commands: CockpitCommand[];
+  lab_target: string;
+};
+
+export type CockpitStatus = {
+  sandbox: string;
+  lab_target: string;
+  up: boolean;
+  isolated: boolean;
+  ready: boolean;
+  detail: string;
+};
+
+export type CockpitRun = {
+  run_id: string;
+  command: string;
+  args: string[];
+  target: string;
+  approved: boolean;
+  exit_code: number | null;
+  stdout: string;
+  stderr: string;
+  started_at: string;
+  finished_at: string | null;
+  session_id: string | null;
+  step_id: string | null;
+};
+
+/** One streamed execution event (SSE `data:` payload from POST /cockpit/exec). */
+export type ExecEvent =
+  | { type: "start"; run_id: string; command: string; args: string[]; target: string; started_at: string }
+  | { type: "stdout"; line: string }
+  | { type: "stderr"; line: string }
+  | { type: "exit"; run_id: string; code: number | null; finished_at: string }
+  | { type: "rejected"; gate: string; reason: string }
+  | { type: "error"; reason: string };
+
+export type ExecPayload = {
+  command: string;
+  args: string[];
+  approved: boolean;
+  session_id?: string | null;
+  step_id?: string | null;
+};
+
+export const getCockpitAllowlist = (signal?: AbortSignal) =>
+  getJSON<CockpitAllowlist>("/cockpit/allowlist", signal);
+
+export const getCockpitStatus = (signal?: AbortSignal) =>
+  getJSON<CockpitStatus>("/cockpit/status", signal);
+
+export const getCockpitRun = (runId: string, signal?: AbortSignal) =>
+  getJSON<CockpitRun>(`/cockpit/runs/${encodeURIComponent(runId)}`, signal);
+
+/**
+ * Run one approved command and stream its output events.
+ *
+ * A safety-gate failure comes back as HTTP 403 (nothing ran) — surfaced as an
+ * ApiError whose message names the gate + reason. Otherwise each SSE `data:`
+ * event is parsed and handed to `onEvent` as it arrives; the promise resolves
+ * when the stream ends.
+ */
+export async function execCockpitStream(
+  payload: ExecPayload,
+  onEvent: (ev: ExecEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/cockpit/exec`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify(payload),
+      signal,
+    });
+  } catch {
+    throw new ApiError(0, `Cannot reach the API at ${API_URL}. Is it running?`);
+  }
+
+  if (!res.ok || !res.body) {
+    // 403 gate rejection carries { detail: { gate, reason } }.
+    let msg = `Request failed (${res.status}).`;
+    try {
+      const body = (await res.json()) as { detail?: { gate?: string; reason?: string } | string };
+      if (body?.detail && typeof body.detail === "object") {
+        msg = `[${body.detail.gate}] ${body.detail.reason}`;
+      } else if (typeof body?.detail === "string") {
+        msg = body.detail;
+      }
+    } catch {
+      /* keep fallback */
+    }
+    throw new ApiError(res.status, msg);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let sep: number;
+    while ((sep = buf.indexOf("\n\n")) >= 0) {
+      const frame = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      const dataLine = frame.split("\n").find((l) => l.startsWith("data:"));
+      if (!dataLine) continue;
+      try {
+        onEvent(JSON.parse(dataLine.slice(5).trim()) as ExecEvent);
+      } catch {
+        /* ignore a malformed frame */
+      }
+    }
+  }
+}

@@ -3905,3 +3905,212 @@ a.hp-card {
   text-transform: uppercase;
   color: #f0a24a;
 }
+
+/* ----------------------------------------------------------------------- *
+ *  Cockpit (M1) — human-approved execution surface
+ * ----------------------------------------------------------------------- */
+.hp-ck {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 8px 0 64px;
+}
+.hp-ck-head {
+  margin-bottom: 18px;
+}
+.hp-ck-title {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: clamp(26px, 4vw, 38px);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--white);
+  margin: 0 0 8px;
+}
+.hp-ck-sub {
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1.5;
+  max-width: 620px;
+  margin: 0;
+}
+
+.hp-ck-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-2);
+  background: var(--panel);
+  margin-bottom: 22px;
+  color: var(--white);
+}
+.hp-ck-banner code {
+  font-family: var(--font-jetbrains-mono), monospace;
+  color: var(--dim);
+  font-size: 11.5px;
+}
+.hp-ck-banner b {
+  color: var(--accent);
+  font-weight: 500;
+}
+.hp-ck-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.hp-ck-ok {
+  border-color: rgba(74, 222, 128, 0.35);
+}
+.hp-ck-ok .hp-ck-dot {
+  background: #4ade80;
+  box-shadow: 0 0 10px #4ade80;
+}
+.hp-ck-warn {
+  border-color: var(--accent-line);
+}
+.hp-ck-warn .hp-ck-dot {
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent);
+}
+
+.hp-ck-builder {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 22px;
+}
+.hp-ck-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.hp-ck-field > span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--dim);
+}
+.hp-ck-field select,
+.hp-ck-field input {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 13.5px;
+  color: var(--white);
+  background: #0a0b0b;
+  border: 1px solid var(--border-2);
+  border-radius: 7px;
+  padding: 9px 11px;
+  outline: none;
+}
+.hp-ck-field select:focus,
+.hp-ck-field input:focus {
+  border-color: var(--accent-line);
+}
+.hp-ck-args input {
+  width: 100%;
+}
+.hp-ck-run {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.hp-ck-preview {
+  flex: 1 1 260px;
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 13px;
+  color: var(--accent);
+  background: #040505;
+  border: 1px solid var(--border-2);
+  border-radius: 7px;
+  padding: 9px 11px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.hp-ck-approve {
+  flex: none;
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 12.5px;
+  letter-spacing: 1px;
+  font-weight: 600;
+  color: #060707;
+  background: var(--accent);
+  border: none;
+  border-radius: 7px;
+  padding: 11px 20px;
+  cursor: pointer;
+  transition: filter 0.15s ease, opacity 0.15s ease;
+}
+.hp-ck-approve:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.hp-ck-approve:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.hp-ck-note {
+  margin: 14px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+.hp-ck-note b {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.hp-ck-out-wrap {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.hp-ck-out-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  background: rgba(22, 25, 26, 0.6);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--dim);
+}
+.hp-ck-exit0 {
+  color: #4ade80;
+}
+.hp-ck-exitn {
+  color: #f0684a;
+}
+.hp-ck-out {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  background: #040505;
+  padding: 14px;
+  max-height: 420px;
+  overflow: auto;
+}
+.hp-ck-empty {
+  color: var(--dim);
+  font-style: italic;
+}
+.hp-ck-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.hp-ck-stdout {
+  color: #c9d2cb;
+}
+.hp-ck-stderr {
+  color: #f0a24a;
+}
+.hp-ck-meta {
+  color: var(--accent);
+}
+.hp-ck-err {
+  color: #f0684a;
+}

@@ -74,6 +74,21 @@ of each section. Zaid reviews this + docs/cockpit-plan.md on return.*
     live, exit 0, persisted with `step_id=recon-1`.
 - `test_cockpit.py` updated (M1.1's "refuses until wired" replaced by gate-order tests) — all green.
 
+### M1.4 — Minimal cockpit UI ✅ (build + lint clean)
+- `src/lib/api.ts`: cockpit types + client — `getCockpitAllowlist`, `getCockpitStatus`,
+  `getCockpitRun`, and `execCockpitStream()` (a fetch-based SSE reader that parses `data:`
+  frames and calls back per event; a 403 gate rejection surfaces as an ApiError naming the gate).
+- `src/components/CockpitScreen.tsx`: readiness/isolation banner (from `/cockpit/status`),
+  command builder (allowlist dropdown + editable args prefilled per command, lab target shown),
+  an **APPROVE & RUN** button (the human control point — sends `approved: true`), and a live
+  terminal output panel that streams stdout/stderr and shows the exit code / rejection reason.
+- `src/app/cockpit/page.tsx` (route) + `:cockpit` nav link in `TopBar.tsx` + `hp-ck-*` styles in
+  `globals.css` (matches the amber cinematic theme).
+- Verified: `eslint` clean; `tsc --noEmit` clean; `next build` succeeds and emits the `/cockpit`
+  route (○ static). NOTE: the first `next build` crashed the TS-check worker with a Windows-native
+  exit code (3221225794) — a Turbopack/Windows flake, not a code issue; `tsc` passed directly and
+  the build succeeded on retry.
+
 ### Open questions for Zaid
 See docs/cockpit-plan.md §"Open questions for Zaid" (sandbox choice, lab target, allowlist scope,
 frontier model/key, Docker daemon start, exec transport). Note: I started Docker Desktop myself and

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageShell } from "./PageShell";
+import { VideoBackdrop } from "./VideoBackdrop";
 import {
   ApiError,
   execCockpitStream,
@@ -137,6 +138,13 @@ export function CockpitScreen({ embedded = false }: { embedded?: boolean } = {})
 
   const inner = (
       <div className="hp-ck">
+        {embedded && (
+          <VideoBackdrop
+            src="/video/waveform.mp4"
+            variant="waveform"
+            className="hp-ck-wave"
+          />
+        )}
         <header className="hp-ck-head">
           {embedded ? (
             <h2 className="hp-ck-title hp-ck-title-sm">Live execution</h2>
@@ -224,7 +232,14 @@ export function CockpitScreen({ embedded = false }: { embedded?: boolean } = {})
         {/* live output */}
         <section className="hp-ck-out-wrap">
           <div className="hp-ck-out-bar">
-            <span>output</span>
+            <span className="hp-ck-out-lights" aria-hidden>
+              <i />
+              <i />
+              <i />
+            </span>
+            <span className="hp-ck-out-title">
+              {running ? "sandbox · streaming" : "sandbox · terminal"}
+            </span>
             {exitCode !== null && (
               <span className={exitCode === 0 ? "hp-ck-exit0" : "hp-ck-exitn"}>
                 exit {exitCode}
@@ -237,11 +252,18 @@ export function CockpitScreen({ embedded = false }: { embedded?: boolean } = {})
                 approve a command to see live output…
               </span>
             ) : (
-              lines.map((l, i) => (
+              <>
+                {lines.map((l, i) => (
                 <div key={i} className={`hp-ck-line hp-ck-${l.kind}`}>
                   {l.text || " "}
                 </div>
-              ))
+                ))}
+                {running && (
+                  <div className="hp-ck-line hp-ck-cursor" aria-hidden>
+                    ▋
+                  </div>
+                )}
+              </>
             )}
           </div>
         </section>

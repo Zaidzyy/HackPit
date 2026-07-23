@@ -4734,3 +4734,60 @@ a.hp-card {
   position: relative;
   z-index: 1;
 }
+
+/* --- M2.4: cinematic live-execution panel --- */
+.hp-ck {
+  position: relative;
+}
+.hp-ck-wave {
+  border-radius: 12px;
+}
+.hp-ck-head,
+.hp-ck-banner,
+.hp-ck-builder,
+.hp-ck-out-wrap {
+  position: relative;
+  z-index: 1;
+}
+/* lit isolated / target-locked status */
+.hp-ck-banner.hp-ck-ok {
+  box-shadow: 0 0 22px rgba(74, 222, 128, 0.06),
+    inset 0 0 0 1px rgba(74, 222, 128, 0.08);
+}
+/* terminal chrome */
+.hp-ck-out-lights {
+  display: inline-flex;
+  gap: 5px;
+  margin-right: 2px;
+}
+.hp-ck-out-lights i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border-2);
+}
+.hp-ck-out-lights i:first-child {
+  background: var(--accent);
+  box-shadow: 0 0 7px var(--accent);
+}
+.hp-ck-out-title {
+  flex: 1;
+  color: var(--dim);
+}
+.hp-ck-out-bar {
+  gap: 10px;
+}
+.hp-ck-cursor {
+  color: var(--accent);
+  animation: hp-ck-blink 1.05s steps(2, start) infinite;
+}
+@keyframes hp-ck-blink {
+  to {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hp-ck-cursor {
+    animation: none;
+  }
+}

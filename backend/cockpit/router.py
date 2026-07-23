@@ -1,17 +1,24 @@
-"""FastAPI routes for the Cockpit — defined here, mounted into main.py in M1.3.
+"""FastAPI routes for the Cockpit — mounted into main.py (M1.3).
 
-M1.1 status: the router exists and imports cleanly, but is intentionally NOT included
-in the app yet (main.py has no `include_router(cockpit_router)` until M1.3). The read-
-only ``/cockpit/allowlist`` endpoint is safe and real; the execution endpoints return
-501 until M1.3 wires them on top of the proven-isolated sandbox.
+Endpoints:
+* ``GET  /cockpit/allowlist``        — the safe command set + fixed lab target.
+* ``GET  /cockpit/status``           — sandbox up? isolation ok? (for the UI banner)
+* ``POST /cockpit/exec``             — run ONE approved allowlisted cmd; streams SSE.
+                                       403 (no run) if any safety gate fails.
+* ``GET  /cockpit/runs/{run_id}``    — the persisted run-record.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+import json
+from typing import Any, Iterator
 
-from . import allowlist, config
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+
+from . import allowlist, config, executor, runstore
 from .models import AllowlistItem, AllowlistResponse, ExecRequest
+from .sandbox import SandboxError, assert_isolation_proven, is_sandbox_up
 
 router = APIRouter(prefix="/cockpit", tags=["cockpit"])
 
@@ -32,16 +39,63 @@ def get_allowlist() -> AllowlistResponse:
     )
 
 
+@router.get("/status")
+def get_status() -> dict[str, Any]:
+    """Whether the sandbox is up and isolated — drives the UI's readiness banner."""
+    up = is_sandbox_up()
+    isolated = False
+    detail = ""
+    if up:
+        try:
+            assert_isolation_proven()
+            isolated = True
+        except SandboxError as exc:
+            detail = str(exc)
+    else:
+        detail = "sandbox container is not running"
+    return {
+        "sandbox": config.SANDBOX_CONTAINER,
+        "lab_target": config.LAB_TARGET_HOST,
+        "up": up,
+        "isolated": isolated,
+        "ready": up and isolated,
+        "detail": detail,
+    }
+
+
+def _sse(event: dict[str, Any]) -> str:
+    return f"data: {json.dumps(event)}\n\n"
+
+
 @router.post("/exec")
 def exec_command(request: ExecRequest):
-    """Run ONE approved allowlisted command against the lab. Wired in M1.3."""
-    raise HTTPException(
-        status_code=501,
-        detail="cockpit execution is not enabled yet (wired in M1.3 after M1.2 proof)",
+    """Run ONE approved, allowlisted, target-locked command against the lab.
+
+    All four safety gates run first. If any fails, nothing runs and a 403 is returned
+    naming the gate. Otherwise the run streams back as Server-Sent Events.
+    """
+    rejected = executor.validate_request(request)
+    if rejected is not None:
+        raise HTTPException(
+            status_code=403,
+            detail={"gate": rejected.gate, "reason": rejected.reason},
+        )
+
+    def gen() -> Iterator[str]:
+        for event in executor.iter_run(request, prevalidated=True):
+            yield _sse(event)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-@router.get("/exec/{run_id}/stream")
-def stream_run(run_id: str):
-    """SSE stream of a run's stdout/stderr/exit. Wired in M1.3/M1.4."""
-    raise HTTPException(status_code=501, detail="run streaming is wired in M1.3/M1.4")
+@router.get("/runs/{run_id}")
+def get_run(run_id: str):
+    """The final, persisted record of a run."""
+    record = runstore.get_run(run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return record

@@ -1,18 +1,18 @@
-"""Unit tests for the Cockpit safety layers (allowlist + target lock + refusal).
+"""Unit tests for the Cockpit safety layers (allowlist + target lock + gate order).
 
-These guard the three independent safety mechanisms (docs/cockpit-plan.md §c):
+These guard the independent safety mechanisms (docs/cockpit-plan.md §c):
   1. allowlist — only known-safe commands, no shell metachars, per-command arg rules;
-  2. target lock — every hostish operand must be the lab, nothing else;
-  3. refusal — sandbox/executor entrypoints raise until wired (M1.2/M1.3), so no
-     command can run before the isolation proof exists.
+  2. target lock — the lab must be explicitly targeted; no other host may appear;
+  3. gate order — validate_request rejects at allowlist → target → approval BEFORE it
+     ever reaches the sandbox/isolation check (so an unsafe request never touches Docker).
 
-Self-contained (stdlib only, no live Docker). Run:  python test_cockpit.py
+Hermetic: the first three gates need no Docker. The live isolation gate + real exec are
+exercised by the M1.5 integration demo, not here. Run:  python test_cockpit.py
 """
 from __future__ import annotations
 
 from cockpit import allowlist as A
 from cockpit import executor as E
-from cockpit import sandbox as S
 from cockpit.models import ExecRequest
 
 
@@ -56,28 +56,37 @@ def test_target_lock() -> None:
     print("  target lock: PASS")
 
 
-def test_execution_refuses_until_wired() -> None:
-    for call in (S.is_sandbox_up, S.assert_isolation_proven):
-        try:
-            call()
-        except NotImplementedError:
-            pass
-        else:
-            raise AssertionError(f"{call.__name__} must refuse until wired")
+def test_gate_order_rejects_before_execution() -> None:
+    # non-allowlisted command → rejected at the allowlist gate (no Docker touched)
+    r = E.validate_request(ExecRequest(command="bash", args=["-c", "id"], approved=True))
+    assert r is not None and r.gate == "allowlist", "non-allowlisted must reject at allowlist"
 
-    try:
-        E.run_command(
-            ExecRequest(command="nmap", args=["hackpit-lab-target"], approved=True)
-        )
-    except NotImplementedError:
-        pass
-    else:
-        raise AssertionError("run_command must refuse until wired (M1.3)")
-    print("  execution refuses until wired: PASS")
+    # allowlisted + approved but a NON-lab target → rejected at the target gate
+    r = E.validate_request(
+        ExecRequest(command="nmap", args=["-sV", "scanme.nmap.org"], approved=True)
+    )
+    assert r is not None and r.gate == "target", "non-lab target must reject at target gate"
+
+    # allowlisted + lab target but NOT approved → rejected at the approval gate
+    r = E.validate_request(
+        ExecRequest(command="nmap", args=["-sV", "hackpit-lab-target"], approved=False)
+    )
+    assert r is not None and r.gate == "approval", "unapproved must reject at approval gate"
+
+    # a fully valid request must clear the first three gates: if it rejects at all,
+    # it can ONLY be the sandbox/isolation gate (never allowlist/target/approval).
+    r = E.validate_request(
+        ExecRequest(command="nmap", args=["-sV", "hackpit-lab-target"], approved=True)
+    )
+    assert r is None or r.gate == "sandbox", (
+        "valid approved lab request must pass allowlist/target/approval "
+        f"(got gate={getattr(r, 'gate', None)})"
+    )
+    print("  gate order rejects before execution: PASS")
 
 
 if __name__ == "__main__":
     test_allowlist_validation()
     test_target_lock()
-    test_execution_refuses_until_wired()
+    test_gate_order_rejects_before_execution()
     print("ALL cockpit safety-layer tests pass")

@@ -53,6 +53,27 @@ of each section. Zaid reviews this + docs/cockpit-plan.md on return.*
   no path off the bridge by construction (not a toggleable filter).
 - **Gate cleared:** execution code (M1.3) is now permitted to be wired.
 
+### M1.3 — Execution API ✅ (verified end-to-end)
+- Wired the four safety gates + real `docker exec` (allowlist → target lock → approval → isolation),
+  now that M1.2 cleared the gate. Nothing runs unless all four pass.
+  - `sandbox.py`: `is_sandbox_up()` + `assert_isolation_proven()` (structural, always-on: the running
+    sandbox must be attached ONLY to `internal` networks, else refuse — an egress path = no exec).
+  - `executor.py`: refined target lock (lab must be explicitly targeted; curl method tokens like `GET`
+    are not treated as hosts; any non-lab host rejected) + threaded streaming `docker exec` (argv, never
+    a shell) with a hard timeout; persists a RunRecord.
+  - `runstore.py`: `cockpit_runs` table in the shared `sessions.db` (gitignored).
+  - `router.py`: `GET /cockpit/allowlist`, `GET /cockpit/status`, `POST /cockpit/exec` (SSE stream; 403
+    naming the failed gate), `GET /cockpit/runs/{id}`. Mounted in `main.py`; runstore init in lifespan.
+- **Verified against the live server + isolated sandbox:**
+  - `GET /cockpit/status` → `{up:true, isolated:true, ready:true}`.
+  - Gate rejections (no execution): unapproved → 403 approval; `scanme.nmap.org` → 403 target;
+    `bash` → 403 allowlist.
+  - Real streamed exec `curl -sSI http://hackpit-lab-target:3000/` → HTTP 200 (Juice Shop banner
+    `X-Recruiting: /#/jobs`), streamed live, exit 0, record persisted + refetched.
+  - Real streamed exec `nmap -sT -Pn -p 3000,80,22 hackpit-lab-target` → port 3000 open, streamed
+    live, exit 0, persisted with `step_id=recon-1`.
+- `test_cockpit.py` updated (M1.1's "refuses until wired" replaced by gate-order tests) — all green.
+
 ### Open questions for Zaid
 See docs/cockpit-plan.md §"Open questions for Zaid" (sandbox choice, lab target, allowlist scope,
 frontier model/key, Docker daemon start, exec transport). Note: I started Docker Desktop myself and

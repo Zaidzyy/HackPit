@@ -51,6 +51,8 @@ import chat as chat_assistant  # noqa: E402  (backend/chat.py — engagement ass
 import llm  # noqa: E402
 import report as report_gen  # noqa: E402  (backend/report.py — LLM report drafting)
 import sessions as sessions_db  # noqa: E402  (backend/sessions.py — SQLite store)
+from cockpit import runstore as cockpit_runstore  # noqa: E402
+from cockpit.router import router as cockpit_router  # noqa: E402
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
 CAPTIONS_PATH = REPO_ROOT / "data" / "images" / "captions.json"
@@ -262,6 +264,8 @@ async def lifespan(app: FastAPI):
 
     # engagement sessions live in a local SQLite file (gitignored).
     sessions_db.init_db()
+    # cockpit run-records share that SQLite file (gitignored).
+    cockpit_runstore.init_db()
     yield
     STATE.entries = []
     STATE.by_id = {}
@@ -283,6 +287,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
+
+# Cockpit — live, human-approved execution against the isolated lab (see cockpit/).
+app.include_router(cockpit_router)
 
 
 # --------------------------------------------------------------------------- #

@@ -18,6 +18,8 @@ const PLACEHOLDER =
  */
 export function CockpitView() {
   const [goal, setGoal] = useState("");
+  const [scopeText, setScopeText] = useState("");
+  const [scopeOpen, setScopeOpen] = useState(false);
   const [path, setPath] = useState<AttackPath | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +41,7 @@ export function CockpitView() {
       setLoading(true);
       setError(null);
 
-      composeAttackPath(g, null, null, ctrl.signal)
+      composeAttackPath(g, null, scopeText.trim() || null, ctrl.signal)
         .then((p) => {
           if (ctrl.signal.aborted) return;
           setPath(p);
@@ -53,7 +55,7 @@ export function CockpitView() {
           );
         });
     },
-    [goal, loading]
+    [goal, scopeText, loading]
   );
 
   // Sections reveal in once a path exists; skip the motion under reduced-motion.
@@ -99,6 +101,40 @@ export function CockpitView() {
               {loading ? "plotting…" : "plot path →"}
             </button>
           </form>
+
+          <div className="hp-ap-scope hp-cv-scope">
+            <button
+              type="button"
+              className="hp-ap-scope-toggle"
+              aria-expanded={scopeOpen}
+              onClick={() => setScopeOpen((o) => !o)}
+              disabled={loading}
+            >
+              <span className="hp-ap-scope-sign" aria-hidden>
+                {scopeOpen ? "−" : "+"}
+              </span>
+              Scope / Rules of Engagement{" "}
+              <span className="hp-ap-scope-opt">(optional)</span>
+              {!scopeOpen && scopeText.trim() && (
+                <span className="hp-ap-scope-dot" title="scope text entered" />
+              )}
+            </button>
+            {scopeOpen && (
+              <textarea
+                className="hp-ap-scope-text"
+                value={scopeText}
+                onChange={(e) => setScopeText(e.target.value)}
+                placeholder={
+                  "Paste in-scope / out-of-scope hosts and paths, or the program’s Rules of Engagement.\n" +
+                  "The profiler uses it to prioritise the right bug classes and drop out-of-scope steps."
+                }
+                rows={5}
+                spellCheck={false}
+                disabled={loading}
+                aria-label="Scope / Rules of Engagement"
+              />
+            )}
+          </div>
 
           {error && <p className="hp-cv-error">{error}</p>}
 

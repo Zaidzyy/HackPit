@@ -4202,6 +4202,12 @@ a.hp-card {
   opacity: 0.75;
   margin: 6px 2px 0;
 }
+/* the plot bar already carries an 18px bottom margin — don't stack another
+   scope margin on top; give the collapsible room before the map instead. */
+.hp-cv-scope {
+  margin-top: 0;
+  margin-bottom: 16px;
+}
 .hp-cv-map-frame {
   position: relative;
   border: 1px solid var(--border);

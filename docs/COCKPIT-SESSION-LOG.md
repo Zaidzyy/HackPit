@@ -89,6 +89,52 @@ of each section. Zaid reviews this + docs/cockpit-plan.md on return.*
   exit code (3221225794) — a Turbopack/Windows flake, not a code issue; `tsc` passed directly and
   the build succeeded on retry.
 
+### M1.5 — End-to-end verified demo ✅ (with one caveat)
+Goal: approve `nmap <lab>` in the UI → runs in the isolated sandbox → output streams to the UI.
+
+Verified against the default-port backend the UI targets (backend :8000, frontend dev :3000):
+- **Route renders:** `GET /cockpit` → 200; the SSR HTML contains every control — `:cockpit`,
+  `APPROVE & RUN`, the "arguments (must target …)" label, the `output` panel, the `isolated`
+  banner, and `hackpit-lab-target`. (Confirmed by fetching the page HTML.)
+- **Page-load calls** (what CockpitScreen fetches on mount): `/cockpit/allowlist` → the 3-command
+  set; `/cockpit/status` → `{up:true, isolated:true, ready:true}`.
+- **APPROVE & RUN path** (the exact payload the button posts, `approved:true`): `nmap -sT -Pn -p
+  3000,80,22 hackpit-lab-target` streamed live → **3000/tcp open**, exit 0, run-record persisted
+  (`step_id=recon-1`). This is the M1 goal, exercised over the real streaming endpoint.
+
+**Caveat (one step left for Zaid's eyes):** the Claude browser extension is offline in this session,
+so I could not perform the literal in-browser button click + watch the pixels stream. Every layer
+_behind_ that click is verified (route + SSR controls + the identical streaming request). To see it
+live: open **http://localhost:3000/cockpit** (both servers are left running) and click APPROVE & RUN.
+
+### What's running right now (left up for Zaid)
+- Docker Desktop + the isolated stack (`hackpit-kali-sandbox` + `hackpit-lab-target`). I started
+  Docker Desktop (it was down). Tear down: `docker compose -f docker/docker-compose.yml down -v`.
+- Backend on `:8000`, frontend dev on `:3000` (so the cockpit is clickable immediately). Stop them
+  when done (they're just left for convenience).
+
+### Reproduce from scratch
+```
+docker compose -f docker/docker-compose.yml up -d --build     # isolated lab + sandbox
+sh docker/proof/isolation_proof.sh                            # HARD GATE — must exit 0
+cd backend && .venv/Scripts/python -m uvicorn main:app --port 8000
+cd frontend && npm run dev                                    # http://localhost:3000/cockpit
+```
+
+### ★ Milestone 1 COMPLETE — summary
+Phase 0 plan + all five increments landed, each committed after verification:
+- M1.1 scaffold (safety layers, execution stubbed) — tests green.
+- M1.2 isolated two-network stack + **PROVEN isolation** (the hard gate) — sandbox reaches the lab,
+  nothing else; structural (`internal:true`, no default route).
+- M1.3 execution API — 4 gates (allowlist → target → approval → isolation) + streamed `docker exec`;
+  verified live (gate 403s + real curl/nmap streamed & persisted).
+- M1.4 cockpit UI — approve + live stream; build/lint/tsc clean.
+- M1.5 E2E — full data path verified; only the in-browser click awaits Zaid (extension offline).
+
+No autonomy was built (per the gate). Nothing runs outside the isolated lab. `data/kb/*`, secrets,
+`sessions.db`, and `llm_config.json` remain gitignored; the repo is code-only. Commits are local
+(not pushed) — Zaid reviews + pushes on return.
+
 ### Open questions for Zaid
 See docs/cockpit-plan.md §"Open questions for Zaid" (sandbox choice, lab target, allowlist scope,
 frontier model/key, Docker daemon start, exec transport). Note: I started Docker Desktop myself and

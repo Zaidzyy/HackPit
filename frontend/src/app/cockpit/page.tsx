@@ -1,5 +1,5 @@
-import { CockpitScreen } from "@/components/CockpitScreen";
+import { CockpitView } from "@/components/CockpitView";
 
 export default function CockpitPage() {
-  return <CockpitScreen />;
+  return <CockpitView />;
 }

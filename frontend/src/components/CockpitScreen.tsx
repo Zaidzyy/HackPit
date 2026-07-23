@@ -29,7 +29,7 @@ type Line = { kind: "stdout" | "stderr" | "meta" | "err"; text: string };
  * isolated sandbox. Every command is gated server-side (allowlist + lab-only
  * target + explicit approval + isolation); the UI just makes the approval real.
  */
-export function CockpitScreen() {
+export function CockpitScreen({ embedded = false }: { embedded?: boolean } = {}) {
   const [allow, setAllow] = useState<CockpitAllowlist | null>(null);
   const [status, setStatus] = useState<CockpitStatus | null>(null);
   const [command, setCommand] = useState("nmap");
@@ -135,11 +135,14 @@ export function CockpitScreen() {
       });
   }, [running, ready, args, command, preview]);
 
-  return (
-    <PageShell crumbs={[{ label: "cockpit" }]}>
+  const inner = (
       <div className="hp-ck">
         <header className="hp-ck-head">
-          <h1 className="hp-ck-title">:cockpit</h1>
+          {embedded ? (
+            <h2 className="hp-ck-title hp-ck-title-sm">Live execution</h2>
+          ) : (
+            <h1 className="hp-ck-title">:cockpit</h1>
+          )}
           <p className="hp-ck-sub">
             Human-approved execution against the isolated lab. One command at a
             time — you approve, it runs in the sandbox, output streams here.
@@ -243,6 +246,8 @@ export function CockpitScreen() {
           </div>
         </section>
       </div>
-    </PageShell>
   );
+
+  if (embedded) return inner;
+  return <PageShell crumbs={[{ label: "cockpit" }]}>{inner}</PageShell>;
 }

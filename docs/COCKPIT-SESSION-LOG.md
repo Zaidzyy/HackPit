@@ -39,6 +39,21 @@ of each section. Zaid reviews this + docs/cockpit-plan.md on return.*
     **NOT mounted into main.py yet** (mounted in M1.3, after the isolation proof).
 - Created `docker/README.md` (M1.2 lands the compose stack + proof here).
 
+### M1.2 — Isolated Docker stack + isolation PROOF ✅ (HARD GATE PASSED)
+- Started Docker Desktop (was down); daemon came up (linux engine, server 29.1.3).
+- Authored `docker/docker-compose.yml` (two services on ONE `internal: true` network:
+  `hackpit-kali-sandbox` + `hackpit-lab-target` = OWASP Juice Shop), `docker/Dockerfile.sandbox`
+  (Debian-slim + nmap/curl/whatweb baked at build time; runtime egress-less; `cap_drop: ALL`,
+  `no-new-privileges`, unprivileged user), and `docker/proof/isolation_proof.sh`.
+- Build hiccup fixed: Debian ships a built-in `operator` user → renamed sandbox user to `sandbox`.
+- **Isolation PROVEN** (`docker/proof/PROOF.md`, exit 0): sandbox → lab = HTTP 200; sandbox → public
+  IP 1.1.1.1, → https://example.com, → external DNS, → host.docker.internal all FAIL.
+  Structural evidence: the `internal: true` network installs no default route — the sandbox's
+  routing table has only the on-link `172.23.0.0/16` route and no `0.0.0.0` gateway, so there is
+  no path off the bridge by construction (not a toggleable filter).
+- **Gate cleared:** execution code (M1.3) is now permitted to be wired.
+
 ### Open questions for Zaid
 See docs/cockpit-plan.md §"Open questions for Zaid" (sandbox choice, lab target, allowlist scope,
-frontier model/key, Docker daemon start, exec transport).
+frontier model/key, Docker daemon start, exec transport). Note: I started Docker Desktop myself and
+ran the proof (open question #5 resolved for this session).

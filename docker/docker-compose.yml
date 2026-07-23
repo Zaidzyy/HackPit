@@ -1,0 +1,50 @@
+# HackPit Cockpit — isolated two-container stack (M1.2).
+#
+# SAFETY MODEL (docs/cockpit-plan.md §c Layer 1):
+#   Both containers share ONE network declared `internal: true`. Docker attaches no
+#   gateway to an internal network, so there is no NAT and no route off the bridge:
+#   the sandbox can reach the lab (same network) but has NO path to the host or the
+#   internet. Isolation is structural, not firewall-filtered.
+#
+# The sandbox image bakes its tools in at build time (build has internet); at runtime
+# it is egress-less. The lab image is pulled at `up` time, then runs isolated.
+#
+# Bring up:   docker compose -f docker/docker-compose.yml up -d --build
+# Prove:      docker/proof/isolation_proof.sh      (the hard gate before any exec)
+# Tear down:  docker compose -f docker/docker-compose.yml down -v
+
+name: hackpit-cockpit
+
+networks:
+  hackpit-isolated:
+    driver: bridge
+    internal: true          # <-- no gateway => no host/internet route. The safety layer.
+
+services:
+  lab-target:
+    # OWASP Juice Shop — the self-hosted vulnerable web app (M1 lab target).
+    image: bkimminich/juice-shop:latest
+    container_name: hackpit-lab-target
+    hostname: hackpit-lab-target
+    networks:
+      - hackpit-isolated
+    restart: unless-stopped
+    # No published ports: the lab is reachable only from inside the isolated network.
+
+  kali-sandbox:
+    # The recon sandbox the backend execs allowlisted commands into.
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    image: hackpit/kali-sandbox:m1
+    container_name: hackpit-kali-sandbox
+    hostname: hackpit-kali-sandbox
+    networks:
+      - hackpit-isolated
+    restart: unless-stopped
+    # Defense in depth beyond network isolation:
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: false

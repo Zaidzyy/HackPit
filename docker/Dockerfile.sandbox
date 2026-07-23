@@ -1,0 +1,30 @@
+# HackPit Cockpit — Kali/Debian sandbox image.
+#
+# The recon tools are baked in at BUILD time (the build has internet). At RUNTIME
+# the container joins only the `internal: true` network, so it has no egress — it
+# can never apt-install or phone home once running. That is the point.
+#
+# Debian-slim base (not full kali-rolling) keeps the image small and reproducible;
+# nmap/curl/whatweb cover the M1 recon allowlist. ca-certificates is installed so
+# that an HTTPS-to-internet test fails ONLY for lack of a route (a fair isolation
+# proof), never for missing trust roots.
+FROM debian:stable-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        nmap \
+        curl \
+        whatweb \
+        ca-certificates \
+        iputils-ping \
+        dnsutils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Run as an unprivileged user — the sandbox never needs root for recon.
+# (Note: Debian ships a built-in `operator` system user, so we use our own name.)
+RUN useradd -m -s /bin/bash sandbox
+USER sandbox
+WORKDIR /home/sandbox
+
+# Stay alive so the backend can `docker exec` into it on demand.
+CMD ["sleep", "infinity"]

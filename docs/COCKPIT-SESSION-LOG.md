@@ -5,6 +5,49 @@ of each section. Zaid reviews this + docs/cockpit-plan.md on return.*
 
 ---
 
+## Session 2026-07-24 (unsupervised, Milestone 2 — cinematic UI)
+
+Goal: build the command-center **face** of the Cockpit — visualize existing data (composed
+attack-path + M1 execution). No new execution, sandbox/allowlist changes, or autonomy.
+
+### What was built (each committed after verify)
+- **M2.1 — attack-map centerpiece** (`CockpitAttackMap.tsx`): a composed path rendered as a lit
+  kill-chain route — 5 phase stations (01–05) down a spine, each step a node (solid amber =
+  grounded, dashed/dim = ai_suggested "unverified"), on_success/on_blocked as branch forks, the
+  profile `target_class` + `priority_bug_classes` as the "why these steps" HUD, skipped phases dim
+  ("not on this path"). Click a node → slide-in detail (why, `target_adaptation`, branches, copyable
+  commands, technique link). `CockpitView.tsx` composes the map (with a live `/attack-path` plot
+  bar) above the M1 exec panel; a labelled **sample path** renders until one is composed.
+- **M2.2 — ignite sequence**: nodes + station dots light phase-by-phase (Framer Motion, staggered
+  by kill-chain index). `prefers-reduced-motion` → final state instantly (`initial={false}`, 0 delay).
+- **M2.3 — video backdrops** (`VideoBackdrop.tsx`): lazy (IntersectionObserver, never SSR'd),
+  muted/loop/playsinline/autoplay, a per-variant CSS gradient that is BOTH poster and missing-file
+  fallback, reduced-motion skips the video, a scrim keeps text readable. Wired `hero-loop.mp4`
+  (page bg) + `cockpit-map.mp4` (behind the map). Node bg bumped to 0.92 opacity for readability.
+- **M2.4 — cinematic exec panel**: restyle only (M1 logic untouched) — lit green
+  isolated/target-locked status, terminal chrome on the output pane ("SANDBOX · TERMINAL",
+  amber activity pip), blinking cursor while running (off under reduced-motion), `waveform.mp4`
+  ambient texture behind the panel.
+- **M2.5 — assemble + verify**: `next build` clean (emits `/cockpit`), eslint + tsc clean.
+  Screenshots verified: full view, mid-ignite stagger, node-detail drawer, and the **without-video**
+  fallback (files moved out → gradient stands in, everything readable, restored after).
+
+### Decisions / notes for Zaid
+- **Videos gitignored** (`frontend/public/video/*.mp4`, ~22MB) + a README lists the expected files;
+  the UI falls back to CSS gradients when absent so the repo stays code-only. Your call whether to
+  commit them / use Git LFS / a CDN.
+- **Sample path**: `frontend/src/lib/cockpitSample.ts` — a schema-faithful demo path (real web-app
+  methodology) so the map is never empty and is demoable offline. Labelled "sample path" in the UI.
+- **Live compose not runtime-tested this session.** The plot bar reuses the same `composeAttackPath`
+  client as the working attack-path screen, but I couldn't run a live compose: `backend/llm_config.json`
+  is set to `claude-agent-sdk/opus` while the running backend had an Ollama env override → Ollama got
+  asked for model "opus" → 404. I did NOT touch your llm_config. With your normal frontier config it
+  will compose real paths into the same map.
+- **reticle.mp4** is unused (it's the optional loading sting) — left available for a future compose loader.
+- Browser extension offline again → screenshots via headless Edge, not the in-app click-through.
+
+---
+
 ## Session 2026-07-23 (unsupervised, Milestone 1)
 
 ### Context / grounding

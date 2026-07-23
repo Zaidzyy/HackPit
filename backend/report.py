@@ -43,6 +43,12 @@ _SYSTEM = (
     "- A completed step with no pasted evidence may be described as performed, "
     "but do NOT fabricate its output.\n"
     "- Steps that were NOT completed must not appear as findings.\n"
+    "- SANDBOX EXECUTION runs (real allowlisted commands executed against the "
+    "lab, each with its captured output and exit code) are ALSO authoritative "
+    "evidence — treat them exactly like completed steps: state what was run and "
+    "what the output showed, and cite them by run id, e.g. '(see Evidence: "
+    "run-ab12cd34)'. Do NOT paste their raw output; the authoritative Evidence "
+    "section carries it.\n"
     "- EVIDENCE INTEGRITY: do NOT reproduce raw command output as fenced code "
     "blocks. The system inserts an authoritative, verbatim Evidence section. "
     "In your narrative, refer to captured evidence in prose and cite it by step "
@@ -57,8 +63,9 @@ _SYSTEM = (
     "2. Scope & Target\n"
     "3. Methodology (the phases followed)\n"
     "4. Findings & Attack Narrative (walk the COMPLETED steps in order, per "
-    "phase — what was done, the command(s) used, and what the evidence showed, "
-    "citing it by step id)\n"
+    "phase, AND the recorded SANDBOX EXECUTION runs — what was done, the "
+    "command(s) used, and what the evidence showed, citing it by step id or "
+    "run id)\n"
     f"5. Evidence — put a single line containing exactly {_EVIDENCE_MARKER} "
     "here and nothing else; do NOT write an Evidence heading or any output "
     "yourself. The system replaces the placeholder with the authoritative "
@@ -125,6 +132,37 @@ def _completed_steps_with_evidence(session: dict):
             yield step, _commands(step), raw
 
 
+def _execution_runs(session: dict) -> list[dict]:
+    """Recorded cockpit sandbox runs attached to the session (may be empty).
+
+    Each is a ``cockpit.models.RunRecord`` dumped to a dict: run_id, command,
+    args, exit_code, stdout, stderr, target, started_at, … These are real
+    allowlisted commands the tester approved and ran against the lab.
+    """
+    runs = session.get("execution_runs") or []
+    return [r for r in runs if isinstance(r, dict)]
+
+
+def _run_ref(run: dict) -> str:
+    """Stable citation id for a run, e.g. 'run-ffd5acb0e78a'."""
+    return f"run-{run.get('run_id', '')}"
+
+
+def _run_cmdline(run: dict) -> str:
+    """The exact command line for a run: 'curl -sSI http://…'."""
+    args = run.get("args") or []
+    return " ".join([run.get("command", ""), *[str(a) for a in args]]).strip()
+
+
+def _run_output(run: dict) -> str:
+    """Combined captured output (stdout then stderr), verbatim."""
+    out = run.get("stdout") or ""
+    err = run.get("stderr") or ""
+    if err.strip():
+        return f"{out}{'' if out.endswith(chr(10)) or not out else chr(10)}{err}"
+    return out
+
+
 def _fence_for(content: str) -> str:
     """A backtick fence guaranteed longer than any backtick run in ``content``.
 
@@ -175,6 +213,33 @@ def build_evidence_section(session: dict) -> str:
         # raw is emitted exactly as pasted, wrapped in a collision-proof fence.
         out.append(f"{of}\n{raw}\n{of}")
         out.append("")
+
+    # Recorded cockpit sandbox runs — the command line + its captured output,
+    # both reproduced verbatim (same collision-proof fencing as pasted evidence).
+    for run in _execution_runs(session):
+        any_ev = True
+        cmdline = _run_cmdline(run)
+        raw = _run_output(run)
+        exit_code = run.get("exit_code")
+        header = f"### {_run_ref(run)} · sandbox execution"
+        target = run.get("target")
+        if target:
+            header += f" · target {target}"
+        out.append(header)
+        out.append("")
+        cf = _fence_for(cmdline)
+        out.append("Command:")
+        out.append("")
+        out.append(f"{cf}bash")
+        out.append(cmdline)
+        out.append(cf)
+        out.append("")
+        of = _fence_for(raw)
+        out.append(f"Output (exit {exit_code}):")
+        out.append("")
+        out.append(f"{of}\n{raw}\n{of}")
+        out.append("")
+
     if not any_ev:
         out.append("_No command output was captured for the completed steps._")
         out.append("")
@@ -225,6 +290,20 @@ def build_prompt(session: dict) -> str:
     lines.append(f"GOAL: {goal}")
     lines.append(f"TARGET TYPE: {ttype}")
     lines.append(f"PROGRESS: {checked} of {total} steps completed")
+
+    # Scope / Rules of Engagement, if the composed path carried any — so the
+    # report's Scope section reflects what was in/out of scope.
+    profile = (session.get("path", {}) or {}).get("profile") or {}
+    target = (session.get("path", {}) or {}).get("target")
+    if target:
+        lines.append(f"TARGET: {target}")
+    out_of_scope = [s for s in (profile.get("out_of_scope") or []) if str(s).strip()]
+    if out_of_scope:
+        lines.append(
+            "OUT OF SCOPE (never report these as findings; they were excluded "
+            "from testing): " + "; ".join(str(s) for s in out_of_scope)
+        )
+
     if phase_names:
         lines.append(
             "PHASES (use exactly these in Methodology, in this order): "
@@ -263,6 +342,35 @@ def build_prompt(session: dict) -> str:
                 lines.append("EVIDENCE>>>")
             else:
                 lines.append("EVIDENCE: (none captured)")
+            lines.append("")
+
+    runs = _execution_runs(session)
+    if runs:
+        lines.append(
+            "## SANDBOX EXECUTION (recorded cockpit runs — real allowlisted "
+            "commands the tester approved and ran against the lab)"
+        )
+        lines.append(
+            "Fold these into the Findings & Attack Narrative alongside the "
+            "completed steps. Each has captured output you may READ to write "
+            "accurate findings; cite it as 'Evidence: run-<id>' and do NOT "
+            "reproduce the raw output."
+        )
+        for run in runs:
+            ref = _run_ref(run)
+            lines.append(f"### [EXECUTED] ({ref}) {_run_cmdline(run)}")
+            lines.append(f"Exit code: {run.get('exit_code')}")
+            raw = _run_output(run).strip()
+            if raw:
+                lines.append(
+                    f"EVIDENCE for {ref} (read only — cite as 'Evidence: {ref}', "
+                    "do not reproduce):"
+                )
+                lines.append("<<<EVIDENCE")
+                lines.append(raw)
+                lines.append("EVIDENCE>>>")
+            else:
+                lines.append("EVIDENCE: (no output captured)")
             lines.append("")
 
     lines.append(

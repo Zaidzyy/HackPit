@@ -977,6 +977,11 @@ def generate_report(session_id: str) -> dict[str, Any]:
     session = sessions_db.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    # Fold in any recorded cockpit sandbox runs so the report reflects what was
+    # actually executed (commands + captured output), not just checked-off steps.
+    runs = cockpit_runstore.list_runs_for_session(session_id)
+    if runs:
+        session["execution_runs"] = [r.model_dump() for r in runs]
     try:
         report_md, model_used = report_gen.compose_report(session)
     except llm.LLMError as e:

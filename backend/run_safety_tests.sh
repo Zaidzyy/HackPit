@@ -38,6 +38,12 @@ echo "== engagement/report path tests (run recorded + report evidence + scope) =
 echo "== engagement MODE tests (real-target: never-auto-run / explicit entry / no Wall-A gate / no autonomy) =="
 "$PY" test_engagement_mode.py
 
+echo "== program-SCOPE model tests (parse / fail-closed / wildcard+CIDR matching / extraction) =="
+"$PY" test_scope.py
+
+echo "== engagement SCOPE tests (in-scope passes / out-of-scope refused / expansion never widens) =="
+"$PY" test_engagement_scope.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

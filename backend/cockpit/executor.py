@@ -87,27 +87,49 @@ def _engagement_aliases(target: str) -> frozenset[str]:
     return frozenset(aliases)
 
 
+def _engagement_lock(eng: EngagementRecord) -> tuple[frozenset[str], Any, str]:
+    """(allowed aliases, in_scope matcher, label) for an engagement's SCOPE-AWARE target-lock.
+
+    The allowed set is the named target's aliases plus the LIVE allowed set (the scope's exact
+    hosts + every in-scope host recon has revealed). The matcher additionally accepts anything
+    the PROGRAM SCOPE covers — a subdomain under a ``*.wildcard``, an IP inside a CIDR — so the
+    loop can pivot within the authorized scope without re-entering mode. Exclusions always win
+    (they are part of the matcher). Falls back to the single named target if the scope can't be
+    resolved — fail-closed, never wider.
+    """
+    aliases = set(_engagement_aliases(eng.target))
+    aliases.update(h for h in eng.allowed_hosts if h)
+    try:
+        matcher = engagement.resolved_scope(eng)
+        return frozenset(aliases), matcher.in_scope, (eng.scope or eng.target)
+    except Exception:  # pragma: no cover - defensive: a broken scope narrows, never widens
+        return frozenset(aliases), None, eng.target
+
+
 def check_target_lock(
     args: list[str],
     command: str | None = None,
     allowed: frozenset[str] | None = None,
     label: str | None = None,
+    in_scope: Any = None,
 ) -> tuple[bool, str]:
-    """BEST-EFFORT target-lock: every host-shaped token in args must be an ``allowed`` target.
+    """BEST-EFFORT target-lock: every host-shaped token in args must be an allowed target.
 
     ``allowed`` defaults to the lab aliases (LAB mode — messages + behaviour unchanged); in
-    ENGAGEMENT mode it is the named real target's aliases and ``label`` names it in the reason.
-    This is cheap defense-in-depth (it catches e.g. ``nmap evil.com``), NOT a load-bearing
-    control: args can be an arbitrary command whose real target is invisible to any argv
-    inspection (``python -c "...connect to X..."``, ``curl @file``, a host inside a base64 blob).
-    In LAB mode ISOLATION is the actual bound; in ENGAGEMENT mode there is no isolation floor, so
-    HUMAN APPROVAL of every command is the actual bound and this lock is an aid to the human, not
-    a guarantee. ``command`` is accepted for signature compatibility.
+    ENGAGEMENT mode it is the engagement's live allowed set, ``in_scope`` is the PROGRAM SCOPE
+    matcher (so any in-scope host passes, not just one exact host) and ``label`` names the scope
+    in the reason. This is cheap defense-in-depth (it catches e.g. ``nmap evil.com``), NOT a
+    load-bearing control: args can be an arbitrary command whose real target is invisible to any
+    argv inspection (``python -c "...connect to X..."``, ``curl @file``, a host inside a base64
+    blob). In LAB mode ISOLATION is the actual bound; in ENGAGEMENT mode there is no isolation
+    floor and Wall A is down, so HUMAN APPROVAL of every command is the actual bound and this
+    lock is an aid to the human, not a guarantee. ``command`` is for signature compatibility.
 
-    A token is the allowed target, another host (→ reject), or a non-host operand (→ ignore).
-    At least one target reference is required so a command isn't silently target-less.
+    A token is an allowed/in-scope target, another host (→ reject), or a non-host operand
+    (→ ignore). At least one target reference is required so a command isn't silently
+    target-less.
     """
-    is_lab = allowed is None
+    is_lab = allowed is None and in_scope is None
     allow = allowed if allowed is not None else config.LAB_TARGET_ALIASES
     found = False
     for token in allowlist.extract_hostish(args):
@@ -116,28 +138,34 @@ def check_target_lock(
             continue
         if _looks_like_host(token):
             host = _host_of(token)
-            if host in allow:
+            if host in allow or (in_scope is not None and in_scope(token)):
                 found = True
             elif is_lab:
                 return False, f"target '{host}' is not the lab — only the lab is allowed"
             else:
-                return False, f"target '{host}' is not the locked target '{label}'"
+                return False, f"target '{host}' is not in the engagement scope '{label}'"
         # else: bare non-host operand → ignore
     if not found:
         if is_lab:
             return False, "no lab target specified — the command must reference the lab"
-        return False, f"no target specified — the command must reference '{label}'"
+        return False, f"no target specified — the command must reference the scope '{label}'"
     return True, ""
 
 
 def _resolved_target(
-    command: str, args: list[str], allowed: frozenset[str] | None = None, default: str | None = None
+    command: str,
+    args: list[str],
+    allowed: frozenset[str] | None = None,
+    default: str | None = None,
+    in_scope: Any = None,
 ) -> str:
-    """The host this command targets (for the record/UI), among the ``allowed`` aliases."""
+    """The host this command targets (for the record/UI), among the allowed/in-scope hosts."""
     allow = allowed if allowed is not None else config.LAB_TARGET_ALIASES
     for token in allowlist.extract_hostish(args):
         host = _host_of(token)
         if token in allow or host in allow:
+            return host or (default or config.LAB_TARGET_HOST)
+        if in_scope is not None and _looks_like_host(token) and in_scope(token):
             return host or (default or config.LAB_TARGET_HOST)
     return default or config.LAB_TARGET_HOST
 
@@ -205,7 +233,7 @@ def _validate_lab(request: ExecRequest) -> ExecRejected | None:
 
 def _validate_engagement(request: ExecRequest, eng: EngagementRecord) -> ExecRejected | None:
     """ENGAGEMENT mode gates (REAL target, NO isolation floor, WALL A DOWN). Order:
-        target-lock (the engagement's named target) → NEVER-AUTO-RUN human approval →
+        target-lock (the engagement's PROGRAM SCOPE) → NEVER-AUTO-RUN human approval →
         heuristic danger red-confirm.
 
     There is NO isolation gate and NO Wall-A gate here — the sandbox is FULLY OPEN (internet +
@@ -214,8 +242,9 @@ def _validate_engagement(request: ExecRequest, eng: EngagementRecord) -> ExecRej
     red-confirm — a conscious human on every single command. That guard now protects real
     targets AND the operator's own machine; it must hold every command, every time.
     """
+    allowed, in_scope, label = _engagement_lock(eng)
     ok, reason = check_target_lock(
-        request.args, request.command, allowed=_engagement_aliases(eng.target), label=eng.target
+        request.args, request.command, allowed=allowed, label=label, in_scope=in_scope
     )
     if not ok:
         return ExecRejected(reason=reason, gate="target")
@@ -286,8 +315,10 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
             }
             return
         container = config.ENGAGE_SANDBOX_CONTAINER
-        aliases = _engagement_aliases(eng.target)
-        target = _resolved_target(request.command, request.args, allowed=aliases, default=eng.target)
+        allowed, in_scope, _label = _engagement_lock(eng)
+        target = _resolved_target(
+            request.command, request.args, allowed=allowed, default=eng.target, in_scope=in_scope
+        )
     else:
         mode = "lab"
         container = config.SANDBOX_CONTAINER
@@ -387,6 +418,27 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
         runstore.save_run(record)
     except Exception as exc:  # persistence must never crash the stream
         yield {"type": "error", "reason": f"run recorded in-memory only: {exc}"}
+
+    # RECON-DRIVEN EXPANSION (engagement only): mine this run's output for hosts and sort them
+    # by the engagement's PROGRAM SCOPE. In-scope hosts join the live allowed set (so the loop
+    # can pivot to them); out-of-scope hosts are surfaced read-only and never added. This
+    # approves NOTHING — every command against a discovered host still needs its own individual
+    # human approval. Best-effort: a failure here can never affect the run that already ran.
+    if eng is not None:
+        try:
+            found = engagement.record_discoveries(
+                eng, record.stdout + record.stderr, run_id=run_id
+            )
+            if found["added"] or found["out_of_scope"]:
+                yield {
+                    "type": "discovered",
+                    "run_id": run_id,
+                    "in_scope": found["added"],
+                    "out_of_scope": found["out_of_scope"],
+                    "truncated": found["truncated"],
+                }
+        except Exception as exc:  # pragma: no cover - never load-bearing
+            yield {"type": "error", "reason": f"scope expansion skipped: {exc}"}
 
     yield {"type": "exit", "run_id": run_id, "code": exit_code, "finished_at": finished_at}
 

@@ -1,22 +1,24 @@
 #!/usr/bin/env sh
-# HackPit :kali — free-shell CONTAINMENT proof (K4 e2e).
+# HackPit :kali — OPEN-sandbox egress proof.
 #
-# :kali runs ARBITRARY commands as `docker exec <sandbox> sh -c "<cmd>"`. This proves the
-# containment holds even for a free shell — i.e. that arbitrary shell is safe because of
-# the sandbox, not because of input filtering. Exercises the EXACT exec path the endpoint
-# uses. Exits 0 ONLY if:
-#   1. a basic shell works inside the sandbox   (id, ls)
-#   2. the sandbox can reach the lab target     (nmap hackpit-lab-target)
-#   3. the sandbox CANNOT reach the internet    (curl https://example.com FAILS)
+# :kali runs ARBITRARY commands as `docker exec <KALI_OPEN_CONTAINER> sh -c "<cmd>"` inside a
+# SEPARATE, intentionally NON-isolated container (hackpit-kali-open). This proves that model
+# holds — the OPEN sandbox has full network reach — WITHOUT touching the isolated cockpit
+# sandbox (which docker/proof/isolation_proof.sh separately proves is still egress-less).
+# Exercises the EXACT exec path the :kali endpoint uses. Exits 0 ONLY if:
+#   1. a basic shell works inside the open sandbox        (id, ls)
+#   2. the open sandbox CAN reach the internet            (curl https://example.com succeeds)
+#   3. the open sandbox is on a NON-internal network      (structural: NAT egress)
 #
-# (3) is the whole point: a free shell that still cannot egress = contained. If (3) ever
-# succeeds, the shell is NOT contained — DO NOT expose :kali.
+# It is deliberately NOT isolated — that is Zaid's informed decision, and this proof asserts
+# the intended (open) behaviour, not containment. The safety of :kali rests on it being
+# human-only (no agent path — see backend/test_kali.py), not on network isolation.
 #
-# Run:  sh docker/proof/kali_containment_proof.sh
+# Run:  sh docker/proof/kali_open_egress_proof.sh
 set -u
 
-SANDBOX="${HACKPIT_SANDBOX_CONTAINER:-hackpit-kali-sandbox}"
-LAB_HOST="${HACKPIT_LAB_TARGET:-hackpit-lab-target}"
+OPEN="${HACKPIT_KALI_OPEN_CONTAINER:-hackpit-kali-open}"
+ISO="${HACKPIT_SANDBOX_CONTAINER:-hackpit-kali-sandbox}"
 TIMEOUT=10
 
 ok=0
@@ -24,60 +26,56 @@ bad=0
 pass() { echo "  [PASS] $1"; ok=$((ok + 1)); }
 fail() { echo "  [FAIL] $1"; bad=$((bad + 1)); }
 
-# The SAME invocation shape the :kali endpoint uses: sh -c into the hardcoded sandbox.
-kali() { docker exec "$SANDBOX" sh -c "$1"; }
+# The SAME invocation shape the :kali endpoint uses: sh -c into the hardcoded OPEN sandbox.
+kali() { docker exec "$OPEN" sh -c "$1"; }
 
-echo "== HackPit :kali containment proof =="
-echo "sandbox=$SANDBOX  lab=$LAB_HOST  $(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)"
+echo "== HackPit :kali OPEN-sandbox egress proof =="
+echo "open=$OPEN  (isolated cockpit sandbox=$ISO, unaffected)  $(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)"
 echo
 
-if ! docker inspect -f '{{.State.Running}}' "$SANDBOX" 2>/dev/null | grep -q true; then
-  echo "  [ERROR] sandbox container '$SANDBOX' is not running. Bring the stack up first:"
+if ! docker inspect -f '{{.State.Running}}' "$OPEN" 2>/dev/null | grep -q true; then
+  echo "  [ERROR] open sandbox container '$OPEN' is not running. Bring the stack up first:"
   echo "          docker compose -f docker/docker-compose.yml up -d"
   exit 2
 fi
 
-echo "-- 1. a free shell works inside the sandbox  (MUST succeed) --"
+echo "-- 1. a free shell works inside the open sandbox  (MUST succeed) --"
 if kali 'id && ls -1 / >/dev/null' >/dev/null 2>&1; then
-  pass "sh -c 'id && ls' ran inside the sandbox"
+  pass "sh -c 'id && ls' ran inside the open sandbox"
 else
-  fail "could not run a basic shell inside the sandbox"
+  fail "could not run a basic shell inside the open sandbox"
 fi
 echo
 
-echo "-- 2. the shell can reach the lab target  (MUST succeed) --"
-# nmap the lab from inside the sandbox (unprivileged connect scan — caps are dropped).
-if kali "nmap -sT -Pn --max-retries 1 --host-timeout ${TIMEOUT}s -p 3000 ${LAB_HOST}" \
-     2>/dev/null | grep -qi 'open\|3000/tcp'; then
-  pass "nmap reached the lab ($LAB_HOST)"
-else
-  # Fall back to a plain TCP check in case nmap output formatting differs.
-  if kali "curl -s -o /dev/null --max-time ${TIMEOUT} http://${LAB_HOST}:3000/"; then
-    pass "sandbox reached the lab ($LAB_HOST:3000)"
-  else
-    fail "sandbox could NOT reach the lab ($LAB_HOST)"
-  fi
-fi
+echo "-- 2. the open sandbox CAN reach the internet  (MUST succeed — the intent) --"
+code="$(kali "curl -s -o /dev/null -w '%{http_code}' --max-time ${TIMEOUT} https://example.com/" 2>/dev/null)"
+echo "     HTTP status from example.com: ${code:-<none>}"
+case "$code" in
+  2*|3*) pass "open sandbox reached https://example.com (HTTP $code) — full network reach";;
+  *)     fail "open sandbox could NOT reach the internet (status='${code:-none}')";;
+esac
 echo
 
-echo "-- 3. the shell CANNOT reach the internet  (MUST fail) --"
-if kali "curl -s -o /dev/null --max-time ${TIMEOUT} https://example.com/" 2>/dev/null; then
-  fail "free shell reached https://example.com — EGRESS NOT BLOCKED, shell NOT contained!"
+echo "-- 3. the open sandbox is on a NON-internal network  (structural) --"
+nets="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$OPEN" 2>/dev/null)"
+all_open=1
+for n in $nets; do
+  internal="$(docker network inspect -f '{{.Internal}}' "$n" 2>/dev/null)"
+  echo "     network $n internal=$internal"
+  [ "$internal" = "true" ] && all_open=0
+done
+if [ "$all_open" -eq 1 ] && [ -n "$nets" ]; then
+  pass "open sandbox is on non-internal network(s) only (NAT egress)"
 else
-  pass "free shell could not reach https://example.com (egress blocked — contained)"
-fi
-# Also test a raw public IP (bypasses DNS — pure routing).
-if kali "curl -s -o /dev/null --max-time ${TIMEOUT} http://1.1.1.1/" 2>/dev/null; then
-  fail "free shell reached public IP 1.1.1.1 — EGRESS NOT BLOCKED!"
-else
-  pass "free shell could not reach public IP 1.1.1.1 (contained)"
+  fail "open sandbox is (partly) on an internal network — egress would be blocked"
 fi
 echo
 
 echo "== result: $ok passed, $bad failed =="
-if [ "$bad" -eq 0 ] && [ "$ok" -ge 4 ]; then
-  echo "CONTAINMENT PROVEN — the free :kali shell is contained to the isolated sandbox."
+if [ "$bad" -eq 0 ] && [ "$ok" -ge 3 ]; then
+  echo "OPEN EGRESS CONFIRMED — :kali's open sandbox has full network reach (by design)."
+  echo "(The isolated cockpit sandbox is unaffected — see docker/proof/isolation_proof.sh.)"
   exit 0
 fi
-echo "CONTAINMENT NOT PROVEN — DO NOT expose :kali."
+echo "OPEN EGRESS NOT CONFIRMED — check the compose network config."
 exit 1

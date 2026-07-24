@@ -465,3 +465,67 @@ tsc clean; `/kali` route builds.
 
 **Orchestrator-has-no-path confirmed** (grep clean). DO NOT push — Zaid reviews the safety-critical
 bits first, then pushes.
+
+---
+
+## Session 2026-07-24 (:kali — wide-open egress, two-sandbox split)
+
+Zaid's informed decision: give `:kali` a human-only shell with **full network reach** (internet
++ host + LAN). Built in verified increments, committed locally. **NOT pushed** — Zaid reviews the
+network config + the human-only confirmation first.
+
+### The change, and why it does NOT touch the cockpit's safety net
+`:kali`'s previous shell ran inside the **isolated** sandbox. Making that container egress-capable
+would have broken `assert_isolation_proven` for the **cockpit executor** too — and that isolation is
+the safety net the future autonomous agent depends on. So instead of opening the shared sandbox, we
+**split into two sandboxes**:
+
+- **`hackpit-kali-sandbox` (ISOLATED — UNCHANGED).** Still `internal: true`, egress-less. The cockpit
+  executor + future agent keep targeting it with all four gates, `assert_isolation_proven` included.
+  Verified unchanged: `test_cockpit.py` green; `docker/proof/isolation_proof.sh` → 4/4, ISOLATION PROVEN
+  (reaches only the lab; no internet, no host).
+- **`hackpit-kali-open` (NOT ISOLATED — new).** On a new non-internal bridge (`hackpit-open`) with NAT
+  egress → internet + host + LAN. Used by `:kali` **only**. Keeps `cap_drop: ALL` +
+  `no-new-privileges`; still disposable.
+
+### `:kali` changes (the changed invariant)
+- `run_kali` execs `docker exec <config.KALI_OPEN_CONTAINER> sh -c "<cmd>"` — hardcoded to
+  `hackpit-kali-open`, **never** a request field (containment rule #1 stays; test-locked, incl. that it
+  can't hop to the isolated box).
+- **Isolation gate dropped from the `:kali` path only.** `kali.py` no longer imports the sandbox module
+  or calls `assert_isolation_proven` (it's intentionally not isolated). Replaced with an honest
+  **availability** check (409 if the open container is down) — explicitly NOT an isolation gate.
+- **KEPT:** hardcoded container, audit-every-run to the session (`target = hackpit-kali-open`), 60s
+  timeout, output cap.
+- **Banner honesty:** UI now reads `GET /cockpit/kali/status` and shows an amber
+  "shell hackpit-kali-open · full network reach · **NOT isolated** · human-only" — never claims
+  isolation. Header/footer copy + a strengthened localhost-only/no-auth warning (an exposed `:kali` now
+  reaches host + LAN — exposure is far worse than before).
+
+### Safety rules that stay absolute (now more load-bearing)
+- **Human-only** — the rule that matters most now. `run_kali` is referenced ONLY by `router.py` (the
+  HTTP route) + `test_kali.py`. The executor/agent/orchestrator path has ZERO reference to it, now
+  **regression-locked** by `test_kali_is_human_only` (scans the source tree; also asserts the cockpit
+  executor exposes no kali hook). An autonomous agent + a full-reach shell = autonomous attacks on
+  host/LAN/internet — this test fails loudly if anyone wires it in.
+- **Cockpit execution stays isolated + lab-locked.** Unchanged; full safety suite green.
+- **localhost-only; auth required before exposure.**
+
+### Verified this session (stack up)
+- `docker/proof/kali_open_egress_proof.sh` → 3/3, OPEN EGRESS CONFIRMED (shell works; `curl
+  example.com` → 200; on a non-internal network). Isolated sandbox unaffected.
+- Real endpoint `POST /cockpit/kali`: `id` → open container; `curl https://example.com` → **exit 0,
+  HTTP 200** (full reach, intended); runs recorded with `target=hackpit-kali-open`.
+  `GET /cockpit/kali/status` → `{container: hackpit-kali-open, isolated: false, ready: true}`.
+- UI at `http://localhost:3000/kali`: amber "NOT isolated · full network reach" banner; live
+  `curl … https://example.com | head -1` → `HTTP/2 200`, EXIT 0.
+- Frontend `next build` + lint + tsc clean.
+
+### Commits (local, NOT pushed)
+1. docker: separate egress-capable `hackpit-kali-open` (isolated sandbox unchanged)
+2. backend: `:kali` execs the open container; isolation gate dropped (`:kali` only); status endpoint;
+   tests rewritten + human-only source-scan test
+3. frontend: banner honesty (full network reach · NOT isolated)
+4. docs + proof (`kali_open_egress_proof.sh`)
+
+DO NOT push — Zaid reviews the network config + human-only confirmation, then pushes.

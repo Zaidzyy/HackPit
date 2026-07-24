@@ -71,8 +71,32 @@ def flags_in_args(args: list[str]) -> set[str]:
 
 # --------------------------------------------------------------------------- #
 # The dangerous-command heuristic (drives the red-confirm). OVER-INCLUSIVE by
-# design — an ASSIST, not a guarantee. (Body implemented in N2.)
+# design — an ASSIST, not a guarantee. A false positive costs one extra confirm;
+# a false negative is a missed warning (the HUMAN approval is the real gate).
 # --------------------------------------------------------------------------- #
+
+# Language interpreters — the binary itself is the tell (it can run arbitrary code).
+_INTERPRETERS = frozenset({
+    "python", "python2", "python3", "bash", "sh", "dash", "zsh", "ksh", "fish",
+    "perl", "ruby", "php", "node", "nodejs", "lua", "tclsh", "expect",
+    "pwsh", "powershell", "osascript", "groovy", "gawk", "awk",
+})
+# Raw network / exec tools commonly used for shells + exec.
+_EXEC_TOOLS = frozenset({"nc", "ncat", "netcat", "socat", "telnet", "rlwrap"})
+# Exploitation frameworks / payload generators.
+_FRAMEWORKS = frozenset({
+    "msfconsole", "msfvenom", "msfcli", "meterpreter", "empire", "sliver",
+    "covenant", "cobaltstrike", "beacon", "chisel", "ligolo",
+})
+# Flags that mean "run this inline code / command".
+_EVAL_FLAGS = frozenset({"-c", "-e", "--command", "--eval", "--exec", "-code"})
+# Substrings anywhere in the args that signal a reverse shell / code exec shape.
+_SHELL_MARKERS = (
+    "/dev/tcp/", "/dev/udp/", "bash -i", "sh -i", "mkfifo", "/inet/tcp/",
+    "pty.spawn", "os.system", "subprocess", "runtime.exec", "0>&1", ">&/dev/tcp",
+    "exec 5<>", "socket(", "fsockopen", "sh >&", "cmd.exe", "-nlvp", "-e /bin",
+    "curl | sh", "wget | sh", "| bash", "| sh", "base64 -d",
+)
 
 
 def dangerous_command_heuristic(command: str, args: list[str]) -> list[str]:
@@ -80,9 +104,40 @@ def dangerous_command_heuristic(command: str, args: list[str]) -> list[str]:
 
     Drives the red-confirm: when non-empty the executor's danger gate requires an explicit
     ``dangerous_ack`` before running (it NEVER blocks outright). Over-inclusive best-effort
-    — the human approval is the real gate. (Populated in N2.)
+    — the human approval is the real gate, so gaps are expected. Flags: language interpreters
+    (esp. with an eval flag), reverse-shell/exec tools (esp. nc/ncat/socat -e/-c), exploitation
+    frameworks, and reverse-shell/code-exec shapes anywhere in the args.
     """
-    return []
+    reasons: list[str] = []
+    cmd = os.path.basename(str(command)).lower()  # handles /usr/bin/python3, ./x
+    flags = flags_in_args(args)
+    eval_flags = sorted(flags & _EVAL_FLAGS)
+
+    if cmd in _INTERPRETERS:
+        note = f" with {', '.join(eval_flags)} (inline code)" if eval_flags else ""
+        reasons.append(f"{cmd}: language interpreter — runs arbitrary code{note}")
+    if cmd in _EXEC_TOOLS:
+        if flags & {"-e", "-c"}:
+            reasons.append(f"{cmd} -e/-c: command execution / reverse shell")
+        else:
+            reasons.append(f"{cmd}: raw network tool — can carry a reverse shell")
+    if cmd in _FRAMEWORKS:
+        reasons.append(f"{cmd}: exploitation framework / payload generator")
+
+    # scan the whole arg vector for reverse-shell / code-exec shapes (payloads, one-liners)
+    blob = " ".join(str(a) for a in args).lower()
+    for marker in _SHELL_MARKERS:
+        if marker in blob:
+            reasons.append(f"reverse-shell / code-exec pattern: {marker!r}")
+
+    # de-dup, preserve order
+    seen: set[str] = set()
+    out: list[str] = []
+    for r in reasons:
+        if r not in seen:
+            seen.add(r)
+            out.append(r)
+    return out
 
 
 def extract_hostish(args: list[str]) -> list[str]:

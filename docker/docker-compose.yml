@@ -1,6 +1,6 @@
 # HackPit Cockpit — TWO-SANDBOX stack.
 #
-# There are two independent sandboxes with DIFFERENT network models — do not conflate them:
+# There are THREE independent sandboxes with DIFFERENT network models — do not conflate them:
 #
 # 1. hackpit-kali-sandbox  (ISOLATED — the cockpit/agent sandbox; SAFETY-CRITICAL, unchanged)
 #    On `hackpit-isolated` (`internal: true`): Docker attaches no gateway, so there is no NAT
@@ -15,7 +15,14 @@
 #    and is still disposable via `down`. An exposed :kali now reaches your host/LAN — localhost only,
 #    auth required before any exposure.
 #
-# Both sandbox images bake their tools in at build time. The lab image is pulled at `up` time.
+# 3. hackpit-engage-sandbox  (FULLY OPEN — the REAL-TARGET engagement sandbox; SUPERVISED, HIGHEST RISK)
+#    The cockpit execs here ONLY in explicit engagement mode (real authorized targets). It has NO
+#    isolation floor and NO Wall A (Zaid's informed decision): on a normal NAT bridge it reaches the
+#    internet + LAN + host + cloud metadata — nothing bounds WHERE it can reach. The ONLY guard is
+#    HUMAN APPROVAL OF EVERY COMMAND (explicit entry + approve-each + heuristic red-confirm; never
+#    hands-off). Keeps cap_drop ALL + no-new-privileges. Proof: engage_open_proof.sh (full reach).
+#
+# All sandbox images bake their tools in at build time. The lab image is pulled at `up` time.
 #
 # Bring up:   docker compose -f docker/docker-compose.yml up -d --build
 # Prove:      docker/proof/isolation_proof.sh            (cockpit sandbox: egress-less — hard gate)
@@ -32,6 +39,11 @@ networks:
     driver: bridge
     # NOT internal: normal bridge with NAT egress. Reaches internet + host + LAN. Used ONLY
     # by the :kali human-only shell (hackpit-kali-open). Deliberately not isolated.
+  hackpit-engage:
+    driver: bridge
+    # NOT internal: a normal NAT bridge with FULL reach (internet + LAN + host + metadata). The
+    # engagement sandbox sits here directly — Wall A is DOWN (no firewall sidecar). The only guard
+    # on a real-target run is human-approval-of-every-command (never hands-off).
 
 services:
   lab-target:
@@ -83,3 +95,26 @@ services:
     security_opt:
       - no-new-privileges:true
     read_only: false
+
+  engage-sandbox:
+    # The REAL-TARGET engagement sandbox — FULLY OPEN (Wall A DOWN, Zaid's informed decision).
+    # On a normal NAT bridge (`hackpit-engage`) with FULL network reach: internet + LAN + host
+    # + cloud metadata. There is NO isolation floor and NO Wall-A firewall — nothing bounds
+    # WHERE it can reach. The ONLY guard on a real-target run is HUMAN APPROVAL OF EVERY COMMAND
+    # (explicit engagement entry + approve-each + heuristic red-confirm; never hands-off). Keeps
+    # cap_drop: ALL + no-new-privileges. The cockpit execs here ONLY in explicit, human-entered
+    # engagement mode. NOT for lab runs (the lab keeps its egress-less isolated sandbox).
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    image: hackpit/kali-sandbox:m1
+    container_name: hackpit-engage-sandbox
+    hostname: hackpit-engage-sandbox
+    networks:
+      - hackpit-engage
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+    restart: unless-stopped

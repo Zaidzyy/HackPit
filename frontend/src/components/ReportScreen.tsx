@@ -84,21 +84,22 @@ export function ReportScreen({ id }: { id: string }) {
     if (!fetched.data || startedRef.current) return;
     startedRef.current = true;
     if (fetched.data.report_md) {
-      getLLMConfig()
-        .then((cfg) =>
-          setReport({
-            md: fetched.data!.report_md!,
-            at: fetched.data!.report_generated_at ?? "",
-            model: cfg.model,
-          })
-        )
-        .catch(() =>
-          setReport({
-            md: fetched.data!.report_md!,
-            at: fetched.data!.report_generated_at ?? "",
-            model: "the configured model",
-          })
-        );
+      // Attribute the report to the model that ACTUALLY generated it (persisted
+      // as report_model). Old reports predate that column (null) — fall back to
+      // the current config label, as before.
+      const persisted = fetched.data.report_model;
+      const modelName = persisted
+        ? Promise.resolve(persisted)
+        : getLLMConfig()
+            .then((cfg) => cfg.model)
+            .catch(() => "the configured model");
+      modelName.then((model) =>
+        setReport({
+          md: fetched.data!.report_md!,
+          at: fetched.data!.report_generated_at ?? "",
+          model,
+        })
+      );
     } else {
       generate();
     }

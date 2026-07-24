@@ -87,3 +87,24 @@ def assert_isolation_proven() -> None:
             "sandbox is attached to non-internal network(s) "
             f"{non_internal} — that is an egress path; refusing to execute"
         )
+
+
+# --------------------------------------------------------------------------- #
+# ENGAGEMENT MODE — availability only (NO Wall A, NO isolation floor).
+# Wall A is DOWN (Zaid's informed decision): the engagement sandbox is fully open — it
+# reaches the internet, the LAN, the host, and cloud metadata, on purpose. There is NO
+# network guard to assert (the way the lab asserts isolation). The ONLY bound on a
+# real-target run is HUMAN APPROVAL OF EVERY COMMAND — see the executor's engagement
+# gates (explicit entry + approve-each + heuristic red-confirm; never hands-off).
+# --------------------------------------------------------------------------- #
+
+
+def _running(name: str) -> bool:
+    rc, out, _ = _docker(["inspect", "-f", "{{.State.Running}}", name])
+    return rc == 0 and out == "true"
+
+
+def is_engage_sandbox_up() -> bool:
+    """True iff the (fully-open) engagement sandbox is running. Availability only — there is
+    no Wall A / isolation to verify; the guard on a real-target run is human-approve-each."""
+    return _running(config.ENGAGE_SANDBOX_CONTAINER)

@@ -53,6 +53,7 @@ import orchestrator  # noqa: E402  (backend/orchestrator.py — the loop's propo
 import report as report_gen  # noqa: E402  (backend/report.py — LLM report drafting)
 import sessions as sessions_db  # noqa: E402  (backend/sessions.py — SQLite store)
 from cockpit import runstore as cockpit_runstore  # noqa: E402
+from cockpit import engagement as cockpit_engagement  # noqa: E402
 from cockpit.router import router as cockpit_router  # noqa: E402
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
@@ -267,6 +268,8 @@ async def lifespan(app: FastAPI):
     sessions_db.init_db()
     # cockpit run-records share that SQLite file (gitignored).
     cockpit_runstore.init_db()
+    # engagement-mode records (deliberate real-target entry) share it too.
+    cockpit_engagement.init_db()
     yield
     STATE.entries = []
     STATE.by_id = {}
@@ -634,6 +637,9 @@ class SessionDetail(BaseModel):
     # the last generated report (Markdown) + when, if any
     report_md: str | None = None
     report_generated_at: str | None = None
+    # the model that actually generated the persisted report (for correct
+    # attribution after the active LLM config changes); null for old reports
+    report_model: str | None = None
     # the engagement assistant's persisted conversation
     chat_history: list[ChatTurn] = Field(default_factory=list)
 
@@ -1026,7 +1032,7 @@ def generate_report(session_id: str) -> dict[str, Any]:
     except llm.LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
-    ts = sessions_db.save_report(session_id, report_md)
+    ts = sessions_db.save_report(session_id, report_md, model_used)
     if ts is None:  # deleted between fetch and save — unlikely
         raise HTTPException(status_code=404, detail="session not found")
     return {

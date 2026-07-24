@@ -35,10 +35,16 @@ echo "== orchestrator-loop tests (proposer cannot execute / no :kali path / gate
 echo "== engagement/report path tests (run recorded + report evidence + scope) =="
 "$PY" test_engagement.py
 
+echo "== engagement MODE tests (real-target: never-auto-run / explicit entry / no Wall-A gate / no autonomy) =="
+"$PY" test_engagement_mode.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
-  echo "== live Docker isolation PROOF (must exit 0) =="
+  echo "== live Docker isolation PROOF (lab — must exit 0) =="
   sh ../docker/proof/isolation_proof.sh
+  echo
+  echo "== live Docker FULLY-OPEN proof (engagement — Wall A down, full reach — must exit 0) =="
+  sh ../docker/proof/engage_open_proof.sh
 else
   echo
   echo "Hermetic safety tests passed."

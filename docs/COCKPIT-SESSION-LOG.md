@@ -798,3 +798,174 @@ every command must be consciously read and approved by a human who owns the cons
 isolation without keeping a human on every command is out of scope and unsafe.
 
 **DO NOT push — Zaid reviews the heuristic + that isolation / human-only / argv all still hold.**
+
+---
+
+## Session 2026-07-24 (SUPERVISED — PURE OPTION 3: real-target engagement mode, HIGHEST RISK)
+
+The "Pure Option 3" the previous session's STANDING CONDITION anticipated: give the cockpit a way to
+run against REAL authorized targets, not just the isolated lab. This REMOVES the isolation floor for
+real-target work. Built in verified increments P1–P6, committed each on branch `engagement-mode`,
+**NOT pushed**. **Lab mode is byte-for-byte unchanged** (isolation 4/4, full lab suite green).
+
+### The standing conditions, as implemented (this IS the whole safety model on real targets)
+On real targets there is **NO isolation floor and NO allowlist**. The bound between a proposed command
+and a real system is **HUMAN APPROVAL OF EVERY COMMAND + operator authorization discipline** — nothing
+else. So the design leans entirely on: a **deliberate, warned mode switch**, **human-approval of EVERY
+command (never hands-off / no batch / no approve-all)**, the **heuristic red-confirm**, and **Wall A**
+(protecting the operator's own host/LAN/metadata). `:kali` stays human-only; the agent still has ZERO
+path to it. argv only, never a shell.
+
+### TWO MODES (explicit + separate)
+- **Lab mode (default, UNCHANGED)** — execs into the isolated `hackpit-kali-sandbox` (`internal: true`);
+  `assert_isolation_proven` gate stays; isolation proof still **4/4**. Nothing about lab mode changed —
+  a bare exec (no `engagement_id`) always takes the lab path.
+- **Engagement mode (new)** — execs into an egress-capable sandbox against a human-named real target.
+  Entering it is a **deliberate, explicit action** with a red warning ("You are about to leave the
+  isolated lab … you are responsible for authorization and staying in scope … every command is yours
+  to approve"). It **cannot be entered accidentally** (needs an explicit `POST /cockpit/engagement/enter`
+  with the target + a non-empty authorization ack → an `engagement_id`), and the UI **always shows the
+  active mode + target**.
+
+### WALL A — the guard that replaces the isolation floor (P1, inverted proof 9/9)
+The engagement sandbox reaches the **public internet** but **DROPS** the operator's host, the LAN
+(RFC1918 10/8, 172.16/12, 192.168/16), and link-local/metadata (169.254/16). **Stricter than :kali on
+purpose — this box is the AGENT's path.** Implemented WITHOUT giving the sandbox NET_ADMIN:
+- `engage-firewall` (the ONLY engagement box with NET_ADMIN) installs the OUTPUT DROP rules and holds
+  the netns open; `engage-sandbox` **shares that netns** (`network_mode: service:engage-firewall`) so it
+  inherits Wall A while keeping `cap_drop: ALL` + `no-new-privileges` (it cannot alter the rules).
+- The DROP matches on DESTINATION, so internet traffic that merely transits the bridge gateway is fine,
+  while packets destined to the gateway/host/LAN/metadata are dropped — "reach out, never turn inward".
+- **`docker/proof/engage_wall_a_proof.sh` (INVERTED): 9/9 PASS** — from inside the sandbox: internet
+  reachable (example.com 200, 1.1.1.1 OK); 169.254.169.254, 10/192.168/172.16, host.docker.internal,
+  and the bridge gateway all UNREACHABLE. Lab isolation proof unaffected (still 4/4).
+
+### Mode-aware gates + NEVER-AUTO-RUN (P2/P3, test-locked)
+- **Routing (P2):** `ExecRequest.engagement_id` → if it names an ACTIVE engagement, run against the
+  `engage-sandbox` + that named target with the Wall-A gate; else the lab path, unchanged. An
+  unknown/exited id is **REFUSED (gate=engagement)**, never silently downgraded to lab — checked in BOTH
+  `validate_request` and at run time (a run can never fall back to lab against a real-target id).
+- **Engagement gates, in order:** `engagement` (explicit entry) → `target` (best-effort lock to the
+  named target) → **`approval` (NEVER-AUTO-RUN: every command needs an individual `approved=true`; no
+  batch, no approve-all)** → `danger` (heuristic red-confirm) → **`wall_a`** (replaces isolation:
+  `assert_wall_a_holds()` verifies, before every exec, that the firewall+sandbox are up, the sandbox
+  shares the firewall netns, and the LIVE iptables ruleset drops every Wall-A range — fail-closed).
+- **NEVER-AUTO-RUN, enforced:** engagement + `approved=False` → `gate=approval` (asserted). The guided
+  **loop (the autonomy mechanic) is deliberately lab-only** — engagement mode has **no loop, no batch,
+  no approve-all** in the UI, and `test_orchestrator_has_no_engagement_capability` source-locks that the
+  orchestrator/loop can never set an `engagement_id`, enter mode, or resolve one. Real targets are never
+  hands-off.
+- **UI (P3):** an always-visible target-mode switch (`lab · isolated` vs `engagement · real target`,
+  ringed red); a warned entry (target + authorization ack); an always-shown `ENGAGEMENT · REAL TARGET ·
+  target locked to <host> · Wall A holding` indicator; and a **manual approve-each** command surface.
+
+### Record + report (P4)
+`RunRecord.mode` (`lab`|`engagement`, persisted + migrated in the run store) drives the report: a
+real-target run is headed **"REAL-TARGET ENGAGEMENT · target <host>"** in the authoritative Evidence
+section and tagged **"[EXECUTED · REAL-TARGET ENGAGEMENT]"** in the prompt, with an explicit "attribute
+findings to the correct target, never blur the two" directive — a real-target finding can never be
+mistaken for lab evidence.
+
+### Tests (P5) — `backend/test_engagement_mode.py`, 16 checks, wired into `run_safety_tests.sh`
+Hermetic (no Docker/LLM). Locks: Wall A (simulated inverted — refuses on down firewall / unshared netns
+/ a missing DROP / a docker error); NEVER-AUTO-RUN (approved=False → approval); EXPLICIT ENTRY (un-entered
+/ exited id → engagement; entry needs an auth ack; exit fail-closes the executor); target-lock to the
+named target; heuristic still fires; gate order; Wall A reached last; **lab mode unchanged** (Wall A blows
+up if ever called in lab mode — it never is); **no autonomy on real targets** (orchestrator/loop has no
+engagement capability); **agent still ZERO :kali path**; mode round-trips through the store. **All green;
+full safety suite green** (attack-path + cockpit + :kali + loop + engagement + engagement-mode).
+
+### P6 — e2e, LIVE against the AUTHORIZED test target scanme.nmap.org (Nmap's official scan host)
+Through the real gated executor (`docker exec` into the Wall-A sandbox), llm restored to
+`{claude-agent-sdk, opus}` (Ollama `dolphin-llama3` used only to compose the demo path — no credit burned):
+- **Deliberate entry** → `engagement_id`; UI shows `ENGAGEMENT · REAL TARGET · target locked to
+  scanme.nmap.org · Wall A holding`.
+- **NEVER-AUTO-RUN (live):** the same command with `approved=false` → **403 gate=approval**.
+- **EXPLICIT-ENTRY (live):** a bogus `engagement_id` → **403 gate=engagement**.
+- **REAL RECON (live):** `nmap -sT -Pn -p 22,80 scanme.nmap.org` → ran in the Wall-A sandbox against
+  **45.33.32.156**, real result (22/tcp ssh), **exit 0**, recorded with `mode=engagement`. Verified in
+  the browser too (terminal: `▶ run … → scanme.nmap.org [engagement]`, exit 0). Screenshots captured.
+- **WALL A blocks a host/LAN probe (live, through the executor):** entered an engagement whose target is
+  `169.254.169.254`, approved a `curl` to it → the target-lock ALLOWED it (operator named it) but **Wall
+  A dropped the packet → curl timed out, exit 28**. This proves Wall A is the real bound, protecting the
+  operator even from a self-directed inward probe — not merely the target-lock.
+- **Report (deterministic):** the recorded scanme run renders as `### run-… · REAL-TARGET ENGAGEMENT ·
+  target scanme.nmap.org` with its verbatim scan output, and `[EXECUTED · REAL-TARGET ENGAGEMENT]` in
+  the prompt.
+- Exit engagement → a post-exit exec is **403 gate=engagement** (fail-closed). Config restored on disk.
+
+### SAFETY GATES (highest risk — all hold)
+Lab mode fully UNCHANGED (isolation **4/4**, lab suite green) · Engagement: **Wall A proven** (host/LAN/
+metadata blocked — inverted proof 9/9 + live-blocked through the executor), **explicit deliberate entry**,
+**human-approval of EVERY command with auto/batch DISABLED** (never-auto-run, test-locked + live-403'd),
+heuristic red-confirm, **argv only** · Agent **ZERO :kali / no autonomy path** on real targets
+(source-locked). e2e only against the explicitly authorized `scanme.nmap.org`.
+
+### THE STANDING CONDITION (restated — the whole safety model on real targets)
+On a real target there is **no isolation floor and no allowlist**. **Human approval of every command is
+the ONLY bound** between a proposed command and a real system; the heuristic and the target-lock are
+aids to the human, not guarantees, and Wall A only bounds WHERE the sandbox can reach (not WHAT runs).
+Therefore engagement mode **MUST NEVER run hands-off / autonomous / approve-all** — every command must be
+consciously read and approved by a human who owns the consequences. This is enforced in code (no batch;
+the loop is lab-only) and test-locked, but it is ultimately an operator discipline.
+
+**DO NOT push — Zaid reviews the never-auto-run enforcement, the Wall-A inverted proof, and that lab
+mode is untouched.**
+
+---
+
+## Session 2026-07-24 (SUPERVISED — flip engagement mode WALL A → DOWN, fully open like :kali)
+
+Zaid's informed decision: take the engagement sandbox from **Wall A ON** to **Wall A DOWN** — fully open,
+like `:kali`. **Changed ONLY the Wall-A part**; the mode switch, never-auto-run, human-approve-each,
+explicit-entry, target routing, and the report all stay intact and test-locked. Same branch
+`engagement-mode`, one commit, **NOT pushed**. **Lab mode still byte-for-byte unchanged (isolation 4/4).**
+
+### What changed (Wall A removed)
+- **Docker:** dropped the `engage-firewall` NET_ADMIN sidecar and its netns DROP rules (deleted
+  `Dockerfile.firewall`, `wall_a_entrypoint.sh`, `engage_wall_a_proof.sh`). `engage-sandbox` is now a
+  normal **NAT-bridge** container on `hackpit-engage` with **FULL reach** (internet + LAN + host +
+  metadata). **Kept `cap_drop: ALL` + `no-new-privileges`.**
+- **Gate:** removed `assert_wall_a_holds()` + the `wall_a` gate. Engagement gates are now
+  **explicit-entry → target-lock → NEVER-AUTO-RUN approval → heuristic red-confirm**. Config's
+  `WALL_A_BLOCKED` + `ENGAGE_FIREWALL_CONTAINER` are gone; `is_engage_sandbox_up()` is availability-only.
+- **Warning text (entry):** now states the sandbox reaches the internet, **your LAN, AND your own
+  machine**, and that **human approval of every command is the ONLY guard** (protects the target and your
+  own machine). The mode indicator/banner read **"FULLY OPEN · full network reach"**, never "Wall A".
+- **Removing the Wall-A gate did NOT weaken never-auto-run or explicit-entry** — both are unchanged and
+  still test-locked (verified live: approved=false → 403 gate=approval; bogus/exited id → 403
+  gate=engagement; post-exit → fail-closed).
+
+### Tests
+- `test_engagement_mode.py` rewritten: **dropped the inverted Wall-A tests** (Wall A is intentionally
+  gone); **kept** never-auto-run, explicit-entry, target-lock, heuristic, gate order (now
+  engagement→target→approval→danger), lab-unchanged, no-autonomy, zero-:kali, mode round-trip, enter/exit
+  registry; **added** a lock that Wall A is gone (no `wall_a` gate, no `assert_wall_a_holds`, no
+  `WALL_A_BLOCKED`/firewall const — so a broken Wall-A gate can't silently creep back). **11 checks, all
+  green.**
+- New `docker/proof/engage_open_proof.sh` (replaces the inverted proof): shell works · **internet
+  reachable** (example.com 200, 1.1.1.1) · on a **non-internal** NAT bridge · reports that inward reach is
+  now intended. **4/4 PASS.** Wired into `run_safety_tests.sh` in place of the Wall-A proof.
+
+### Verified
+- **Fully open:** `engage_open_proof.sh` 4/4; the sandbox reaches the internet AND now reaches the host
+  gateway 172.25.0.1 (curl exit 7 = refused/**reachable** in 0.6 ms — vs the old Wall-A **exit 28 timeout**).
+  NetworkMode is the plain `hackpit-engage` bridge; the firewall container is gone.
+- **Surviving guards (live, through the running executor):** enter → run `nmap -sT -Pn -p 80
+  scanme.nmap.org` (approved) → **exit 0, mode=engagement**; approved=false → 403 approval; bogus id → 403
+  engagement; post-exit → 403 engagement. Status endpoint now `{open:true, ready:true}` (no
+  `wall_a_ok`/`firewall`).
+- **Lab mode UNCHANGED:** isolation proof **4/4**; full hermetic suite green (attack-path + cockpit +
+  :kali + loop + engagement + engagement-mode). `:kali` human-only + agent-zero-:kali unchanged.
+- frontend tsc + eslint clean; `next build` emits `/cockpit`.
+
+### THE STANDING CONDITION (restated — now Wall A is DOWN)
+The engagement sandbox is **fully open**: no isolation floor, no Wall A. It can reach real targets, your
+LAN, and **your own machine**. **Human approval of every command is the ONLY guard** — it is now the sole
+thing standing between a proposed command and the internet, your network, or your own box. Therefore
+engagement mode **MUST NEVER run hands-off / autonomous / approve-all**; every command must be consciously
+read and approved by a human who owns the consequences. Enforced in code (no batch; the loop is lab-only)
+and test-locked, but ultimately an operator discipline — more load-bearing than ever now that Wall A is gone.
+
+**DO NOT push — Zaid reviews the Wall-A-down flip: that never-auto-run + explicit-entry still hold, the
+sandbox keeps cap_drop:ALL + no-new-privileges, and lab mode is untouched (isolation 4/4).**

@@ -22,6 +22,17 @@ SANDBOX_CONTAINER = os.environ.get("HACKPIT_SANDBOX_CONTAINER", "hackpit-kali-sa
 # request field) so a request can't redirect the exec elsewhere.
 KALI_OPEN_CONTAINER = os.environ.get("HACKPIT_KALI_OPEN_CONTAINER", "hackpit-kali-open")
 
+# --- Engagement sandbox (REAL-TARGET mode — FULLY OPEN, NO isolation floor, WALL A DOWN) -----
+# The egress-capable sandbox the cockpit execs into ONLY in explicit engagement mode
+# (POST /cockpit/engagement/enter). Wall A is DOWN (Zaid's informed decision): on a normal
+# NAT bridge it has FULL network reach — internet + LAN + host + cloud metadata. Nothing
+# bounds WHERE it can reach; the ONLY guard on a real-target run is HUMAN APPROVAL OF EVERY
+# COMMAND (explicit entry + approve-each + heuristic red-confirm; never hands-off). It keeps
+# cap_drop:ALL + no-new-privileges. It is NOT isolated, so it does NOT run
+# assert_isolation_proven and there is NO Wall-A gate to assert. Hardcoded (never a request
+# field) so a request can't redirect the exec elsewhere.
+ENGAGE_SANDBOX_CONTAINER = os.environ.get("HACKPIT_ENGAGE_CONTAINER", "hackpit-engage-sandbox")
+
 # --- Lab target (the ONLY thing the sandbox may be pointed at) ---------------
 # The self-hosted vulnerable app on the isolated network. While unsupervised this
 # is the ONLY allowed target — never an external, real, or user-supplied host.

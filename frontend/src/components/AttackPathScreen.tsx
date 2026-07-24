@@ -7,6 +7,7 @@ import { motion } from "framer-motion";
 import { PageShell } from "./PageShell";
 import { CopyButton } from "./CopyButton";
 import { LLMSettingsModal } from "./LLMSettingsModal";
+import { ModelBadge } from "./ModelBadge";
 import { ComposingLoader } from "./ComposingLoader";
 import {
   ApiError,
@@ -116,9 +117,6 @@ export function AttackPathScreen() {
         );
       });
   }, [result, starting, router]);
-
-  const providerLabel =
-    config?.provider === "ollama" ? "local" : config?.provider;
 
   return (
     <PageShell
@@ -406,26 +404,10 @@ export function AttackPathScreen() {
         )}
 
         {!result && !loading && !error && (
-          <div className="hp-ap-hint">
-            <span className="hp-ap-hint-dot" />
-            {config ? (
-              <>
-                composed by{" "}
-                <b>{config.model}</b>
-                <span className="hp-ap-local"> · {providerLabel}</span>{" "}
-                <button
-                  type="button"
-                  className="hp-ap-gear hp-ap-gear-inline"
-                  aria-label="LLM settings"
-                  onClick={() => setSettingsOpen(true)}
-                >
-                  ⚙
-                </button>
-              </>
-            ) : (
-              <>knowledge-base grounded · local &amp; offline by default</>
-            )}
-          </div>
+          <ModelBadge
+            config={config}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
         )}
       </div>
 

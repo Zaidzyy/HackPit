@@ -5,11 +5,15 @@ import { motion, useReducedMotion } from "framer-motion";
 import { PageShell } from "./PageShell";
 import { CockpitAttackMap } from "./CockpitAttackMap";
 import { CockpitScreen } from "./CockpitScreen";
+import { LLMSettingsModal } from "./LLMSettingsModal";
+import { ModelBadge } from "./ModelBadge";
 import {
   ApiError,
   composeAttackPath,
   createSession,
+  getLLMConfig,
   type AttackPath,
+  type LLMConfig,
 } from "@/lib/api";
 
 const PLACEHOLDER =
@@ -29,10 +33,22 @@ export function CockpitView() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [config, setConfig] = useState<LLMConfig | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const reduced = useReducedMotion();
 
   const ctrlRef = useRef<AbortController | null>(null);
   useEffect(() => () => ctrlRef.current?.abort(), []);
+
+  // Load current LLM config for the model badge (same /llm-config the attack-path
+  // screen reads — changing it here affects both).
+  useEffect(() => {
+    const ctrl = new AbortController();
+    getLLMConfig(ctrl.signal)
+      .then(setConfig)
+      .catch(() => setConfig(null));
+    return () => ctrl.abort();
+  }, []);
 
   const compose = useCallback(
     (e?: React.FormEvent) => {
@@ -88,6 +104,7 @@ export function CockpitView() {
     <PageShell crumbs={[{ label: "cockpit" }]}>
       <div className="hp-cv">
         <header className="hp-cv-head">
+          <div className="hp-ap-kicker">grounded plan · live execution</div>
           <h1 className="hp-cv-title">:cockpit</h1>
           <p className="hp-cv-sub">
             Plot an attack path, then run it — approved, one command at a time,
@@ -153,6 +170,11 @@ export function CockpitView() {
             )}
           </div>
 
+          <ModelBadge
+            config={config}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+
           {error && <p className="hp-cv-error">{error}</p>}
 
           {!path && !error && (
@@ -180,6 +202,13 @@ export function CockpitView() {
           </motion.section>
         )}
       </div>
+
+      <LLMSettingsModal
+        open={settingsOpen}
+        config={config}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={(c) => setConfig(c)}
+      />
     </PageShell>
   );
 }

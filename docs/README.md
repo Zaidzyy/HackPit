@@ -13,3 +13,11 @@ runbooks). Populated as the project grows.
 Safety invariants that hold across all Cockpit work: four independent gates (allowlist → target
 lock → approval → isolation), recon-only allowlist, lab-only target, no autonomy. M3 only *records*
 what M1 already runs and adds planning-side scope + reporting; it does not touch the execution path.
+
+**Re-verify the safety invariants in one command** (they are regression-locked by automated tests
+that fail loudly if the model is weakened — see `backend/README.md`):
+
+```sh
+sh backend/run_safety_tests.sh              # hermetic: the four gates + composer + engagement/report
+sh backend/run_safety_tests.sh --with-proof # + the live Docker isolation proof (stack must be up)
+```

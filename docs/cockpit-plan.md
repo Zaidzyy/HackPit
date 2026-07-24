@@ -5,7 +5,10 @@
 execution vs the isolated lab) COMPLETE**; **M2 (cinematic command-center UI) COMPLETE**; **M3
 (engagement integration + polish) COMPLETE** — cockpit runs are recorded into the existing engagement
 sessions layer and roll up into the reused report generator (scope + composed path + recorded
-commands/outputs). See `docs/COCKPIT-SESSION-LOG.md` for the per-increment build + verification log.
+commands/outputs); **Hardening/QA night COMPLETE** — the four safety gates are now regression-locked
+by automated tests (`sh backend/run_safety_tests.sh`), the M3 engagement/report path is tested, and an
+app-wide broken-state sweep was run (findings in the session log). See `docs/COCKPIT-SESSION-LOG.md`
+for the per-increment build + verification log.
 The roadmap table below is the original Phase-0 numbering (M2 there = "guided execution over a path");
 the build sessions numbered differently (M2 = UI, M3 = engagement integration). No autonomy has been
 built; execution stays allowlisted-recon, lab-only, human-approved (the four gates are unchanged).*

@@ -42,9 +42,9 @@ export function CockpitEngagementMode({
   const [entering, setEntering] = useState(false);
   const [enterErr, setEnterErr] = useState<string | null>(null);
 
-  // loop (drafts, human approves each) vs manual approve-each. Defaults to manual on a real
-  // target (the more conservative surface). The loop DRAFTS; never-auto-run still gates every run.
-  const [engExecMode, setEngExecMode] = useState<"loop" | "manual">("manual");
+  // loop (drafts, human approves each) vs manual approve-each. Defaults to the guided loop for
+  // symmetry with lab mode; never-auto-run still gates every run (the loop drafts, you approve).
+  const [engExecMode, setEngExecMode] = useState<"loop" | "manual">("loop");
 
   // command surface
   const [command, setCommand] = useState("nmap");
@@ -293,15 +293,22 @@ export function CockpitEngagementMode({
         </button>
       </div>
 
-      {engExecMode === "loop" && sessionId ? (
+      {engExecMode === "loop" ? (
         /* The loop DRAFTS proposals; each approved run routes through _validate_engagement
-           (target -> approval -> danger) with this engagement's id. It never
-           fires without your click. */
-        <CockpitLoop
-          sessionId={sessionId}
-          engagementId={active.engagement_id}
-          onRunRecorded={onRunRecorded}
-        />
+           (target -> approval -> danger) with this engagement's id. It never fires without
+           your click. Needs a saved engagement (sessionId) to propose against — mirrors lab. */
+        sessionId ? (
+          <CockpitLoop
+            sessionId={sessionId}
+            engagementId={active.engagement_id}
+            onRunRecorded={onRunRecorded}
+          />
+        ) : (
+          <p className="hp-cv-hint">
+            The guided loop needs a saved engagement to propose against — it wasn&apos;t
+            created. Re-plot the path, or switch to <b>manual</b> to run commands yourself.
+          </p>
+        )
       ) : (
       <>
       <section className="hp-ck-builder">

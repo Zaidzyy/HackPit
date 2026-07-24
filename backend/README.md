@@ -41,6 +41,10 @@ sh backend/run_safety_tests.sh --with-proof # + the live structural isolation pr
   so the hermetic run needs no daemon.
 - `test_attack_path.py` — composer regressions (meta-doc exclusion, target substitution scoping,
   `target_adaptation` guardrail, priority-class coverage).
+- `test_engagement.py` — the M3 engagement/report path: a cockpit run is recorded against a session
+  and listed back read-only, and the report folds the run's command + verbatim output into the
+  authoritative Evidence section (cited by run id) while surfacing out-of-scope hosts. Hermetic
+  (throwaway temp DB, no live LLM).
 - `docker/proof/isolation_proof.sh` — the live structural proof: the sandbox reaches the lab and
   nothing else (no default route off the `internal:true` bridge). Must exit 0.
 

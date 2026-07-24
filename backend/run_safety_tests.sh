@@ -26,6 +26,9 @@ echo "== attack-path composer regressions =="
 echo "== cockpit safety-layer tests (allowlist / target / approval / isolation / order) =="
 "$PY" test_cockpit.py
 
+echo "== engagement/report path tests (run recorded + report evidence + scope) =="
+"$PY" test_engagement.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (must exit 0) =="

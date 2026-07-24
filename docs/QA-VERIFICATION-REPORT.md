@@ -138,3 +138,25 @@ During browser automation, `Page.captureScreenshot` repeatedly timed out (30s "r
 - **`tsc` clean; `next build` clean (exit 0).**
 - **Bugs: 0 new critical.** 4 items LOGGED (1 pre-existing lint baseline, 1 default-model reliability, 1 known report-attribution, 1 animation-perf observation), 0 fixed (none were safe/trivial per the rules). No safety gate was weakened.
 - **`llm_config.json` restored to frontier** (`claude-agent-sdk`/`opus`). **Not pushed.**
+
+---
+
+## Post-QA loose ends (follow-up session, same day)
+
+Cleaned up 3 actionable items + documented 1, all behavior-preserving, on the `engagement-mode` branch (the QA precondition "run on main after merge" was not met — `engagement-mode` is **not** merged into `main`; Zaid authorized doing the work on the branch directly). No safety gate weakened; lab mode untouched. Committed as focused local commits — **not pushed**.
+
+| Item | Commit | What changed | Verified |
+|---|---|---|---|
+| **L1** — default Ollama model (was LOGGED-2) | `13bb45b` | `DEFAULTS` + `PROVIDER_DEFAULT_MODEL` + docstring: `qwen3:8b` → `llama3.1:8b`. (`<think>` stripping was already applied before JSON extraction via `extract_json`→`strip_think`; the "unusable output → 503" guard is untouched.) | `POST /attack-path` on the new default → clean 5-phase/8-step path, **no 503** |
+| **L2** — persist `report_model` (was LOGGED-4) | `bc42823` | New `report_model` column (migration-safe `ADD COLUMN … DEFAULT NULL` + in `CREATE TABLE`); `save_report(…, report_model)` stores `model_used`; `get_session`/`SessionDetail`/api.ts return it; `ReportScreen` attributes to `report_model` when present, falls back to current config only for old (null) reports (routed through the async path → no new lint line) | Generate with `llama3.1:8b` → persisted; switch active model to `qwen3:8b` → `GET /sessions/{id}` still reports **`llama3.1:8b`** |
+| **L3** — never-auto-run belt-and-suspenders | `0538313` | In `iter_run`'s **engagement branch only**: if `not approved` → yield one `rejected`/`approval` and return, even when `prevalidated=True`. Pure no-op for valid flows; **lab branch byte-for-byte unchanged**. + new regression test | New test PASS: `iter_run(prevalidated=True)` + active engagement + `approved=False` → exactly one `rejected` (gate=approval), **nothing runs**. All existing engagement/never-auto-run/explicit-entry tests still green |
+| **L4** — document lint baseline (was LOGGED-1) | `29e9468` | `frontend/AGENTS.md`: the 10 `react-hooks/*` errors are an accepted pre-existing baseline; `next build` passes exit 0; only `npm run lint` affected; do NOT auto-fix | No code change |
+
+### Re-run verification (all green)
+- `sh backend/run_safety_tests.sh` — **all 6 suites PASS** (incl. the new *BELT-AND-SUSPENDERS* engagement test).
+- `isolation_proof.sh` — **4/4** (lab reaches lab, not internet/host).
+- `engage_open_proof.sh` — **4/4** (engagement fully open; the only guard is human-approve-each).
+- `tsc --noEmit` — **clean (exit 0)**; `next build` — **exit 0** (12 routes, 9/9 static pages).
+- `eslint` — unchanged at the **11-problem baseline** (0 new). `llm_config.json` **restored to frontier**. Backend healthy. **Not pushed.**
+
+**Net LOGGED status after this session:** LOGGED-1 → documented (accepted); LOGGED-2 → fixed (L1); LOGGED-3 (animation renderer jank) → still open (needs profiling, no safe one-liner); LOGGED-4 → fixed (L2). L3 is a defense-in-depth hardening of the sole engagement floor.

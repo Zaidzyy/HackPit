@@ -91,11 +91,11 @@ def test_per_command_arg_rules() -> None:
     ok, _ = A.validate("whatweb", ["--color=never", "http://hackpit-lab-target:3000"])
     assert ok, "plain whatweb fingerprint must be allowed"
 
-    # the allowlist is EXACTLY the recon-only M1 set — a regression that adds a
-    # weaponised tool must trip this (update deliberately, with review, if it changes)
-    assert set(A.ALLOWLIST) == {"nmap", "curl", "whatweb"}, (
-        "allowlist changed — M1 is recon-only (nmap/curl/whatweb). Expanding it is a "
-        "deliberate, reviewed change, not an accident."
+    # nmap/curl/whatweb are the STRICT recon tools — a regression that loosens one of
+    # them (or removes one) must trip this. Active tools are asserted separately below.
+    assert {c for c in A.ALLOWLIST if not A.ALLOWLIST[c].active} == {"nmap", "curl", "whatweb"}, (
+        "the strict recon set changed — nmap/curl/whatweb must stay strict; expanding or "
+        "loosening it is a deliberate, reviewed change, not an accident."
     )
     print("  per-command arg rules: PASS")
 
@@ -200,7 +200,11 @@ def test_flag_schema_frozen() -> None:
         "curl": ({"-s", "-S", "-i", "-I", "-L", "-v", "-X"}, {"-X"}),
         "whatweb": ({"-a", "--color=never", "-v"}, set()),
     }
-    assert set(A.ALLOWLIST) == set(frozen), "command set changed — see test_per_command_arg_rules"
+    # recon tools stay strict-frozen; the active tools (all-flags) are frozen separately
+    # in test_active_tools_frozen. The command set is exactly recon ∪ active.
+    assert set(A.ALLOWLIST) == set(frozen) | {"sqlmap", "ffuf", "nuclei"}, (
+        "command set changed — adding/removing a tool is a deliberate, reviewed change."
+    )
     for name, (flags, vflags) in frozen.items():
         spec = A.ALLOWLIST[name]
         assert spec.allowed_flags == frozenset(flags), (

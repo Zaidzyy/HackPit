@@ -5,26 +5,27 @@ that decide whether a (command, args) pair is permitted. It is safe to import an
 unit-test before any sandbox exists, and it is one of the three independent safety
 layers (see docs/cockpit-plan.md §c, Layer 3).
 
-Design:
-* Only commands in ``ALLOWLIST`` may ever run.
-* Args are validated conservatively: no shell metacharacters (defense in depth even
-  though we exec argv-style, never through a shell); each command's own arg rule; and
-  a STRICT per-command flag allowlist — every flag/option a command receives must be on
-  that command's ``allowed_flags``, or the request is rejected at the allowlist gate,
-  naming the offending flag. ``allowed_flags`` is authoritative, not advisory.
-* The target-lock (a host arg must be the lab) is enforced together with this by the
-  executor, using :func:`extract_hostish` + ``config.LAB_TARGET_ALIASES``.
+Two command MODES (this is the load-bearing distinction):
 
-Why strict flags matter: when active tools land later (sqlmap, ffuf, nuclei…) they
-carry genuinely dangerous flags (``--os-shell``, ``--file-write``, ``-e``, intrusive
-``--script``…) AND legitimately need metacharacters in payload args, so the metachar
-filter can no longer blanket-apply. The load-bearing defense then becomes target-lock +
-isolation + this strict per-command flag schema. Hardening it now, while the allowlist
-is still recon-only, keeps any mistake low-stakes.
+* RECON tools (``nmap``/``curl``/``whatweb``) — ``active=False`` (STRICT). Every flag must
+  be on that command's ``allowed_flags`` or the request is rejected at the allowlist gate,
+  naming the offending flag; args must be metachar-free. ``allowed_flags`` is authoritative,
+  not advisory. Recon stays locked down — nothing here loosens it.
+* ACTIVE web-exploitation tools (``sqlmap``/``ffuf``/``nuclei``) — ``active=True``. Full
+  capability: ALL flags are permitted (no flag-allowlist rejection), because these tools
+  legitimately need dangerous flags and metacharacter payloads to exploit the lab. The
+  safety promise here is NOT "block the dangerous flag" but "you can't approve it by
+  ACCIDENT": each command's ``dangerous_flags`` are DETECTED (never blocked) in every form
+  by the hardened parser, shown RED, and require an explicit second confirmation to run
+  (see :func:`dangerous_flags_present`; enforced by the executor's danger gate).
 
-M1 web-module scope: recon-only, read-mostly tools. No weaponized payloads, no
-arbitrary binaries. Extending the set — commands OR a command's ``allowed_flags`` — is a
-deliberate, reviewed code change (a frozen-schema test trips on any widening).
+The load-bearing defenses for active tools (the risk turn): argv exec (no shell → metachars
+can't inject); per-tool target-lock (each tool bound to the lab via its ``target_flags``);
+isolation (no egress); human approval + RED-CONFIRM on dangerous flags; and the hardened
+parser reliably DETECTING every dangerous flag (a missed form = a silent dangerous approval).
+
+Extending the set — commands, a recon command's ``allowed_flags``, or a ``dangerous_flags``
+set — is a deliberate, reviewed code change (a frozen-schema test trips on any change).
 """
 
 from __future__ import annotations
@@ -44,17 +45,30 @@ class CommandSpec:
 
     name: str
     description: str
-    # Flags/options that are explicitly permitted. STRICT: any flag token a command
-    # receives that is not resolvable to this set is rejected at the allowlist gate.
-    # Entries are canonical flag tokens: short (``-s``), atomic multi-char (``-sV``,
-    # ``-T4``, ``-p-``), long (``--color``), or a pinned long=value form
+    # RECON (active=False): the STRICT flag allowlist — any flag not resolvable to this set
+    # is rejected. Entries are canonical flag tokens: short (``-s``), atomic multi-char
+    # (``-sV``, ``-T4``, ``-p-``), long (``--color``), or a pinned long=value form
     # (``--color=never``, allowing only that exact value).
+    # ACTIVE (active=True): NOT used for rejection — all flags are permitted. Still used by
+    # the parser to recognize atomic multi-char short flags so they aren't mis-decomposed.
     allowed_flags: frozenset[str] = field(default_factory=frozenset)
-    # Flags that consume the FOLLOWING token as their value (e.g. nmap ``-p 3000``,
-    # curl ``-X GET``). Needed so a value — even one that looks like a flag or a
-    # negative number — is treated as a value, not misread as an (un-listed) flag.
-    # Each entry must also appear in ``allowed_flags``.
+    # Flags that consume the FOLLOWING token as their value (recon: nmap ``-p 3000``, curl
+    # ``-X GET``; active: sqlmap ``-u <url>``/``--data <payload>``, ffuf ``-u``/``-w``…).
+    # Needed so a value — even one that looks like a flag, a negative number, or a
+    # metachar-laden payload — is treated as a value, not misread as a flag.
     value_flags: frozenset[str] = field(default_factory=frozenset)
+    # ACTIVE tools only: all flags permitted (no strict flag-allowlist rejection), and
+    # metachars are allowed in VALUE args (payloads) — never in flag names, never for recon.
+    active: bool = False
+    # ACTIVE tools only: the escalation flags to DETECT (never block) and surface RED —
+    # anything that runs code, touches the target's OS/filesystem, or loads arbitrary
+    # code/config. Detected in EVERY form by the hardened parser; a match requires an
+    # explicit confirm before the command can run.
+    dangerous_flags: frozenset[str] = field(default_factory=frozenset)
+    # ACTIVE tools only: the flag(s) whose VALUE is the target (sqlmap ``-u``/``--url``,
+    # ffuf ``-u``, nuclei ``-u``/``-target``, nikto ``-h``). The target-lock binds each of
+    # these to the lab. A subset of ``value_flags``.
+    target_flags: frozenset[str] = field(default_factory=frozenset)
     # Max number of args (flags + operands) accepted, a rough DoS/typo guard.
     max_args: int = 24
     # Optional extra per-command validator: (args) -> (ok, reason).
@@ -99,12 +113,77 @@ ALLOWLIST: dict[str, CommandSpec] = {
         allowed_flags=frozenset({"-a", "--color=never", "-v"}),
         max_args=8,
     ),
+    # --- ACTIVE web-exploitation tools (all-flags; dangerous flags detected + red-confirm) ---
+    "sqlmap": CommandSpec(
+        name="sqlmap",
+        description="SQL-injection exploitation against the lab (all flags; dangerous flags need confirm).",
+        active=True,
+        # target is -u/--url; other value-flags listed so payloads/values aren't misread as flags.
+        target_flags=frozenset({"-u", "--url"}),
+        value_flags=frozenset(
+            {
+                "-u", "--url", "-p", "--data", "-r", "--cookie", "-H", "--header", "--headers",
+                "--method", "-D", "-T", "-C", "-U", "--dbms", "--level", "--risk", "--technique",
+                "--tamper", "--proxy", "--user-agent", "-A", "--threads", "--time-sec",
+                "--os-cmd", "-e", "--eval", "--file-read", "--file-write", "--file-dest",
+                "--sql-query", "--dbms-cred", "--config", "-c",
+            }
+        ),
+        # Runs code / touches the target OS or filesystem / loads arbitrary scripts.
+        dangerous_flags=frozenset(
+            {
+                "--os-shell", "--os-cmd", "--os-pwn", "--os-bof", "--os-smbrelay",
+                "--sql-shell", "-e", "--eval",
+                "--file-read", "--file-write", "--file-dest",
+                "--tamper",  # loads arbitrary tamper (Python) scripts
+            }
+        ),
+        max_args=40,
+    ),
+    "ffuf": CommandSpec(
+        name="ffuf",
+        description="Web fuzzer against the lab (all flags; dangerous flags need confirm).",
+        active=True,
+        target_flags=frozenset({"-u"}),
+        value_flags=frozenset(
+            {
+                "-u", "-w", "-H", "-X", "-d", "-b", "-t", "-p", "-rate", "-timeout",
+                "-o", "-of", "-mc", "-ms", "-mr", "-ml", "-fc", "-fs", "-fw", "-fl", "-fr",
+                "-recursion-depth", "-replay-proxy", "-config", "-x", "-maxtime",
+            }
+        ),
+        # -config loads an arbitrary ffuf config (can carry any option, incl. a proxy/replay).
+        dangerous_flags=frozenset({"-config"}),
+        max_args=40,
+    ),
+    "nuclei": CommandSpec(
+        name="nuclei",
+        description="Template scanner against the lab (all flags; dangerous flags need confirm).",
+        active=True,
+        target_flags=frozenset({"-u", "-target"}),
+        value_flags=frozenset(
+            {
+                "-u", "-target", "-l", "-t", "-templates", "-w", "-tags", "-etags", "-itags",
+                "-severity", "-H", "-o", "-c", "-rl", "-rate-limit", "-timeout", "-retries",
+                "-proxy", "-interactsh-server", "-mc", "-ec",
+            }
+        ),
+        # -code enables code-protocol templates (arbitrary code exec); -headless drives a browser.
+        dangerous_flags=frozenset({"-code", "-headless"}),
+        max_args=40,
+    ),
 }
 
 
 def is_allowed_command(command: str) -> bool:
     """True iff ``command`` is in the hardcoded allowlist."""
     return command in ALLOWLIST
+
+
+def is_active(command: str) -> bool:
+    """True iff ``command`` is an ACTIVE (all-flags, dangerous-flag-detected) tool."""
+    spec = ALLOWLIST.get(command)
+    return spec is not None and spec.active
 
 
 def has_forbidden_chars(token: str) -> bool:
@@ -222,9 +301,14 @@ def extract_hostish(args: list[str]) -> list[str]:
 def validate(command: str, args: list[str]) -> tuple[bool, str]:
     """Pure validation of a (command, args) pair. Returns (ok, reason).
 
-    Does NOT check the target lock (that needs config + belongs with the executor);
-    this is purely: allowlisted command + sane, metachar-free args + STRICT per-command
-    flags (every flag must be on the command's ``allowed_flags``).
+    Does NOT check the target lock (that needs config + belongs with the executor) nor the
+    danger-confirm gate (dangerous flags are DETECTED, not blocked — see
+    :func:`dangerous_flags_present`). This is purely: allowlisted command + sane args +
+    per-command flag policy.
+
+    RECON (strict): metachar-free args + every flag on ``allowed_flags``.
+    ACTIVE (all-flags): every flag permitted; no flag-allowlist rejection. (E3 relaxes the
+    metachar rule for VALUE args so payloads can carry metacharacters.)
     """
     if not is_allowed_command(command):
         return False, f"command '{command}' is not on the allowlist"
@@ -233,6 +317,16 @@ def validate(command: str, args: list[str]) -> tuple[bool, str]:
     if len(args) > spec.max_args:
         return False, f"too many args for '{command}' (max {spec.max_args})"
 
+    if spec.active:
+        # ACTIVE: all flags allowed (full capability). No flag-allowlist rejection. The
+        # metachar check still runs here (belt) — E3 relaxes it to VALUE args only so
+        # payloads can carry metacharacters (argv exec makes that safe).
+        for a in args:
+            if has_forbidden_chars(a):
+                return False, f"argument contains a forbidden character: {a!r}"
+        return True, ""
+
+    # RECON (strict): metachar-free + strict per-command flag allowlist.
     for a in args:
         if has_forbidden_chars(a):
             return False, f"argument contains a forbidden character: {a!r}"

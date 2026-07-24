@@ -1,6 +1,6 @@
 # HackPit Cockpit — TWO-SANDBOX stack.
 #
-# There are two independent sandboxes with DIFFERENT network models — do not conflate them:
+# There are THREE independent sandboxes with DIFFERENT network models — do not conflate them:
 #
 # 1. hackpit-kali-sandbox  (ISOLATED — the cockpit/agent sandbox; SAFETY-CRITICAL, unchanged)
 #    On `hackpit-isolated` (`internal: true`): Docker attaches no gateway, so there is no NAT
@@ -15,7 +15,16 @@
 #    and is still disposable via `down`. An exposed :kali now reaches your host/LAN — localhost only,
 #    auth required before any exposure.
 #
-# Both sandbox images bake their tools in at build time. The lab image is pulled at `up` time.
+# 3. hackpit-engage-sandbox  (WALL-A EGRESS — the REAL-TARGET engagement sandbox; SUPERVISED)
+#    The cockpit execs here ONLY in explicit engagement mode (real authorized targets). It has NO
+#    isolation floor — it reaches the PUBLIC INTERNET — but a firewall SIDECAR
+#    (hackpit-engage-firewall, the ONLY box with NET_ADMIN) owns its netns and DROPs the operator's
+#    host + LAN (RFC1918) + link-local/metadata (169.254/16) = Wall A. The sandbox SHARES that netns
+#    (`network_mode: service:engage-firewall`) so it stays cap_drop ALL + no-new-privileges and still
+#    cannot turn inward on you. Wall-A is stricter than :kali on purpose — this is the AGENT's path,
+#    behind human-approval-of-EVERY-command (never hands-off). Proof: engage_wall_a_proof.sh (inverted).
+#
+# All sandbox images bake their tools in at build time. The lab image is pulled at `up` time.
 #
 # Bring up:   docker compose -f docker/docker-compose.yml up -d --build
 # Prove:      docker/proof/isolation_proof.sh            (cockpit sandbox: egress-less — hard gate)
@@ -32,6 +41,11 @@ networks:
     driver: bridge
     # NOT internal: normal bridge with NAT egress. Reaches internet + host + LAN. Used ONLY
     # by the :kali human-only shell (hackpit-kali-open). Deliberately not isolated.
+  hackpit-engage:
+    driver: bridge
+    # NOT internal: NAT egress to the internet. This is the engagement pair's network; the
+    # firewall sidecar sits here with NET_ADMIN and installs the Wall-A OUTPUT DROP rules
+    # (host/LAN/metadata), which the sandbox inherits by SHARING the sidecar's netns.
 
 services:
   lab-target:
@@ -83,3 +97,45 @@ services:
     security_opt:
       - no-new-privileges:true
     read_only: false
+
+  engage-firewall:
+    # WALL-A firewall SIDECAR for engagement mode. The ONLY engagement box with NET_ADMIN.
+    # It installs the OUTPUT DROP rules (host/LAN/metadata) and holds the netns open; the
+    # engagement sandbox shares this netns and inherits the filter. See Dockerfile.firewall.
+    build:
+      context: .
+      dockerfile: Dockerfile.firewall
+    image: hackpit/engage-firewall:m5
+    container_name: hackpit-engage-firewall
+    hostname: hackpit-engage-firewall
+    networks:
+      - hackpit-engage
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN          # needed ONLY to program the Wall-A iptables rules
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  engage-sandbox:
+    # The REAL-TARGET engagement sandbox. SAME tool image as the isolated/open sandboxes, but
+    # it SHARES the firewall sidecar's network namespace, so its egress is Wall-A-filtered
+    # (internet yes; host/LAN/metadata no). It has NO isolation floor and NO NET_ADMIN — it
+    # cannot alter the firewall's rules. The cockpit execs here ONLY in explicit, human-entered
+    # engagement mode, with human approval of EVERY command (never hands-off). NOT for lab runs.
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    image: hackpit/kali-sandbox:m1
+    container_name: hackpit-engage-sandbox
+    # Share the firewall's netns → inherit Wall-A. (No `networks:` when network_mode is set.)
+    network_mode: "service:engage-firewall"
+    depends_on:
+      - engage-firewall
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+    restart: unless-stopped

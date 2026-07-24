@@ -1,0 +1,29 @@
+# HackPit Cockpit — engagement-mode WALL-A firewall sidecar.
+#
+# This tiny container OWNS the network namespace that the egress-capable engagement
+# sandbox SHARES (compose `network_mode: "service:engage-firewall"`). It is the ONLY
+# container in the engagement pair with NET_ADMIN; the sandbox itself stays cap_drop:ALL
+# + no-new-privileges and inherits this netns' egress filter.
+#
+# WALL A: allow the public internet, DROP the operator's host + LAN (RFC1918) + link-local
+# and cloud metadata (169.254/16). The DROP matches on DESTINATION IP, so internet traffic
+# that merely TRANSITS the bridge gateway is unaffected, while packets destined TO the
+# gateway/host/LAN/metadata are dropped. Rules are installed by the entrypoint and held
+# live by `sleep infinity`; the backend re-reads them (assert_wall_a_holds) before every
+# engagement exec, so a flushed ruleset fails the gate.
+FROM debian:stable-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        iptables \
+        iproute2 \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY wall_a_entrypoint.sh /usr/local/bin/wall_a_entrypoint.sh
+RUN chmod +x /usr/local/bin/wall_a_entrypoint.sh
+
+# Runs as root (NET_ADMIN is needed to program iptables). The sandbox that shares this
+# netns runs unprivileged and drops all caps — it cannot alter these rules.
+ENTRYPOINT ["/usr/local/bin/wall_a_entrypoint.sh"]

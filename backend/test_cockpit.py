@@ -100,6 +100,122 @@ def test_per_command_arg_rules() -> None:
     print("  per-command arg rules: PASS")
 
 
+def test_every_allowed_flag_passes() -> None:
+    """Every flag on a command's allowed_flags must validate (recon usage stays working).
+
+    Value-flags are given a benign value; all others are bare. This is the positive
+    half of the strict gate — the negative half (un-listed flags rejected) is below.
+    """
+    sample_value = {"nmap": "80,443", "curl": "GET", "whatweb": "x"}
+    for name, spec in A.ALLOWLIST.items():
+        for flag in sorted(spec.allowed_flags):
+            args = [flag]
+            if flag in spec.value_flags:
+                args.append(sample_value[name])
+            ok, reason = A.validate(name, args)
+            assert ok, f"allowed flag {flag!r} for {name} must validate — got: {reason}"
+    print("  every allowed flag validates: PASS")
+
+
+def test_unlisted_flags_rejected_and_named() -> None:
+    """A flag NOT on a command's allowed_flags is rejected AT THE ALLOWLIST GATE, and the
+    reason names the offending flag — in short, long, cluster, and =-joined forms."""
+    # (command, args, substring the reason must contain)
+    for cmd, args, needle in (
+        ("nmap", ["-O", "hackpit-lab-target"], "-O"),                 # short: OS detect
+        ("nmap", ["--min-rate", "1000", "hackpit-lab-target"], "--min-rate"),  # long
+        ("curl", ["--data", "x", "http://hackpit-lab-target/"], "--data"),     # long
+        ("curl", ["-sZ", "http://hackpit-lab-target/"], "-Z"),        # cluster: name the letter
+        ("whatweb", ["--color=always", "http://hackpit-lab-target/"], "--color=always"),  # wrong pin
+    ):
+        ok, reason = A.validate(cmd, args)
+        assert not ok, f"{cmd} {args} must be rejected by the strict flag gate"
+        assert needle in reason, f"reason must NAME {needle!r} — got: {reason}"
+
+    # and the rejection really is the ALLOWLIST gate (before target/approval/isolation),
+    # so it stops an unsafe request at the first gate, exactly like a bad command does.
+    r = E.validate_request(
+        ExecRequest(command="nmap", args=["-O", "hackpit-lab-target"], approved=True)
+    )
+    assert r is not None and r.gate == "allowlist" and "-O" in r.reason, (
+        "an un-listed flag must reject at the allowlist gate, naming the flag"
+    )
+    print("  un-listed flags rejected and named (at the allowlist gate): PASS")
+
+
+def test_flag_parser_forms() -> None:
+    """The flag parser is the load-bearing piece — it must classify EVERY form, and fail
+    CLOSED on ambiguity. Tested against a synthetic spec so all forms are exercised
+    deterministically, independent of which flags the recon commands happen to expose.
+
+    ``_first_disallowed_flag(spec, args)`` returns None when all flags are permitted, or
+    the offending flag token. Operands and value-flag VALUES are never misread as flags.
+    """
+    syn = A.CommandSpec(
+        name="syn",
+        description="synthetic — parser fixture",
+        allowed_flags=frozenset({"-a", "-b", "-c", "-x", "--flag", "--opt", "--pin=on"}),
+        value_flags=frozenset({"-x", "--opt"}),
+    )
+
+    def ok(args: list[str]) -> None:
+        bad = A._first_disallowed_flag(syn, args)
+        assert bad is None, f"{args} should be permitted — parser flagged {bad!r}"
+
+    def bad(args: list[str], expected: str) -> None:
+        got = A._first_disallowed_flag(syn, args)
+        assert got == expected, f"{args} should reject {expected!r} — parser returned {got!r}"
+
+    # combined short, each letter a flag (the '-sVn' shape)
+    ok(["-abc"])
+    bad(["-abz"], "-z")                       # one bad letter in a cluster is named
+    # short value-flag: space form, and the value is NOT re-scanned as a flag
+    ok(["-x", "val"])
+    ok(["-x", "-z"])                          # flag-LIKE value not misread
+    ok(["-x", "-5"])                          # negative-number value not misread
+    # short value-flag: inline getopt form ('-xVALUE'), remainder is the value
+    ok(["-xval"])
+    ok(["-x-z"])                              # inline value that looks like a flag
+    ok(["-abx", "val"])                       # cluster ending in a value-flag + space value
+    # long forms: bool, unknown, =-joined pinned (exact value only), value-flag
+    ok(["--flag"])
+    bad(["--nope"], "--nope")
+    ok(["--pin=on"])
+    bad(["--pin=off"], "--pin=off")           # pinned flag: only the exact value passes
+    ok(["--opt", "val"])
+    ok(["--opt", "-z"])                       # long value-flag: flag-like value not misread
+    ok(["--opt=anything"])                    # long value-flag: =-joined arbitrary value
+    # operands are not flags; '--' is deliberately NOT an operand marker (fail closed)
+    ok(["operand", "-", "hackpit-lab-target"])
+    bad(["--"], "--")
+    print("  flag parser forms (combined/joined/valued/flag-like) resolve correctly: PASS")
+
+
+def test_flag_schema_frozen() -> None:
+    """FREEZE the per-command flag schema. Widening (or narrowing) a command's
+    allowed_flags / value_flags trips this ON PURPOSE — extending the strict schema is a
+    deliberate, reviewed change, never an accident (mirrors the frozen command SET)."""
+    frozen: dict[str, tuple[set[str], set[str]]] = {
+        "nmap": ({"-sV", "-sT", "-sS", "-p", "-p-", "-T4", "-T3", "-Pn", "-n", "-oN-"}, {"-p"}),
+        "curl": ({"-s", "-S", "-i", "-I", "-L", "-v", "-X"}, {"-X"}),
+        "whatweb": ({"-a", "--color=never", "-v"}, set()),
+    }
+    assert set(A.ALLOWLIST) == set(frozen), "command set changed — see test_per_command_arg_rules"
+    for name, (flags, vflags) in frozen.items():
+        spec = A.ALLOWLIST[name]
+        assert spec.allowed_flags == frozenset(flags), (
+            f"{name} allowed_flags changed to {set(spec.allowed_flags)} — widening the "
+            f"strict flag schema is a deliberate, reviewed change, not an accident."
+        )
+        assert spec.value_flags == frozenset(vflags), (
+            f"{name} value_flags changed to {set(spec.value_flags)} — reviewed change only."
+        )
+        assert spec.value_flags <= spec.allowed_flags, (
+            f"{name} value_flags must be a subset of allowed_flags"
+        )
+    print("  flag schema frozen: PASS")
+
+
 def test_target_lock() -> None:
     for args in (
         ["-sV", "hackpit-lab-target"],
@@ -276,6 +392,10 @@ if __name__ == "__main__":
     test_allowlist_validation()
     test_forbidden_metachars()
     test_per_command_arg_rules()
+    test_every_allowed_flag_passes()
+    test_unlisted_flags_rejected_and_named()
+    test_flag_parser_forms()
+    test_flag_schema_frozen()
     test_target_lock()
     test_gate_order_rejects_before_execution()
     test_approval_gate()

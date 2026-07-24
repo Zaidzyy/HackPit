@@ -40,27 +40,35 @@ _MAX_PLAN_STEPS = 30
 
 def _system_prompt() -> str:
     lab = config.LAB_TARGET_HOST
-    cmds = ", ".join(_ALLOWED)
+    recon = ", ".join(sorted(c for c in _ALLOWED if not allowlist.is_active(c)))
+    active = ", ".join(sorted(c for c in _ALLOWED if allowlist.is_active(c)))
     return (
-        "You are driving an AUTHORIZED, RECON-ONLY penetration test against a single, "
-        "ISOLATED lab target. You do NOT run commands yourself — you propose ONE next "
-        "command and a human approves it before it runs.\n"
+        "You are driving an AUTHORIZED penetration test against a single, ISOLATED lab "
+        "target (a deliberately vulnerable web app). You do NOT run commands yourself — you "
+        "propose ONE next command and a human approves it before it runs.\n"
         "HARD RULES:\n"
-        f"- You may ONLY use these commands: {cmds}. Nothing else.\n"
+        f"- You may ONLY use these commands: recon — {recon}; active exploitation — "
+        f"{active}. Nothing else.\n"
         f"- The ONLY target is the lab host '{lab}' (or a URL on it, e.g. "
-        f"http://{lab}:3000/). NEVER propose any other host, IP, or the internet.\n"
-        "- Recon/enumeration only: service/version scans, HTTP fetches, web "
-        "fingerprinting. No exploitation, no writes, no scripting engines "
-        "(no nmap --script/-sC/-A, no file output).\n"
+        f"http://{lab}:3000/). NEVER propose any other host, IP, or the internet. Active "
+        f"tools MUST point at the lab via their target flag (sqlmap -u, ffuf -u with FUZZ, "
+        f"nuclei -u/-target).\n"
+        "- Work the kill chain: recon/enumerate first (service scan, HTTP fetch, "
+        "fingerprint), then exploit what you find (e.g. sqlmap against a parameter you "
+        "saw, ffuf to discover paths, nuclei to check known CVEs).\n"
+        "- Dangerous flags (e.g. sqlmap --os-shell/--file-read/-e) are ALLOWED when they "
+        "genuinely advance the test, but the human must give an EXTRA explicit confirm for "
+        "them — so only propose one when it is clearly the right next step, and say why in "
+        "the rationale.\n"
         "- Propose the SINGLE most useful next step given the plan and what has already "
-        "been run — adapt to prior results (e.g. after finding a web port, fetch it; "
-        "after a redirect, follow it). Do not repeat a command already run.\n"
-        "- When the recon in the plan is sufficiently covered, or no useful allowlisted "
-        'next step remains, return {"done": true}.\n'
+        "been run — adapt to prior results. Do not repeat a command already run.\n"
+        "- When the objective is met, or no useful allowlisted next step remains, return "
+        '{"done": true}.\n'
         "Output ONLY a JSON object, no prose, shaped exactly like:\n"
-        '{"done": false, "command": "nmap", "args": ["-sV", "-p", "3000", "'
+        '{"done": false, "command": "sqlmap", "args": ["-u", "http://'
         + lab
-        + '"], "rationale": "<1-2 sentences: why this is the next step>", '
+        + ':3000/rest/products/search?q=1", "--batch", "--dbs"], '
+        '"rationale": "<1-2 sentences: why this is the next step>", '
         '"step_id": "<the plan step id this realizes, or omit>"}'
     )
 

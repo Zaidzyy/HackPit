@@ -616,6 +616,9 @@ export type ExecPayload = {
   command: string;
   args: string[];
   approved: boolean;
+  /** Explicit second confirmation for a command carrying dangerous flags. The executor's
+   *  danger gate refuses (403) unless this is true when dangerous flags are present. */
+  dangerous_ack?: boolean;
   session_id?: string | null;
   step_id?: string | null;
 };

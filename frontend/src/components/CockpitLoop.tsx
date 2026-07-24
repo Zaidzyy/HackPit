@@ -41,6 +41,7 @@ export function CockpitLoop({
 }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [proposal, setProposal] = useState<LoopProposal | null>(null);
+  const [dangerAck, setDangerAck] = useState(false);
   const [doneReason, setDoneReason] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lines, setLines] = useState<Line[]>([]);
@@ -63,6 +64,7 @@ export function CockpitLoop({
     setPhase("proposing");
     setError(null);
     setProposal(null);
+    setDangerAck(false); // every new proposal must be re-confirmed if dangerous
     onStepActive?.(null);
 
     loopPropose(sessionId, avoidRef.current, ctrl.signal)
@@ -96,6 +98,8 @@ export function CockpitLoop({
 
   const approve = useCallback(() => {
     if (!proposal || !proposal.gate_ok || phase !== "awaiting") return;
+    const danger = proposal.dangerous_flags ?? [];
+    if (danger.length > 0 && !dangerAck) return; // dangerous flags need the explicit confirm
     ctrlRef.current?.abort();
     const ctrl = new AbortController();
     ctrlRef.current = ctrl;
@@ -111,6 +115,7 @@ export function CockpitLoop({
         command: proposal.command,
         args: proposal.args,
         approved: true,
+        dangerous_ack: dangerAck, // true only after the explicit confirm; ignored if none
         session_id: sessionId,
         step_id: stepId ?? undefined,
       },
@@ -155,7 +160,7 @@ export function CockpitLoop({
         // nothing runs without another explicit approve.
         propose();
       });
-  }, [proposal, phase, sessionId, onStepDone, onRunRecorded, propose]);
+  }, [proposal, phase, dangerAck, sessionId, onStepDone, onRunRecorded, propose]);
 
   const skip = useCallback(() => {
     if (proposal) avoidRef.current = [...avoidRef.current, cmdline(proposal)];
@@ -233,9 +238,15 @@ export function CockpitLoop({
       )}
 
       {/* the proposal — shown while awaiting approval or during the run */}
-      {proposal && (phase === "awaiting" || phase === "running") && (
+      {proposal && (phase === "awaiting" || phase === "running") && (() => {
+        const danger = proposal.dangerous_flags ?? [];
+        const isDanger = danger.length > 0;
+        const canApprove = proposal.gate_ok && (!isDanger || dangerAck);
+        return (
         <section
-          className={`hp-loop-proposal${proposal.gate_ok ? "" : " is-blocked"}`}
+          className={`hp-loop-proposal${proposal.gate_ok ? "" : " is-blocked"}${
+            isDanger ? " is-danger" : ""
+          }`}
         >
           <div className="hp-loop-proposal-head">
             <span className="hp-loop-proposal-tag" aria-hidden>
@@ -248,7 +259,9 @@ export function CockpitLoop({
           {proposal.rationale && (
             <p className="hp-loop-rationale">{proposal.rationale}</p>
           )}
-          <code className="hp-loop-cmd">{cmdline(proposal)}</code>
+          <code className={`hp-loop-cmd${isDanger ? " is-danger" : ""}`}>
+            {cmdline(proposal)}
+          </code>
 
           {!proposal.gate_ok && (
             <p className="hp-loop-gatewarn">
@@ -256,20 +269,49 @@ export function CockpitLoop({
             </p>
           )}
 
+          {/* dangerous flags: detected, shown RED, require an explicit confirm to approve */}
+          {isDanger && (
+            <div className="hp-loop-danger" role="alert">
+              <p className="hp-loop-danger-head">
+                ⚠ dangerous {danger.length === 1 ? "flag" : "flags"} detected —{" "}
+                <span className="hp-loop-danger-flags">{danger.join("  ·  ")}</span>
+              </p>
+              <p className="hp-loop-danger-note">
+                {danger.length === 1 ? "This flag runs" : "These flags run"} code, touch the
+                target’s OS/filesystem, or load arbitrary scripts. Nothing is blocked — but
+                approving is a conscious choice, not an accident.
+              </p>
+              {phase === "awaiting" && (
+                <label className="hp-loop-danger-ack">
+                  <input
+                    type="checkbox"
+                    checked={dangerAck}
+                    onChange={(e) => setDangerAck(e.target.checked)}
+                  />
+                  <span>
+                    Yes, run <b>{danger.join(", ")}</b> against the isolated lab.
+                  </span>
+                </label>
+              )}
+            </div>
+          )}
+
           {phase === "awaiting" && (
             <div className="hp-loop-controls">
               <button
                 type="button"
-                className="hp-ck-approve"
+                className={`hp-ck-approve${isDanger ? " is-danger" : ""}`}
                 onClick={approve}
-                disabled={!proposal.gate_ok}
+                disabled={!canApprove}
                 title={
-                  proposal.gate_ok
-                    ? "Approve and run this command in the sandbox"
-                    : "Blocked by a safety gate — cannot run"
+                  !proposal.gate_ok
+                    ? "Blocked by a safety gate — cannot run"
+                    : isDanger && !dangerAck
+                    ? "Confirm the dangerous flag(s) above to enable approval"
+                    : "Approve and run this command in the sandbox"
                 }
               >
-                APPROVE &amp; RUN
+                {isDanger ? "APPROVE (DANGEROUS) & RUN" : "APPROVE & RUN"}
               </button>
               <button type="button" className="hp-loop-skip" onClick={skip}>
                 skip
@@ -280,7 +322,8 @@ export function CockpitLoop({
             </div>
           )}
         </section>
-      )}
+        );
+      })()}
 
       {/* live / last output */}
       {lines.length > 0 && (

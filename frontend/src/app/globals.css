@@ -4458,6 +4458,62 @@ a.hp-card {
   font-size: 12.5px;
   margin: 10px 0 0;
 }
+
+/* --- dangerous-flag red-confirm (active tools) --------------------------- */
+.hp-loop-proposal.is-danger {
+  border-color: rgba(240, 60, 60, 0.6);
+  background: color-mix(in srgb, #f03c3c 7%, var(--panel));
+}
+.hp-loop-cmd.is-danger {
+  color: #ff9a86;
+  border-color: rgba(240, 60, 60, 0.45);
+}
+.hp-loop-danger {
+  margin-top: 12px;
+  border: 1px solid rgba(240, 60, 60, 0.5);
+  border-radius: 9px;
+  background: rgba(240, 60, 60, 0.08);
+  padding: 11px 13px;
+}
+.hp-loop-danger-head {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #ff6a52;
+  letter-spacing: 0.2px;
+}
+.hp-loop-danger-flags {
+  font-family: var(--font-jetbrains-mono), monospace;
+  color: #ff4d4d;
+  font-weight: 700;
+}
+.hp-loop-danger-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: color-mix(in srgb, #ff9a86 70%, var(--white));
+}
+.hp-loop-danger-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--white);
+  cursor: pointer;
+}
+.hp-loop-danger-ack input {
+  margin-top: 2px;
+  accent-color: #f03c3c;
+  cursor: pointer;
+}
+.hp-ck-approve.is-danger {
+  background: #d63a2a;
+  border-color: #ff6a52;
+}
+.hp-ck-approve.is-danger:hover:not(:disabled) {
+  background: #e5442f;
+}
 .hp-loop-controls {
   display: flex;
   align-items: center;

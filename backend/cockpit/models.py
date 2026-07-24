@@ -23,6 +23,13 @@ class ExecRequest(BaseModel):
     approved: bool = Field(
         False, description="Per-command human approval. Execution refuses unless true."
     )
+    dangerous_ack: bool = Field(
+        False,
+        description="Explicit second confirmation for a command that carries dangerous "
+        "flags (--os-shell, -e, --file-write…). When the command has any dangerous flag, "
+        "execution refuses at the danger gate unless this is true — you can't approve a "
+        "shell by accident. Ignored (no effect) when the command has no dangerous flag.",
+    )
     session_id: str | None = Field(
         None, description="Optional engagement to attach the run-record to."
     )
@@ -47,7 +54,9 @@ class ExecRejected(BaseModel):
 
     rejected: Literal[True] = True
     reason: str
-    gate: Literal["allowlist", "target", "approval", "sandbox"] = "allowlist"
+    gate: Literal["allowlist", "target", "approval", "danger", "sandbox"] = "allowlist"
+    # When gate == "danger": the dangerous flags that require an explicit confirm.
+    dangerous_flags: list[str] = Field(default_factory=list)
 
 
 class RunRecord(BaseModel):

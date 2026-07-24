@@ -151,6 +151,21 @@ def validate_request(request: ExecRequest) -> ExecRejected | None:
             reason="command not approved — set approved=true to run", gate="approval"
         )
 
+    # Danger gate: a command carrying dangerous flags needs an EXPLICIT second confirm
+    # (dangerous_ack) on top of approval — so a shell can't be approved by accident, incl.
+    # an agent-proposed one. Detection (all forms) is in allowlist.dangerous_flags_present;
+    # this NEVER blocks a dangerous flag outright, it requires the confirm.
+    dangerous = allowlist.dangerous_flags_present(request.command, request.args)
+    if dangerous and not request.dangerous_ack:
+        return ExecRejected(
+            reason=(
+                "dangerous flag(s) require an explicit confirmation before running: "
+                + ", ".join(dangerous)
+            ),
+            gate="danger",
+            dangerous_flags=dangerous,
+        )
+
     try:
         assert_isolation_proven()
     except SandboxError as exc:

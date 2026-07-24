@@ -27,11 +27,6 @@ from typing import Any
 import llm
 from cockpit import allowlist, config, executor
 
-# The commands the loop may propose (== the M1 recon allowlist). Kept in sync with
-# cockpit.allowlist.ALLOWLIST — the pre-check below uses that module directly, so this
-# is only for the prompt text.
-_ALLOWED = sorted(allowlist.ALLOWLIST)
-
 # How much of each prior run's output to feed back (keeps the prompt bounded).
 _RUN_OUTPUT_CHARS = 600
 _MAX_RUNS_FED = 12
@@ -40,29 +35,28 @@ _MAX_PLAN_STEPS = 30
 
 def _system_prompt() -> str:
     lab = config.LAB_TARGET_HOST
-    recon = ", ".join(sorted(c for c in _ALLOWED if not allowlist.is_active(c)))
-    active = ", ".join(sorted(c for c in _ALLOWED if allowlist.is_active(c)))
     return (
         "You are driving an AUTHORIZED penetration test against a single, ISOLATED lab "
         "target (a deliberately vulnerable web app). You do NOT run commands yourself — you "
         "propose ONE next command and a human approves it before it runs.\n"
         "HARD RULES:\n"
-        f"- You may ONLY use these commands: recon — {recon}; active exploitation — "
-        f"{active}. Nothing else.\n"
+        "- You may propose ANY single command (one binary + its args) — any tool on the "
+        "sandbox (nmap, curl, sqlmap, ffuf, nuclei, gobuster, nikto, and more). There is no "
+        "allowlist. It runs argv-style (never a shell), so give the binary and its args, not "
+        "a shell pipeline.\n"
         f"- The ONLY target is the lab host '{lab}' (or a URL on it, e.g. "
-        f"http://{lab}:3000/). NEVER propose any other host, IP, or the internet. Active "
-        f"tools MUST point at the lab via their target flag (sqlmap -u, ffuf -u with FUZZ, "
-        f"nuclei -u/-target).\n"
+        f"http://{lab}:3000/). NEVER propose any other host, IP, or the internet. Point the "
+        f"tool's target at the lab (e.g. -u http://{lab}:3000/…).\n"
         "- Work the kill chain: recon/enumerate first (service scan, HTTP fetch, "
-        "fingerprint), then exploit what you find (e.g. sqlmap against a parameter you "
-        "saw, ffuf to discover paths, nuclei to check known CVEs).\n"
-        "- Dangerous flags (e.g. sqlmap --os-shell/--file-read/-e) are ALLOWED when they "
-        "genuinely advance the test, but the human must give an EXTRA explicit confirm for "
-        "them — so only propose one when it is clearly the right next step, and say why in "
-        "the rationale.\n"
+        "fingerprint), then exploit what you find (e.g. sqlmap against a parameter you saw, "
+        "ffuf to discover paths, nuclei to check known CVEs).\n"
+        "- Commands that run arbitrary code (python/bash -c, nc -e, reverse shells, "
+        "msfvenom) are ALLOWED when they genuinely advance the test, but the human must give "
+        "an EXTRA explicit confirm for them — so only propose one when it is clearly the "
+        "right next step, and say why in the rationale.\n"
         "- Propose the SINGLE most useful next step given the plan and what has already "
         "been run — adapt to prior results. Do not repeat a command already run.\n"
-        "- When the objective is met, or no useful allowlisted next step remains, return "
+        "- When the objective is met, or no useful next step remains, return "
         '{"done": true}.\n'
         "Output ONLY a JSON object, no prose, shaped exactly like:\n"
         '{"done": false, "command": "sqlmap", "args": ["-u", "http://'
@@ -146,14 +140,12 @@ def build_user_prompt(plan: dict, runs: list[dict], avoid: list[str]) -> str:
 
 
 def precheck(command: str, args: list[str]) -> tuple[bool, str]:
-    """Pre-check a proposal against the REAL M1 gates that will run it: the allowlist
-    (recon commands, metachar-free args) + the target-lock (lab only). Returns
-    (ok, reason). This is advisory transparency for the UI — the executor re-checks
-    these (plus approval + isolation) at run time; nothing runs on the basis of this.
+    """Pre-check a proposal against the real run-time gate that can REJECT it: the
+    best-effort target-lock (a host-shaped token must be the lab). There is no allowlist
+    anymore, so any binary passes; a command flagged dangerous is NOT a pre-check failure
+    (it runs after an explicit confirm — see the proposal's ``dangerous_flags``). Advisory
+    transparency for the UI — the executor re-checks target + approval + danger + isolation.
     """
-    ok, reason = allowlist.validate(command, args)
-    if not ok:
-        return False, reason
     ok, reason = executor.check_target_lock(args, command)
     if not ok:
         return False, reason
@@ -199,9 +191,9 @@ def propose_next(
         }
 
     gate_ok, gate_reason = precheck(command, args)
-    # Dangerous flags are DETECTED (never blocked): surfaced so the UI shows them RED and
-    # requires an explicit confirm before approve. Empty for recon + benign active commands.
-    dangerous = allowlist.dangerous_flags_present(command, args)
+    # Heuristic danger reasons are surfaced (never a pre-check failure): the UI shows them
+    # RED and requires an explicit confirm before approve. Empty for a plainly-safe command.
+    dangerous = allowlist.dangerous_command_heuristic(command, args)
     step_id = parsed.get("step_id")
     proposal = {
         "command": command,

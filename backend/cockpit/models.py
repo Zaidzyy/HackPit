@@ -54,8 +54,9 @@ class ExecRejected(BaseModel):
 
     rejected: Literal[True] = True
     reason: str
-    gate: Literal["allowlist", "target", "approval", "danger", "sandbox"] = "allowlist"
-    # When gate == "danger": the dangerous flags that require an explicit confirm.
+    # The allowlist gate was removed; the surviving gates are these.
+    gate: Literal["target", "approval", "danger", "sandbox"] = "target"
+    # When gate == "danger": the heuristic reasons the command was flagged (for the confirm).
     dangerous_flags: list[str] = Field(default_factory=list)
 
 

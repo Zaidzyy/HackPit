@@ -25,6 +25,15 @@ from .sandbox import SandboxError, assert_isolation_proven
 
 _IPV4 = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 
+# Best-effort: a dotted token ending in one of these is a FILE operand (wordlist, output,
+# config…), not a host — so the target-lock doesn't false-reject e.g. `ffuf -w words.txt`.
+# Non-load-bearing (isolation is the real bound), so an imperfect list is fine.
+_FILE_EXTS = frozenset({
+    "txt", "json", "xml", "csv", "html", "htm", "js", "py", "conf", "cfg", "ini", "list",
+    "lst", "dic", "gz", "zip", "tar", "log", "md", "yaml", "yml", "php", "asp", "aspx",
+    "bak", "pem", "key", "crt", "db", "sqlite", "pdf", "png", "jpg", "gif", "svg", "css",
+})
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -33,8 +42,9 @@ def _now() -> str:
 def _looks_like_host(token: str) -> bool:
     """True if a token is addressing *something* (URL, dotted host, IP, host:port).
 
-    Bare words with none of these (e.g. curl's ``GET``) are NOT hosts — they cannot
-    address a non-lab machine on the isolated network and are ignored by the lock.
+    Bare words with none of these (e.g. curl's ``GET``) are NOT hosts. A dotted token that
+    is really a filename (``words.txt``) is also not a host — best-effort, since the
+    target-lock is cheap DiD, not the real bound (isolation is). A scheme'd URL always wins.
     """
     if "://" in token:
         return True
@@ -44,7 +54,8 @@ def _looks_like_host(token: str) -> bool:
     if _IPV4.match(host):
         return True
     if "." in host:
-        return True
+        ext = host.rsplit(".", 1)[-1].lower()
+        return ext not in _FILE_EXTS  # a filename operand is not a host
     return False
 
 
@@ -65,11 +76,18 @@ def _host_of(token: str) -> str | None:
     return t or None
 
 
-def _recon_target_lock(args: list[str]) -> tuple[bool, str]:
-    """RECON target-lock: every hostish operand must be the lab; at least one required.
+def check_target_lock(args: list[str], command: str | None = None) -> tuple[bool, str]:
+    """BEST-EFFORT lab target-lock: every host-shaped token in args must be the lab.
 
-    A token is either the lab alias, another host (→ reject), or a non-host operand
-    (→ ignore). Unchanged from the recon milestone.
+    This is cheap defense-in-depth (it catches e.g. ``nmap evil.com``), NOT a load-bearing
+    control: with the allowlist removed, args can be an arbitrary command whose real target
+    is invisible to any argv inspection (``python -c "...connect to X..."``, ``curl @file``,
+    a host inside a base64 blob). ISOLATION (egress-less sandbox) is the actual bound on
+    what the lab exec can reach. ``command`` is accepted for signature compatibility but is
+    no longer used to dispatch (there are no per-tool schemas).
+
+    A token is the lab alias, another host (→ reject), or a non-host operand (→ ignore).
+    At least one lab reference is required so a command isn't silently target-less.
     """
     found_lab = False
     for token in allowlist.extract_hostish(args):
@@ -84,52 +102,13 @@ def _recon_target_lock(args: list[str]) -> tuple[bool, str]:
                 return False, f"target '{host}' is not the lab — only the lab is allowed"
         # else: bare non-host operand → ignore
     if not found_lab:
-        return False, "no lab target specified — the command must target the lab"
+        return False, "no lab target specified — the command must reference the lab"
     return True, ""
-
-
-def _active_target_lock(command: str, args: list[str]) -> tuple[bool, str]:
-    """ACTIVE target-lock: bind the tool's TARGET (its ``target_flags`` value) to the lab.
-
-    Only the designated target flag(s) are lab-checked (sqlmap ``-u``, ffuf ``-u``,
-    nuclei ``-u``/``-target``) — so a wordlist/data operand with a dot is not mistaken for
-    a target host. At least one lab target is required (fail closed); isolation is the
-    backstop for any non-target egress (``--proxy``, ``-interactsh-server``…).
-    """
-    targets = allowlist.extract_active_targets(command, args)
-    if not targets:
-        return False, (
-            f"no lab target — {command} must point at the lab via its target flag "
-            "(e.g. -u http://<lab>/…)"
-        )
-    for token in targets:
-        host = _host_of(token)
-        if host not in config.LAB_TARGET_ALIASES:
-            return False, f"target '{host}' is not the lab — only the lab is allowed"
-    return True, ""
-
-
-def check_target_lock(args: list[str], command: str | None = None) -> tuple[bool, str]:
-    """Pure target-lock. Dispatches by tool MODE: active tools bind their per-tool target
-    flag to the lab; recon tools (or an unknown command) use the hostish-operand rule.
-
-    ``command`` is optional for backward compatibility — omitted → recon behavior.
-    """
-    spec = allowlist.ALLOWLIST.get(command) if command else None
-    if spec is not None and spec.active:
-        return _active_target_lock(command, args)  # type: ignore[arg-type]
-    return _recon_target_lock(args)
 
 
 def _resolved_target(command: str, args: list[str]) -> str:
     """The lab host this command targets (for the record/UI)."""
-    spec = allowlist.ALLOWLIST.get(command)
-    tokens = (
-        allowlist.extract_active_targets(command, args)
-        if spec is not None and spec.active
-        else allowlist.extract_hostish(args)
-    )
-    for token in tokens:
+    for token in allowlist.extract_hostish(args):
         host = _host_of(token)
         if token in config.LAB_TARGET_ALIASES or host in config.LAB_TARGET_ALIASES:
             return host or config.LAB_TARGET_HOST
@@ -137,11 +116,12 @@ def _resolved_target(command: str, args: list[str]) -> str:
 
 
 def validate_request(request: ExecRequest) -> ExecRejected | None:
-    """Run all four gates. Return an ExecRejected on the first failure, else None."""
-    ok, reason = allowlist.validate(request.command, request.args)
-    if not ok:
-        return ExecRejected(reason=reason, gate="allowlist")
+    """Run the surviving gates in order, returning an ExecRejected on the first failure.
 
+    The ALLOWLIST gate was removed (any binary + args may run) — argv exec keeps "what you
+    approve is what runs". The gates that remain: best-effort target-lock → human approval
+    → heuristic danger red-confirm → isolation (the real lab containment).
+    """
     ok, reason = check_target_lock(request.args, request.command)
     if not ok:
         return ExecRejected(reason=reason, gate="target")
@@ -151,17 +131,14 @@ def validate_request(request: ExecRequest) -> ExecRejected | None:
             reason="command not approved — set approved=true to run", gate="approval"
         )
 
-    # Danger gate: a command carrying dangerous flags needs an EXPLICIT second confirm
-    # (dangerous_ack) on top of approval — so a shell can't be approved by accident, incl.
-    # an agent-proposed one. Detection (all forms) is in allowlist.dangerous_flags_present;
-    # this NEVER blocks a dangerous flag outright, it requires the confirm.
-    dangerous = allowlist.dangerous_flags_present(request.command, request.args)
+    # Danger gate: a command the HEURISTIC flags as dangerous (interpreter, reverse shell,
+    # framework…) needs an EXPLICIT second confirm (dangerous_ack) on top of approval — so
+    # arbitrary code / a shell can't be approved by accident, incl. an agent-proposed one.
+    # NEVER blocks outright; requires the confirm. Over-inclusive assist — human is the gate.
+    dangerous = allowlist.dangerous_command_heuristic(request.command, request.args)
     if dangerous and not request.dangerous_ack:
         return ExecRejected(
-            reason=(
-                "dangerous flag(s) require an explicit confirmation before running: "
-                + ", ".join(dangerous)
-            ),
+            reason="this command is flagged dangerous — confirm to run: " + "; ".join(dangerous),
             gate="danger",
             dangerous_flags=dangerous,
         )

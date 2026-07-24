@@ -29,15 +29,16 @@ router = APIRouter(prefix="/cockpit", tags=["cockpit"])
 
 @router.get("/allowlist", response_model=AllowlistResponse)
 def get_allowlist() -> AllowlistResponse:
-    """The safe command set + the fixed lab target the UI may point at."""
+    """SUGGESTED commands (informational hints) + the fixed lab target.
+
+    There is no longer an allowlist gate — ANY binary may run (isolation + human approval
+    + the heuristic red-confirm are the safety). This list is just UI convenience; the
+    empty ``allowed_flags`` reflects that nothing is flag-restricted.
+    """
     return AllowlistResponse(
         commands=[
-            AllowlistItem(
-                name=spec.name,
-                description=spec.description,
-                allowed_flags=sorted(spec.allowed_flags),
-            )
-            for spec in allowlist.ALLOWLIST.values()
+            AllowlistItem(name=name, description=desc, allowed_flags=[])
+            for name, desc in allowlist.SUGGESTED_COMMANDS
         ],
         lab_target=config.LAB_TARGET_HOST,
     )

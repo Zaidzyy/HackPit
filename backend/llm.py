@@ -8,8 +8,9 @@ feature code.
 Design
 ------
 * **Default = local Ollama** (`/api/chat`, model from config, default
-  ``qwen3:8b``). Free, offline, no key. Reasoning models that emit
-  ``<think>…</think>`` are handled — the block is stripped before parsing.
+  ``llama3.1:8b`` — it grounds the composer reliably). Free, offline, no key.
+  Reasoning models (e.g. ``qwen3:8b``) that emit ``<think>…</think>`` are still
+  handled — the block is stripped before parsing.
 * **Swappable** via a *gitignored* config (``backend/llm_config.json``) or env.
   Set ``provider`` + ``api_key`` to route to openai / anthropic / openrouter
   through a thin urllib adapter — no extra dependency, no LiteLLM needed.
@@ -51,9 +52,13 @@ VALID_PROVIDERS = ("ollama", "openai", "anthropic", "openrouter", "claude-agent-
 _NO_KEY_PROVIDERS = ("ollama", "claude-agent-sdk")
 
 # Default provider is LOCAL Ollama — free, offline, needs no API key.
+# Default model is llama3.1:8b: it reliably grounds the attack-path composer.
+# qwen3:8b (a reasoning model) tends to produce steps that fail the grounding
+# pass -> a 503 "no usable steps"; llama3.1 does not. <think> blocks from any
+# reasoning model are still stripped in extract_json, so either works.
 DEFAULTS: dict[str, str] = {
     "provider": "ollama",
-    "model": "qwen3:8b",
+    "model": "llama3.1:8b",
     "host": "http://localhost:11434",  # only used by the ollama provider
 }
 
@@ -61,7 +66,7 @@ DEFAULTS: dict[str, str] = {
 # without naming a model. The Agent SDK takes a Claude alias (sonnet/opus/haiku)
 # or a full id; default to Sonnet for a strong, cost-sane frontier completion.
 PROVIDER_DEFAULT_MODEL: dict[str, str] = {
-    "ollama": "qwen3:8b",
+    "ollama": "llama3.1:8b",
     "openai": "gpt-4o-mini",
     "anthropic": "claude-opus-4-8",
     "openrouter": "openai/gpt-4o-mini",

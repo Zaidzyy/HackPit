@@ -474,6 +474,9 @@ export type Session = {
   /** Last generated report (Markdown) + when, if any. */
   report_md: string | null;
   report_generated_at: string | null;
+  /** The model that actually generated the persisted report; null for reports
+   *  saved before model attribution was persisted (UI falls back to config). */
+  report_model: string | null;
   /** The engagement assistant's persisted conversation. */
   chat_history: ChatTurn[];
 };

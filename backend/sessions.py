@@ -98,6 +98,7 @@ def init_db() -> None:
                 updated_at          TEXT NOT NULL,
                 report_md           TEXT,
                 report_generated_at TEXT,
+                report_model        TEXT,
                 chat_history        TEXT NOT NULL DEFAULT '[]'
             );
 
@@ -119,6 +120,10 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE sessions ADD COLUMN report_generated_at TEXT"
             )
+        # migrate DBs whose reports predate model attribution — old reports get
+        # NULL (the UI falls back to the current config label for those).
+        if "report_model" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN report_model TEXT")
         # migrate DBs created before the assistant chat existed — existing
         # sessions get an empty history (the NOT NULL default backfills them).
         if "chat_history" not in cols:
@@ -298,6 +303,7 @@ def get_session(session_id: str) -> dict[str, Any] | None:
         "report_generated_at": (
             row["report_generated_at"] if "report_generated_at" in keys else None
         ),
+        "report_model": row["report_model"] if "report_model" in keys else None,
         "chat_history": _load_chat(row),
     }
 
@@ -363,17 +369,21 @@ def rename_session(session_id: str, label: str) -> bool:
         return cur.rowcount > 0
 
 
-def save_report(session_id: str, report_md: str) -> str | None:
+def save_report(
+    session_id: str, report_md: str, report_model: str | None = None
+) -> str | None:
     """Persist a generated report on the session. Returns its timestamp.
 
-    Returns ``None`` if the session doesn't exist.
+    ``report_model`` is the model that ACTUALLY generated this report; it is
+    stored so the UI can attribute the report correctly even after the active
+    LLM config later changes. Returns ``None`` if the session doesn't exist.
     """
     ts = _now()
     with _write_lock, _connect() as conn:
         cur = conn.execute(
-            "UPDATE sessions SET report_md=?, report_generated_at=?, updated_at=? "
-            "WHERE id=?",
-            (report_md, ts, ts, session_id),
+            "UPDATE sessions SET report_md=?, report_generated_at=?, "
+            "report_model=?, updated_at=? WHERE id=?",
+            (report_md, ts, report_model, ts, session_id),
         )
         if cur.rowcount == 0:
             return None

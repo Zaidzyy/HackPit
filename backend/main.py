@@ -637,6 +637,9 @@ class SessionDetail(BaseModel):
     # the last generated report (Markdown) + when, if any
     report_md: str | None = None
     report_generated_at: str | None = None
+    # the model that actually generated the persisted report (for correct
+    # attribution after the active LLM config changes); null for old reports
+    report_model: str | None = None
     # the engagement assistant's persisted conversation
     chat_history: list[ChatTurn] = Field(default_factory=list)
 
@@ -1029,7 +1032,7 @@ def generate_report(session_id: str) -> dict[str, Any]:
     except llm.LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
-    ts = sessions_db.save_report(session_id, report_md)
+    ts = sessions_db.save_report(session_id, report_md, model_used)
     if ts is None:  # deleted between fetch and save — unlikely
         raise HTTPException(status_code=404, detail="session not found")
     return {

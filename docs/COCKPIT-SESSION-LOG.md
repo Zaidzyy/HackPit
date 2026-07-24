@@ -404,3 +404,64 @@ No autonomy was built (per the gate). Nothing runs outside the isolated lab. `da
 See docs/cockpit-plan.md §"Open questions for Zaid" (sandbox choice, lab target, allowlist scope,
 frontier model/key, Docker daemon start, exec transport). Note: I started Docker Desktop myself and
 ran the proof (open question #5 resolved for this session).
+
+---
+
+## Session 2026-07-24 (:kali — human-only interactive sandbox shell)
+
+Goal: build `:kali`, the ONE feature that runs **arbitrary** commands (`sh -c`) inside the
+already-isolated M1 sandbox. Built in four verified increments (K1–K4), each committed
+locally. **NOT pushed** — Zaid reviews the safety-critical bits first.
+
+### The containment model, as implemented
+Arbitrary shell is safe here ONLY because of these — all hold in code:
+
+1. **Hardcoded target container.** Every exec is `docker exec <config.SANDBOX_CONTAINER> sh -c
+   "<command>"`. The container is a code constant; `KaliRequest` has exactly two fields —
+   `command` + `session_id` — and **no** container/target/host field. Nothing in a request can
+   redirect the exec to the host, another container, or anywhere else. (`cockpit/kali.py`.)
+2. **Egress-less + hardened + disposable sandbox (M1).** `internal:true` network, `cap_drop: ALL`,
+   `no-new-privileges`. `curl evil.com` simply fails; `docker compose down -v` resets it.
+3. **Isolation re-checked before EVERY exec.** `run_kali` calls the M1 gate
+   `assert_isolation_proven` first; if the sandbox is ever on a non-internal network it raises
+   `KaliRefused` and **nothing runs** (HTTP 409). `:kali` drops M1's allowlist / target-lock /
+   per-command-approval (a human typing IS the approval) but **never** drops isolation.
+4. **Human-only.** `run_kali` is imported/called ONLY by `router.py` (the HTTP route) and
+   `test_kali.py`. The executor / attack-path / orchestrator path has **zero** reference to it
+   (`grep run_kali` confirms) — there is deliberately no code path from the autonomous agent to
+   the shell.
+5. **Audit + limits.** Every command + output is recorded to the engagement session (reuses the M1
+   run store; `target` = the sandbox itself). 60s per-command timeout; 200k-char per-stream output
+   cap. Both enforced and tested.
+6. **Local-only.** No auth. A code comment on both the module and the route states it MUST get
+   auth before any exposure/deploy. Egress is the point of `sh -c` here — there is deliberately
+   **no** fake input sanitisation pretending arbitrary shell is "safe"; the containment is the control.
+
+### Tests (regression-locked)
+`backend/test_kali.py` (hermetic; wired into `sh backend/run_safety_tests.sh`):
+- **isolation-refusal** — `assert_isolation_proven` patched to raise ⇒ `run_kali` raises + subprocess
+  is never touched + nothing recorded.
+- **hardcoded container** — argv always execs `SANDBOX_CONTAINER` even when the command *string*
+  smuggles `docker exec other-container` / another host; and `KaliRequest.model_fields == {command,
+  session_id}`.
+- **audit** — a run is recorded to the session with `target == sandbox`, `approved == True`.
+- plus timeout-contained + output-capped. All 5 pass; full safety suite green.
+
+### Live e2e (verified this session, stack up)
+`docker/proof/kali_containment_proof.sh` over the exact exec path → **4/4 PASS, CONTAINMENT PROVEN**:
+a free shell runs (`id`/`ls`), reaches the lab (`nmap hackpit-lab-target` → 3000 open), and CANNOT
+egress (`curl https://example.com` fails). Also exercised the real HTTP endpoint (`POST /cockpit/kali`)
+for `id` (exit 0, uid=1000 sandbox), `nmap` (3000 open), `curl` egress (exit 6 — blocked), and
+confirmed all four runs recorded to the engagement session. UI verified in-browser at
+`http://localhost:3000/kali`: `id` → EXIT 0, `curl https://example.com` → EXIT 6, green
+"sandbox isolated · egress blocked · shell contained to this box" banner. Frontend build + lint +
+tsc clean; `/kali` route builds.
+
+### Commits (local, NOT pushed)
+- K1 backend `:kali` shell (`cockpit/kali.py` + route)
+- K2 `:kali` terminal page (`KaliShell` + `runKali` + styles)
+- K3 `:kali` added to top nav
+- K4 containment tests + live proof, wired into the safety runner
+
+**Orchestrator-has-no-path confirmed** (grep clean). DO NOT push — Zaid reviews the safety-critical
+bits first, then pushes.

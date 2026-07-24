@@ -65,9 +65,9 @@ class ExecRejected(BaseModel):
     rejected: Literal[True] = True
     reason: str
     # LAB gates: target -> approval -> danger -> sandbox (isolation).
-    # ENGAGEMENT gates: engagement (explicit entry) -> target -> approval -> danger.
-    # (No wall_a gate — engagement mode is fully open; human-approve-each is the only bound.)
-    gate: Literal["target", "approval", "danger", "sandbox", "engagement"] = "target"
+    # ENGAGEMENT gates: engagement (explicit entry) -> scope (scope-lock network floor) ->
+    #   target -> approval (NEVER-AUTO-RUN) -> danger.
+    gate: Literal["target", "approval", "danger", "sandbox", "engagement", "scope"] = "target"
     # When gate == "danger": the heuristic reasons the command was flagged (for the confirm).
     dangerous_flags: list[str] = Field(default_factory=list)
 

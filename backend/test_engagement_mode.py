@@ -52,16 +52,29 @@ def _fake_engagement(target=_REAL) -> EngagementRecord:
         authorization="authorized test target",
         active=True,
         entered_at="2026-07-24T00:00:00+00:00",
+        resolved_scope=["45.33.32.156"],
+        scope_kind="host",
     )
 
 
-def _patch_active(rec: EngagementRecord | None):
-    """Make the executor resolve THIS engagement (or none). No Wall A to patch — it's gone."""
-    orig = E.engagement.get_active
+def _patch_active(rec: EngagementRecord | None, scope_ok: bool = True):
+    """Make the executor resolve THIS engagement (or none), and stub the SCOPE-LOCK gate so the
+    tests are hermetic (no Docker). ``scope_ok=True`` -> assert_scope_locked passes (the network
+    floor is confirmed, so the OTHER gates can be exercised); ``scope_ok=False`` -> it raises, so
+    the scope gate itself can be exercised."""
+    orig_active = E.engagement.get_active
+    orig_scope = E.assert_scope_locked
     E.engagement.get_active = lambda eid: rec if (rec and eid == rec.engagement_id) else None
 
+    def _scope(resolved):
+        if not scope_ok:
+            raise SandboxError("scope-lock not confirmed (test)")
+
+    E.assert_scope_locked = _scope
+
     def restore():
-        E.engagement.get_active = orig
+        E.engagement.get_active = orig_active
+        E.assert_scope_locked = orig_scope
 
     return restore
 
@@ -171,56 +184,95 @@ def test_engagement_heuristic_red_confirm() -> None:
     print("  HEURISTIC red-confirm still fires in engagement mode: PASS")
 
 
-def test_engagement_gate_order() -> None:
-    """engagement → target → approval → danger (first failing gate wins; danger is now last)."""
-    restore = _patch_active(_fake_engagement(_REAL))
+def test_scope_lock_gate() -> None:
+    """SCOPE-LOCK is the engagement network floor: if assert_scope_locked refuses (rules not
+    confirmed / don't match the resolved scope), the command is rejected at gate=scope BEFORE
+    approval — even an approved, in-target command. This is what makes the loop safe on a real
+    target: nothing runs unless egress is confirmed locked to scope. Fail-closed."""
+    restore = _patch_active(_fake_engagement(_REAL), scope_ok=False)
     try:
-        # unknown id + everything else wrong → engagement leads
+        r = E.validate_request(
+            ExecRequest(command="nmap", args=["-sV", _REAL], engagement_id="eng-test000000", approved=True)
+        )
+        assert r is not None and r.gate == "scope", "unconfirmed scope-lock MUST reject at gate=scope"
+        assert "scope-lock" in r.reason
+    finally:
+        restore()
+    # and with the scope-lock confirmed, an approved in-scope command clears every gate.
+    restore = _patch_active(_fake_engagement(_REAL), scope_ok=True)
+    try:
+        r = E.validate_request(
+            ExecRequest(command="nmap", args=["-sV", _REAL], engagement_id="eng-test000000", approved=True)
+        )
+        assert r is None, "confirmed scope-lock + approved in-scope command clears the gates"
+    finally:
+        restore()
+    print("  SCOPE-LOCK: unconfirmed network floor refuses at gate=scope (fail-closed); confirmed clears: PASS")
+
+
+def test_engagement_gate_order() -> None:
+    """engagement → scope → target → approval → danger (first failing gate wins)."""
+    # scope leads (before target/approval/danger) when the network floor is not confirmed.
+    restore = _patch_active(_fake_engagement(_REAL), scope_ok=False)
+    try:
+        r = E.validate_request(
+            ExecRequest(command="python3", args=["-c", "x", "example.com"], engagement_id="eng-test000000")
+        )
+        assert r.gate == "scope", "scope-lock leads (beats target/approval/danger)"
+    finally:
+        restore()
+    restore = _patch_active(_fake_engagement(_REAL))  # scope_ok=True: exercise the rest of the order
+    try:
+        # unknown id + everything else wrong → engagement leads (before scope is even reached)
         r = E.validate_request(
             ExecRequest(command="python3", args=["-c", "x", "example.com"], engagement_id="nope")
         )
         assert r.gate == "engagement", "engagement (explicit entry) leads"
-        # active id, wrong target, unapproved, dangerous → target beats approval+danger
+        # active id, scope ok, wrong target, unapproved, dangerous → target beats approval+danger
         r = E.validate_request(
             ExecRequest(command="python3", args=["-c", "x", "example.com"], engagement_id="eng-test000000")
         )
         assert r.gate == "target", "target beats approval/danger"
-        # active id, right target, unapproved, dangerous → approval beats danger
+        # active id, scope ok, right target, unapproved, dangerous → approval beats danger
         r = E.validate_request(
             ExecRequest(command="python3", args=["-c", "x", _REAL], engagement_id="eng-test000000")
         )
         assert r.gate == "approval", "approval beats danger"
-        # active id, right target, approved, dangerous, no ack → danger (the LAST engagement gate)
+        # active id, scope ok, right target, approved, dangerous, no ack → danger (last gate)
         r = E.validate_request(
             ExecRequest(command="python3", args=["-c", "x", _REAL], engagement_id="eng-test000000", approved=True)
         )
         assert r.gate == "danger", "danger is the last engagement gate"
     finally:
         restore()
-    print("  GATE ORDER: engagement -> target -> approval -> danger (no wall_a): PASS")
+    print("  GATE ORDER: engagement -> scope -> target -> approval -> danger: PASS")
 
 
 def test_no_wall_a_gate() -> None:
-    """Wall A is intentionally DOWN: there is no wall_a gate and no assert_wall_a_holds. Locked
-    so a broken Wall-A gate can't silently creep back and start refusing real-target runs."""
+    """Wall A is UP as a per-target SCOPE-LOCK: engagement has a real, NETWORK-enforced floor
+    (default-deny + allow-only-scope), wired as the 'scope' gate ahead of approval. Locked so
+    the floor can't silently regress to fully-open. (The legacy 'wall_a' NAMING stays gone — the
+    floor is the cleaner scope-lock; only the naming lock remains from the old model.)"""
     from cockpit.models import ExecRejected
-    # the gate literal no longer offers 'wall_a'
-    assert "wall_a" not in getattr(ExecRejected.model_fields["gate"].annotation, "__args__", ()), \
-        "the ExecRejected.gate literal must not include 'wall_a'"
-    # the sandbox module no longer exposes the Wall-A guard or its config
-    assert not hasattr(S, "assert_wall_a_holds"), "assert_wall_a_holds must be gone (Wall A down)"
-    assert not hasattr(config, "WALL_A_BLOCKED"), "WALL_A_BLOCKED must be gone (Wall A down)"
-    assert not hasattr(config, "ENGAGE_FIREWALL_CONTAINER"), "the firewall sidecar constant must be gone"
-    # a fully-valid approved engagement command clears with NO Wall-A gate in the way
+    gate_args = getattr(ExecRejected.model_fields["gate"].annotation, "__args__", ())
+    # the network floor exists: a 'scope' gate + assert_scope_locked + the firewall sidecar const
+    assert "scope" in gate_args, "the ExecRejected.gate literal must include 'scope' (the floor)"
+    assert hasattr(S, "assert_scope_locked"), "assert_scope_locked (the scope-lock gate) must exist"
+    assert hasattr(config, "ENGAGE_FIREWALL_CONTAINER"), "the scope-lock firewall sidecar const must exist"
+    # the legacy Wall-A naming stays gone (the floor is 'scope', not 'wall_a')
+    assert "wall_a" not in gate_args, "the gate literal must not use the legacy 'wall_a' name"
+    assert not hasattr(S, "assert_wall_a_holds"), "the legacy assert_wall_a_holds must stay gone"
+    assert not hasattr(config, "WALL_A_BLOCKED"), "the legacy WALL_A_BLOCKED must stay gone"
+    # a fully-valid approved engagement command clears once the scope-lock is confirmed
     restore = _patch_active(_fake_engagement(_REAL))
     try:
         r = E.validate_request(
             ExecRequest(command="nmap", args=["-sV", _REAL], engagement_id="eng-test000000", approved=True)
         )
-        assert r is None, "an approved engagement command clears — there is no wall_a gate to fail"
+        assert r is None, "an approved, in-scope engagement command clears once the floor is confirmed"
     finally:
         restore()
-    print("  WALL A intentionally gone: no wall_a gate / no assert_wall_a_holds (locked): PASS")
+    print("  SCOPE-LOCK FLOOR present (scope gate + assert_scope_locked + sidecar; no legacy wall_a): PASS")
 
 
 # --------------------------------------------------------------------------- #
@@ -233,6 +285,8 @@ def test_enter_exit_registry() -> None:
     ENG.DB_PATH = tmp
     runstore.init_db()
     ENG.init_db()
+    orig_scope = E.assert_scope_locked
+    E.assert_scope_locked = lambda resolved: None  # this test exercises the REGISTRY, not the floor
     try:
         # entry requires a non-empty authorization ack (deliberate, warned entry)
         raised = False
@@ -261,6 +315,7 @@ def test_enter_exit_registry() -> None:
         assert r is not None and r.gate == "engagement", "an exited engagement is refused at the gate"
     finally:
         runstore.DB_PATH, ENG.DB_PATH = orig
+        E.assert_scope_locked = orig_scope
     print("  ENTER/EXIT registry: entry needs auth; exit fail-closes the executor: PASS")
 
 
@@ -357,6 +412,7 @@ if __name__ == "__main__":
     test_explicit_entry_required()
     test_engagement_target_lock()
     test_engagement_heuristic_red_confirm()
+    test_scope_lock_gate()
     test_engagement_gate_order()
     test_no_wall_a_gate()
     test_enter_exit_registry()

@@ -152,6 +152,86 @@ def apply_scope(allow_tokens: list[str], hosts_line: str | None = None) -> None:
         _docker(["exec", config.ENGAGE_FIREWALL_CONTAINER, "sh", "-c", script])
 
 
+def _output_accept_dests(fw: str) -> tuple[bool, set[str]]:
+    """Read a family's OUTPUT chain: return (policy_is_DROP, {ACCEPT destination tokens}).
+
+    Raises SandboxError if the chain can't be read or contains a blanket ACCEPT (an ACCEPT that
+    is neither ``-o lo`` nor destination-scoped ``-d`` — that would be an egress hole).
+    """
+    rc, out, err = _docker(["exec", config.ENGAGE_FIREWALL_CONTAINER, fw, "-S", "OUTPUT"])
+    if rc != 0:
+        raise SandboxError(f"cannot read {fw} OUTPUT rules: {err or out or 'rc ' + str(rc)}")
+    policy_drop = False
+    dests: set[str] = set()
+    for line in out.splitlines():
+        parts = line.split()
+        if parts[:3] == ["-P", "OUTPUT", "DROP"]:
+            policy_drop = True
+        elif parts[:2] == ["-A", "OUTPUT"] and "-j" in parts:
+            if parts[parts.index("-j") + 1] != "ACCEPT":
+                continue
+            if "-o" in parts and parts[parts.index("-o") + 1] == "lo":
+                continue  # loopback allow — fine
+            if "-d" in parts:
+                dests.add(parts[parts.index("-d") + 1])
+            else:
+                raise SandboxError(f"{fw} OUTPUT has a NON-SCOPED ACCEPT (egress hole): {line}")
+    return policy_drop, dests
+
+
+def assert_scope_locked(resolved_scope: list[str]) -> None:
+    """Raise SandboxError unless the engagement egress is confirmed SCOPE-LOCKED to exactly
+    ``resolved_scope``. The engagement analog of :func:`assert_isolation_proven`, re-checked
+    before every engagement exec (fail-closed):
+
+      * the firewall sidecar + sandbox are running;
+      * the OUTPUT policy is DROP on v4 AND v6 (default-deny);
+      * the ACCEPT destinations MATCH the resolved scope EXACTLY (not broader — a widened or
+        flushed ruleset fails); loopback is the only non-scoped allow.
+
+    A malformed/empty scope, an unreadable ruleset, a non-DROP policy, a blanket ACCEPT, or any
+    mismatch all refuse — so a real-target command can only run behind a confirmed network floor.
+    """
+    import ipaddress
+
+    if not resolved_scope:
+        raise SandboxError("engagement has no resolved scope — refusing to exec (fail-closed)")
+    if not is_engage_firewall_up():
+        raise SandboxError(
+            f"scope-lock firewall '{config.ENGAGE_FIREWALL_CONTAINER}' is not running — refusing"
+        )
+    if not is_engage_sandbox_up():
+        raise SandboxError(
+            f"engagement sandbox '{config.ENGAGE_SANDBOX_CONTAINER}' is not running — refusing"
+        )
+
+    exp4: set = set()
+    exp6: set = set()
+    for tok in resolved_scope:
+        net = ipaddress.ip_network(tok, strict=False)
+        (exp6 if net.version == 6 else exp4).add(net)
+
+    drop4, dests4 = _output_accept_dests("iptables")
+    if not drop4:
+        raise SandboxError("scope-lock v4 OUTPUT policy is not DROP — refusing (fail-closed)")
+    got4 = {ipaddress.ip_network(d, strict=False) for d in dests4}
+    if got4 != exp4:
+        raise SandboxError(
+            f"scope-lock v4 allow-list {sorted(map(str, got4))} does not match the resolved "
+            f"scope {sorted(map(str, exp4))} — refusing"
+        )
+
+    drop6, dests6 = _output_accept_dests("ip6tables")
+    if not drop6:
+        raise SandboxError("scope-lock v6 OUTPUT policy is not DROP — refusing (fail-closed)")
+    got6 = {ipaddress.ip_network(d, strict=False) for d in dests6}
+    if got6 != exp6:
+        raise SandboxError(
+            f"scope-lock v6 allow-list {sorted(map(str, got6))} does not match the resolved "
+            f"scope {sorted(map(str, exp6))} — refusing"
+        )
+
+
 def clear_scope() -> None:
     """Reset the scope-lock to DEFAULT-DENY (no scope) and drop the injected /etc/hosts line.
     Best-effort — used on engagement EXIT; a still-running firewall then reaches nothing."""

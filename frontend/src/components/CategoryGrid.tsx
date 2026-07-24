@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState, type CSSProperties } from "react";
 import { CategoryCard } from "./CategoryCard";
 import { ScriptsCard } from "./ScriptsCard";
-import { FEATURED } from "@/lib/data";
+import { COCKPIT_FEATURE, FEATURED } from "@/lib/data";
 import type { Category } from "@/lib/api";
 import { useReducedMotion } from "@/lib/useReducedMotion";
 
@@ -42,7 +42,8 @@ export function CategoryGrid({
   const visibleCategories =
     categories?.filter((cat) => !HIDDEN_CATEGORIES.has(cat.slug)) ?? null;
 
-  const total = 2 + (visibleCategories?.length ?? 0); // featured + scripts + categories
+  // reveal order: attack-paths, cockpit, scripts, then each category
+  const total = 3 + (visibleCategories?.length ?? 0);
 
   useEffect(() => {
     if (!active) return;
@@ -63,30 +64,52 @@ export function CategoryGrid({
 
   return (
     <div className="hp-grid">
-      {/* Featured — guided attack paths (the first generative feature) */}
-      <Link
-        href="/attack-path"
-        className={`hp-card hp-feat${shownCount > 0 ? " hp-in" : ""}`}
-        style={{ "--cc": FEATURED.color } as CSSProperties}
-      >
-        <div className="hp-ic">{FEATURED.icon}</div>
-        <div className="hp-fx">
-          <h3>
-            {FEATURED.title} <span className="hp-badge">{FEATURED.badge}</span>
-          </h3>
-          <p>{FEATURED.desc}</p>
-        </div>
-        <div className="hp-go">{FEATURED.cta}</div>
-      </Link>
+      {/* Two featured surfaces, side-by-side (stack on mobile): the generative
+          attack-paths planner and the live Cockpit. */}
+      <div className="hp-feat-row">
+        {/* Featured — guided attack paths (the first generative feature) */}
+        <Link
+          href="/attack-path"
+          className={`hp-card hp-feat${shownCount > 0 ? " hp-in" : ""}`}
+          style={{ "--cc": FEATURED.color } as CSSProperties}
+        >
+          <div className="hp-ic">{FEATURED.icon}</div>
+          <div className="hp-fx">
+            <h3>
+              {FEATURED.title}{" "}
+              <span className="hp-badge">{FEATURED.badge}</span>
+            </h3>
+            <p>{FEATURED.desc}</p>
+          </div>
+          <div className="hp-go">{FEATURED.cta}</div>
+        </Link>
+
+        {/* Cockpit — plot a path, then run it against the isolated lab */}
+        <Link
+          href="/cockpit"
+          className={`hp-card hp-feat${shownCount > 1 ? " hp-in" : ""}`}
+          style={{ "--cc": COCKPIT_FEATURE.color } as CSSProperties}
+        >
+          <div className="hp-ic">{COCKPIT_FEATURE.icon}</div>
+          <div className="hp-fx">
+            <h3>
+              {COCKPIT_FEATURE.title}{" "}
+              <span className="hp-badge">{COCKPIT_FEATURE.badge}</span>
+            </h3>
+            <p>{COCKPIT_FEATURE.desc}</p>
+          </div>
+          <div className="hp-go">{COCKPIT_FEATURE.cta}</div>
+        </Link>
+      </div>
 
       {/* Scripts arsenal — the copy-ready operator view of the whole KB */}
-      <ScriptsCard shown={shownCount > 1} />
+      <ScriptsCard shown={shownCount > 2} />
 
       {visibleCategories?.map((cat, i) => (
         <CategoryCard
           key={cat.slug}
           category={cat}
-          shown={shownCount > i + 2}
+          shown={shownCount > i + 3}
         />
       ))}
 

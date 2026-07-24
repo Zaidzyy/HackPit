@@ -44,13 +44,23 @@ export const STAT_FIELDS: { key: keyof Stats; label: string }[] = [
   { key: "workflows", label: "workflows" },
 ];
 
-/** Featured bento card — the future guided-attack-paths surface (visual only). */
+/** Featured bento card — the guided-attack-paths surface. */
 export const FEATURED = {
   icon: "↳",
   color: "#ffb03a",
   title: "Guided attack paths",
   badge: "new",
   desc: 'Type "how do I crack this box" — get an ordered recon → exploit → privesc walkthrough from your own notes.',
+  cta: "start →",
+};
+
+/** Featured bento card — the Cockpit (sibling of the attack-paths card). */
+export const COCKPIT_FEATURE = {
+  icon: "▸",
+  color: "#ffb03a",
+  title: "Cockpit",
+  badge: "new",
+  desc: "Plot a path, then run it — approved commands in an isolated sandbox, live output.",
   cta: "start →",
 };
 

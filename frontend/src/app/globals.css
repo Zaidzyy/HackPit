@@ -337,8 +337,15 @@ body {
   color: var(--dim);
   font-weight: 500;
 }
+/* the two featured surfaces (attack-paths + cockpit) share one full-width row,
+   split into equal halves; they stack on mobile (see the media query below). */
+.hp-feat-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
 .hp-card.hp-feat {
-  grid-column: span 3;
   display: flex;
   align-items: center;
   gap: 22px;
@@ -399,8 +406,9 @@ body {
   .hp-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-  .hp-card.hp-feat {
-    grid-column: span 2;
+  /* the two featured cards stack instead of sitting side-by-side */
+  .hp-feat-row {
+    grid-template-columns: 1fr;
   }
   .hp-stat {
     padding: 0 24px;

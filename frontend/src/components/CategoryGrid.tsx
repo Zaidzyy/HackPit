@@ -15,6 +15,16 @@ type CategoryGridProps = {
   error: string | null;
 };
 
+// Near-empty categories we don't surface as a browse card. Their entries stay in
+// the KB and remain reachable via search / direct link — this is a display-only
+// filter, not a data change (the /categories endpoint is untouched).
+const HIDDEN_CATEGORIES = new Set([
+  "forensics",
+  "ics",
+  "phishing",
+  "supply-chain",
+]);
+
 /**
  * The bento grid. The featured card is static; the rest are populated from
  * GET /categories (real counts + colour/icon). Cards stagger in (70ms apart)
@@ -29,7 +39,10 @@ export function CategoryGrid({
   const reduced = useReducedMotion();
   const [shownCount, setShownCount] = useState(0);
 
-  const total = 2 + (categories?.length ?? 0); // featured + scripts + categories
+  const visibleCategories =
+    categories?.filter((cat) => !HIDDEN_CATEGORIES.has(cat.slug)) ?? null;
+
+  const total = 2 + (visibleCategories?.length ?? 0); // featured + scripts + categories
 
   useEffect(() => {
     if (!active) return;
@@ -69,7 +82,7 @@ export function CategoryGrid({
       {/* Scripts arsenal — the copy-ready operator view of the whole KB */}
       <ScriptsCard shown={shownCount > 1} />
 
-      {categories?.map((cat, i) => (
+      {visibleCategories?.map((cat, i) => (
         <CategoryCard
           key={cat.slug}
           category={cat}

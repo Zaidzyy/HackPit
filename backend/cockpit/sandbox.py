@@ -90,13 +90,20 @@ def assert_isolation_proven() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# ENGAGEMENT MODE — availability only (NO Wall A, NO isolation floor).
-# Wall A is DOWN (Zaid's informed decision): the engagement sandbox is fully open — it
-# reaches the internet, the LAN, the host, and cloud metadata, on purpose. There is NO
-# network guard to assert (the way the lab asserts isolation). The ONLY bound on a
-# real-target run is HUMAN APPROVAL OF EVERY COMMAND — see the executor's engagement
-# gates (explicit entry + approve-each + heuristic red-confirm; never hands-off).
+# ENGAGEMENT MODE — the SCOPE-LOCK egress floor (per-target, network-enforced).
+# On a real target the containment is a DEFAULT-DENY firewall (the NET_ADMIN sidecar that
+# owns the sandbox's shared netns) that allows ONLY the engagement's resolved authorized
+# scope. The operator's host, out-of-scope LAN, cloud metadata, IPv6 (unless scoped), and the
+# rest of the internet are dropped. This REPLACES isolation on real targets. The backend
+# programs the rules at ENTER (apply_scope) / resets them at EXIT (clear_scope), and re-reads
+# them before every engagement exec (assert_scope_locked — see below / executor). Because the
+# floor is network-enforced, the guided loop may DRAFT here; NEVER-AUTO-RUN still requires
+# human approval of EVERY command.
 # --------------------------------------------------------------------------- #
+
+_SCOPE_LOCK = "/usr/local/bin/scope_lock.sh"
+# A stable marker so /etc/hosts injection is idempotent across re-entries.
+_HOSTS_MARKER = "# hackpit-scope"
 
 
 def _running(name: str) -> bool:
@@ -105,6 +112,54 @@ def _running(name: str) -> bool:
 
 
 def is_engage_sandbox_up() -> bool:
-    """True iff the (fully-open) engagement sandbox is running. Availability only — there is
-    no Wall A / isolation to verify; the guard on a real-target run is human-approve-each."""
+    """True iff the engagement sandbox container is running."""
     return _running(config.ENGAGE_SANDBOX_CONTAINER)
+
+
+def is_engage_firewall_up() -> bool:
+    """True iff the scope-lock firewall sidecar is running (it owns the sandbox's netns)."""
+    return _running(config.ENGAGE_FIREWALL_CONTAINER)
+
+
+def apply_scope(allow_tokens: list[str], hosts_line: str | None = None) -> None:
+    """Program the scope-lock: DEFAULT-DENY + allow ONLY ``allow_tokens`` (resolved IPs or a
+    CIDR), then inject an ``/etc/hosts`` mapping into the sandbox so the scope name resolves
+    locally with no DNS egress. Raises SandboxError on any failure (so entry fails closed)."""
+    if not allow_tokens:
+        raise SandboxError("refusing to apply an EMPTY scope — engagement needs a resolved scope")
+    if not is_engage_firewall_up():
+        raise SandboxError(
+            f"scope-lock firewall '{config.ENGAGE_FIREWALL_CONTAINER}' is not running — bring the "
+            "engagement stack up (docker compose -f docker/docker-compose.yml up -d)"
+        )
+    rc, out, err = _docker(
+        ["exec", config.ENGAGE_FIREWALL_CONTAINER, _SCOPE_LOCK, "apply", *allow_tokens]
+    )
+    if rc != 0:
+        raise SandboxError(f"could not apply scope-lock rules: {err or out or 'rc ' + str(rc)}")
+
+    if hosts_line:
+        # Inject into the FIREWALL container's /etc/hosts: it OWNS the shared netns, so the
+        # sandbox sees this file (its own /etc/hosts is a read-only bind mount of it). Idempotent
+        # across re-entries: filter out any prior injected line, add the current mapping, and
+        # rewrite IN PLACE via `cat >` (NOT `sed -i`, which can't replace the /etc/hosts inode —
+        # it's a bind mount).
+        script = (
+            f"{{ grep -v '{_HOSTS_MARKER}' /etc/hosts; "
+            f"printf '%s %s\\n' '{hosts_line}' '{_HOSTS_MARKER}'; }} "
+            f"> /tmp/hp_hosts && cat /tmp/hp_hosts > /etc/hosts"
+        )
+        _docker(["exec", config.ENGAGE_FIREWALL_CONTAINER, "sh", "-c", script])
+
+
+def clear_scope() -> None:
+    """Reset the scope-lock to DEFAULT-DENY (no scope) and drop the injected /etc/hosts line.
+    Best-effort — used on engagement EXIT; a still-running firewall then reaches nothing."""
+    if is_engage_firewall_up():
+        _docker(["exec", config.ENGAGE_FIREWALL_CONTAINER, _SCOPE_LOCK, "deny"])
+        # Rewrite in place (cat >, not sed -i — /etc/hosts is a bind mount).
+        _docker(
+            ["exec", config.ENGAGE_FIREWALL_CONTAINER, "sh", "-c",
+             f"grep -v '{_HOSTS_MARKER}' /etc/hosts > /tmp/hp_hosts 2>/dev/null "
+             "&& cat /tmp/hp_hosts > /etc/hosts || true"]
+        )

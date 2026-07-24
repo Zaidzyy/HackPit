@@ -113,7 +113,13 @@ class EngagementEnterRequest(BaseModel):
 
 
 class EngagementRecord(BaseModel):
-    """An entered engagement — the active-mode record the executor checks against."""
+    """An entered engagement — the active-mode record the executor checks against.
+
+    ``target`` is the operator's named scope (a single host/URL or a CIDR). ``resolved_scope``
+    is the concrete firewall allow-list computed from it at entry (resolved IPs for a host, or
+    the CIDR) — the exact destinations the scope-lock permits and that assert_scope_locked
+    verifies before every exec. ``scope_kind`` is 'host' or 'cidr'.
+    """
 
     engagement_id: str
     target: str
@@ -122,6 +128,8 @@ class EngagementRecord(BaseModel):
     entered_at: str
     exited_at: str | None = None
     session_id: str | None = None
+    resolved_scope: list[str] = Field(default_factory=list)
+    scope_kind: str | None = None
 
 
 class AllowlistItem(BaseModel):

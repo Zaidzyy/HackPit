@@ -15,12 +15,17 @@
 #    and is still disposable via `down`. An exposed :kali now reaches your host/LAN — localhost only,
 #    auth required before any exposure.
 #
-# 3. hackpit-engage-sandbox  (FULLY OPEN — the REAL-TARGET engagement sandbox; SUPERVISED, HIGHEST RISK)
-#    The cockpit execs here ONLY in explicit engagement mode (real authorized targets). It has NO
-#    isolation floor and NO Wall A (Zaid's informed decision): on a normal NAT bridge it reaches the
-#    internet + LAN + host + cloud metadata — nothing bounds WHERE it can reach. The ONLY guard is
-#    HUMAN APPROVAL OF EVERY COMMAND (explicit entry + approve-each + heuristic red-confirm; never
-#    hands-off). Keeps cap_drop ALL + no-new-privileges. Proof: engage_open_proof.sh (full reach).
+# 3. hackpit-engage-sandbox  (SCOPE-LOCKED — the REAL-TARGET engagement sandbox; SUPERVISED, HIGHEST RISK)
+#    The cockpit execs here ONLY in explicit engagement mode (real authorized targets). Its egress is
+#    a per-engagement DEFAULT-DENY firewall: the sidecar hackpit-engage-firewall (the ONLY box with
+#    NET_ADMIN) owns the netns and, at engagement ENTER, allows ONLY the resolved authorized scope
+#    (a single host's IPs or a CIDR). The operator's host/gateway, out-of-scope LAN, cloud metadata
+#    (169.254/16), IPv6 (unless scoped), and the rest of the internet are DROPped by default policy.
+#    The sandbox SHARES that netns (`network_mode: service:engage-firewall`) so it stays cap_drop:ALL
+#    + no-new-privileges and inherits the filter — it cannot turn inward or leave scope. Because the
+#    containment is now NETWORK-enforced, the guided loop may DRAFT commands here; NEVER-AUTO-RUN
+#    still requires human approval of EVERY command (loop drafts, human fires). Proof:
+#    engage_scope_proof.sh (scope reachable; host/LAN/metadata/off-scope internet all dropped).
 #
 # All sandbox images bake their tools in at build time. The lab image is pulled at `up` time.
 #
@@ -41,9 +46,10 @@ networks:
     # by the :kali human-only shell (hackpit-kali-open). Deliberately not isolated.
   hackpit-engage:
     driver: bridge
-    # NOT internal: a normal NAT bridge with FULL reach (internet + LAN + host + metadata). The
-    # engagement sandbox sits here directly — Wall A is DOWN (no firewall sidecar). The only guard
-    # on a real-target run is human-approval-of-every-command (never hands-off).
+    # NOT internal: NAT egress to the internet. This is the engagement pair's network; the
+    # SCOPE-LOCK firewall sidecar sits here with NET_ADMIN and installs a DEFAULT-DENY OUTPUT
+    # policy (allow only the per-engagement scope, applied at ENTER), which the sandbox inherits
+    # by SHARING the sidecar's netns. Egress to anywhere but the authorized scope is dropped.
 
 services:
   lab-target:
@@ -96,22 +102,45 @@ services:
       - no-new-privileges:true
     read_only: false
 
+  engage-firewall:
+    # SCOPE-LOCK firewall SIDECAR for engagement mode. The ONLY engagement box with NET_ADMIN.
+    # Installs a DEFAULT-DENY OUTPUT policy at start (fail-closed), holds the netns open, and
+    # the backend programs the per-engagement allow-list into it (scope_lock.sh apply <scope>)
+    # at ENTER / resets it (deny) at EXIT. The engagement sandbox shares this netns and inherits
+    # the filter. See Dockerfile.firewall + scope_lock.sh.
+    build:
+      context: .
+      dockerfile: Dockerfile.firewall
+    image: hackpit/engage-firewall:scopelock
+    container_name: hackpit-engage-firewall
+    hostname: hackpit-engage-firewall
+    networks:
+      - hackpit-engage
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN          # needed ONLY to program the scope-lock iptables rules
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
   engage-sandbox:
-    # The REAL-TARGET engagement sandbox — FULLY OPEN (Wall A DOWN, Zaid's informed decision).
-    # On a normal NAT bridge (`hackpit-engage`) with FULL network reach: internet + LAN + host
-    # + cloud metadata. There is NO isolation floor and NO Wall-A firewall — nothing bounds
-    # WHERE it can reach. The ONLY guard on a real-target run is HUMAN APPROVAL OF EVERY COMMAND
-    # (explicit engagement entry + approve-each + heuristic red-confirm; never hands-off). Keeps
-    # cap_drop: ALL + no-new-privileges. The cockpit execs here ONLY in explicit, human-entered
-    # engagement mode. NOT for lab runs (the lab keeps its egress-less isolated sandbox).
+    # The REAL-TARGET engagement sandbox — SCOPE-LOCKED. SAME tool image as the isolated/open
+    # sandboxes, but it SHARES the firewall sidecar's network namespace, so its egress is
+    # DEFAULT-DENY + allow-only-the-authorized-scope (see engage-firewall). It has NO isolation
+    # floor but a REAL network floor (the scope-lock), and NO NET_ADMIN — it cannot alter the
+    # firewall's rules or leave scope. The cockpit execs here ONLY in explicit, human-entered
+    # engagement mode. Because containment is network-enforced, the guided loop may DRAFT here;
+    # NEVER-AUTO-RUN still requires human approval of EVERY command. NOT for lab runs.
     build:
       context: .
       dockerfile: Dockerfile.sandbox
     image: hackpit/kali-sandbox:m1
     container_name: hackpit-engage-sandbox
-    hostname: hackpit-engage-sandbox
-    networks:
-      - hackpit-engage
+    # Share the firewall's netns -> inherit the scope-lock. (No `networks:` when network_mode is set.)
+    network_mode: "service:engage-firewall"
+    depends_on:
+      - engage-firewall
     cap_drop:
       - ALL
     security_opt:

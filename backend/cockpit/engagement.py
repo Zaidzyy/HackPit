@@ -19,6 +19,7 @@ only answers "is this engagement explicitly, currently entered?".
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import uuid
@@ -48,16 +49,26 @@ def init_db() -> None:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS engagement_mode (
-                engagement_id TEXT PRIMARY KEY,
-                target        TEXT NOT NULL,
-                authorization TEXT NOT NULL,
-                active        INTEGER NOT NULL,
-                entered_at    TEXT NOT NULL,
-                exited_at     TEXT,
-                session_id    TEXT
+                engagement_id  TEXT PRIMARY KEY,
+                target         TEXT NOT NULL,
+                authorization  TEXT NOT NULL,
+                active         INTEGER NOT NULL,
+                entered_at     TEXT NOT NULL,
+                exited_at      TEXT,
+                session_id     TEXT,
+                resolved_scope TEXT NOT NULL DEFAULT '[]',
+                scope_kind     TEXT
             )
             """
         )
+        # migrate DBs created before the scope-lock columns existed.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(engagement_mode)")}
+        if "resolved_scope" not in cols:
+            conn.execute(
+                "ALTER TABLE engagement_mode ADD COLUMN resolved_scope TEXT NOT NULL DEFAULT '[]'"
+            )
+        if "scope_kind" not in cols:
+            conn.execute("ALTER TABLE engagement_mode ADD COLUMN scope_kind TEXT")
 
 
 def _valid_target(target: str) -> str:
@@ -70,11 +81,20 @@ def _valid_target(target: str) -> str:
     return t
 
 
-def enter(target: str, authorization: str, session_id: str | None = None) -> EngagementRecord:
-    """Explicitly enter engagement mode against ``target``; return the active record.
+def enter(
+    target: str,
+    authorization: str,
+    session_id: str | None = None,
+    resolved_scope: list[str] | None = None,
+    scope_kind: str | None = None,
+) -> EngagementRecord:
+    """Record an entered engagement against ``target`` (with its already-resolved+applied
+    scope) and return the active record.
 
-    Requires a non-empty ``authorization`` acknowledgement — this is the deliberate, warned
-    action of leaving the isolated lab. Generates a fresh ``engagement_id``.
+    Pure registry write — the caller (router) resolves the scope and applies the scope-lock
+    FIRST, then records it here with ``resolved_scope`` (the firewall allow-list) so the
+    executor's scope-lock gate can verify it. Requires a non-empty ``authorization``
+    acknowledgement — the deliberate, warned action of leaving the isolated lab.
     """
     t = _valid_target(target)
     auth = (authorization or "").strip()
@@ -83,14 +103,16 @@ def enter(target: str, authorization: str, session_id: str | None = None) -> Eng
             "authorization acknowledgement is required to enter engagement mode — you are "
             "responsible for authorization and staying in scope"
         )
+    scope = list(resolved_scope or [])
     engagement_id = "eng-" + uuid.uuid4().hex[:12]
     entered_at = _now()
     with _write_lock, _connect() as conn:
         conn.execute(
             "INSERT INTO engagement_mode "
-            "(engagement_id, target, authorization, active, entered_at, exited_at, session_id) "
-            "VALUES (?, ?, ?, 1, ?, NULL, ?)",
-            (engagement_id, t, auth, entered_at, session_id),
+            "(engagement_id, target, authorization, active, entered_at, exited_at, session_id, "
+            " resolved_scope, scope_kind) "
+            "VALUES (?, ?, ?, 1, ?, NULL, ?, ?, ?)",
+            (engagement_id, t, auth, entered_at, session_id, json.dumps(scope), scope_kind),
         )
     return EngagementRecord(
         engagement_id=engagement_id,
@@ -100,6 +122,8 @@ def enter(target: str, authorization: str, session_id: str | None = None) -> Eng
         entered_at=entered_at,
         exited_at=None,
         session_id=session_id,
+        resolved_scope=scope,
+        scope_kind=scope_kind,
     )
 
 
@@ -136,6 +160,11 @@ def list_active() -> list[EngagementRecord]:
 
 
 def _row(row: sqlite3.Row) -> EngagementRecord:
+    keys = row.keys()
+    try:
+        scope = json.loads(row["resolved_scope"]) if "resolved_scope" in keys else []
+    except (TypeError, ValueError):
+        scope = []
     return EngagementRecord(
         engagement_id=row["engagement_id"],
         target=row["target"],
@@ -144,4 +173,6 @@ def _row(row: sqlite3.Row) -> EngagementRecord:
         entered_at=row["entered_at"],
         exited_at=row["exited_at"],
         session_id=row["session_id"],
+        resolved_scope=scope if isinstance(scope, list) else [],
+        scope_kind=row["scope_kind"] if "scope_kind" in keys else None,
     )

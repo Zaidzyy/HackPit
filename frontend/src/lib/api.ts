@@ -594,6 +594,8 @@ export type CockpitRun = {
   args: string[];
   target: string;
   approved: boolean;
+  /** "lab" (isolated lab) or "engagement" (real authorized target, Wall-A sandbox). */
+  mode?: "lab" | "engagement";
   exit_code: number | null;
   stdout: string;
   stderr: string;
@@ -605,7 +607,7 @@ export type CockpitRun = {
 
 /** One streamed execution event (SSE `data:` payload from POST /cockpit/exec). */
 export type ExecEvent =
-  | { type: "start"; run_id: string; command: string; args: string[]; target: string; started_at: string }
+  | { type: "start"; run_id: string; command: string; args: string[]; target: string; mode?: "lab" | "engagement"; started_at: string }
   | { type: "stdout"; line: string }
   | { type: "stderr"; line: string }
   | { type: "exit"; run_id: string; code: number | null; finished_at: string }
@@ -621,7 +623,60 @@ export type ExecPayload = {
   dangerous_ack?: boolean;
   session_id?: string | null;
   step_id?: string | null;
+  /** When set to an ACTIVE engagement id, run in REAL-TARGET engagement mode (Wall-A
+   *  sandbox, no isolation floor) against that engagement's named target. Omit for lab. */
+  engagement_id?: string | null;
 };
+
+// ---- Engagement mode (REAL targets — no isolation floor; Wall-A + approve-each) ---- //
+
+/** An entered engagement — the deliberate, human-authorized real-target mode record. */
+export type EngagementRecord = {
+  engagement_id: string;
+  target: string;
+  authorization: string;
+  active: boolean;
+  entered_at: string;
+  exited_at: string | null;
+  session_id: string | null;
+};
+
+/** Active engagement(s) + Wall-A readiness (GET /cockpit/engagement). Drives the UI mode
+ *  indicator, which must ALWAYS show whether lab or a real-target engagement is active. */
+export type EngagementStatus = {
+  active: EngagementRecord[];
+  sandbox: string;
+  firewall: string;
+  up: boolean;
+  wall_a_ok: boolean;
+  ready: boolean;
+  detail: string;
+};
+
+export const getEngagementStatus = (signal?: AbortSignal) =>
+  getJSON<EngagementStatus>("/cockpit/engagement", signal);
+
+/** DELIBERATELY enter real-target engagement mode. `target` is the real authorized host/URL;
+ *  `authorization` is the operator's acknowledgement they own/are authorized to test it. */
+export const enterEngagement = (
+  target: string,
+  authorization: string,
+  sessionId?: string | null,
+  signal?: AbortSignal
+) =>
+  postJSON<EngagementRecord>(
+    "/cockpit/engagement/enter",
+    { target, authorization, session_id: sessionId ?? null },
+    signal
+  );
+
+/** Leave engagement mode for this id — no further engagement-mode runs against it. */
+export const exitEngagement = (engagementId: string, signal?: AbortSignal) =>
+  postJSON<{ engagement_id: string; exited: boolean }>(
+    `/cockpit/engagement/${encodeURIComponent(engagementId)}/exit`,
+    {},
+    signal
+  );
 
 export const getCockpitAllowlist = (signal?: AbortSignal) =>
   getJSON<CockpitAllowlist>("/cockpit/allowlist", signal);

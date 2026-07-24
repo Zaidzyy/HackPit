@@ -7,6 +7,7 @@ import { CockpitAttackMap } from "./CockpitAttackMap";
 import { CockpitScreen } from "./CockpitScreen";
 import { CockpitLoop } from "./CockpitLoop";
 import { CockpitEngagement } from "./CockpitEngagement";
+import { CockpitEngagementMode } from "./CockpitEngagementMode";
 import { LLMSettingsModal } from "./LLMSettingsModal";
 import { ModelBadge } from "./ModelBadge";
 import { TargetTypeChips } from "./TargetTypeChips";
@@ -40,6 +41,9 @@ export function CockpitView() {
   const [config, setConfig] = useState<LLMConfig | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [execMode, setExecMode] = useState<"loop" | "manual">("loop");
+  // Which SANDBOX the exec surface targets: the isolated lab (default) or a real-target
+  // engagement (no isolation floor — Wall A + human-approve-each, never the guided loop).
+  const [targetMode, setTargetMode] = useState<"lab" | "engagement">("lab");
   const [engToken, setEngToken] = useState(0);
   // Loop progress, lifted so the kill-chain map can light nodes as steps complete.
   const [activeStep, setActiveStep] = useState<string | null>(null);
@@ -222,53 +226,101 @@ export function CockpitView() {
                 : { duration: 0.5, ease: "easeOut", delay: 0.12 }
             }
           >
-            <div className="hp-cv-execmode" role="tablist" aria-label="Execution mode">
+            {/* Target mode — ALWAYS shown, so it is never ambiguous whether commands
+                run against the isolated lab or a real target. Engagement is deliberate. */}
+            <div
+              className={`hp-cv-targetmode is-${targetMode}`}
+              role="tablist"
+              aria-label="Target"
+            >
               <button
                 type="button"
                 role="tab"
-                aria-selected={execMode === "loop"}
-                className={execMode === "loop" ? "is-on" : undefined}
-                onClick={() => setExecMode("loop")}
+                aria-selected={targetMode === "lab"}
+                className={targetMode === "lab" ? "is-on" : undefined}
+                onClick={() => setTargetMode("lab")}
               >
-                guided loop
+                lab · isolated
               </button>
               <button
                 type="button"
                 role="tab"
-                aria-selected={execMode === "manual"}
-                className={execMode === "manual" ? "is-on" : undefined}
-                onClick={() => setExecMode("manual")}
+                aria-selected={targetMode === "engagement"}
+                className={targetMode === "engagement" ? "is-on is-danger" : undefined}
+                onClick={() => setTargetMode("engagement")}
               >
-                manual
+                engagement · real target
               </button>
             </div>
 
-            {execMode === "loop" ? (
-              sessionId ? (
-                <>
-                  <CockpitLoop
-                    sessionId={sessionId}
-                    onStepActive={setActiveStep}
-                    onStepDone={(id) => {
-                      if (id) setDoneSteps((s) => new Set(s).add(id));
-                      setActiveStep(null);
-                    }}
-                    onRunRecorded={() => setEngToken((t) => t + 1)}
-                  />
+            {targetMode === "engagement" ? (
+              /* Real-target mode: manual approve-each only. The guided loop (autonomy
+                 mechanic) is deliberately NOT available here — never hands-off on a real
+                 target. Recorded runs surface in the same engagement panel below. */
+              <>
+                <CockpitEngagementMode
+                  sessionId={sessionId}
+                  onRunRecorded={() => setEngToken((t) => t + 1)}
+                />
+                {sessionId && (
                   <CockpitEngagement
-                    key={sessionId}
+                    key={`eng-${sessionId}`}
                     sessionId={sessionId}
                     refreshToken={engToken}
                   />
-                </>
-              ) : (
-                <p className="hp-cv-hint">
-                  The guided loop needs a saved engagement to record against — it
-                  wasn’t created. Re-plot the path, or use manual execution.
-                </p>
-              )
+                )}
+              </>
             ) : (
-              <CockpitScreen embedded sessionId={sessionId} />
+              <>
+                <div className="hp-cv-execmode" role="tablist" aria-label="Execution mode">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={execMode === "loop"}
+                    className={execMode === "loop" ? "is-on" : undefined}
+                    onClick={() => setExecMode("loop")}
+                  >
+                    guided loop
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={execMode === "manual"}
+                    className={execMode === "manual" ? "is-on" : undefined}
+                    onClick={() => setExecMode("manual")}
+                  >
+                    manual
+                  </button>
+                </div>
+
+                {execMode === "loop" ? (
+                  sessionId ? (
+                    <>
+                      <CockpitLoop
+                        sessionId={sessionId}
+                        onStepActive={setActiveStep}
+                        onStepDone={(id) => {
+                          if (id) setDoneSteps((s) => new Set(s).add(id));
+                          setActiveStep(null);
+                        }}
+                        onRunRecorded={() => setEngToken((t) => t + 1)}
+                      />
+                      <CockpitEngagement
+                        key={sessionId}
+                        sessionId={sessionId}
+                        refreshToken={engToken}
+                      />
+                    </>
+                  ) : (
+                    <p className="hp-cv-hint">
+                      The guided loop needs a saved engagement to record against — it
+                      wasn’t created. Re-plot the path, or use manual execution.
+                    </p>
+                  )
+                ) : (
+                  <CockpitScreen embedded sessionId={sessionId} />
+                )}
+              </>
             )}
           </motion.section>
         )}

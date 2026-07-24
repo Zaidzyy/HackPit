@@ -42,7 +42,7 @@ export function CockpitView() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [execMode, setExecMode] = useState<"loop" | "manual">("loop");
   // Which SANDBOX the exec surface targets: the isolated lab (default) or a real-target
-  // engagement (no isolation floor — Wall A + human-approve-each, never the guided loop).
+  // engagement (real target, SCOPE-LOCKED egress — loop may draft, human approves every command).
   const [targetMode, setTargetMode] = useState<"lab" | "engagement">("lab");
   const [engToken, setEngToken] = useState(0);
   // Loop progress, lifted so the kill-chain map can light nodes as steps complete.
@@ -254,9 +254,10 @@ export function CockpitView() {
             </div>
 
             {targetMode === "engagement" ? (
-              /* Real-target mode: manual approve-each only. The guided loop (autonomy
-                 mechanic) is deliberately NOT available here — never hands-off on a real
-                 target. Recorded runs surface in the same engagement panel below. */
+              /* Real-target mode: SCOPE-LOCKED egress. CockpitEngagementMode hosts the enter/exit
+                 + a loop/manual toggle — the guided loop may DRAFT here (a command cannot leave
+                 the authorized scope), but every command still needs explicit human approval;
+                 never hands-off. Recorded runs surface in the same engagement panel below. */
               <>
                 <CockpitEngagementMode
                   sessionId={sessionId}

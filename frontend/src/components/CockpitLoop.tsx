@@ -30,11 +30,15 @@ const cmdline = (p: LoopProposal) => `${p.command} ${p.args.join(" ")}`.trim();
 
 export function CockpitLoop({
   sessionId,
+  engagementId = null,
   onStepActive,
   onStepDone,
   onRunRecorded,
 }: {
   sessionId: string;
+  /** When set, approved proposals run in REAL-TARGET engagement mode against this engagement
+   *  (routing through the scope-lock + never-auto-run gates). Omit for isolated lab mode. */
+  engagementId?: string | null;
   onStepActive?: (stepId: string | null) => void;
   onStepDone?: (stepId: string | null) => void;
   onRunRecorded?: () => void;
@@ -114,10 +118,13 @@ export function CockpitLoop({
       {
         command: proposal.command,
         args: proposal.args,
-        approved: true,
+        approved: true, // set ONLY here, after the human clicked approve on this proposal
         dangerous_ack: dangerAck, // true only after the explicit confirm; ignored if none
         session_id: sessionId,
         step_id: stepId ?? undefined,
+        // In engagement mode this routes the run through _validate_engagement (scope-lock ->
+        // target -> approval -> danger). The loop DRAFTS; this only fires on the human's click.
+        engagement_id: engagementId ?? undefined,
       },
       (ev: ExecEvent) => {
         switch (ev.type) {
@@ -160,7 +167,7 @@ export function CockpitLoop({
         // nothing runs without another explicit approve.
         propose();
       });
-  }, [proposal, phase, dangerAck, sessionId, onStepDone, onRunRecorded, propose]);
+  }, [proposal, phase, dangerAck, sessionId, engagementId, onStepDone, onRunRecorded, propose]);
 
   const skip = useCallback(() => {
     if (proposal) avoidRef.current = [...avoidRef.current, cmdline(proposal)];
@@ -182,9 +189,12 @@ export function CockpitLoop({
         <div className="hp-loop-head-main">
           <h2 className="hp-ck-title hp-ck-title-sm">Guided loop</h2>
           <p className="hp-ck-sub">
-            The agent proposes each recon step; <b>you approve every command</b> before
-            it runs in the isolated sandbox. It adapts to each result and proposes the
-            next. Nothing runs without your approval.
+            The agent proposes each step; <b>you approve every command</b> before it runs
+            {engagementId
+              ? " against the scope-locked real target"
+              : " in the isolated sandbox"}
+            . It adapts to each result and proposes the next. Nothing runs without your
+            approval.
           </p>
         </div>
         <div className="hp-loop-status" role="status">

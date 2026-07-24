@@ -11,11 +11,14 @@ import {
   type EngagementStatus,
   type ExecEvent,
 } from "@/lib/api";
+import { CockpitLoop } from "./CockpitLoop";
 
 /**
  * REAL-TARGET engagement mode — the SUPERVISED, highest-risk surface.
  *
- * This is deliberately NOT the guided loop: there is no auto-propose, no batch, no
+ * Under the SCOPE-LOCK, the guided loop may DRAFT commands here (a hallucinated command cannot
+ * leave the authorized scope), but every command still needs the operator's explicit approval —
+ * the loop never fires on its own, and there is no batch, no
  * approve-all. You enter engagement mode explicitly (naming the real target + acknowledging
  * you are authorized), then run ONE command at a time, reading and approving each yourself.
  * The active mode + scope are always shown. Execution goes to a SCOPE-LOCKED sandbox: a
@@ -41,6 +44,10 @@ export function CockpitEngagementMode({
   const [auth, setAuth] = useState("");
   const [entering, setEntering] = useState(false);
   const [enterErr, setEnterErr] = useState<string | null>(null);
+
+  // loop (drafts, human approves each) vs manual approve-each. Defaults to manual on a real
+  // target (the more conservative surface); the loop is available because egress is scope-locked.
+  const [engExecMode, setEngExecMode] = useState<"loop" | "manual">("manual");
 
   // command surface
   const [command, setCommand] = useState("nmap");
@@ -267,6 +274,40 @@ export function CockpitEngagementMode({
         or approve-all.
       </p>
 
+      <div className="hp-cv-execmode" role="tablist" aria-label="Execution mode">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={engExecMode === "loop"}
+          className={engExecMode === "loop" ? "is-on" : undefined}
+          onClick={() => setEngExecMode("loop")}
+          disabled={!sessionId}
+          title={sessionId ? "Agent drafts each step; you approve every command" : "Needs a saved engagement to record against"}
+        >
+          guided loop
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={engExecMode === "manual"}
+          className={engExecMode === "manual" ? "is-on" : undefined}
+          onClick={() => setEngExecMode("manual")}
+        >
+          manual
+        </button>
+      </div>
+
+      {engExecMode === "loop" && sessionId ? (
+        /* The loop DRAFTS proposals; each approved run routes through _validate_engagement
+           (scope-lock -> target -> approval -> danger) with this engagement's id. It never
+           fires without your click. */
+        <CockpitLoop
+          sessionId={sessionId}
+          engagementId={active.engagement_id}
+          onRunRecorded={onRunRecorded}
+        />
+      ) : (
+      <>
       <section className="hp-ck-builder">
         <label className="hp-ck-field">
           <span>command</span>
@@ -350,6 +391,8 @@ export function CockpitEngagementMode({
           )}
         </div>
       </section>
+      </>
+      )}
     </div>
   );
 }

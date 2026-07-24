@@ -245,6 +245,34 @@ def test_heuristic_clean_for_safe_commands() -> None:
     print("  heuristic clean for safe recon/exploit commands: PASS")
 
 
+def test_eval_flag_detected_every_form() -> None:
+    """The heuristic reuses the flag parser, so an eval flag is spotted in every form —
+    bare -c, =-joined -c=x, inside a short cluster -Xc, and the long --command/--eval. The
+    interpreter is flagged regardless, but the eval note must appear when the flag is there."""
+    for form in (["-c", "code"], ["-c=code"], ["-Xc", "code"], ["--command", "code"], ["--eval", "code"]):
+        flags = A.flags_in_args(form)
+        assert flags & A._EVAL_FLAGS, f"eval flag must be parsed from {form}: got {flags}"
+        reasons = A.dangerous_command_heuristic("python3", [*form, _LAB])
+        assert reasons and "inline code" in " ".join(reasons), f"eval note missing for {form}"
+    print("  eval flag detected in every form (bare/=-joined/cluster/long): PASS")
+
+
+def test_no_metachar_gate() -> None:
+    """The metachar rejection is GONE — payloads legitimately carry metacharacters and argv
+    exec makes them safe. A command with metachars in its args validates (only isolation may
+    remain), where the old model rejected it."""
+    for cmd, args in (
+        ("curl", [f"http://{_LAB}:3000/?a=1&b=2*"]),                       # & *
+        ("sqlmap", ["-u", f"http://{_LAB}:3000/rest?q=1", "--data", "' OR 1=1-- -"]),
+        ("ffuf", ["-u", f"http://{_LAB}:3000/FUZZ", "-H", "X: a|b;c", "-w", "w.txt"]),  # | ;
+    ):
+        r = E.validate_request(ExecRequest(command=cmd, args=args, approved=True, dangerous_ack=True))
+        assert r is None or r.gate == "sandbox", (
+            f"metachar payload must validate now (no metachar gate): {cmd} {args} → {getattr(r,'gate',None)}"
+        )
+    print("  no metachar gate — payloads with metacharacters validate: PASS")
+
+
 def test_danger_gate_requires_confirm() -> None:
     """A heuristic-flagged command is REFUSED unless dangerous_ack is explicitly true —
     approve alone is not enough. NEVER blocked; the confirm is required (test-locked)."""
@@ -276,6 +304,8 @@ if __name__ == "__main__":
     test_gate_order_and_first_failing_gate()
     test_heuristic_flags_dangerous_commands()
     test_heuristic_clean_for_safe_commands()
+    test_eval_flag_detected_every_form()
+    test_no_metachar_gate()
     test_danger_gate_requires_confirm()
     test_isolation_assert()
     test_isolation_gate_in_validate()

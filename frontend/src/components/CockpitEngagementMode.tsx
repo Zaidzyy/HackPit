@@ -18,9 +18,10 @@ import {
  * This is deliberately NOT the guided loop: there is no auto-propose, no batch, no
  * approve-all. You enter engagement mode explicitly (naming the real target + acknowledging
  * you are authorized), then run ONE command at a time, reading and approving each yourself.
- * The active mode + target are always shown. Execution goes to a FULLY-OPEN sandbox (Wall A
- * down — it reaches the internet, your LAN, AND your own machine). Human approval of every
- * command is the ONLY guard — it protects the real target AND your own machine.
+ * The active mode + scope are always shown. Execution goes to a SCOPE-LOCKED sandbox: a
+ * default-deny egress firewall allows ONLY the engagement's authorized scope (your own machine
+ * and out-of-scope networks are NOT reachable). Because the floor is network-enforced, the
+ * guided loop may DRAFT commands, but human approval of EVERY command is still required.
  */
 
 type Line = { kind: "stdout" | "stderr" | "meta" | "err"; text: string };
@@ -171,23 +172,24 @@ export function CockpitEngagementMode({
         <div className="hp-eng-warn" role="alert">
           <p className="hp-eng-warn-head">⚠ You are about to leave the isolated lab.</p>
           <p>
-            Engagement mode runs against a <b>real target</b> with <b>no isolation floor and no
-            Wall A</b>. The sandbox reaches the internet, <b>your LAN, and your own machine</b> —
-            nothing bounds where it can reach. You are responsible for authorization and for
-            staying in scope, and <b>human approval of every command is the only guard</b> — it
-            protects the target and your own machine. There is no autonomous mode, no batch, no
-            approve-all.
+            Engagement mode runs against a <b>real target</b> you name as the <b>scope</b> (a
+            single host or a CIDR). On entry the sandbox is <b>SCOPE-LOCKED</b>: a default-deny
+            egress firewall allows <b>only</b> that scope — <b>your own machine and out-of-scope
+            networks are NOT reachable</b>. You are responsible for authorization and for staying
+            in scope. Because the floor is network-enforced, the guided loop may <b>draft</b>
+            commands here, but <b>human approval of every command is still required</b> — the loop
+            never fires on its own. No autonomous mode, no batch, no approve-all.
           </p>
         </div>
 
         <div className="hp-eng-enter">
           <label className="hp-ck-field">
-            <span>real target (host or URL you are authorized to test)</span>
+            <span>authorized scope — a single host/URL or a CIDR you may test</span>
             <input
               type="text"
               value={target}
               onChange={(e) => setTarget(e.target.value)}
-              placeholder="e.g. scanme.nmap.org"
+              placeholder="e.g. scanme.nmap.org  or  10.10.10.0/24"
               spellCheck={false}
               autoComplete="off"
               disabled={entering}
@@ -225,7 +227,7 @@ export function CockpitEngagementMode({
             ready ? (
               <>
                 <span className="hp-ck-dot" /> engagement sandbox <b>{status.sandbox}</b> ready ·
-                <b> FULLY OPEN</b> · full network reach (internet + LAN + host) · human-approve-each
+                <b> SCOPE-LOCKED</b> · egress reaches the authorized scope only · human-approve-each
               </>
             ) : (
               <>
@@ -248,10 +250,10 @@ export function CockpitEngagementMode({
       <div className="hp-eng-mode" role="status">
         <span className="hp-eng-mode-tag">ENGAGEMENT · REAL TARGET</span>
         <span className="hp-eng-mode-target">
-          target locked to <b>{active.target}</b>
+          scope-locked to <b>{active.target}</b>
         </span>
-        <span className="hp-eng-wall-bad">
-          {ready ? "FULLY OPEN · full reach" : "sandbox not running"}
+        <span className="hp-eng-wall-ok">
+          {ready ? "SCOPE-LOCKED · off-scope + your machine unreachable" : "sandbox not running"}
         </span>
         <button type="button" className="hp-loop-stop" onClick={doExit}>
           exit engagement
@@ -259,9 +261,10 @@ export function CockpitEngagementMode({
       </div>
 
       <p className="hp-ck-note">
-        No isolation floor, no Wall A — the sandbox reaches the internet, your LAN, and your own
-        machine. The <b>only</b> guard on what runs is you — read and approve every command. There
-        is no loop, no batch, no approve-all here (that is lab-only, by design).
+        Egress is <b>scope-locked</b> to <b>{active.target}</b> — your own machine and out-of-scope
+        networks are not reachable. The guided loop may <b>draft</b> commands, but <b>you approve
+        every command</b> before it runs — the loop never fires on its own, and there is no batch
+        or approve-all.
       </p>
 
       <section className="hp-ck-builder">

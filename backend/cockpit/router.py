@@ -117,22 +117,32 @@ def exec_command(request: ExecRequest):
 
 @router.get("/engagement")
 def get_engagement() -> dict[str, Any]:
-    """The active engagement (if any) + sandbox availability — drives the UI mode indicator.
+    """The active engagement (if any) + scope-lock readiness — drives the UI mode indicator.
 
     Read-only. The UI must ALWAYS show which mode is active; when an engagement is active it
-    shows the named target + that the sandbox is FULLY OPEN (Wall A down — the only guard is
-    human-approve-each). This never enters/exits mode.
+    shows the named target + that the sandbox is SCOPE-LOCKED (egress reaches ONLY the resolved
+    scope — the operator's own machine and out-of-scope networks are NOT reachable). Readiness
+    requires BOTH the sandbox and the scope-lock firewall sidecar to be running. This never
+    enters/exits mode.
     """
     active = engagement.list_active()
     up = is_engage_sandbox_up()
+    fw = is_engage_firewall_up()
+    ready = up and fw
     return {
         "active": [e.model_dump() for e in active],
         "sandbox": config.ENGAGE_SANDBOX_CONTAINER,
+        "firewall": config.ENGAGE_FIREWALL_CONTAINER,
         "up": up,
-        # Fully open: readiness is just availability (there is no Wall A / isolation to verify).
-        "open": True,
-        "ready": up,
-        "detail": "" if up else "engagement sandbox is not running",
+        "firewall_up": fw,
+        # Scope-locked: egress is default-deny + allow-only-scope (a real, network-enforced floor).
+        "scope_locked": True,
+        "ready": ready,
+        "detail": (
+            "" if ready
+            else "engagement sandbox is not running" if not up
+            else "scope-lock firewall sidecar is not running"
+        ),
     }
 
 

@@ -650,9 +650,12 @@ export type EngagementRecord = {
 export type EngagementStatus = {
   active: EngagementRecord[];
   sandbox: string;
+  firewall: string;
   up: boolean;
-  /** Always true — the engagement sandbox is fully open (no Wall A / isolation to verify). */
-  open: boolean;
+  firewall_up: boolean;
+  /** Always true — engagement egress is scope-locked (default-deny + allow-only-scope). */
+  scope_locked: boolean;
+  /** Ready iff BOTH the sandbox and the scope-lock firewall sidecar are running. */
   ready: boolean;
   detail: string;
 };

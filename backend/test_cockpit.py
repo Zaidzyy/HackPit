@@ -75,6 +75,24 @@ def test_best_effort_target_lock() -> None:
     print("  best-effort target-lock (lab-only, host-shaped): PASS")
 
 
+def test_target_lock_is_best_effort_not_load_bearing() -> None:
+    """The target-lock is cheap DiD, NOT a load-bearing control — this test documents its
+    KNOWN GAP so no one mistakes it for real containment: it only inspects argv tokens, so a
+    lab-referencing command whose actual network target is hidden in an arbitrary payload
+    still passes. ISOLATION (egress-less sandbox) is the real bound on what the lab reaches."""
+    # the cheap win it DOES catch: an obvious non-lab host token
+    ok, _ = E.check_target_lock(["scanme.nmap.org"])
+    assert not ok, "an obvious non-lab host is caught"
+    # the GAP: it cannot see intent inside arbitrary code — a lab-referencing python command
+    # passes even though the code could connect anywhere (isolation, not this, stops that)
+    ok, _ = E.check_target_lock(["-c", "connect_out_somehow()", _LAB])
+    assert ok, "target-lock only sees argv tokens — code intent is invisible (isolation is the bound)"
+    # file operands (even absolute paths / dotted names) are not mistaken for hosts
+    ok, _ = E.check_target_lock(["-w", "/usr/share/wordlists/common.txt", f"http://{_LAB}/FUZZ"])
+    assert ok, "a wordlist path is not a target host"
+    print("  target-lock is best-effort, not load-bearing (gap documented): PASS")
+
+
 def test_approval_gate() -> None:
     """approved MUST be explicitly True — there is no autonomous / approve-all path."""
     r = E.validate_request(ExecRequest(command="curl", args=["-sI", f"http://{_LAB}:3000/"]))
@@ -253,6 +271,7 @@ def test_danger_gate_requires_confirm() -> None:
 if __name__ == "__main__":
     test_no_allowlist_any_binary_runs()
     test_best_effort_target_lock()
+    test_target_lock_is_best_effort_not_load_bearing()
     test_approval_gate()
     test_gate_order_and_first_failing_gate()
     test_heuristic_flags_dangerous_commands()

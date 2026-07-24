@@ -730,3 +730,71 @@ relaxation SURGICAL (active VALUE args only) · recon tools UNCHANGED (strict). 
 suite green; frontend tsc + eslint clean; llm_config restored.
 
 **DO NOT push — Zaid reviews the dangerous-flag detection completeness + the per-tool target-lock first.**
+
+---
+
+## Session 2026-07-24 (SUPERVISED — remove the allowlist; heuristic red-confirm)
+
+Zaid's final decision: the cockpit DROPS the command allowlist. The human-approved agent may
+run ANY single binary + args against the lab. Safety on the lab is ISOLATION + HUMAN-APPROVAL,
+plus a HEURISTIC red-confirm so arbitrary-code/shell-shaped commands can't be approved by
+accident. Executor STAYS argv (never a shell) — what you approve is what runs. Built in
+increments N1–N5, committed each, NOT pushed.
+
+### What changed
+- The ALLOWLIST GATE is gone. Any binary + args passes what used to be the allowlist/flag
+  check. The per-tool allowed_flags / dangerous_flags / strict-recon schema is retired
+  (allowlist.py now holds only: the flag PARSER, the heuristic, extract_hostish, and an
+  informational SUGGESTED_COMMANDS list for the UI). No metachar rejection anymore (payloads
+  legitimately carry metacharacters; argv makes them safe).
+
+### What stays (the surviving safety — verified)
+- ISOLATION (the real lab bound): the cockpit still execs into the egress-less
+  `hackpit-kali-sandbox`; `assert_isolation_proven` gate STAYS; isolation_proof.sh still 4/4.
+  Arbitrary commands (reverse shells, python, rm -rf) are trapped in the disposable lab net.
+- HUMAN APPROVAL: the loop's per-command approval + the direct-exec approved gate stay.
+- Agent has ZERO path to :kali — test-locked (test_kali + test_loop proposer-cannot-execute green).
+- BEST-EFFORT target-lock (cheap DiD, NOT load-bearing): any host-shaped token must be the lab
+  (catches `nmap evil.com`). Documented gap: it only inspects argv, so a target hidden inside
+  an arbitrary command (`python -c "...connect..."`) is invisible — isolation is the real bound.
+  File/wordlist operands are skipped so they aren't mistaken for hosts.
+
+### The heuristic red-confirm (replaces per-tool danger detection)
+`dangerous_command_heuristic(command, args)` → reasons; wired into the EXISTING danger gate:
+if it fires and `dangerous_ack` is not set → ExecRejected(gate="danger") (NEVER blocks; needs
+the explicit confirm). OVER-INCLUSIVE by design.
+- Coverage: language interpreters (python/bash/sh/perl/ruby/php/node/… — the binary is the
+  tell, extra note if an eval flag -c/-e/--command/--eval is present, spotted in every form via
+  the reused parser); reverse-shell/exec tools (nc/ncat/socat/telnet, esp. -e/-c); frameworks
+  (msfconsole/msfvenom/sliver/…); and reverse-shell/code-exec SHAPES in the args (/dev/tcp/,
+  bash -i, mkfifo, subprocess, | bash, base64 -d, …). Command is basename'd (catches /usr/bin/python3).
+- KNOWN GAPS (it is an ASSIST, not a guarantee): a novel interpreter/loader not in the lists, an
+  obfuscated payload (base64/hex without the literal markers), or code that reaches out without a
+  flagged shape will NOT be flagged. A false positive costs one extra confirm; a false negative is
+  a missed warning. The HUMAN approval is the real gate — gaps are expected and acceptable ON THE LAB.
+
+### Increments (local commits, NOT pushed)
+- N1 remove the allowlist gate (any binary runs; best-effort target-lock; argv) · N2 the
+  heuristic + danger-gate wiring · N3 document the target-lock's non-load-bearing gap · N4
+  consolidate tests + live isolation proof 4/4 · N5 e2e + UI accuracy.
+
+### E2E (live, isolated lab; Ollama for automation, frontier config restored)
+- ANY BINARY: `dig hackpit-lab-target` → exit 0 (resolved the lab; never on the allowlist).
+- RED-CONFIRM: `python3 -c "<urlopen the lab>"` → gate=danger without the confirm; WITH it, ran
+  in the egress-less sandbox → HTTP 200 from Juice Shop, recorded; report generated over the run
+  (cites it). Cockpit UI live; the red-confirm frame is a human click-through (enforcement is the
+  server-side danger gate). Isolation proof 4/4.
+
+### STANDING CONDITION (read before ever pointing this at a real target)
+On the LAB this is safe: ISOLATION is a hard bound (no egress), so even a missed-by-the-heuristic
+reverse shell or `rm -rf` is trapped in the disposable network, and every command is human-approved.
+The heuristic is an assist for the human, not a guarantee.
+
+On REAL targets (a future "Pure Option 3" with the isolation bound removed), there is NO hard bound
+left — HUMAN APPROVAL + OPERATOR DISCIPLINE become the ONLY thing standing between a proposed command
+and a real system. The heuristic's gaps mean a dangerous command CAN reach the approve button
+un-flagged. Therefore, off the isolated lab this MUST NEVER run hands-off / autonomous / approve-all;
+every command must be consciously read and approved by a human who owns the consequences. Removing
+isolation without keeping a human on every command is out of scope and unsafe.
+
+**DO NOT push — Zaid reviews the heuristic + that isolation / human-only / argv all still hold.**

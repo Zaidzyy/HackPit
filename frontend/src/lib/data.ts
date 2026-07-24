@@ -24,6 +24,7 @@ export const NAV: NavItem[] = [
   { key: "library", label: ":library", href: "/" },
   { key: "attack-paths", label: ":attack-paths", href: "/attack-path" },
   { key: "cockpit", label: ":cockpit", href: "/cockpit" },
+  { key: "kali", label: ":kali", href: "/kali" },
   { key: "engagements", label: ":engagements", href: "/engagements" },
 ];
 

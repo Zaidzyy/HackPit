@@ -1,26 +1,56 @@
 # HackPit Cockpit — Kali/Debian sandbox image.
 #
-# The recon tools are baked in at BUILD time (the build has internet). At RUNTIME
-# the container joins only the `internal: true` network, so it has no egress — it
-# can never apt-install or phone home once running. That is the point.
+# Tools are baked in at BUILD time (the build has internet). At RUNTIME the cockpit
+# sandbox joins only the `internal: true` network, so it has no egress — it can never
+# apt-install or phone home once running. That is the point.
 #
-# Debian-slim base (not full kali-rolling) keeps the image small and reproducible;
-# nmap/curl/whatweb cover the M1 recon allowlist. ca-certificates is installed so
-# that an HTTPS-to-internet test fails ONLY for lack of a route (a fair isolation
-# proof), never for missing trust roots.
+# Debian-slim base (not full kali-rolling) keeps the image small and reproducible.
+#   RECON (strict allowlist):  nmap, curl, whatweb
+#   ACTIVE (all-flags + red-confirm): sqlmap (apt), ffuf + nuclei (pinned release binaries)
+# ca-certificates is installed so an HTTPS-to-internet test fails ONLY for lack of a
+# route (a fair isolation proof), never for missing trust roots.
 FROM debian:stable-slim
 
+# Recon tools + sqlmap (apt) + fetch/extract helpers for the Go binaries.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         nmap \
         curl \
         whatweb \
+        sqlmap \
         ca-certificates \
         iputils-ping \
         dnsutils \
+        curl \
+        unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Run as an unprivileged user — the sandbox never needs root for recon.
+# ffuf (web fuzzer) — pinned static Go binary from the official release.
+ARG FFUF_VERSION=2.1.0
+RUN curl -fsSL "https://github.com/ffuf/ffuf/releases/download/v${FFUF_VERSION}/ffuf_${FFUF_VERSION}_linux_amd64.tar.gz" \
+        -o /tmp/ffuf.tgz \
+    && tar -xzf /tmp/ffuf.tgz -C /usr/local/bin ffuf \
+    && rm /tmp/ffuf.tgz \
+    && /usr/local/bin/ffuf -V
+
+# nuclei (template scanner) — pinned static Go binary from the official release.
+# NOTE: nuclei templates need a build-time `nuclei -update-templates` (egress) to scan
+# live; the binary is baked here so the tool exists for the allowlist. Templates can be
+# added to the image later without touching the safety layer.
+ARG NUCLEI_VERSION=3.3.9
+RUN curl -fsSL "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip" \
+        -o /tmp/nuclei.zip \
+    && unzip -o /tmp/nuclei.zip nuclei -d /usr/local/bin \
+    && rm /tmp/nuclei.zip \
+    && /usr/local/bin/nuclei -version
+
+# A small baked wordlist for ffuf (the sandbox has no egress to fetch one at runtime).
+RUN printf '%s\n' \
+        admin login rest api ftp backup users user products search \
+        administration metrics robots.txt .git .env assets public \
+        > /usr/share/hackpit-wordlist.txt
+
+# Run as an unprivileged user — the sandbox never needs root.
 # (Note: Debian ships a built-in `operator` system user, so we use our own name.)
 RUN useradd -m -s /bin/bash sandbox
 USER sandbox

@@ -529,3 +529,58 @@ the safety net the future autonomous agent depends on. So instead of opening the
 4. docs + proof (`kali_open_egress_proof.sh`)
 
 DO NOT push — Zaid reviews the network config + human-only confirmation, then pushes.
+
+---
+
+## Session 2026-07-24 (the orchestrator loop — the autonomy mechanic, human-in-the-loop)
+
+Built the guided agent loop: the composer's plan is driven step-by-step — the agent
+proposes the next command, **the human approves every one**, it runs through the M1
+executor, the result feeds back, the agent adapts and proposes the next. Design in
+docs/cockpit-loop.md. Local commits, **NOT pushed** — Zaid reviews the human-in-the-loop
+gate first.
+
+### The loop model
+propose → **await-approval** → execute (M1 executor) → capture → feed-back → propose | stop.
+The only new backend surface is `POST /sessions/{id}/loop/propose` (backend/orchestrator.py),
+which **proposes and does not execute**. Everything else is reused unchanged: the composer
+(the plan/seed), the M1 executor (`POST /cockpit/exec` — the loop's "execute", four gates),
+the engagement/run store (plan + recorded runs = the loop's whole state + its feedback
+channel), and the M3 report generator (the recorded run sequence is its evidence).
+
+### The human-approval gate (where autonomy enters)
+- **Every command is human-approved.** The loop PAUSES at `awaiting-approval` and runs
+  nothing until the operator approves. No batching, no auto-run, no "approve all". skip /
+  stop always available. The agent PROPOSES; it never runs anything itself — the frontend
+  only ever executes via the M1 executor after an explicit approve.
+- **Recon-only + lab-locked + isolated, unchanged.** Execution is the M1 executor's four
+  gates (allowlist recon → target-lock lab → approval → isolation). The proposer is *told*
+  to stay recon/lab and PRE-CHECKS each proposal against the real allowlist + target-lock,
+  flagging a stray one — but the enforcement is the executor's gates at run time. The frozen
+  cockpit safety suite is green, unchanged.
+- **No :kali / no egress path for the agent.** orchestrator.py imports only `llm` +
+  `cockpit.{allowlist,config,executor}` and calls only the pure `check_target_lock` — never
+  iter_run/run_command/subprocess, never the `:kali` shell. Loop runs go to the ISOLATED
+  `hackpit-kali-sandbox` (verified: recorded run target=hackpit-lab-target), never the open
+  `:kali` box. Regression-locked by test_loop.py (proposer-cannot-execute) and the :kali
+  human-only source scan (which covers orchestrator.py); both green.
+
+### Increments (local commits, NOT pushed)
+- phase0 — design (docs/cockpit-loop.md)
+- L1 — propose endpoint (no execution) + orchestrator.py + test_loop.py
+- L2 — the human-gated loop (CockpitLoop: propose → approve → M1 executor → feed back)
+- L3 — cinematic map (nodes light phase-by-phase; active pulses, done goes green)
+- L4/L5 — report reuse (pure) + end-to-end, this section
+
+### Verified live (local Ollama qwen3:8b for automation; frontier config restored after)
+Plotted a lab path → started the loop → agent proposed `nmap -sV -p 3000 hackpit-lab-target`
+(step recon-1) with a rationale, AWAITING approval → approved → ran through the M1 executor,
+EXIT 0 (real Juice Shop fingerprint), recorded to the session → loop fed back and re-proposed,
+ADAPTING. The agent then proposed an off-policy XSS payload (shell metachars); the pre-check
+FLAGGED it in red with APPROVE disabled — surfaced, never auto-run (the safety story, live).
+Report generated over the recorded run: folds it into the authoritative Evidence section and
+cites it by run id. Full safety suite green (cockpit isolation unchanged); build + lint + tsc
+clean. llm_config.json restored to {claude-agent-sdk, opus}.
+
+**No autonomy without approval; execution stayed recon/lab/isolated; the agent has no
+:kali/egress path.** DO NOT push — Zaid reviews the human-in-the-loop gate first.

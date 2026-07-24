@@ -191,6 +191,9 @@ def propose_next(
         }
 
     gate_ok, gate_reason = precheck(command, args)
+    # Dangerous flags are DETECTED (never blocked): surfaced so the UI shows them RED and
+    # requires an explicit confirm before approve. Empty for recon + benign active commands.
+    dangerous = allowlist.dangerous_flags_present(command, args)
     step_id = parsed.get("step_id")
     proposal = {
         "command": command,
@@ -199,5 +202,6 @@ def propose_next(
         "step_id": str(step_id).strip() if isinstance(step_id, str) and step_id.strip() else None,
         "gate_ok": gate_ok,
         "gate_reason": gate_reason,
+        "dangerous_flags": dangerous,
     }
     return {"done": False, "proposal": proposal, "reason": None}

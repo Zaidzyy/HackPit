@@ -284,6 +284,103 @@ def _first_disallowed_flag(spec: CommandSpec, args: list[str]) -> str | None:
     return None
 
 
+# --------------------------------------------------------------------------- #
+# ACTIVE-tool parsing: one authoritative walk backing dangerous-flag DETECTION
+# (E2), the per-tool target-lock (E3), and the value-only metachar rule (E3).
+# Reusing a single walk is the crux: detection must catch EVERY form, and if the
+# three consumers parsed args differently, a form caught by one could slip past
+# another. Over-inclusive on flag identities by design — a false positive only
+# costs an extra confirm; a false negative is a silent dangerous approval.
+# --------------------------------------------------------------------------- #
+
+
+def _split_short_active(base: str, value_flags: frozenset[str]) -> tuple[list[str], str | None, str | None]:
+    """Decompose a single-dash token for detection. Returns (letters, vflag, inline_value).
+
+    ``letters`` are the per-letter flag candidates (``-abe`` → ``-a -b -e``), truncated at
+    the first value-flag letter (its remainder is a value, not more flags). ``vflag`` is
+    that value-flag letter (or None); ``inline_value`` is the remainder after it (or None).
+    Note the WHOLE token is also kept as a candidate by the caller, so a Go-style single-dash
+    long flag (``-code``, ``-config``) is caught even though it also decomposes into letters.
+    """
+    letters: list[str] = []
+    cluster = base[1:]
+    for idx, ch in enumerate(cluster):
+        letter = "-" + ch
+        letters.append(letter)
+        if letter in value_flags:
+            inline = cluster[idx + 1:] if idx + 1 < len(cluster) else None
+            return letters, letter, inline
+    return letters, None, None
+
+
+def _iter_active(spec: "CommandSpec", args: list[str]):
+    """Yield one record per flag-shaped token in an ACTIVE tool's args.
+
+    Each record: ``{candidates, name, value, value_taker}`` where
+    * ``candidates`` — every flag identity this token could represent (whole token minus any
+      ``=value``, plus decomposed letters for a single-dash token). Used for dangerous-flag
+      detection; over-inclusive on purpose.
+    * ``name`` — the flag-NAME portion (no value), for the value-only metachar rule.
+    * ``value`` — the value this flag carries (``=``-joined, inline, or the next token), or None.
+    * ``value_taker`` — the flag identity that took the value (for the target-lock).
+    Operands and consumed values are not yielded — a value (even a flag-like one) is never
+    re-scanned as a flag.
+    """
+    vf = spec.value_flags
+    i, n = 0, len(args)
+    while i < n:
+        tok = args[i]
+        if not _is_flag_token(tok):
+            i += 1
+            continue
+        base, sep, eqval = tok.partition("=")
+        has_eq = sep == "="
+        candidates = {base}
+        vflag: str | None = None
+        inline: str | None = None
+        name = base
+        if not base.startswith("--"):  # single-dash: decompose + peel any inline value
+            letters, vflag, inline = _split_short_active(base, vf)
+            candidates.update(letters)
+            if inline is not None:
+                name = base[: len(base) - len(inline)]
+
+        value: str | None = None
+        value_taker: str | None = None
+        took_next = False
+        if has_eq:
+            value, value_taker = eqval, base
+        elif inline is not None:
+            value, value_taker = inline, vflag
+        elif base in vf:
+            value_taker = base
+        elif vflag is not None:
+            value_taker = vflag
+        if value is None and value_taker is not None and i + 1 < n:
+            value, took_next = args[i + 1], True
+
+        yield {"candidates": candidates, "name": name, "value": value, "value_taker": value_taker}
+        i += 2 if took_next else 1
+
+
+def dangerous_flags_present(command: str, args: list[str]) -> list[str]:
+    """The dangerous flags present in a command, DETECTED (never blocked) in EVERY form.
+
+    Empty for recon tools and for a benign active command. Reuses the hardened active walk
+    so no form is missed: a combined short (``-e`` inside a cluster), ``--os-shell``,
+    ``--os-shell=x`` (=-joined), a Go-style single-dash long flag, and the ``--`` trick are
+    all caught. The result drives the RED highlight + explicit-confirm requirement.
+    """
+    spec = ALLOWLIST.get(command)
+    if spec is None or not spec.active or not spec.dangerous_flags:
+        return []
+    hits: set[str] = set()
+    for rec in _iter_active(spec, args):
+        hits |= rec["candidates"] & spec.dangerous_flags
+    return sorted(hits)
+
+
 def extract_hostish(args: list[str]) -> list[str]:
     """Return arg tokens that look like a host/URL operand (not flags).
 

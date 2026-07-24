@@ -712,6 +712,9 @@ export type LoopProposal = {
   step_id: string | null;
   gate_ok: boolean;
   gate_reason: string;
+  /** Escalation flags DETECTED in this proposal (never blocked). When non-empty the
+   *  approval surface shows them RED and APPROVE needs an explicit second confirm. */
+  dangerous_flags: string[];
 };
 
 export type LoopProposeOut = {

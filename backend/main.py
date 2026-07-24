@@ -694,6 +694,12 @@ class LoopProposal(BaseModel):
     gate_reason: str = Field(
         description="Why the pre-check failed (empty when gate_ok)."
     )
+    dangerous_flags: list[str] = Field(
+        default_factory=list,
+        description="Escalation flags DETECTED in this proposal (never blocked). When "
+        "non-empty the UI shows them RED and approve requires an explicit confirmation; "
+        "the executor's danger gate re-checks this at run time.",
+    )
 
 
 class LoopProposeOut(BaseModel):

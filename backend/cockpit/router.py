@@ -19,10 +19,23 @@ from typing import Any, Iterator
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from . import allowlist, config, executor, runstore
+from . import allowlist, config, engagement, executor, runstore
 from .kali import KaliRefused, KaliRequest, KaliResult, kali_status, run_kali
-from .models import AllowlistItem, AllowlistResponse, ExecRequest, RunRecord
-from .sandbox import SandboxError, assert_isolation_proven, is_sandbox_up
+from .models import (
+    AllowlistItem,
+    AllowlistResponse,
+    EngagementEnterRequest,
+    EngagementRecord,
+    ExecRequest,
+    RunRecord,
+)
+from .sandbox import (
+    SandboxError,
+    assert_isolation_proven,
+    assert_wall_a_holds,
+    is_engage_sandbox_up,
+    is_sandbox_up,
+)
 
 router = APIRouter(prefix="/cockpit", tags=["cockpit"])
 
@@ -74,10 +87,12 @@ def _sse(event: dict[str, Any]) -> str:
 
 @router.post("/exec")
 def exec_command(request: ExecRequest):
-    """Run ONE approved, allowlisted, target-locked command against the lab.
+    """Run ONE approved command — LAB mode (isolated lab) or, when ``engagement_id`` names an
+    active engagement, REAL-TARGET engagement mode (Wall-A sandbox, no isolation floor).
 
-    All four safety gates run first. If any fails, nothing runs and a 403 is returned
-    naming the gate. Otherwise the run streams back as Server-Sent Events.
+    The mode's gates run first (lab: target→approval→danger→isolation; engagement:
+    engagement→target→approval→danger→wall_a). If any fails, nothing runs and a 403 is
+    returned naming the gate. Otherwise the run streams back as Server-Sent Events.
     """
     rejected = executor.validate_request(request)
     if rejected is not None:
@@ -95,6 +110,65 @@ def exec_command(request: ExecRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# --- Engagement mode (REAL targets — no isolation floor; Wall A + human-approve-each) --- #
+
+
+@router.get("/engagement")
+def get_engagement() -> dict[str, Any]:
+    """The active engagement (if any) + Wall-A readiness — drives the UI mode indicator.
+
+    Read-only. The UI must ALWAYS show which mode is active; when an engagement is active it
+    shows the named target + that Wall A is holding. This never enters/exits mode.
+    """
+    active = engagement.list_active()
+    up = is_engage_sandbox_up()
+    wall_a_ok = False
+    detail = ""
+    if up:
+        try:
+            assert_wall_a_holds()
+            wall_a_ok = True
+        except SandboxError as exc:
+            detail = str(exc)
+    else:
+        detail = "engagement sandbox / firewall is not running"
+    return {
+        "active": [e.model_dump() for e in active],
+        "sandbox": config.ENGAGE_SANDBOX_CONTAINER,
+        "firewall": config.ENGAGE_FIREWALL_CONTAINER,
+        "up": up,
+        "wall_a_ok": wall_a_ok,
+        "ready": up and wall_a_ok,
+        "detail": detail,
+    }
+
+
+@router.post("/engagement/enter", response_model=EngagementRecord)
+def enter_engagement(req: EngagementEnterRequest) -> EngagementRecord:
+    """DELIBERATELY enter real-target engagement mode. This is the explicit, warned switch
+    that LEAVES THE ISOLATED LAB.
+
+    You are responsible for authorization and for staying in scope. Every command is still
+    yours to approve — engagement mode is never hands-off. Returns the engagement id the
+    exec path must reference to run against the named target (through the Wall-A sandbox).
+    422 if the target/authorization is missing (both are required — mode cannot be entered
+    by accident).
+    """
+    try:
+        return engagement.enter(req.target, req.authorization, req.session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/engagement/{engagement_id}/exit")
+def exit_engagement(engagement_id: str) -> dict[str, Any]:
+    """Leave engagement mode for this id — no further engagement-mode runs against it."""
+    exited = engagement.exit_engagement(engagement_id)
+    if not exited:
+        raise HTTPException(status_code=404, detail="no active engagement with that id")
+    return {"engagement_id": engagement_id, "exited": True}
 
 
 @router.get("/kali/status")

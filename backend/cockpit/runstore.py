@@ -29,7 +29,7 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Create the cockpit_runs table if absent. Safe to call repeatedly."""
+    """Create the cockpit_runs table if absent + apply light migrations. Idempotent."""
     with _write_lock, _connect() as conn:
         conn.execute(
             """
@@ -45,10 +45,15 @@ def init_db() -> None:
                 stdout      TEXT NOT NULL DEFAULT '',
                 stderr      TEXT NOT NULL DEFAULT '',
                 started_at  TEXT NOT NULL,
-                finished_at TEXT
+                finished_at TEXT,
+                mode        TEXT NOT NULL DEFAULT 'lab'  -- 'lab' | 'engagement' (real target)
             )
             """
         )
+        # Migration: add `mode` to a pre-existing table (CREATE IF NOT EXISTS won't).
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(cockpit_runs)")}
+        if "mode" not in cols:
+            conn.execute("ALTER TABLE cockpit_runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'lab'")
 
 
 def save_run(record: RunRecord) -> None:
@@ -58,8 +63,8 @@ def save_run(record: RunRecord) -> None:
             """
             INSERT OR REPLACE INTO cockpit_runs
               (run_id, session_id, step_id, command, args, target, approved,
-               exit_code, stdout, stderr, started_at, finished_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               exit_code, stdout, stderr, started_at, finished_at, mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.run_id,
@@ -74,6 +79,7 @@ def save_run(record: RunRecord) -> None:
                 record.stderr,
                 record.started_at,
                 record.finished_at,
+                record.mode,
             ),
         )
 
@@ -113,6 +119,7 @@ def _row_to_record(row: sqlite3.Row) -> RunRecord:
         args=json.loads(d["args"]),
         target=d["target"],
         approved=bool(d["approved"]),
+        mode=d["mode"] if "mode" in d.keys() and d["mode"] else "lab",
         exit_code=d["exit_code"],
         stdout=d["stdout"],
         stderr=d["stderr"],

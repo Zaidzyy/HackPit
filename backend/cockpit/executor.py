@@ -19,9 +19,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
-from . import allowlist, config, runstore
-from .models import ExecRejected, ExecRequest, RunRecord
-from .sandbox import SandboxError, assert_isolation_proven
+from . import allowlist, config, engagement, runstore
+from .models import EngagementRecord, ExecRejected, ExecRequest, RunRecord
+from .sandbox import SandboxError, assert_isolation_proven, assert_wall_a_holds
 
 _IPV4 = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 
@@ -76,52 +76,104 @@ def _host_of(token: str) -> str | None:
     return t or None
 
 
-def check_target_lock(args: list[str], command: str | None = None) -> tuple[bool, str]:
-    """BEST-EFFORT lab target-lock: every host-shaped token in args must be the lab.
+def _engagement_aliases(target: str) -> frozenset[str]:
+    """The accepted target-lock aliases for an engagement's named target: the raw string
+    (a host or URL) plus its bare host form, so both ``scanme.nmap.org`` and
+    ``http://scanme.nmap.org/`` resolve to the same locked target."""
+    aliases = {target}
+    host = _host_of(target)
+    if host:
+        aliases.add(host)
+    return frozenset(aliases)
 
+
+def check_target_lock(
+    args: list[str],
+    command: str | None = None,
+    allowed: frozenset[str] | None = None,
+    label: str | None = None,
+) -> tuple[bool, str]:
+    """BEST-EFFORT target-lock: every host-shaped token in args must be an ``allowed`` target.
+
+    ``allowed`` defaults to the lab aliases (LAB mode — messages + behaviour unchanged); in
+    ENGAGEMENT mode it is the named real target's aliases and ``label`` names it in the reason.
     This is cheap defense-in-depth (it catches e.g. ``nmap evil.com``), NOT a load-bearing
-    control: with the allowlist removed, args can be an arbitrary command whose real target
-    is invisible to any argv inspection (``python -c "...connect to X..."``, ``curl @file``,
-    a host inside a base64 blob). ISOLATION (egress-less sandbox) is the actual bound on
-    what the lab exec can reach. ``command`` is accepted for signature compatibility but is
-    no longer used to dispatch (there are no per-tool schemas).
+    control: args can be an arbitrary command whose real target is invisible to any argv
+    inspection (``python -c "...connect to X..."``, ``curl @file``, a host inside a base64 blob).
+    In LAB mode ISOLATION is the actual bound; in ENGAGEMENT mode there is no isolation floor, so
+    HUMAN APPROVAL of every command is the actual bound and this lock is an aid to the human, not
+    a guarantee. ``command`` is accepted for signature compatibility.
 
-    A token is the lab alias, another host (→ reject), or a non-host operand (→ ignore).
-    At least one lab reference is required so a command isn't silently target-less.
+    A token is the allowed target, another host (→ reject), or a non-host operand (→ ignore).
+    At least one target reference is required so a command isn't silently target-less.
     """
-    found_lab = False
+    is_lab = allowed is None
+    allow = allowed if allowed is not None else config.LAB_TARGET_ALIASES
+    found = False
     for token in allowlist.extract_hostish(args):
-        if token in config.LAB_TARGET_ALIASES:
-            found_lab = True
+        if token in allow:
+            found = True
             continue
         if _looks_like_host(token):
             host = _host_of(token)
-            if host in config.LAB_TARGET_ALIASES:
-                found_lab = True
-            else:
+            if host in allow:
+                found = True
+            elif is_lab:
                 return False, f"target '{host}' is not the lab — only the lab is allowed"
+            else:
+                return False, f"target '{host}' is not the locked target '{label}'"
         # else: bare non-host operand → ignore
-    if not found_lab:
-        return False, "no lab target specified — the command must reference the lab"
+    if not found:
+        if is_lab:
+            return False, "no lab target specified — the command must reference the lab"
+        return False, f"no target specified — the command must reference '{label}'"
     return True, ""
 
 
-def _resolved_target(command: str, args: list[str]) -> str:
-    """The lab host this command targets (for the record/UI)."""
+def _resolved_target(
+    command: str, args: list[str], allowed: frozenset[str] | None = None, default: str | None = None
+) -> str:
+    """The host this command targets (for the record/UI), among the ``allowed`` aliases."""
+    allow = allowed if allowed is not None else config.LAB_TARGET_ALIASES
     for token in allowlist.extract_hostish(args):
         host = _host_of(token)
-        if token in config.LAB_TARGET_ALIASES or host in config.LAB_TARGET_ALIASES:
-            return host or config.LAB_TARGET_HOST
-    return config.LAB_TARGET_HOST
+        if token in allow or host in allow:
+            return host or (default or config.LAB_TARGET_HOST)
+    return default or config.LAB_TARGET_HOST
+
+
+def _engagement_for(request: ExecRequest) -> EngagementRecord | None:
+    """The ACTIVE engagement this request runs under, or None (→ lab mode). An engagement_id
+    that is set but not active resolves to None; the caller treats that as a hard refusal."""
+    if not request.engagement_id:
+        return None
+    return engagement.get_active(request.engagement_id)
 
 
 def validate_request(request: ExecRequest) -> ExecRejected | None:
-    """Run the surviving gates in order, returning an ExecRejected on the first failure.
+    """Run the mode's gates in order, returning an ExecRejected on the first failure.
 
-    The ALLOWLIST gate was removed (any binary + args may run) — argv exec keeps "what you
-    approve is what runs". The gates that remain: best-effort target-lock → human approval
-    → heuristic danger red-confirm → isolation (the real lab containment).
+    MODE SPLIT (the whole risk model): if ``engagement_id`` names an ACTIVE, explicitly-entered
+    engagement, the request runs against a REAL target with NO isolation floor and is gated by
+    :func:`_validate_engagement`. Otherwise it is LAB mode, gated by :func:`_validate_lab` —
+    entirely unchanged. An ``engagement_id`` that doesn't resolve is refused (never silently
+    downgraded to lab), so engagement mode can only be reached by explicitly entering it.
     """
+    if request.engagement_id:
+        eng = _engagement_for(request)
+        if eng is None:
+            return ExecRejected(
+                reason="engagement mode is not active for this id — enter engagement mode first "
+                "(POST /cockpit/engagement/enter); an unknown or exited engagement cannot run",
+                gate="engagement",
+            )
+        return _validate_engagement(request, eng)
+    return _validate_lab(request)
+
+
+def _validate_lab(request: ExecRequest) -> ExecRejected | None:
+    """LAB mode gates (UNCHANGED): best-effort target-lock (lab) → human approval → heuristic
+    danger red-confirm → ISOLATION (the real lab containment: an egress-less sandbox)."""
     ok, reason = check_target_lock(request.args, request.command)
     if not ok:
         return ExecRejected(reason=reason, gate="target")
@@ -151,6 +203,48 @@ def validate_request(request: ExecRequest) -> ExecRejected | None:
     return None
 
 
+def _validate_engagement(request: ExecRequest, eng: EngagementRecord) -> ExecRejected | None:
+    """ENGAGEMENT mode gates (REAL target, NO isolation floor). Order:
+        target-lock (the engagement's named target) → NEVER-AUTO-RUN human approval →
+        heuristic danger red-confirm → WALL A (host/LAN/metadata unreachable).
+
+    There is NO isolation gate here — the sandbox reaches the internet on purpose. The bound
+    on WHAT runs is the per-command human approval below (there is no batch/approve-all path);
+    the bound on WHERE it can reach is Wall A. Both must hold, every command, every time.
+    """
+    ok, reason = check_target_lock(
+        request.args, request.command, allowed=_engagement_aliases(eng.target), label=eng.target
+    )
+    if not ok:
+        return ExecRejected(reason=reason, gate="target")
+
+    # NEVER-AUTO-RUN: on a real target every single command needs an INDIVIDUAL human approval.
+    # No batch, no approve-all, no autonomy. This is the only bound on what runs — enforce hard.
+    if not request.approved:
+        return ExecRejected(
+            reason="engagement mode: every command needs an individual human approval "
+            "(approved=true) — never hands-off / no batch approval on a real target",
+            gate="approval",
+        )
+
+    dangerous = allowlist.dangerous_command_heuristic(request.command, request.args)
+    if dangerous and not request.dangerous_ack:
+        return ExecRejected(
+            reason="this command is flagged dangerous — confirm to run: " + "; ".join(dangerous),
+            gate="danger",
+            dangerous_flags=dangerous,
+        )
+
+    # Wall A replaces the isolation floor: the engagement sandbox must reach the internet but
+    # NOT the operator's host / LAN / metadata, verified against the live firewall ruleset.
+    try:
+        assert_wall_a_holds()
+    except SandboxError as exc:
+        return ExecRejected(reason=str(exc), gate="wall_a")
+
+    return None
+
+
 def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[str, Any]]:
     """Validate then stream a run as events.
 
@@ -168,10 +262,29 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
             yield {"type": "rejected", "gate": rejected.gate, "reason": rejected.reason}
             return
 
+    # Route by mode. An engagement_id that is set but no longer active is refused here too
+    # (even when prevalidated), so a run can NEVER fall back to lab against a real-target id.
+    eng = _engagement_for(request)
+    if request.engagement_id and eng is None:
+        yield {
+            "type": "rejected",
+            "gate": "engagement",
+            "reason": "engagement is no longer active — refusing to run",
+        }
+        return
+    if eng is not None:
+        mode = "engagement"
+        container = config.ENGAGE_SANDBOX_CONTAINER
+        aliases = _engagement_aliases(eng.target)
+        target = _resolved_target(request.command, request.args, allowed=aliases, default=eng.target)
+    else:
+        mode = "lab"
+        container = config.SANDBOX_CONTAINER
+        target = _resolved_target(request.command, request.args)
+
     run_id = uuid.uuid4().hex[:12]
-    target = _resolved_target(request.command, request.args)
     started_at = _now()
-    argv = ["docker", "exec", config.SANDBOX_CONTAINER, request.command, *request.args]
+    argv = ["docker", "exec", container, request.command, *request.args]
 
     yield {
         "type": "start",
@@ -179,6 +292,7 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
         "command": request.command,
         "args": request.args,
         "target": target,
+        "mode": mode,
         "started_at": started_at,
     }
 
@@ -249,6 +363,7 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
         args=request.args,
         target=target,
         approved=request.approved,
+        mode=mode,
         exit_code=exit_code,
         stdout="".join(out_buf),
         stderr="".join(err_buf),

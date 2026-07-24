@@ -13,15 +13,25 @@ from pydantic import BaseModel, Field
 
 
 class ExecRequest(BaseModel):
-    """A request to run ONE allowlisted command against the lab.
+    """A request to run ONE command in the sandbox — LAB mode (default) or ENGAGEMENT mode.
 
-    ``approved`` MUST be explicitly true — there is no autonomous / approve-all path.
+    ``approved`` MUST be explicitly true — there is no autonomous / approve-all path, in
+    EITHER mode. When ``engagement_id`` names an ACTIVE, explicitly-entered engagement the
+    command runs against that real target through the Wall-A engagement sandbox; otherwise
+    it runs against the isolated lab, entirely unchanged.
     """
 
-    command: str = Field(..., description="Allowlisted command name, e.g. 'nmap'.")
+    command: str = Field(..., description="Command name, e.g. 'nmap'.")
     args: list[str] = Field(default_factory=list, description="Argv tokens (no shell).")
     approved: bool = Field(
         False, description="Per-command human approval. Execution refuses unless true."
+    )
+    engagement_id: str | None = Field(
+        None,
+        description="When set to an ACTIVE engagement id, run in REAL-TARGET engagement mode "
+        "(Wall-A sandbox, no isolation floor) against that engagement's named target. Omit "
+        "(the default) for isolated LAB mode. An unknown/exited id is refused (gate=engagement) "
+        "— engagement mode cannot be entered by a bare exec; it must be explicitly entered first.",
     )
     dangerous_ack: bool = Field(
         False,
@@ -54,8 +64,9 @@ class ExecRejected(BaseModel):
 
     rejected: Literal[True] = True
     reason: str
-    # The allowlist gate was removed; the surviving gates are these.
-    gate: Literal["target", "approval", "danger", "sandbox"] = "target"
+    # LAB gates: target -> approval -> danger -> sandbox (isolation).
+    # ENGAGEMENT gates: engagement (explicit entry) -> target -> approval -> danger -> wall_a.
+    gate: Literal["target", "approval", "danger", "sandbox", "engagement", "wall_a"] = "target"
     # When gate == "danger": the heuristic reasons the command was flagged (for the confirm).
     dangerous_flags: list[str] = Field(default_factory=list)
 
@@ -68,6 +79,9 @@ class RunRecord(BaseModel):
     args: list[str]
     target: str
     approved: bool
+    # "lab" (isolated lab target) or "engagement" (real authorized target, Wall-A sandbox).
+    # Drives how the report marks the run (a real-target engagement is called out as such).
+    mode: str = "lab"
     exit_code: int | None = None
     stdout: str = ""
     stderr: str = ""
@@ -75,6 +89,38 @@ class RunRecord(BaseModel):
     finished_at: str | None = None
     session_id: str | None = None
     step_id: str | None = None
+
+
+class EngagementEnterRequest(BaseModel):
+    """DELIBERATE entry into real-target engagement mode.
+
+    Both fields are required — this is the explicit, warned action that leaves the isolated
+    lab. ``target`` is the human-named real host/URL the sandbox will be locked to; the
+    ``authorization`` acknowledgement is the operator asserting they own or are authorized
+    to test it and will stay in scope. There is no default; a bare exec can never enter mode.
+    """
+
+    target: str = Field(..., min_length=1, description="The real authorized target (host or URL).")
+    authorization: str = Field(
+        ..., min_length=1,
+        description="Operator's authorization acknowledgement — you are responsible for "
+        "authorization and for staying in scope; every command is yours to approve.",
+    )
+    session_id: str | None = Field(
+        None, description="Optional engagement to attach runs + this mode record to."
+    )
+
+
+class EngagementRecord(BaseModel):
+    """An entered engagement — the active-mode record the executor checks against."""
+
+    engagement_id: str
+    target: str
+    authorization: str
+    active: bool
+    entered_at: str
+    exited_at: str | None = None
+    session_id: str | None = None
 
 
 class AllowlistItem(BaseModel):

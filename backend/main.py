@@ -53,6 +53,7 @@ import orchestrator  # noqa: E402  (backend/orchestrator.py — the loop's propo
 import report as report_gen  # noqa: E402  (backend/report.py — LLM report drafting)
 import sessions as sessions_db  # noqa: E402  (backend/sessions.py — SQLite store)
 from cockpit import runstore as cockpit_runstore  # noqa: E402
+from cockpit import engagement as cockpit_engagement  # noqa: E402
 from cockpit.router import router as cockpit_router  # noqa: E402
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
@@ -267,6 +268,8 @@ async def lifespan(app: FastAPI):
     sessions_db.init_db()
     # cockpit run-records share that SQLite file (gitignored).
     cockpit_runstore.init_db()
+    # engagement-mode records (deliberate real-target entry) share it too.
+    cockpit_engagement.init_db()
     yield
     STATE.entries = []
     STATE.by_id = {}

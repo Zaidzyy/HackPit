@@ -221,7 +221,12 @@ def build_evidence_section(session: dict) -> str:
         cmdline = _run_cmdline(run)
         raw = _run_output(run)
         exit_code = run.get("exit_code")
-        header = f"### {_run_ref(run)} · sandbox execution"
+        # A real-target engagement run is called out as such — it was NOT run against the
+        # isolated lab, so the report must not blur it with lab evidence.
+        if (run.get("mode") or "lab") == "engagement":
+            header = f"### {_run_ref(run)} · REAL-TARGET ENGAGEMENT"
+        else:
+            header = f"### {_run_ref(run)} · sandbox execution (isolated lab)"
         target = run.get("target")
         if target:
             header += f" · target {target}"
@@ -347,8 +352,9 @@ def build_prompt(session: dict) -> str:
     runs = _execution_runs(session)
     if runs:
         lines.append(
-            "## SANDBOX EXECUTION (recorded cockpit runs — real allowlisted "
-            "commands the tester approved and ran against the lab)"
+            "## SANDBOX EXECUTION (recorded cockpit runs — real commands the tester "
+            "approved and ran; each is tagged 'isolated lab' or 'REAL-TARGET ENGAGEMENT' "
+            "— attribute findings to the correct target, never blur the two)"
         )
         lines.append(
             "Fold these into the Findings & Attack Narrative alongside the "
@@ -358,8 +364,9 @@ def build_prompt(session: dict) -> str:
         )
         for run in runs:
             ref = _run_ref(run)
-            lines.append(f"### [EXECUTED] ({ref}) {_run_cmdline(run)}")
-            lines.append(f"Exit code: {run.get('exit_code')}")
+            tag = "REAL-TARGET ENGAGEMENT" if (run.get("mode") or "lab") == "engagement" else "isolated lab"
+            lines.append(f"### [EXECUTED · {tag}] ({ref}) {_run_cmdline(run)}")
+            lines.append(f"Target: {run.get('target')} · Exit code: {run.get('exit_code')}")
             raw = _run_output(run).strip()
             if raw:
                 lines.append(

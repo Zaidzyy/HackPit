@@ -133,7 +133,9 @@ def test_report_folds_run_into_evidence() -> None:
         assert "Output (exit 0):" in evidence, "exit code must be recorded"
 
         prompt = R.build_prompt(session)
-        assert "[EXECUTED] (run-ffd5acb0e78a)" in prompt, "run listed as executed evidence"
+        # runs are tagged by target so lab vs real-target engagement can't be blurred; a
+        # lab run (mode defaults to "lab") is tagged 'isolated lab'.
+        assert "[EXECUTED · isolated lab] (run-ffd5acb0e78a)" in prompt, "run listed + tagged as executed evidence"
         assert "Evidence: run-ffd5acb0e78a" in prompt, "prompt must instruct citing by run id"
         print("  report folds run into Evidence + cites run id: PASS")
     finally:

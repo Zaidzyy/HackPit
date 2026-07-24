@@ -9,6 +9,10 @@ runbooks). Populated as the project grows.
   **Status: M1 (execution) + M2 (cinematic UI) + M3 (engagement integration) complete.**
 - [`COCKPIT-SESSION-LOG.md`](COCKPIT-SESSION-LOG.md) — per-increment build + verification log
   for the unsupervised Cockpit sessions.
+- [`ENGAGEMENT-LOOP-REAL-TARGET.md`](ENGAGEMENT-LOOP-REAL-TARGET.md) — the guided loop on a REAL
+  authorized target: the program-scope model (hosts, `*.wildcards`, CIDRs, `!exclusions`), the
+  scope-aware proposer + target-lock, recon-driven expansion, the network posture (Wall A DOWN),
+  the never-auto-run proof, and the honest UI.
 
 Safety invariants that hold across all Cockpit work: four independent gates (allowlist → target
 lock → approval → isolation), recon-only allowlist, lab-only target, no autonomy. M3 only *records*

@@ -1,16 +1,25 @@
-# HackPit Cockpit — isolated two-container stack (M1.2).
+# HackPit Cockpit — TWO-SANDBOX stack.
 #
-# SAFETY MODEL (docs/cockpit-plan.md §c Layer 1):
-#   Both containers share ONE network declared `internal: true`. Docker attaches no
-#   gateway to an internal network, so there is no NAT and no route off the bridge:
-#   the sandbox can reach the lab (same network) but has NO path to the host or the
-#   internet. Isolation is structural, not firewall-filtered.
+# There are two independent sandboxes with DIFFERENT network models — do not conflate them:
 #
-# The sandbox image bakes its tools in at build time (build has internet); at runtime
-# it is egress-less. The lab image is pulled at `up` time, then runs isolated.
+# 1. hackpit-kali-sandbox  (ISOLATED — the cockpit/agent sandbox; SAFETY-CRITICAL, unchanged)
+#    On `hackpit-isolated` (`internal: true`): Docker attaches no gateway, so there is no NAT
+#    and no route off the bridge — it reaches the lab (same network) but has NO path to the
+#    host or the internet. This is the safety net the cockpit executor's 4th gate
+#    (`assert_isolation_proven`) and the future autonomous agent depend on. It stays egress-less.
+#
+# 2. hackpit-kali-open     (NOT ISOLATED — the :kali human-only shell; Zaid's informed decision)
+#    On `hackpit-open` (a normal bridge, NAT egress): reaches the internet + host + LAN. This is
+#    intentional and is used ONLY by :kali (POST /cockpit/kali), which is human-driven — the
+#    orchestrator/agent/executor has NO code path to it. It keeps cap_drop ALL + no-new-privileges
+#    and is still disposable via `down`. An exposed :kali now reaches your host/LAN — localhost only,
+#    auth required before any exposure.
+#
+# Both sandbox images bake their tools in at build time. The lab image is pulled at `up` time.
 #
 # Bring up:   docker compose -f docker/docker-compose.yml up -d --build
-# Prove:      docker/proof/isolation_proof.sh      (the hard gate before any exec)
+# Prove:      docker/proof/isolation_proof.sh            (cockpit sandbox: egress-less — hard gate)
+#             docker/proof/kali_open_egress_proof.sh     (:kali open sandbox: egress reachable)
 # Tear down:  docker compose -f docker/docker-compose.yml down -v
 
 name: hackpit-cockpit
@@ -19,6 +28,10 @@ networks:
   hackpit-isolated:
     driver: bridge
     internal: true          # <-- no gateway => no host/internet route. The safety layer.
+  hackpit-open:
+    driver: bridge
+    # NOT internal: normal bridge with NAT egress. Reaches internet + host + LAN. Used ONLY
+    # by the :kali human-only shell (hackpit-kali-open). Deliberately not isolated.
 
 services:
   lab-target:
@@ -43,6 +56,28 @@ services:
       - hackpit-isolated
     restart: unless-stopped
     # Defense in depth beyond network isolation:
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+
+  kali-open:
+    # The :kali human-only shell sandbox. SAME image/tools as the isolated sandbox, but on a
+    # NORMAL bridge network (NAT egress) — it reaches the internet, the host, and the LAN. That
+    # is Zaid's informed decision and is used ONLY by POST /cockpit/kali (human-driven; the
+    # orchestrator/agent has no path to it). NOT isolated — do NOT point cockpit/agent execution
+    # here (the cockpit keeps targeting hackpit-kali-sandbox with all four gates intact).
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    image: hackpit/kali-sandbox:m1
+    container_name: hackpit-kali-open
+    hostname: hackpit-kali-open
+    networks:
+      - hackpit-open
+    restart: unless-stopped
+    # Defense in depth is KEPT even though the network is open:
     cap_drop:
       - ALL
     security_opt:

@@ -392,6 +392,165 @@ def test_isolation_gate_in_validate() -> None:
     print("  isolation gate reached in validate_request: PASS")
 
 
+# --------------------------------------------------------------------------- #
+# ACTIVE web-exploitation tools (all-flags + dangerous-flag detection + red-confirm)
+# --------------------------------------------------------------------------- #
+
+_LAB_URL = "http://hackpit-lab-target:3000/rest/products/search?q=1"
+
+
+def test_active_tools_all_flags() -> None:
+    """ACTIVE tools accept ALL flags (full capability), including dangerous + made-up ones,
+    with NO flag-allowlist rejection. Recon tools still reject unlisted flags (the contrast)."""
+    for cmd, args in (
+        ("sqlmap", ["-u", _LAB_URL, "--os-shell", "--technique=BEUST"]),
+        ("sqlmap", ["-u", _LAB_URL, "--a-totally-made-up-flag"]),
+        ("ffuf", ["-u", "http://hackpit-lab-target/FUZZ", "-w", "list.txt", "-mc", "200,301"]),
+        ("nuclei", ["-u", "http://hackpit-lab-target/", "-t", "cves/", "-code"]),
+    ):
+        ok, reason = A.validate(cmd, args)
+        assert ok, f"active tool {cmd} must accept all flags — got: {reason}"
+    # recon stays strict — an unlisted flag is still rejected + named
+    ok, reason = A.validate("nmap", ["-O", "hackpit-lab-target"])
+    assert not ok and "-O" in reason, "recon must still reject unlisted flags"
+    print("  active tools accept all flags; recon stays strict: PASS")
+
+
+def test_dangerous_flag_detection_every_form() -> None:
+    """THE CRUX: every dangerous flag DETECTED in EVERY form — plain, =-joined, and the
+    `--` trick — and marked dangerous (NOT blocked). A missed form is a silent dangerous
+    approval, so this is the load-bearing safety test."""
+    D = A.dangerous_flags_present
+    for flag in sorted(A.ALLOWLIST["sqlmap"].dangerous_flags):
+        forms = [
+            ["-u", _LAB_URL, flag],            # plain
+            ["-u", _LAB_URL, f"{flag}=x"],     # =-joined (value attached to the flag)
+            ["--", "-u", _LAB_URL, flag],      # the -- trick must NOT hide it
+        ]
+        for args in forms:
+            assert flag in D("sqlmap", args), f"sqlmap {flag!r} MISSED in form {args}"
+            # detection marks dangerous — it is NOT blocked (validate still passes)
+            ok, _ = A.validate("sqlmap", args)
+            assert ok, f"a dangerous flag must be DETECTED, not blocked: {args}"
+    # combined-short: -e hidden inside a cluster is still caught
+    assert "-e" in D("sqlmap", ["-u", _LAB_URL, "-abe", "import os"]), "-e in a cluster must detect"
+    # ffuf / nuclei single-dash long dangerous flags (whole-token candidate)
+    assert "-config" in D("ffuf", ["-u", "http://hackpit-lab-target/FUZZ", "-config", "x.conf"])
+    assert "-code" in D("nuclei", ["-u", "http://hackpit-lab-target/", "-code"])
+    assert "-headless" in D("nuclei", ["-u", "http://hackpit-lab-target/", "-headless"])
+    # benign active commands are NOT flagged (no false positives)
+    assert D("sqlmap", ["-u", _LAB_URL, "--batch", "--dbs", "--technique=BEUST"]) == []
+    assert D("ffuf", ["-u", "http://hackpit-lab-target/FUZZ", "-w", "w.txt", "-mc", "200", "-fc", "404"]) == []
+    # recon tools are never dangerous
+    assert D("nmap", ["-sV", "hackpit-lab-target"]) == []
+    print("  dangerous-flag detection — every flag, every form (crux): PASS")
+
+
+def test_active_target_lock() -> None:
+    """Each active tool is bound to the lab via ITS OWN target flag; a non-lab target is
+    rejected at the target gate, a wordlist is not mistaken for a target, and a missing
+    target fails closed."""
+    for cmd, args in (
+        ("sqlmap", ["-u", _LAB_URL, "--batch"]),
+        ("sqlmap", ["--url=" + _LAB_URL, "--dbs"]),
+        ("ffuf", ["-u", "http://hackpit-lab-target/FUZZ", "-w", "wordlist.txt"]),  # .txt not a target
+        ("nuclei", ["-target", "http://hackpit-lab-target/", "-t", "cves/"]),
+    ):
+        ok, reason = E.check_target_lock(args, cmd)
+        assert ok, f"{cmd} against the lab must pass the target-lock — got: {reason}"
+    for cmd, args in (
+        ("sqlmap", ["-u", "http://evil.com/", "--dbs"]),
+        ("ffuf", ["-u", "http://scanme.nmap.org/FUZZ", "-w", "w.txt"]),
+        ("nuclei", ["-u", "http://169.254.169.254/"]),  # cloud metadata
+    ):
+        ok, reason = E.check_target_lock(args, cmd)
+        assert not ok and "not the lab" in reason, f"{cmd} non-lab must be rejected: {args}"
+    # missing target flag → fail closed
+    ok, reason = E.check_target_lock(["-w", "w.txt", "-mc", "200"], "ffuf")
+    assert not ok and "no lab target" in reason.lower(), "no target flag must fail closed"
+    # end-to-end: a non-lab active target rejects at gate=target
+    r = E.validate_request(
+        ExecRequest(command="sqlmap", args=["-u", "http://evil.com/", "--dbs"], approved=True)
+    )
+    assert r is not None and r.gate == "target", "non-lab active target must reject at the target gate"
+    print("  active per-tool target-lock (lab-bound, fail-closed): PASS")
+
+
+def test_active_metachar_relaxation() -> None:
+    """SURGICAL relaxation: active-tool VALUE args may carry metacharacters (payloads); a
+    flag NAME may not; recon tools stay fully strict (metachars rejected everywhere)."""
+    for cmd, args in (
+        ("sqlmap", ["-u", "http://hackpit-lab-target/rest?q=1", "--data", "id=1*"]),   # *
+        ("sqlmap", ["-u", "http://hackpit-lab-target/", "--data", "' OR 1=1-- -"]),     # sqli payload
+        ("ffuf", ["-u", "http://hackpit-lab-target/FUZZ", "-w", "w.txt", "-H", "X-F: a|b&c"]),  # | &
+    ):
+        ok, reason = A.validate(cmd, args)
+        assert ok, f"active value payload with metachars must be allowed — got: {reason}"
+    # a flag NAME with a metachar is still refused (relaxation is values-only)
+    ok, reason = A.validate("sqlmap", ["-u", "http://hackpit-lab-target/", "--os;shell"])
+    assert not ok and "flag name" in reason, "a metachar in a flag NAME must be refused"
+    # recon tools: metachars rejected everywhere (unchanged)
+    ok, reason = A.validate("curl", ["http://hackpit-lab-target/;id"])
+    assert not ok and "forbidden" in reason, "recon metachars stay strict"
+    print("  active metachar relaxation is surgical (values yes, names no; recon strict): PASS")
+
+
+def test_danger_confirm_gate() -> None:
+    """A command carrying a dangerous flag is REFUSED unless dangerous_ack is explicitly
+    true — approve alone is not enough. The confirm is required (test-locked)."""
+    danger = ["-u", "http://hackpit-lab-target/rest", "--os-shell"]
+    # approved but NOT confirmed → danger gate, flags named
+    r = E.validate_request(ExecRequest(command="sqlmap", args=danger, approved=True))
+    assert r is not None and r.gate == "danger" and "--os-shell" in r.dangerous_flags, (
+        "a dangerous flag must refuse at the danger gate without the explicit confirm"
+    )
+    # approved AND confirmed → clears the danger gate (only isolation may remain)
+    r = E.validate_request(
+        ExecRequest(command="sqlmap", args=danger, approved=True, dangerous_ack=True)
+    )
+    assert r is None or r.gate == "sandbox", "the explicit confirm must clear the danger gate"
+    # not approved → approval gate still wins (danger is checked AFTER approval)
+    r = E.validate_request(
+        ExecRequest(command="sqlmap", args=danger, approved=False, dangerous_ack=True)
+    )
+    assert r is not None and r.gate == "approval", "approval precedes the danger gate"
+    # a benign active command needs no confirm
+    r = E.validate_request(
+        ExecRequest(command="sqlmap", args=["-u", "http://hackpit-lab-target/rest", "--dbs"], approved=True)
+    )
+    assert r is None or r.gate == "sandbox", "a benign active command needs no confirm"
+    print("  danger gate: approve blocked without explicit confirm (test-locked): PASS")
+
+
+def test_active_tools_frozen() -> None:
+    """FREEZE the active tools + their dangerous-flag schemas. Adding an active tool or
+    changing a dangerous-flag set trips this ON PURPOSE (a deliberate, reviewed change) —
+    detection completeness depends on the set being exactly what was audited."""
+    frozen_dangerous: dict[str, set[str]] = {
+        "sqlmap": {
+            "--os-shell", "--os-cmd", "--os-pwn", "--os-bof", "--os-smbrelay", "--sql-shell",
+            "-e", "--eval", "--file-read", "--file-write", "--file-dest", "--tamper",
+        },
+        "ffuf": {"-config"},
+        "nuclei": {"-code", "-headless"},
+    }
+    assert {c for c in A.ALLOWLIST if A.ALLOWLIST[c].active} == set(frozen_dangerous), (
+        "the active-tool set changed — adding/removing an active tool is a reviewed change."
+    )
+    for name, dz in frozen_dangerous.items():
+        spec = A.ALLOWLIST[name]
+        assert spec.active, f"{name} must be active"
+        assert spec.dangerous_flags == frozenset(dz), (
+            f"{name} dangerous_flags changed to {set(spec.dangerous_flags)} — reviewed change only."
+        )
+        assert spec.target_flags, f"{name} must declare target_flags for the lab lock"
+        assert spec.target_flags <= spec.value_flags, f"{name} target_flags must be value_flags"
+        assert not spec.allowed_flags, (
+            f"{name} is all-flags — allowed_flags must stay empty (not a strict list)"
+        )
+    print("  active tools + dangerous-flag schemas frozen: PASS")
+
+
 if __name__ == "__main__":
     test_allowlist_validation()
     test_forbidden_metachars()
@@ -400,6 +559,12 @@ if __name__ == "__main__":
     test_unlisted_flags_rejected_and_named()
     test_flag_parser_forms()
     test_flag_schema_frozen()
+    test_active_tools_all_flags()
+    test_dangerous_flag_detection_every_form()
+    test_active_target_lock()
+    test_active_metachar_relaxation()
+    test_danger_confirm_gate()
+    test_active_tools_frozen()
     test_target_lock()
     test_gate_order_rejects_before_execution()
     test_approval_gate()

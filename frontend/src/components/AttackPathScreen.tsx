@@ -8,6 +8,7 @@ import { PageShell } from "./PageShell";
 import { CopyButton } from "./CopyButton";
 import { LLMSettingsModal } from "./LLMSettingsModal";
 import { ModelBadge } from "./ModelBadge";
+import { TargetTypeChips } from "./TargetTypeChips";
 import { ComposingLoader } from "./ComposingLoader";
 import {
   ApiError,
@@ -19,15 +20,6 @@ import {
   type LLMConfig,
 } from "@/lib/api";
 import { useReducedMotion } from "@/lib/useReducedMotion";
-
-type Chip = { value: string; label: string };
-
-const CHIPS: Chip[] = [
-  { value: "pentest", label: "Pentest" },
-  { value: "bugbounty", label: "Bug Bounty" },
-  { value: "ctf", label: "CTF" },
-  { value: "ad", label: "AD" },
-];
 
 const PLACEHOLDER =
   "Describe your target — e.g. “HackTheBox Windows AD box”, " +
@@ -151,24 +143,11 @@ export function AttackPathScreen() {
           </div>
 
           <div className="hp-ap-controls">
-            <div className="hp-ap-chips" role="group" aria-label="Target type">
-              {CHIPS.map((c) => (
-                <button
-                  key={c.value}
-                  type="button"
-                  className={`hp-ap-chip${
-                    targetType === c.value ? " is-on" : ""
-                  }`}
-                  aria-pressed={targetType === c.value}
-                  onClick={() =>
-                    setTargetType((t) => (t === c.value ? null : c.value))
-                  }
-                  disabled={loading}
-                >
-                  {c.label}
-                </button>
-              ))}
-            </div>
+            <TargetTypeChips
+              value={targetType}
+              onChange={setTargetType}
+              disabled={loading}
+            />
 
             <button
               type="submit"

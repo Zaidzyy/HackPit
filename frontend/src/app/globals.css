@@ -4321,6 +4321,9 @@ a.hp-card {
 }
 /* the plot bar already carries an 18px bottom margin — don't stack another
    scope margin on top; give the collapsible room before the map instead. */
+.hp-cv-chips {
+  margin-bottom: 16px;
+}
 .hp-cv-scope {
   margin-top: 0;
   margin-bottom: 16px;

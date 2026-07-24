@@ -83,6 +83,14 @@ _CATEGORY_MAP: dict[str, str] = {
 # target-type chip → extra query context.
 # Chips: Pentest (general full-scope) · Bug Bounty (web-focused) · CTF · AD.
 _TARGET_CONTEXT: dict[str, str] = {
+    # The UI merges Pentest + Bug Bounty into one chip; its context spans BOTH
+    # network/host and web/api terms so neither retrieval bias is lost (the
+    # profiler then narrows from the goal text). "pentest"/"bugbounty" are kept
+    # for any stored/explicit values that still use them.
+    "pentest-bugbounty": (
+        "penetration test full scope network hosts services "
+        "web application bug bounty http api"
+    ),
     "pentest": "penetration test full scope network hosts services",
     "bugbounty": "web application bug bounty http api",
     "ctf": "capture the flag",

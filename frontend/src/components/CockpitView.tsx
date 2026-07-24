@@ -7,6 +7,7 @@ import { CockpitAttackMap } from "./CockpitAttackMap";
 import { CockpitScreen } from "./CockpitScreen";
 import { LLMSettingsModal } from "./LLMSettingsModal";
 import { ModelBadge } from "./ModelBadge";
+import { TargetTypeChips } from "./TargetTypeChips";
 import {
   ApiError,
   composeAttackPath,
@@ -27,6 +28,7 @@ const PLACEHOLDER =
  */
 export function CockpitView() {
   const [goal, setGoal] = useState("");
+  const [targetType, setTargetType] = useState<string | null>(null);
   const [scopeText, setScopeText] = useState("");
   const [scopeOpen, setScopeOpen] = useState(false);
   const [path, setPath] = useState<AttackPath | null>(null);
@@ -63,7 +65,7 @@ export function CockpitView() {
       setLoading(true);
       setError(null);
 
-      composeAttackPath(g, null, scopeText.trim() || null, ctrl.signal)
+      composeAttackPath(g, targetType, scopeText.trim() || null, ctrl.signal)
         .then((p) => {
           if (ctrl.signal.aborted) return;
           setPath(p);
@@ -88,7 +90,7 @@ export function CockpitView() {
           );
         });
     },
-    [goal, scopeText, loading]
+    [goal, targetType, scopeText, loading]
   );
 
   // Sections reveal in once a path exists; skip the motion under reduced-motion.
@@ -135,6 +137,14 @@ export function CockpitView() {
               {loading ? "plotting…" : "plot path →"}
             </button>
           </form>
+
+          <div className="hp-cv-chips">
+            <TargetTypeChips
+              value={targetType}
+              onChange={setTargetType}
+              disabled={loading}
+            />
+          </div>
 
           <div className="hp-ap-scope hp-cv-scope">
             <button

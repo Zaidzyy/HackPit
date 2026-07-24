@@ -44,6 +44,7 @@ Extended `backend/test_cockpit.py` from 3 tests to 9 so the four-gate model **fa
   `max_args` + per-command `extra` validators, but does NOT reject flags outside `allowed_flags`
   (`allowed_flags` drives the UI + the `extra` validators do the real per-command narrowing). Left
   as-is — not a hole (recon tools, argv exec, no shell), but flagged for Zaid's awareness.
+  **[UPDATE 2026-07-24: this is now STRICTLY ENFORCED — see the strict-flags session at the end.]**
 
 ### Part B — test the M3 engagement/report path ✅ (commit QA-B)
 Added hermetic `backend/test_engagement.py` (throwaway temp DB pointed at by both the sessions layer and
@@ -117,9 +118,9 @@ warranted, so there is no Part-C commit. What was checked and found solid:
   shows the model that actually generated it? (Recommended — small, backward-compatible migration; I left
   it for a supervised change since it touches `sessions.db`.)
 - **Mobile support**: is a responsive pass in scope for a future milestone? (Couldn't verify this session.)
-- **`allowed_flags` enforcement** (Part A note): today it's advisory (UI + `extra` validators do the real
-  narrowing). Want `validate` to also reject flags outside `allowed_flags` as belt-and-suspenders? (Would
-  tighten the allowlist gate; needs a careful pass over the preset args so nothing legit breaks.)
+- **`allowed_flags` enforcement** (Part A note): ~~today it's advisory~~ **RESOLVED 2026-07-24** — now
+  STRICTLY ENFORCED (see the strict-flags session below). `validate` rejects any flag outside a command's
+  `allowed_flags`, naming it, at the allowlist gate.
 
 ---
 
@@ -584,3 +585,67 @@ clean. llm_config.json restored to {claude-agent-sdk, opus}.
 
 **No autonomy without approval; execution stayed recon/lab/isolated; the agent has no
 :kali/egress path.** DO NOT push — Zaid reviews the human-in-the-loop gate first.
+
+---
+
+## Session 2026-07-24 (SUPERVISED — strict per-command flag enforcement, safety-critical hardening)
+
+Goal: turn `allowed_flags` from advisory into a **STRICTLY ENFORCED per-command allowlist** — the
+prerequisite that makes the later active-tools expansion (sqlmap/ffuf/nuclei…) safe. Those tools carry
+genuinely dangerous flags (`--os-shell`, `--file-write`, `-e`, intrusive `--script`, output/write flags)
+AND legitimately need metacharacters in payload args, so the metachar filter can no longer blanket-apply;
+the load-bearing defense shifts to target-lock + isolation + a strict flag schema. Hardened NOW, while the
+allowlist is still recon-only and any mistake is low-stakes.
+
+**Scope unchanged**: still recon-only (`nmap`/`curl`/`whatweb`), same sandbox, target-lock, four gates. No
+new tools, no new execution capability. This only TIGHTENS the model — it adds stricter rejection of
+un-listed flags. All prior safety tests stay green.
+
+### The enforced flag schema (frozen — widening trips `test_flag_schema_frozen`)
+| command | `allowed_flags` | `value_flags` (consume the next/inline token as a value) |
+|---|---|---|
+| `nmap` | `-sV -sT -sS -p -p- -T4 -T3 -Pn -n -oN-` | `-p` (e.g. `-p 80,443`; `-p-` = all-ports, atomic) |
+| `curl` | `-s -S -i -I -L -v -X` | `-X` (e.g. `-X GET`; the method is a value, not a flag) |
+| `whatweb` | `-a --color=never -v` | *(none; `--color=never` is a pinned exact form)* |
+
+- Dropped the bogus `GET`/`HEAD` from curl's `allowed_flags` — they are operands, never flags (operands
+  are not flag-checked, so validation behavior is unchanged; the frozen set is now honest).
+- `_nmap_extra` is kept and runs BEFORE the strict gate so its precise recon-scope reason
+  (`scripting` / `file output`) still wins for `--script`/`-sC`/`-A`/`-oN`/`-oX`; the strict gate catches
+  everything else and names the offending flag.
+
+### The parser (the crux — a bug here fails OPEN, so every form is handled + tested)
+`_first_disallowed_flag(spec, args)` walks argv left→right, deterministic, no shell. Forms covered:
+- **short atomic** `-sV`, `-T4`, `-p-`, `-oN-` — matched whole first;
+- **combined short cluster** `-sI` = `-s` + `-I` (each letter a flag); a bad letter is **named** (`-sZ` →
+  `-Z`), not the whole token;
+- **short value-flag, space form** `-p 80,443`, `-X GET`;
+- **short value-flag, inline getopt form** `-p3000`, `-XGET` — the value-flag stops the cluster and takes
+  the token remainder as its value (does not decompose `-G`/`-E`/`-T`);
+- **long bool** `--flag`; **long `=`-joined** `--pin=on` (a pinned `--color=never` permits only that exact
+  value; `--color=always` is rejected); **long value-flag** space (`--opt val`) + `=`-arbitrary (`--opt=x`);
+- **values that look like flags / negative numbers are NEVER misread as flags** — after a value-flag the
+  next (or inline remainder) token is consumed as a value: `-X -I`, `-p -1`, `-x-z` all resolve correctly;
+- **fail-closed on ambiguity**: a lone `-` is an operand; `--` (POSIX end-of-options) is **deliberately NOT
+  honored** as an operand marker — honoring it would switch off flag enforcement AND the target-lock (via
+  `extract_hostish`) for every following token, a fail-open hole — so `--` is rejected as an un-listed flag.
+  No recon command needs it.
+
+### Increments (local commits, NOT pushed)
+- **F1** `loop(F1): strict per-command flag enforcement` — `allowed_flags` made authoritative; `validate`
+  rejects any un-listed flag at the allowlist gate, naming it; `CommandSpec` gains `value_flags`.
+- **F2** `loop(F2): robust flag parser` — inline getopt values + fail-closed `--`; a flag-like/negative
+  value is never re-scanned as a flag.
+- **F3** `loop(F3): tests + freeze` — extended `test_cockpit.py`: every allowed flag validates; un-listed
+  flags rejected + named + land on the allowlist gate; the parser exercised across every form against a
+  synthetic spec; and the per-command flag schema FROZEN (verified it trips on an injected widening).
+
+### Verified
+Full safety suite green (`sh backend/run_safety_tests.sh` — attack-path composer + cockpit + :kali +
+orchestrator-loop + engagement, all `ALL … pass`). Confirmed: recon commands still run (`nmap -sV -T4`,
+`nmap -sV -p 80,443`, `curl -sI`, `curl -X GET`, `whatweb --color=never`); an un-listed flag (`-O`,
+`--data`, `--min-rate`, `--color=always`, `-sZ`) is rejected at the allowlist gate, naming the flag; the
+parser resolves combined/joined/valued/flag-like forms; and the freeze test trips on a widening. Nothing
+about execution, the sandbox, or allowlist MEMBERSHIP changed — only flag STRICTNESS.
+
+**DO NOT push — Zaid reviews the parser + the frozen schemas first.**

@@ -21,7 +21,7 @@ from typing import Any, Iterator
 
 from . import allowlist, config, engagement, runstore
 from .models import EngagementRecord, ExecRejected, ExecRequest, RunRecord
-from .sandbox import SandboxError, assert_isolation_proven, assert_wall_a_holds
+from .sandbox import SandboxError, assert_isolation_proven
 
 _IPV4 = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 
@@ -204,13 +204,15 @@ def _validate_lab(request: ExecRequest) -> ExecRejected | None:
 
 
 def _validate_engagement(request: ExecRequest, eng: EngagementRecord) -> ExecRejected | None:
-    """ENGAGEMENT mode gates (REAL target, NO isolation floor). Order:
+    """ENGAGEMENT mode gates (REAL target, NO isolation floor, WALL A DOWN). Order:
         target-lock (the engagement's named target) → NEVER-AUTO-RUN human approval →
-        heuristic danger red-confirm → WALL A (host/LAN/metadata unreachable).
+        heuristic danger red-confirm.
 
-    There is NO isolation gate here — the sandbox reaches the internet on purpose. The bound
-    on WHAT runs is the per-command human approval below (there is no batch/approve-all path);
-    the bound on WHERE it can reach is Wall A. Both must hold, every command, every time.
+    There is NO isolation gate and NO Wall-A gate here — the sandbox is FULLY OPEN (internet +
+    LAN + host + metadata) on purpose. Nothing bounds WHERE it can reach. The ONLY bound is the
+    per-command human approval below (there is no batch/approve-all path) plus the heuristic
+    red-confirm — a conscious human on every single command. That guard now protects real
+    targets AND the operator's own machine; it must hold every command, every time.
     """
     ok, reason = check_target_lock(
         request.args, request.command, allowed=_engagement_aliases(eng.target), label=eng.target
@@ -219,7 +221,8 @@ def _validate_engagement(request: ExecRequest, eng: EngagementRecord) -> ExecRej
         return ExecRejected(reason=reason, gate="target")
 
     # NEVER-AUTO-RUN: on a real target every single command needs an INDIVIDUAL human approval.
-    # No batch, no approve-all, no autonomy. This is the only bound on what runs — enforce hard.
+    # No batch, no approve-all, no autonomy. This is the ONLY bound on what runs (Wall A is
+    # down) — so it is more load-bearing than ever. Enforce hard.
     if not request.approved:
         return ExecRejected(
             reason="engagement mode: every command needs an individual human approval "
@@ -234,13 +237,6 @@ def _validate_engagement(request: ExecRequest, eng: EngagementRecord) -> ExecRej
             gate="danger",
             dangerous_flags=dangerous,
         )
-
-    # Wall A replaces the isolation floor: the engagement sandbox must reach the internet but
-    # NOT the operator's host / LAN / metadata, verified against the live firewall ruleset.
-    try:
-        assert_wall_a_holds()
-    except SandboxError as exc:
-        return ExecRejected(reason=str(exc), gate="wall_a")
 
     return None
 

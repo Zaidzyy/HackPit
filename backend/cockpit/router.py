@@ -32,7 +32,6 @@ from .models import (
 from .sandbox import (
     SandboxError,
     assert_isolation_proven,
-    assert_wall_a_holds,
     is_engage_sandbox_up,
     is_sandbox_up,
 )
@@ -88,11 +87,11 @@ def _sse(event: dict[str, Any]) -> str:
 @router.post("/exec")
 def exec_command(request: ExecRequest):
     """Run ONE approved command — LAB mode (isolated lab) or, when ``engagement_id`` names an
-    active engagement, REAL-TARGET engagement mode (Wall-A sandbox, no isolation floor).
+    active engagement, REAL-TARGET engagement mode (fully-open sandbox, no isolation floor).
 
     The mode's gates run first (lab: target→approval→danger→isolation; engagement:
-    engagement→target→approval→danger→wall_a). If any fails, nothing runs and a 403 is
-    returned naming the gate. Otherwise the run streams back as Server-Sent Events.
+    engagement→target→approval→danger). If any fails, nothing runs and a 403 is returned
+    naming the gate. Otherwise the run streams back as Server-Sent Events.
     """
     rejected = executor.validate_request(request)
     if rejected is not None:
@@ -117,31 +116,22 @@ def exec_command(request: ExecRequest):
 
 @router.get("/engagement")
 def get_engagement() -> dict[str, Any]:
-    """The active engagement (if any) + Wall-A readiness — drives the UI mode indicator.
+    """The active engagement (if any) + sandbox availability — drives the UI mode indicator.
 
     Read-only. The UI must ALWAYS show which mode is active; when an engagement is active it
-    shows the named target + that Wall A is holding. This never enters/exits mode.
+    shows the named target + that the sandbox is FULLY OPEN (Wall A down — the only guard is
+    human-approve-each). This never enters/exits mode.
     """
     active = engagement.list_active()
     up = is_engage_sandbox_up()
-    wall_a_ok = False
-    detail = ""
-    if up:
-        try:
-            assert_wall_a_holds()
-            wall_a_ok = True
-        except SandboxError as exc:
-            detail = str(exc)
-    else:
-        detail = "engagement sandbox / firewall is not running"
     return {
         "active": [e.model_dump() for e in active],
         "sandbox": config.ENGAGE_SANDBOX_CONTAINER,
-        "firewall": config.ENGAGE_FIREWALL_CONTAINER,
         "up": up,
-        "wall_a_ok": wall_a_ok,
-        "ready": up and wall_a_ok,
-        "detail": detail,
+        # Fully open: readiness is just availability (there is no Wall A / isolation to verify).
+        "open": True,
+        "ready": up,
+        "detail": "" if up else "engagement sandbox is not running",
     }
 
 
@@ -150,11 +140,11 @@ def enter_engagement(req: EngagementEnterRequest) -> EngagementRecord:
     """DELIBERATELY enter real-target engagement mode. This is the explicit, warned switch
     that LEAVES THE ISOLATED LAB.
 
-    You are responsible for authorization and for staying in scope. Every command is still
-    yours to approve — engagement mode is never hands-off. Returns the engagement id the
-    exec path must reference to run against the named target (through the Wall-A sandbox).
-    422 if the target/authorization is missing (both are required — mode cannot be entered
-    by accident).
+    The engagement sandbox is FULLY OPEN (Wall A down): it reaches the internet, your LAN, and
+    your own machine. You are responsible for authorization and for staying in scope, and human
+    approval of every command is the ONLY guard. Engagement mode is never hands-off. Returns the
+    engagement id the exec path must reference to run against the named target. 422 if the
+    target/authorization is missing (both are required — mode cannot be entered by accident).
     """
     try:
         return engagement.enter(req.target, req.authorization, req.session_id)

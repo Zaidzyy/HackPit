@@ -17,7 +17,7 @@ class ExecRequest(BaseModel):
 
     ``approved`` MUST be explicitly true — there is no autonomous / approve-all path, in
     EITHER mode. When ``engagement_id`` names an ACTIVE, explicitly-entered engagement the
-    command runs against that real target through the Wall-A engagement sandbox; otherwise
+    command runs against that real target through the fully-open engagement sandbox; otherwise
     it runs against the isolated lab, entirely unchanged.
     """
 
@@ -29,7 +29,7 @@ class ExecRequest(BaseModel):
     engagement_id: str | None = Field(
         None,
         description="When set to an ACTIVE engagement id, run in REAL-TARGET engagement mode "
-        "(Wall-A sandbox, no isolation floor) against that engagement's named target. Omit "
+        "(fully-open sandbox, no isolation floor) against that engagement's named target. Omit "
         "(the default) for isolated LAB mode. An unknown/exited id is refused (gate=engagement) "
         "— engagement mode cannot be entered by a bare exec; it must be explicitly entered first.",
     )
@@ -65,8 +65,9 @@ class ExecRejected(BaseModel):
     rejected: Literal[True] = True
     reason: str
     # LAB gates: target -> approval -> danger -> sandbox (isolation).
-    # ENGAGEMENT gates: engagement (explicit entry) -> target -> approval -> danger -> wall_a.
-    gate: Literal["target", "approval", "danger", "sandbox", "engagement", "wall_a"] = "target"
+    # ENGAGEMENT gates: engagement (explicit entry) -> target -> approval -> danger.
+    # (No wall_a gate — engagement mode is fully open; human-approve-each is the only bound.)
+    gate: Literal["target", "approval", "danger", "sandbox", "engagement"] = "target"
     # When gate == "danger": the heuristic reasons the command was flagged (for the confirm).
     dangerous_flags: list[str] = Field(default_factory=list)
 
@@ -79,7 +80,7 @@ class RunRecord(BaseModel):
     args: list[str]
     target: str
     approved: bool
-    # "lab" (isolated lab target) or "engagement" (real authorized target, Wall-A sandbox).
+    # "lab" (isolated lab target) or "engagement" (real authorized target, fully-open sandbox).
     # Drives how the report marks the run (a real-target engagement is called out as such).
     mode: str = "lab"
     exit_code: int | None = None

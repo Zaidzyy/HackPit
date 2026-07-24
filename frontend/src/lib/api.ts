@@ -641,14 +641,15 @@ export type EngagementRecord = {
   session_id: string | null;
 };
 
-/** Active engagement(s) + Wall-A readiness (GET /cockpit/engagement). Drives the UI mode
- *  indicator, which must ALWAYS show whether lab or a real-target engagement is active. */
+/** Active engagement(s) + sandbox availability (GET /cockpit/engagement). Drives the UI mode
+ *  indicator, which must ALWAYS show whether lab or a real-target engagement is active. The
+ *  engagement sandbox is fully open (Wall A down): `ready` is just availability. */
 export type EngagementStatus = {
   active: EngagementRecord[];
   sandbox: string;
-  firewall: string;
   up: boolean;
-  wall_a_ok: boolean;
+  /** Always true — the engagement sandbox is fully open (no Wall A / isolation to verify). */
+  open: boolean;
   ready: boolean;
   detail: string;
 };

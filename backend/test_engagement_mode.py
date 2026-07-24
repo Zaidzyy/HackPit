@@ -1,30 +1,30 @@
 """Regression-lock for REAL-TARGET engagement mode (the SUPERVISED, highest-risk path).
 
-Engagement mode removes the isolation floor: the cockpit execs against a human-named REAL
-target through the Wall-A sandbox. The ENTIRE safety model then rests on a handful of
-invariants — these tests fail loudly if any is weakened:
+Engagement mode removes the isolation floor AND Wall A: the cockpit execs against a human-named
+REAL target through a FULLY-OPEN sandbox (internet + LAN + host + metadata — Zaid's informed
+decision). The ENTIRE safety model then rests on human approval of every command. These tests
+fail loudly if any surviving invariant is weakened:
 
-  1. WALL A (simulated inverted proof): assert_wall_a_holds refuses unless the firewall +
-     sandbox are up, the sandbox SHARES the firewall netns, and the live ruleset DROPs every
-     WALL_A_BLOCKED range. Any one missing → refuse (fail-closed).
-  2. NEVER-AUTO-RUN: an engagement command with approved=False is refused at the approval
-     gate — every command needs an INDIVIDUAL human approval; there is no batch/approve-all.
-  3. EXPLICIT ENTRY: an engagement_id that was never entered (or was exited) is refused at the
+  1. NEVER-AUTO-RUN: an engagement command with approved=False is refused at the approval gate —
+     every command needs an INDIVIDUAL human approval; there is no batch/approve-all. (Now the
+     ONLY bound on what runs — Wall A is gone — so it is more load-bearing than ever.)
+  2. EXPLICIT ENTRY: an engagement_id that was never entered (or was exited) is refused at the
      engagement gate — engagement mode can never be reached by a bare exec, nor downgraded to
      lab. Entry requires a target + a non-empty authorization acknowledgement.
-  4. TARGET-LOCK to the named target (best-effort DiD): a non-target host is refused; the named
+  3. TARGET-LOCK to the named target (best-effort DiD): a non-target host is refused; the named
      target (host or URL form) passes.
-  5. HEURISTIC RED-CONFIRM still fires in engagement mode (interpreters/shells/frameworks need
+  4. HEURISTIC RED-CONFIRM still fires in engagement mode (interpreters/shells/frameworks need
      the extra confirm).
-  6. GATE ORDER: engagement → target → approval → danger → wall_a.
-  7. LAB MODE UNCHANGED: no engagement_id → the lab gates (isolation), never Wall A.
-  8. NO AUTONOMY ON REAL TARGETS + NO :kali PATH: the orchestrator/loop (the autonomy
-     mechanic) has no engagement capability, and the executor still has zero :kali path.
+  5. GATE ORDER: engagement → target → approval → danger. (No wall_a gate — Wall A is down.)
+  6. WALL A IS INTENTIONALLY GONE: there is no wall_a gate and no assert_wall_a_holds — locked
+     so a broken Wall-A gate can't silently creep back.
+  7. LAB MODE UNCHANGED: no engagement_id → the lab gates (isolation), unchanged.
+  8. NO AUTONOMY ON REAL TARGETS + NO :kali PATH: the orchestrator/loop (the autonomy mechanic)
+     has no engagement capability, and the executor still has zero :kali path.
   9. mode round-trips through the run store ('lab' default; 'engagement' preserved).
 
-Hermetic: Docker + the LLM are never touched — assert_wall_a_holds' docker helpers are
-monkeypatched, engagement resolution is either monkeypatched or driven through a throwaway
-temp DB. Run:  python test_engagement_mode.py
+Hermetic: Docker + the LLM are never touched — engagement resolution is either monkeypatched
+or driven through a throwaway temp DB. Run:  python test_engagement_mode.py
 """
 from __future__ import annotations
 
@@ -45,35 +45,6 @@ _REAL = "scanme.nmap.org"
 # --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
-def _full_ruleset(drop=config.WALL_A_BLOCKED) -> str:
-    lines = ["-P OUTPUT ACCEPT", "-A OUTPUT -o lo -j ACCEPT"]
-    lines += [f"-A OUTPUT -d {c} -j DROP" for c in drop]
-    return "\n".join(lines)
-
-
-def _patch_wall(*, running, netmode, ruleset, rc=0):
-    """Swap sandbox's docker helpers for pure fakes; returns a restore fn."""
-    fw = config.ENGAGE_FIREWALL_CONTAINER
-    fw_id = "deadbeefcafe0000"
-    orig = (S._running, S._inspect_field, S._docker)
-    S._running = lambda name: running.get(name, False)
-
-    def fake_inspect(name, fmt):
-        if "NetworkMode" in fmt:
-            return netmode.replace("{FWID}", fw_id)
-        if ".Id" in fmt:
-            return fw_id
-        return ""
-
-    S._inspect_field = fake_inspect
-    S._docker = lambda args, timeout=10.0: (rc, ruleset, "" if rc == 0 else "boom")
-
-    def restore():
-        S._running, S._inspect_field, S._docker = orig
-
-    return restore, fw
-
-
 def _fake_engagement(target=_REAL) -> EngagementRecord:
     return EngagementRecord(
         engagement_id="eng-test000000",
@@ -85,101 +56,22 @@ def _fake_engagement(target=_REAL) -> EngagementRecord:
 
 
 def _patch_active(rec: EngagementRecord | None):
-    """Make executor resolve THIS engagement (or none), and no-op Wall A."""
-    orig = (E.engagement.get_active, E.assert_wall_a_holds)
+    """Make the executor resolve THIS engagement (or none). No Wall A to patch — it's gone."""
+    orig = E.engagement.get_active
     E.engagement.get_active = lambda eid: rec if (rec and eid == rec.engagement_id) else None
-    E.assert_wall_a_holds = lambda: None
 
     def restore():
-        E.engagement.get_active, E.assert_wall_a_holds = orig
+        E.engagement.get_active = orig
 
     return restore
 
 
 # --------------------------------------------------------------------------- #
-# 1. WALL A — simulated inverted proof
-# --------------------------------------------------------------------------- #
-def test_wall_a_holds_when_all_good() -> None:
-    up = {config.ENGAGE_FIREWALL_CONTAINER: True, config.ENGAGE_SANDBOX_CONTAINER: True}
-    restore, fw = _patch_wall(running=up, netmode="container:{FWID}", ruleset=_full_ruleset())
-    try:
-        S.assert_wall_a_holds()  # returns None on success
-    finally:
-        restore()
-    print("  wall A holds when firewall+sandbox up, netns shared, all ranges dropped: PASS")
-
-
-def test_wall_a_refuses_firewall_down() -> None:
-    up = {config.ENGAGE_FIREWALL_CONTAINER: False, config.ENGAGE_SANDBOX_CONTAINER: True}
-    restore, _ = _patch_wall(running=up, netmode="container:{FWID}", ruleset=_full_ruleset())
-    try:
-        raised = False
-        try:
-            S.assert_wall_a_holds()
-        except SandboxError as exc:
-            raised = True
-            assert "firewall" in str(exc) and "not running" in str(exc)
-        assert raised, "a down firewall MUST refuse (Wall A has no owner)"
-    finally:
-        restore()
-    print("  wall A refuses when the firewall sidecar is down: PASS")
-
-
-def test_wall_a_refuses_when_netns_not_shared() -> None:
-    up = {config.ENGAGE_FIREWALL_CONTAINER: True, config.ENGAGE_SANDBOX_CONTAINER: True}
-    # sandbox on its own bridge, NOT sharing the firewall's netns → Wall A wouldn't apply.
-    restore, _ = _patch_wall(running=up, netmode="bridge", ruleset=_full_ruleset())
-    try:
-        raised = False
-        try:
-            S.assert_wall_a_holds()
-        except SandboxError as exc:
-            raised = True
-            assert "netns" in str(exc) or "sharing" in str(exc)
-        assert raised, "a sandbox not sharing the firewall netns MUST refuse"
-    finally:
-        restore()
-    print("  wall A refuses when the sandbox does not share the firewall netns: PASS")
-
-
-def test_wall_a_refuses_when_a_range_not_dropped() -> None:
-    up = {config.ENGAGE_FIREWALL_CONTAINER: True, config.ENGAGE_SANDBOX_CONTAINER: True}
-    # drop everything EXCEPT the metadata range — a hole Wall A must catch.
-    partial = _full_ruleset(drop=[c for c in config.WALL_A_BLOCKED if c != "169.254.0.0/16"])
-    restore, _ = _patch_wall(running=up, netmode="container:{FWID}", ruleset=partial)
-    try:
-        raised = False
-        try:
-            S.assert_wall_a_holds()
-        except SandboxError as exc:
-            raised = True
-            assert "169.254.0.0/16" in str(exc) and "not dropping" in str(exc)
-        assert raised, "a missing DROP (metadata reachable) MUST refuse"
-    finally:
-        restore()
-    print("  wall A refuses when any WALL_A_BLOCKED range is not dropped: PASS")
-
-
-def test_wall_a_refuses_on_docker_error() -> None:
-    up = {config.ENGAGE_FIREWALL_CONTAINER: True, config.ENGAGE_SANDBOX_CONTAINER: True}
-    restore, _ = _patch_wall(running=up, netmode="container:{FWID}", ruleset="", rc=1)
-    try:
-        raised = False
-        try:
-            S.assert_wall_a_holds()
-        except SandboxError:
-            raised = True
-        assert raised, "an unreadable ruleset (docker error) MUST fail closed"
-    finally:
-        restore()
-    print("  wall A fails closed when the ruleset cannot be read: PASS")
-
-
-# --------------------------------------------------------------------------- #
-# 2–6. the engagement gate chain (Wall A no-op'd; engagement resolved)
+# 1–5. the engagement gate chain
 # --------------------------------------------------------------------------- #
 def test_never_auto_run_engagement() -> None:
-    """The core real-target invariant: approved=False is refused at approval. No batch/auto."""
+    """The core real-target invariant (now the ONLY bound): approved=False is refused at
+    approval. No batch/auto. An individually-approved command clears (no Wall-A gate)."""
     restore = _patch_active(_fake_engagement())
     try:
         r = E.validate_request(
@@ -187,7 +79,7 @@ def test_never_auto_run_engagement() -> None:
         )
         assert r is not None and r.gate == "approval", "engagement + unapproved MUST reject at approval"
         assert "individual human approval" in r.reason or "hands-off" in r.reason
-        # explicitly approved → clears (Wall A no-op'd) — one conscious command at a time
+        # explicitly approved → clears all engagement gates (target ok, approved, not dangerous)
         r = E.validate_request(
             ExecRequest(command="nmap", args=["-sV", _REAL], engagement_id="eng-test000000", approved=True)
         )
@@ -255,7 +147,7 @@ def test_engagement_heuristic_red_confirm() -> None:
 
 
 def test_engagement_gate_order() -> None:
-    """engagement → target → approval → danger → wall_a (first failing gate wins)."""
+    """engagement → target → approval → danger (first failing gate wins; danger is now last)."""
     restore = _patch_active(_fake_engagement(_REAL))
     try:
         # unknown id + everything else wrong → engagement leads
@@ -273,41 +165,41 @@ def test_engagement_gate_order() -> None:
             ExecRequest(command="python3", args=["-c", "x", _REAL], engagement_id="eng-test000000")
         )
         assert r.gate == "approval", "approval beats danger"
-        # active id, right target, approved, dangerous, no ack → danger (wall_a is last, no-op'd)
+        # active id, right target, approved, dangerous, no ack → danger (the LAST engagement gate)
         r = E.validate_request(
             ExecRequest(command="python3", args=["-c", "x", _REAL], engagement_id="eng-test000000", approved=True)
         )
-        assert r.gate == "danger", "danger precedes wall_a"
+        assert r.gate == "danger", "danger is the last engagement gate"
     finally:
         restore()
-    print("  GATE ORDER: engagement -> target -> approval -> danger -> wall_a: PASS")
+    print("  GATE ORDER: engagement -> target -> approval -> danger (no wall_a): PASS")
 
 
-def test_wall_a_is_reached_last() -> None:
-    """With target/approval/danger all passed, a failing Wall A surfaces as gate=wall_a; a
-    passing one clears. (Here we DON'T no-op Wall A — we patch it directly.)"""
-    rec = _fake_engagement(_REAL)
-    orig = (E.engagement.get_active, E.assert_wall_a_holds)
-    E.engagement.get_active = lambda eid: rec if eid == rec.engagement_id else None
+def test_no_wall_a_gate() -> None:
+    """Wall A is intentionally DOWN: there is no wall_a gate and no assert_wall_a_holds. Locked
+    so a broken Wall-A gate can't silently creep back and start refusing real-target runs."""
+    from cockpit.models import ExecRejected
+    # the gate literal no longer offers 'wall_a'
+    assert "wall_a" not in getattr(ExecRejected.model_fields["gate"].annotation, "__args__", ()), \
+        "the ExecRejected.gate literal must not include 'wall_a'"
+    # the sandbox module no longer exposes the Wall-A guard or its config
+    assert not hasattr(S, "assert_wall_a_holds"), "assert_wall_a_holds must be gone (Wall A down)"
+    assert not hasattr(config, "WALL_A_BLOCKED"), "WALL_A_BLOCKED must be gone (Wall A down)"
+    assert not hasattr(config, "ENGAGE_FIREWALL_CONTAINER"), "the firewall sidecar constant must be gone"
+    # a fully-valid approved engagement command clears with NO Wall-A gate in the way
+    restore = _patch_active(_fake_engagement(_REAL))
     try:
-        E.assert_wall_a_holds = lambda: (_ for _ in ()).throw(SandboxError("sim: Wall A breached"))
         r = E.validate_request(
-            ExecRequest(command="nmap", args=["-sV", _REAL], engagement_id=rec.engagement_id, approved=True)
+            ExecRequest(command="nmap", args=["-sV", _REAL], engagement_id="eng-test000000", approved=True)
         )
-        assert r is not None and r.gate == "wall_a", "a Wall-A failure must surface as gate=wall_a"
-
-        E.assert_wall_a_holds = lambda: None
-        r = E.validate_request(
-            ExecRequest(command="nmap", args=["-sV", _REAL], engagement_id=rec.engagement_id, approved=True)
-        )
-        assert r is None, "a fully valid engagement command clears all gates"
+        assert r is None, "an approved engagement command clears — there is no wall_a gate to fail"
     finally:
-        E.engagement.get_active, E.assert_wall_a_holds = orig
-    print("  WALL A is the last engagement gate (reached in validate_request): PASS")
+        restore()
+    print("  WALL A intentionally gone: no wall_a gate / no assert_wall_a_holds (locked): PASS")
 
 
 # --------------------------------------------------------------------------- #
-# 3b. explicit entry / exit through the REAL registry (throwaway temp DB)
+# 2b. explicit entry / exit through the REAL registry (throwaway temp DB)
 # --------------------------------------------------------------------------- #
 def test_enter_exit_registry() -> None:
     tmp = Path(tempfile.mkdtemp()) / "eng.db"
@@ -329,15 +221,11 @@ def test_enter_exit_registry() -> None:
         assert rec.active and rec.target == _REAL and rec.engagement_id.startswith("eng-")
         assert ENG.get_active(rec.engagement_id) is not None, "an entered engagement resolves"
 
-        # the executor now runs against it (Wall A no-op'd)
-        restore = _patch_active(rec)
-        try:
-            r = E.validate_request(
-                ExecRequest(command="nmap", args=["-sV", _REAL], engagement_id=rec.engagement_id, approved=True)
-            )
-            assert r is None, "an entered + approved command clears"
-        finally:
-            restore()
+        # the executor now runs against it (no Wall A to patch)
+        r = E.validate_request(
+            ExecRequest(command="nmap", args=["-sV", _REAL], engagement_id=rec.engagement_id, approved=True)
+        )
+        assert r is None, "an entered + approved command clears"
 
         assert ENG.exit_engagement(rec.engagement_id) is True, "exit ends the engagement"
         assert ENG.get_active(rec.engagement_id) is None, "an exited engagement no longer resolves"
@@ -352,29 +240,23 @@ def test_enter_exit_registry() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 7. LAB MODE UNCHANGED — no engagement_id → lab gates, not Wall A
+# 7. LAB MODE UNCHANGED — no engagement_id → lab gates (isolation)
 # --------------------------------------------------------------------------- #
 def test_lab_mode_unaffected() -> None:
-    """A request with no engagement_id runs the LAB path: it never consults engagement or Wall
-    A, and reaches the ISOLATION gate. Verified by making Wall A blow up if it were ever called
-    and isolation the thing that decides."""
-    orig = (E.assert_isolation_proven, E.assert_wall_a_holds)
-
-    def boom():
-        raise AssertionError("Wall A must NOT be called in lab mode")
-
+    """A request with no engagement_id runs the LAB path unchanged: it reaches the ISOLATION
+    gate (a passing check clears; a failing one surfaces as gate=sandbox)."""
+    orig = E.assert_isolation_proven
     try:
-        E.assert_wall_a_holds = boom
         E.assert_isolation_proven = lambda: None
         r = E.validate_request(ExecRequest(command="nmap", args=["-sV", "hackpit-lab-target"], approved=True))
-        assert r is None, "a valid lab command clears via the ISOLATION gate (not Wall A)"
+        assert r is None, "a valid lab command clears via the ISOLATION gate"
 
         E.assert_isolation_proven = lambda: (_ for _ in ()).throw(SandboxError("sim: not isolated"))
         r = E.validate_request(ExecRequest(command="nmap", args=["-sV", "hackpit-lab-target"], approved=True))
         assert r is not None and r.gate == "sandbox", "lab isolation failure surfaces as gate=sandbox"
     finally:
-        E.assert_isolation_proven, E.assert_wall_a_holds = orig
-    print("  LAB MODE unchanged: lab path uses isolation, never Wall A: PASS")
+        E.assert_isolation_proven = orig
+    print("  LAB MODE unchanged: lab path still uses the isolation gate: PASS")
 
 
 # --------------------------------------------------------------------------- #
@@ -395,21 +277,15 @@ def test_orchestrator_has_no_engagement_capability() -> None:
         "cockpit.engagement",
         ".enter(",             # cannot enter engagement mode
         "get_active",          # cannot resolve an engagement
-        "assert_wall_a_holds",
     ]
     hits = [f for f in forbidden if f in src]
     assert not hits, f"orchestrator/loop must have NO engagement capability — found: {hits}"
-    # and the loop proposal it emits carries no engagement field (structure lock)
-    assert "engagement" not in " ".join(
-        # the proposal dict keys built in propose_next
-        ["command", "args", "rationale", "step_id", "gate_ok", "gate_reason", "dangerous_flags"]
-    )
     print("  NO AUTONOMY on real targets: orchestrator/loop has no engagement capability: PASS")
 
 
 def test_executor_still_has_no_kali_path() -> None:
     """The agent's exec path must still have ZERO path to the :kali open-egress shell, even
-    though engagement mode now has its own egress sandbox."""
+    though engagement mode now has its own fully-open sandbox."""
     assert not hasattr(E, "run_kali") and not hasattr(E, "kali"), "executor must not reference :kali"
     src = Path(E.__file__).read_text(encoding="utf-8")
     for tok in ("run_kali", "from .kali", "cockpit.kali", "KALI_OPEN_CONTAINER"):
@@ -451,17 +327,12 @@ def test_mode_round_trips() -> None:
 
 
 if __name__ == "__main__":
-    test_wall_a_holds_when_all_good()
-    test_wall_a_refuses_firewall_down()
-    test_wall_a_refuses_when_netns_not_shared()
-    test_wall_a_refuses_when_a_range_not_dropped()
-    test_wall_a_refuses_on_docker_error()
     test_never_auto_run_engagement()
     test_explicit_entry_required()
     test_engagement_target_lock()
     test_engagement_heuristic_red_confirm()
     test_engagement_gate_order()
-    test_wall_a_is_reached_last()
+    test_no_wall_a_gate()
     test_enter_exit_registry()
     test_lab_mode_unaffected()
     test_orchestrator_has_no_engagement_capability()

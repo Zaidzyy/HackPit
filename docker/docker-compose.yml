@@ -15,14 +15,12 @@
 #    and is still disposable via `down`. An exposed :kali now reaches your host/LAN — localhost only,
 #    auth required before any exposure.
 #
-# 3. hackpit-engage-sandbox  (WALL-A EGRESS — the REAL-TARGET engagement sandbox; SUPERVISED)
+# 3. hackpit-engage-sandbox  (FULLY OPEN — the REAL-TARGET engagement sandbox; SUPERVISED, HIGHEST RISK)
 #    The cockpit execs here ONLY in explicit engagement mode (real authorized targets). It has NO
-#    isolation floor — it reaches the PUBLIC INTERNET — but a firewall SIDECAR
-#    (hackpit-engage-firewall, the ONLY box with NET_ADMIN) owns its netns and DROPs the operator's
-#    host + LAN (RFC1918) + link-local/metadata (169.254/16) = Wall A. The sandbox SHARES that netns
-#    (`network_mode: service:engage-firewall`) so it stays cap_drop ALL + no-new-privileges and still
-#    cannot turn inward on you. Wall-A is stricter than :kali on purpose — this is the AGENT's path,
-#    behind human-approval-of-EVERY-command (never hands-off). Proof: engage_wall_a_proof.sh (inverted).
+#    isolation floor and NO Wall A (Zaid's informed decision): on a normal NAT bridge it reaches the
+#    internet + LAN + host + cloud metadata — nothing bounds WHERE it can reach. The ONLY guard is
+#    HUMAN APPROVAL OF EVERY COMMAND (explicit entry + approve-each + heuristic red-confirm; never
+#    hands-off). Keeps cap_drop ALL + no-new-privileges. Proof: engage_open_proof.sh (full reach).
 #
 # All sandbox images bake their tools in at build time. The lab image is pulled at `up` time.
 #
@@ -43,9 +41,9 @@ networks:
     # by the :kali human-only shell (hackpit-kali-open). Deliberately not isolated.
   hackpit-engage:
     driver: bridge
-    # NOT internal: NAT egress to the internet. This is the engagement pair's network; the
-    # firewall sidecar sits here with NET_ADMIN and installs the Wall-A OUTPUT DROP rules
-    # (host/LAN/metadata), which the sandbox inherits by SHARING the sidecar's netns.
+    # NOT internal: a normal NAT bridge with FULL reach (internet + LAN + host + metadata). The
+    # engagement sandbox sits here directly — Wall A is DOWN (no firewall sidecar). The only guard
+    # on a real-target run is human-approval-of-every-command (never hands-off).
 
 services:
   lab-target:
@@ -98,41 +96,22 @@ services:
       - no-new-privileges:true
     read_only: false
 
-  engage-firewall:
-    # WALL-A firewall SIDECAR for engagement mode. The ONLY engagement box with NET_ADMIN.
-    # It installs the OUTPUT DROP rules (host/LAN/metadata) and holds the netns open; the
-    # engagement sandbox shares this netns and inherits the filter. See Dockerfile.firewall.
-    build:
-      context: .
-      dockerfile: Dockerfile.firewall
-    image: hackpit/engage-firewall:m5
-    container_name: hackpit-engage-firewall
-    hostname: hackpit-engage-firewall
-    networks:
-      - hackpit-engage
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_ADMIN          # needed ONLY to program the Wall-A iptables rules
-    security_opt:
-      - no-new-privileges:true
-    restart: unless-stopped
-
   engage-sandbox:
-    # The REAL-TARGET engagement sandbox. SAME tool image as the isolated/open sandboxes, but
-    # it SHARES the firewall sidecar's network namespace, so its egress is Wall-A-filtered
-    # (internet yes; host/LAN/metadata no). It has NO isolation floor and NO NET_ADMIN — it
-    # cannot alter the firewall's rules. The cockpit execs here ONLY in explicit, human-entered
-    # engagement mode, with human approval of EVERY command (never hands-off). NOT for lab runs.
+    # The REAL-TARGET engagement sandbox — FULLY OPEN (Wall A DOWN, Zaid's informed decision).
+    # On a normal NAT bridge (`hackpit-engage`) with FULL network reach: internet + LAN + host
+    # + cloud metadata. There is NO isolation floor and NO Wall-A firewall — nothing bounds
+    # WHERE it can reach. The ONLY guard on a real-target run is HUMAN APPROVAL OF EVERY COMMAND
+    # (explicit engagement entry + approve-each + heuristic red-confirm; never hands-off). Keeps
+    # cap_drop: ALL + no-new-privileges. The cockpit execs here ONLY in explicit, human-entered
+    # engagement mode. NOT for lab runs (the lab keeps its egress-less isolated sandbox).
     build:
       context: .
       dockerfile: Dockerfile.sandbox
     image: hackpit/kali-sandbox:m1
     container_name: hackpit-engage-sandbox
-    # Share the firewall's netns → inherit Wall-A. (No `networks:` when network_mode is set.)
-    network_mode: "service:engage-firewall"
-    depends_on:
-      - engage-firewall
+    hostname: hackpit-engage-sandbox
+    networks:
+      - hackpit-engage
     cap_drop:
       - ALL
     security_opt:

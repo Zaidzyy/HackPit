@@ -1,7 +1,7 @@
 """Engagement-mode registry — the DELIBERATE, explicit switch into real-target mode.
 
 Real-target ("engagement") mode removes the isolation floor: the cockpit execs against a
-human-named REAL target through the Wall-A sandbox. Because that is the highest-risk path,
+human-named REAL target through the fully-open sandbox. Because that is the highest-risk path,
 entering it must be a conscious act, not something a bare exec can trip into. This module is
 that gate's state:
 

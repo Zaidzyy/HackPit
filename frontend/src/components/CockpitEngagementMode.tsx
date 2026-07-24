@@ -18,8 +18,9 @@ import {
  * This is deliberately NOT the guided loop: there is no auto-propose, no batch, no
  * approve-all. You enter engagement mode explicitly (naming the real target + acknowledging
  * you are authorized), then run ONE command at a time, reading and approving each yourself.
- * The active mode + target are always shown. Execution goes to the Wall-A sandbox (internet
- * yes; your host/LAN/metadata no) — but the only bound on WHAT runs is you, every command.
+ * The active mode + target are always shown. Execution goes to a FULLY-OPEN sandbox (Wall A
+ * down — it reaches the internet, your LAN, AND your own machine). Human approval of every
+ * command is the ONLY guard — it protects the real target AND your own machine.
  */
 
 type Line = { kind: "stdout" | "stderr" | "meta" | "err"; text: string };
@@ -75,7 +76,7 @@ export function CockpitEngagementMode({
     [argsText]
   );
   const preview = `${command} ${args.join(" ")}`.trim();
-  const wallOk = status?.ready ?? false;
+  const ready = status?.ready ?? false;
 
   const doEnter = useCallback(() => {
     const t = target.trim();
@@ -170,10 +171,12 @@ export function CockpitEngagementMode({
         <div className="hp-eng-warn" role="alert">
           <p className="hp-eng-warn-head">⚠ You are about to leave the isolated lab.</p>
           <p>
-            Engagement mode runs against a <b>real target</b> with <b>no isolation floor</b>.
-            You are responsible for authorization and for staying in scope. Every command is
-            yours to read and approve — there is no autonomous mode, no batch, no approve-all.
-            Wall A still blocks your host, LAN, and cloud metadata, but the internet is reachable.
+            Engagement mode runs against a <b>real target</b> with <b>no isolation floor and no
+            Wall A</b>. The sandbox reaches the internet, <b>your LAN, and your own machine</b> —
+            nothing bounds where it can reach. You are responsible for authorization and for
+            staying in scope, and <b>human approval of every command is the only guard</b> — it
+            protects the target and your own machine. There is no autonomous mode, no batch, no
+            approve-all.
           </p>
         </div>
 
@@ -215,19 +218,19 @@ export function CockpitEngagementMode({
         </div>
 
         <div
-          className={`hp-ck-banner ${wallOk ? "hp-ck-ok" : "hp-ck-warn"}`}
+          className={`hp-ck-banner ${ready ? "hp-ck-warn" : "hp-ck-warn"}`}
           role="status"
         >
           {status ? (
-            wallOk ? (
+            ready ? (
               <>
                 <span className="hp-ck-dot" /> engagement sandbox <b>{status.sandbox}</b> ready ·
-                Wall A holding (internet yes · host/LAN/metadata blocked)
+                <b> FULLY OPEN</b> · full network reach (internet + LAN + host) · human-approve-each
               </>
             ) : (
               <>
-                <span className="hp-ck-dot" /> engagement sandbox not ready —{" "}
-                {status.detail || "bring the engagement pair up"}.{" "}
+                <span className="hp-ck-dot" /> engagement sandbox not running —{" "}
+                {status.detail || "bring it up"}.{" "}
                 <code>docker compose -f docker/docker-compose.yml up -d --build</code>
               </>
             )
@@ -247,8 +250,8 @@ export function CockpitEngagementMode({
         <span className="hp-eng-mode-target">
           target locked to <b>{active.target}</b>
         </span>
-        <span className={wallOk ? "hp-eng-wall-ok" : "hp-eng-wall-bad"}>
-          {wallOk ? "Wall A holding" : "Wall A NOT verified"}
+        <span className="hp-eng-wall-bad">
+          {ready ? "FULLY OPEN · full reach" : "sandbox not running"}
         </span>
         <button type="button" className="hp-loop-stop" onClick={doExit}>
           exit engagement
@@ -256,8 +259,9 @@ export function CockpitEngagementMode({
       </div>
 
       <p className="hp-ck-note">
-        No isolation floor. The <b>only</b> bound on what runs is you — read and approve every
-        command. There is no loop, no batch, no approve-all here (that is lab-only, by design).
+        No isolation floor, no Wall A — the sandbox reaches the internet, your LAN, and your own
+        machine. The <b>only</b> guard on what runs is you — read and approve every command. There
+        is no loop, no batch, no approve-all here (that is lab-only, by design).
       </p>
 
       <section className="hp-ck-builder">
@@ -300,8 +304,8 @@ export function CockpitEngagementMode({
             type="button"
             className="hp-ck-approve is-danger"
             onClick={approveAndRun}
-            disabled={running || !wallOk || args.length === 0}
-            title={wallOk ? "Approve and run against the real target" : "Wall A not verified"}
+            disabled={running || !ready || args.length === 0}
+            title={ready ? "Approve and run against the real target" : "Engagement sandbox not running"}
           >
             {running ? "running…" : "APPROVE & RUN (REAL TARGET)"}
           </button>

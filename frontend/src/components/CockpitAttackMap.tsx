@@ -65,8 +65,20 @@ function isGrounded(step: AttackStep): boolean {
  * kill-chain order (staggered by global index); under prefers-reduced-motion the
  * final lit state renders immediately.
  */
-export function CockpitAttackMap({ path }: { path: AttackPath }) {
+export function CockpitAttackMap({
+  path,
+  activeStepId = null,
+  doneStepIds,
+}: {
+  path: AttackPath;
+  /** The step the loop is currently proposing/running — pulses on the map. */
+  activeStepId?: string | null;
+  /** Steps the loop has executed — light up "done". When provided (loop mode),
+   *  not-yet-reached nodes dim so progress reads phase-by-phase. */
+  doneStepIds?: Set<string>;
+}) {
   const stations = useMemo(() => toStations(path), [path]);
+  const loopMode = doneStepIds !== undefined;
   const [selected, setSelected] = useState<{ step: AttackStep; phase: string } | null>(
     null
   );
@@ -134,13 +146,22 @@ export function CockpitAttackMap({ path }: { path: AttackPath }) {
                   {st.steps.map((step, localIdx) => {
                     const idx = st.startIndex + localIdx;
                     const grounded = isGrounded(step);
+                    const done = doneStepIds?.has(step.id) ?? false;
+                    const isActive = activeStepId === step.id;
+                    const loopCls = done
+                      ? " is-done"
+                      : isActive
+                        ? " is-active"
+                        : loopMode
+                          ? " is-pending"
+                          : "";
                     return (
                       <motion.button
                         key={step.id}
                         type="button"
-                        className={`hp-cm-node${grounded ? " is-grounded" : " is-ai"}`}
+                        className={`hp-cm-node${grounded ? " is-grounded" : " is-ai"}${loopCls}`}
                         onClick={() => setSelected({ step, phase: st.label })}
-                        aria-label={`${step.title} — ${grounded ? "grounded" : "unverified"} step`}
+                        aria-label={`${step.title} — ${grounded ? "grounded" : "unverified"} step${done ? ", done" : isActive ? ", in progress" : ""}`}
                         initial={reduced ? false : { opacity: 0, x: -10 }}
                         animate={{ opacity: 1, x: 0 }}
                         transition={{
@@ -153,6 +174,16 @@ export function CockpitAttackMap({ path }: { path: AttackPath }) {
                         <span className="hp-cm-node-pip" aria-hidden />
                         <span className="hp-cm-node-body">
                           <span className="hp-cm-node-title">{step.title}</span>
+                          {done && (
+                            <span className="hp-cm-node-check" aria-hidden>
+                              ✓
+                            </span>
+                          )}
+                          {isActive && (
+                            <span className="hp-cm-node-tag is-active-tag">
+                              running
+                            </span>
+                          )}
                           {!grounded && (
                             <span className="hp-cm-node-tag">unverified</span>
                           )}

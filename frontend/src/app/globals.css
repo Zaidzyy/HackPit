@@ -4899,6 +4899,56 @@ a.hp-card {
   border-style: dashed;
   background: rgba(14, 16, 17, 0.78);
 }
+/* --- loop progress states: nodes light phase-by-phase as steps complete --- */
+.hp-cm-node.is-pending {
+  opacity: 0.42;
+}
+.hp-cm-node.is-done {
+  opacity: 1;
+  border-color: rgba(74, 222, 128, 0.45);
+  background: color-mix(in srgb, #4ade80 8%, rgba(14, 16, 17, 0.92));
+}
+.hp-cm-node.is-done .hp-cm-node-pip {
+  background: #4ade80;
+  box-shadow: 0 0 8px #4ade80;
+  border: none;
+}
+.hp-cm-node-check {
+  color: #4ade80;
+  font-size: 12px;
+  font-weight: 700;
+}
+.hp-cm-node.is-active {
+  opacity: 1;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, rgba(14, 16, 17, 0.92));
+  box-shadow: 0 0 0 1px var(--accent-line), 0 0 18px -4px var(--accent);
+  animation: hp-cm-pulse 1.3s ease-in-out infinite;
+}
+.hp-cm-node.is-active .hp-cm-node-pip {
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent);
+  border: none;
+}
+.hp-cm-node-tag.is-active-tag {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+@keyframes hp-cm-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px var(--accent-line), 0 0 14px -6px var(--accent);
+  }
+  50% {
+    box-shadow: 0 0 0 1px var(--accent), 0 0 22px -2px var(--accent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hp-cm-node.is-active {
+    animation: none;
+  }
+}
 .hp-cm-node-pip {
   flex: none;
   width: 9px;

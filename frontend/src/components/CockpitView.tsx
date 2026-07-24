@@ -41,6 +41,9 @@ export function CockpitView() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [execMode, setExecMode] = useState<"loop" | "manual">("loop");
   const [engToken, setEngToken] = useState(0);
+  // Loop progress, lifted so the kill-chain map can light nodes as steps complete.
+  const [activeStep, setActiveStep] = useState<string | null>(null);
+  const [doneSteps, setDoneSteps] = useState<Set<string>>(new Set());
   const reduced = useReducedMotion();
 
   const ctrlRef = useRef<AbortController | null>(null);
@@ -74,6 +77,9 @@ export function CockpitView() {
           if (ctrl.signal.aborted) return;
           setPath(p);
           setLoading(false);
+          // reset loop progress for the new plan
+          setActiveStep(null);
+          setDoneSteps(new Set());
           // Persist the composed path as an engagement so every cockpit run
           // below can be recorded against it. Non-fatal: if this fails the map
           // still shows; execution just won't be recorded to a session.
@@ -197,7 +203,11 @@ export function CockpitView() {
 
           {path && (
             <motion.div className="hp-cv-map-frame" {...reveal}>
-              <CockpitAttackMap path={path} />
+              <CockpitAttackMap
+                path={path}
+                activeStepId={execMode === "loop" ? activeStep : null}
+                doneStepIds={execMode === "loop" ? doneSteps : undefined}
+              />
             </motion.div>
           )}
         </section>
@@ -238,6 +248,11 @@ export function CockpitView() {
                 <>
                   <CockpitLoop
                     sessionId={sessionId}
+                    onStepActive={setActiveStep}
+                    onStepDone={(id) => {
+                      if (id) setDoneSteps((s) => new Set(s).add(id));
+                      setActiveStep(null);
+                    }}
                     onRunRecorded={() => setEngToken((t) => t + 1)}
                   />
                   <CockpitEngagement

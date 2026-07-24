@@ -5,6 +5,8 @@ import { motion, useReducedMotion } from "framer-motion";
 import { PageShell } from "./PageShell";
 import { CockpitAttackMap } from "./CockpitAttackMap";
 import { CockpitScreen } from "./CockpitScreen";
+import { CockpitLoop } from "./CockpitLoop";
+import { CockpitEngagement } from "./CockpitEngagement";
 import { LLMSettingsModal } from "./LLMSettingsModal";
 import { ModelBadge } from "./ModelBadge";
 import { TargetTypeChips } from "./TargetTypeChips";
@@ -37,6 +39,8 @@ export function CockpitView() {
   const [error, setError] = useState<string | null>(null);
   const [config, setConfig] = useState<LLMConfig | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [execMode, setExecMode] = useState<"loop" | "manual">("loop");
+  const [engToken, setEngToken] = useState(0);
   const reduced = useReducedMotion();
 
   const ctrlRef = useRef<AbortController | null>(null);
@@ -208,7 +212,49 @@ export function CockpitView() {
                 : { duration: 0.5, ease: "easeOut", delay: 0.12 }
             }
           >
-            <CockpitScreen embedded sessionId={sessionId} />
+            <div className="hp-cv-execmode" role="tablist" aria-label="Execution mode">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={execMode === "loop"}
+                className={execMode === "loop" ? "is-on" : undefined}
+                onClick={() => setExecMode("loop")}
+              >
+                guided loop
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={execMode === "manual"}
+                className={execMode === "manual" ? "is-on" : undefined}
+                onClick={() => setExecMode("manual")}
+              >
+                manual
+              </button>
+            </div>
+
+            {execMode === "loop" ? (
+              sessionId ? (
+                <>
+                  <CockpitLoop
+                    sessionId={sessionId}
+                    onRunRecorded={() => setEngToken((t) => t + 1)}
+                  />
+                  <CockpitEngagement
+                    key={sessionId}
+                    sessionId={sessionId}
+                    refreshToken={engToken}
+                  />
+                </>
+              ) : (
+                <p className="hp-cv-hint">
+                  The guided loop needs a saved engagement to record against — it
+                  wasn’t created. Re-plot the path, or use manual execution.
+                </p>
+              )
+            ) : (
+              <CockpitScreen embedded sessionId={sessionId} />
+            )}
           </motion.section>
         )}
       </div>

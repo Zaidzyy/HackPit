@@ -700,6 +700,43 @@ export async function execCockpitStream(
   }
 }
 
+// --- the orchestrator loop: propose the NEXT command (no execution) -------------
+
+/** One proposed next command from the guided loop. `gate_ok` is the advisory
+ *  pre-check against the M1 allowlist + target-lock; a false proposal is shown
+ *  flagged and can't be approved (the executor would reject it anyway). */
+export type LoopProposal = {
+  command: string;
+  args: string[];
+  rationale: string;
+  step_id: string | null;
+  gate_ok: boolean;
+  gate_reason: string;
+};
+
+export type LoopProposeOut = {
+  done: boolean;
+  proposal: LoopProposal | null;
+  reason: string | null;
+};
+
+/**
+ * Ask the agent for the next single recon command for a session's loop. This does
+ * NOT execute — the returned proposal awaits human approval, after which it runs
+ * through the M1 executor (execCockpitStream). `avoid` lists command lines the
+ * operator skipped so the agent proposes something different.
+ */
+export const loopPropose = (
+  sessionId: string,
+  avoid: string[] = [],
+  signal?: AbortSignal
+) =>
+  postJSON<LoopProposeOut>(
+    `/sessions/${encodeURIComponent(sessionId)}/loop/propose`,
+    { avoid },
+    signal
+  );
+
 // --- :kali — human-only arbitrary shell into the isolated sandbox ---------------
 
 /** Availability of the :kali OPEN sandbox (GET /cockpit/kali/status). Note: `isolated`

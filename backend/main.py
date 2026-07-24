@@ -684,6 +684,14 @@ class LoopProposeIn(BaseModel):
         default_factory=list,
         description="Command lines the operator skipped — propose something different.",
     )
+    engagement_id: str | None = Field(
+        None,
+        description="When set to an ACTIVE engagement id, the loop drafts against THAT "
+        "engagement's real target + authorized program scope instead of the isolated lab. "
+        "An unknown/exited id is refused (409) — never silently downgraded to lab. The "
+        "proposal is still only a draft: nothing runs until the operator approves it, and "
+        "the executor re-checks every gate then.",
+    )
 
 
 class LoopProposal(BaseModel):
@@ -1042,15 +1050,52 @@ def generate_report(session_id: str) -> dict[str, Any]:
     }
 
 
+def _loop_scope_context(engagement_id: str | None) -> orchestrator.ScopeContext | None:
+    """Resolve the loop's mode: None = the isolated lab; a ScopeContext = a real engagement.
+
+    The MODE RESOLUTION lives here, not in the orchestrator — the proposer has no capability
+    to enter or look up an engagement (regression-locked); it only ever receives an inert,
+    read-only description of what it may target. An id that is set but not ACTIVE fails
+    CLOSED with 409: the loop is never silently downgraded to lab against a real-target id.
+    """
+    if not engagement_id:
+        return None
+    record = cockpit_engagement.get_active(engagement_id)
+    if record is None:
+        raise HTTPException(
+            status_code=409,
+            detail="engagement mode is not active for this id — enter engagement mode first "
+            "(POST /cockpit/engagement/enter); an unknown or exited engagement cannot drive "
+            "the loop",
+        )
+    matcher = cockpit_engagement.resolved_scope(record)
+    return orchestrator.ScopeContext(
+        target=record.target,
+        scope=record.scope or record.target,
+        include=tuple(record.scope_include),
+        exclude=tuple(record.scope_exclude),
+        allowed_hosts=tuple(record.allowed_hosts),
+        out_of_scope_seen=tuple(record.discovered_out_of_scope),
+        in_scope=matcher.in_scope,
+    )
+
+
 @app.post("/sessions/{session_id}/loop/propose", response_model=LoopProposeOut)
 def loop_propose(session_id: str, req: LoopProposeIn = Body(default=None)) -> dict[str, Any]:
-    """Propose the NEXT single recon command for the guided loop — does NOT execute.
+    """Propose the NEXT single command for the guided loop — does NOT execute.
 
-    Reads the session's composed plan + its recorded cockpit runs (the results so far)
-    and asks the LLM for the one next allowlisted command against the isolated lab. The
-    returned proposal is a SUGGESTION only: it is not run here, and it advances nothing.
-    Execution happens separately through POST /cockpit/exec (the M1 executor, all four
-    gates), only after a human approves. See docs/cockpit-loop.md.
+    Reads the session's composed plan + its recorded cockpit runs (the results so far) and
+    asks the LLM for the one next command. WHICH TARGET depends on the mode:
+
+    * no ``engagement_id`` → the ISOLATED LAB, exactly as before (unchanged).
+    * an ACTIVE ``engagement_id`` → that engagement's REAL target and authorized PROGRAM
+      SCOPE, including any in-scope hosts recon has discovered. An unknown/exited id is
+      refused with 409 — it is never downgraded to lab.
+
+    The returned proposal is a SUGGESTION only: it is not run here, and it advances nothing.
+    Execution happens separately through POST /cockpit/exec (the executor, all of the mode's
+    gates), only after a human approves THAT command. There is no batch and no approve-all in
+    either mode. See docs/cockpit-loop.md + docs/ENGAGEMENT-LOOP-REAL-TARGET.md.
     """
     session = sessions_db.get_session(session_id)
     if session is None:
@@ -1058,8 +1103,9 @@ def loop_propose(session_id: str, req: LoopProposeIn = Body(default=None)) -> di
     plan = session.get("path") or {}
     runs = [r.model_dump() for r in cockpit_runstore.list_runs_for_session(session_id)]
     avoid = list(req.avoid) if req and req.avoid else []
+    scope_ctx = _loop_scope_context(req.engagement_id if req else None)
     try:
-        return orchestrator.propose_next(plan, runs, llm.load_config(), avoid)
+        return orchestrator.propose_next(plan, runs, llm.load_config(), avoid, scope_ctx)
     except llm.LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
 

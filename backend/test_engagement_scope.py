@@ -16,6 +16,9 @@ any of that widens past what the operator authorized:
   5. GATE ORDER unchanged: an out-of-scope host is refused at 'target' even when approved.
   6. LAB MODE UNTOUCHED: with no engagement, the lab target-lock is byte-for-byte the same
      (lab host passes, everything else refused with the lab wording).
+  7. THE PROPOSER drafts against the engagement's SCOPE, never the lab — and the lab prompt is
+     unchanged; the proposal pre-check uses the same matcher the executor does; and a proposal
+     is only ever a DRAFT (the proposer never reaches an execution path, even off-scope).
 
 Hermetic: no Docker, no LLM, no network. Scopes are built with resolve=False / explicit seed
 IPs, and expansion runs against a throwaway temp DB. Run:  python test_engagement_scope.py
@@ -218,6 +221,91 @@ def test_lab_target_lock_unchanged() -> None:
     print("  LAB target-lock wording + behaviour byte-for-byte unchanged: PASS")
 
 
+# --------------------------------------------------------------------------- #
+# 7. the PROPOSER drafts against the engagement scope, never the lab
+# --------------------------------------------------------------------------- #
+def _ctx():
+    import orchestrator as O
+
+    from cockpit import scope as SC
+
+    matcher = SC.parse_scope(_SCOPE, resolve=False)
+    return O.ScopeContext(
+        target="example.com",
+        scope=_SCOPE,
+        include=("example.com", "*.example.com", "10.10.10.0/24"),
+        exclude=("admin.example.com",),
+        allowed_hosts=("example.com", "api.example.com"),
+        out_of_scope_seen=("evil.com",),
+        in_scope=matcher.in_scope,
+    )
+
+
+def test_proposer_targets_the_scope_not_the_lab() -> None:
+    import orchestrator as O
+
+    from cockpit import config
+
+    ctx = _ctx()
+    system, user = O._system_prompt(ctx), O.build_user_prompt({"goal": "g"}, [], [], ctx)
+    both = system + "\n" + user
+    assert config.LAB_TARGET_HOST not in both, "the LAB must never appear in a real-target prompt"
+    assert "example.com" in system and "*.example.com" in user
+    assert "admin.example.com" in both, "the exclusion must be stated to the model"
+    assert "api.example.com" in user, "a discovered in-scope host must be offered as a pivot"
+    assert "evil.com" in user, "an out-of-scope discovery must be listed as forbidden"
+    print("  proposer drafts against the engagement scope, never the lab: PASS")
+
+
+def test_lab_proposer_prompt_unchanged() -> None:
+    import orchestrator as O
+
+    from cockpit import config
+
+    system, user = O._system_prompt(), O.build_user_prompt({"goal": "g"}, [], [])
+    assert config.LAB_TARGET_HOST in system and f"LAB TARGET: {config.LAB_TARGET_HOST}" in user
+    assert "The ONLY target is the lab host" in system
+    assert "AUTHORIZED SCOPE" not in system + user, "no scope text may leak into the lab prompt"
+    print("  LAB proposer prompt byte-for-byte unchanged: PASS")
+
+
+def test_proposer_precheck_uses_the_scope() -> None:
+    import orchestrator as O
+
+    ctx = _ctx()
+    ok, _ = O.precheck("nmap", ["-sV", "api.example.com"], ctx)
+    assert ok, "an in-scope proposal must pre-check clean"
+    ok, reason = O.precheck("nmap", ["-sV", "evil.com"], ctx)
+    assert not ok and "scope" in reason, reason
+    ok, _ = O.precheck("nmap", ["-sV", "admin.example.com"], ctx)
+    assert not ok, "an EXCLUDED host must fail the pre-check"
+    print("  the proposal pre-check uses the same scope matcher as the executor: PASS")
+
+
+def test_loop_proposal_never_runs_anything() -> None:
+    """NEVER-AUTO-RUN in the loop, on a REAL target: a proposal is a draft. propose_next must
+    not reach the executor's run path, and an off-scope draft comes back flagged, not run."""
+    import llm
+    import orchestrator as O
+
+    ctx = _ctx()
+    fired: list[str] = []
+    orig_chat, orig_iter, orig_run = llm.chat, E.iter_run, E.run_command
+    llm.chat = lambda *a, **k: '{"done": false, "command": "nmap", "args": ["-sV", "evil.com"]}'
+    E.iter_run = lambda *a, **k: fired.append("iter_run")  # type: ignore[assignment]
+    E.run_command = lambda *a, **k: fired.append("run_command")  # type: ignore[assignment]
+    try:
+        res = O.propose_next({"goal": "g"}, [], {}, [], ctx)
+        assert not fired, f"the proposer must never execute anything — called: {fired}"
+        prop = res["proposal"]
+        assert prop is not None and prop["gate_ok"] is False, prop
+        assert "scope" in prop["gate_reason"], prop
+        assert "approved" not in prop, "a proposal can never carry an approval"
+    finally:
+        llm.chat, E.iter_run, E.run_command = orig_chat, orig_iter, orig_run
+    print("  NEVER-AUTO-RUN: a real-target proposal is a flagged draft, nothing ran: PASS")
+
+
 if __name__ == "__main__":
     test_in_scope_targets_pass()
     test_seed_ip_of_an_exact_host_passes()
@@ -228,4 +316,8 @@ if __name__ == "__main__":
     test_never_auto_run_holds_for_a_discovered_host()
     test_gate_order_target_before_approval()
     test_lab_target_lock_unchanged()
+    test_proposer_targets_the_scope_not_the_lab()
+    test_lab_proposer_prompt_unchanged()
+    test_proposer_precheck_uses_the_scope()
+    test_loop_proposal_never_runs_anything()
     print("ALL engagement-scope tests pass")

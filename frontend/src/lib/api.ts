@@ -791,14 +791,19 @@ export type LoopProposeOut = {
  * through the M1 executor (execCockpitStream). `avoid` lists command lines the
  * operator skipped so the agent proposes something different.
  */
+/** Ask the loop for the next draft command. With `engagementId` the agent drafts against that
+ *  engagement's REAL target + authorized program scope (incl. recon-discovered in-scope hosts)
+ *  instead of the isolated lab; an unknown/exited id is refused (409), never downgraded to lab.
+ *  The result is a DRAFT either way — nothing runs until the operator approves that command. */
 export const loopPropose = (
   sessionId: string,
   avoid: string[] = [],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  engagementId?: string | null
 ) =>
   postJSON<LoopProposeOut>(
     `/sessions/${encodeURIComponent(sessionId)}/loop/propose`,
-    { avoid },
+    { avoid, engagement_id: engagementId ?? null },
     signal
   );
 

@@ -71,7 +71,9 @@ export function CockpitLoop({
     setDangerAck(false); // every new proposal must be re-confirmed if dangerous
     onStepActive?.(null);
 
-    loopPropose(sessionId, avoidRef.current, ctrl.signal)
+    // In engagement mode the proposer drafts against the REAL target + its authorized scope
+    // (not the lab). It still only DRAFTS — the approve click below is what runs anything.
+    loopPropose(sessionId, avoidRef.current, ctrl.signal, engagementId)
       .then((res) => {
         if (ctrl.signal.aborted) return;
         if (res.done || !res.proposal) {

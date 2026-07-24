@@ -107,13 +107,28 @@ class EngagementEnterRequest(BaseModel):
         description="Operator's authorization acknowledgement — you are responsible for "
         "authorization and for staying in scope; every command is yours to approve.",
     )
+    scope: str | None = Field(
+        None,
+        description="The authorized PROGRAM SCOPE: in-scope patterns separated by commas or "
+        "spaces — exact hosts, *.wildcards, CIDRs — plus !exclusions "
+        "(e.g. 'example.com, *.example.com, 10.10.10.0/24, !admin.example.com'). A wildcard "
+        "covers SUBdomains only; list the apex too if it is in scope. Omit to scope the "
+        "engagement to the named target alone. Refused (422) if empty, malformed, wholly "
+        "unresolvable, or if it does not contain the named target.",
+    )
     session_id: str | None = Field(
         None, description="Optional engagement to attach runs + this mode record to."
     )
 
 
 class EngagementRecord(BaseModel):
-    """An entered engagement — the active-mode record the executor checks against."""
+    """An entered engagement — the active-mode record the executor checks against.
+
+    The scope fields are the resolved PROGRAM SCOPE (see cockpit/scope.py). They are
+    MIGRATION-SAFE: a record written before the scope model reads back with its ``target`` as
+    a single-host scope, which is exactly the old behaviour. ``allowed_hosts`` is the LIVE
+    allowed set — the scope's exact hosts plus every in-scope host recon has since revealed.
+    """
 
     engagement_id: str
     target: str
@@ -122,6 +137,33 @@ class EngagementRecord(BaseModel):
     entered_at: str
     exited_at: str | None = None
     session_id: str | None = None
+    # --- program scope (resolved at entry) ---
+    scope: str = Field("", description="The scope spec exactly as the operator gave it.")
+    scope_include: list[str] = Field(
+        default_factory=list, description="IN-SCOPE patterns (hosts, *.wildcards, CIDRs)."
+    )
+    scope_exclude: list[str] = Field(
+        default_factory=list, description="OUT-OF-SCOPE exclusions — these always win."
+    )
+    scope_ips: list[str] = Field(
+        default_factory=list,
+        description="Addresses the scope's exact hosts resolved to at entry (so an IP form "
+        "of an in-scope host also passes the lock).",
+    )
+    # --- live sets (recon-driven expansion) ---
+    allowed_hosts: list[str] = Field(
+        default_factory=list,
+        description="LIVE allowed set: the scope's exact hosts + every in-scope host recon "
+        "has revealed. Every command against any of them still needs its own approval.",
+    )
+    discovered_in_scope: list[str] = Field(
+        default_factory=list, description="Hosts recon revealed that the scope covers (added)."
+    )
+    discovered_out_of_scope: list[str] = Field(
+        default_factory=list,
+        description="Hosts recon revealed that the scope does NOT cover — surfaced read-only, "
+        "never added and never targetable.",
+    )
 
 
 class AllowlistItem(BaseModel):

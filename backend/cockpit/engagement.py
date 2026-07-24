@@ -5,29 +5,42 @@ human-named REAL target through the fully-open sandbox. Because that is the high
 entering it must be a conscious act, not something a bare exec can trip into. This module is
 that gate's state:
 
-* :func:`enter` records an engagement — the named ``target`` + the operator's ``authorization``
-  acknowledgement — and returns an ``engagement_id``. Only an exec that references an ACTIVE
-  engagement id runs in engagement mode; everything else is lab mode, unchanged.
+* :func:`enter` records an engagement — the named ``target``, the operator's ``authorization``
+  acknowledgement and the PROGRAM SCOPE (see ``scope.py``) — and returns an ``engagement_id``.
+  Only an exec that references an ACTIVE engagement id runs in engagement mode; everything
+  else is lab mode, unchanged.
 * :func:`get_active` is what the executor consults on every exec — it returns the record ONLY
   while active, so an exited/unknown engagement fails closed (the executor refuses).
 * :func:`exit_engagement` ends an engagement (no more engagement-mode runs against it).
+* :func:`record_discoveries` is RECON-DRIVEN EXPANSION: hosts mined out of a run's output are
+  validated against the scope; in-scope ones join the engagement's LIVE ALLOWED SET, out-of-
+  scope ones are recorded read-only (surfaced, never auto-added). Adding a host never widens
+  the scope — a discovery can only be added if the scope already covered it.
 
 Records persist in the shared ``sessions.db`` (gitignored) so they survive a reload AND leave
-an audit trail (who entered mode against what, and when). This module holds NO execution — it
-only answers "is this engagement explicitly, currently entered?".
+an audit trail (who entered mode against what, with what scope, and when). This module holds
+NO execution — it only answers "is this engagement explicitly, currently entered, and what may
+it touch?".
 """
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import uuid
 from datetime import datetime, timezone
 
+from . import scope as scope_mod
 from .models import EngagementRecord
 from .runstore import DB_PATH  # same single-file SQLite store as the run records
 
 _write_lock = threading.Lock()
+
+# Recon-driven expansion caps (logged when hit, so a truncation is never silent).
+MAX_ADDED_PER_RUN = 25       # in-scope hosts a single run may add to the live allowed set
+MAX_SEEN_PER_RUN = 50        # out-of-scope hosts a single run may record read-only
+MAX_DISCOVERED_TOTAL = 500   # hard ceiling on rows per engagement
 
 
 def _now() -> str:
@@ -43,7 +56,12 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Create the engagement_mode table if absent. Safe to call repeatedly."""
+    """Create/upgrade the engagement tables if absent. Safe to call repeatedly.
+
+    MIGRATION-SAFE: the scope columns are added to an existing engagement_mode table with
+    ALTER TABLE, so a database written before the scope model still opens. A pre-scope record
+    reads back with its ``target`` as its (single-host) scope — exactly the old behaviour.
+    """
     with _write_lock, _connect() as conn:
         conn.execute(
             """
@@ -55,6 +73,25 @@ def init_db() -> None:
                 entered_at    TEXT NOT NULL,
                 exited_at     TEXT,
                 session_id    TEXT
+            )
+            """
+        )
+        have = {r["name"] for r in conn.execute("PRAGMA table_info(engagement_mode)")}
+        if "scope_spec" not in have:
+            conn.execute("ALTER TABLE engagement_mode ADD COLUMN scope_spec TEXT")
+        if "scope_ips" not in have:
+            conn.execute("ALTER TABLE engagement_mode ADD COLUMN scope_ips TEXT")
+        # Recon-driven expansion: every host a run's output revealed, with the scope verdict
+        # recorded at the moment it was seen. in_scope=1 rows form the LIVE ALLOWED SET.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS engagement_discovered (
+                engagement_id TEXT NOT NULL,
+                host          TEXT NOT NULL,
+                in_scope      INTEGER NOT NULL,
+                first_seen    TEXT NOT NULL,
+                run_id        TEXT,
+                PRIMARY KEY (engagement_id, host)
             )
             """
         )
@@ -70,11 +107,20 @@ def _valid_target(target: str) -> str:
     return t
 
 
-def enter(target: str, authorization: str, session_id: str | None = None) -> EngagementRecord:
-    """Explicitly enter engagement mode against ``target``; return the active record.
+def enter(
+    target: str,
+    authorization: str,
+    session_id: str | None = None,
+    scope_spec: str | None = None,
+) -> EngagementRecord:
+    """Explicitly enter engagement mode against ``target`` + its scope; return the record.
 
     Requires a non-empty ``authorization`` acknowledgement — this is the deliberate, warned
-    action of leaving the isolated lab. Generates a fresh ``engagement_id``.
+    action of leaving the isolated lab. ``scope_spec`` is the PROGRAM SCOPE (hosts, wildcards,
+    CIDRs, !exclusions — see ``scope.py``); when omitted it defaults to the single named
+    target, i.e. exactly the pre-scope behaviour. The scope is parsed + resolved HERE and
+    fails closed (ValueError) if it is empty, malformed or wholly unresolvable — so an
+    engagement can never be entered with a scope that means nothing.
     """
     t = _valid_target(target)
     auth = (authorization or "").strip()
@@ -83,14 +129,25 @@ def enter(target: str, authorization: str, session_id: str | None = None) -> Eng
             "authorization acknowledgement is required to enter engagement mode — you are "
             "responsible for authorization and staying in scope"
         )
+    spec = (scope_spec or "").strip() or t
+    resolved = scope_mod.parse_scope(spec)  # fail-closed; resolves exact-host includes
+    if not resolved.in_scope(t):
+        raise ValueError(
+            f"the named target '{t}' is not inside the scope '{spec}' — add it to the scope "
+            "(a target outside its own scope could never be run)"
+        )
     engagement_id = "eng-" + uuid.uuid4().hex[:12]
     entered_at = _now()
     with _write_lock, _connect() as conn:
         conn.execute(
             "INSERT INTO engagement_mode "
-            "(engagement_id, target, authorization, active, entered_at, exited_at, session_id) "
-            "VALUES (?, ?, ?, 1, ?, NULL, ?)",
-            (engagement_id, t, auth, entered_at, session_id),
+            "(engagement_id, target, authorization, active, entered_at, exited_at, session_id, "
+            " scope_spec, scope_ips) "
+            "VALUES (?, ?, ?, 1, ?, NULL, ?, ?, ?)",
+            (
+                engagement_id, t, auth, entered_at, session_id,
+                resolved.raw, json.dumps(list(resolved.seed_ips)),
+            ),
         )
     return EngagementRecord(
         engagement_id=engagement_id,
@@ -100,6 +157,11 @@ def enter(target: str, authorization: str, session_id: str | None = None) -> Eng
         entered_at=entered_at,
         exited_at=None,
         session_id=session_id,
+        scope=resolved.raw,
+        scope_include=resolved.includes(),
+        scope_exclude=resolved.excludes(),
+        scope_ips=list(resolved.seed_ips),
+        allowed_hosts=list(resolved.seed_hosts),
     )
 
 
@@ -135,13 +197,137 @@ def list_active() -> list[EngagementRecord]:
     return [_row(r) for r in rows]
 
 
+def _col(row: sqlite3.Row, name: str) -> str | None:
+    """A column that may not exist on a pre-migration row (migration-safe reads)."""
+    try:
+        return row[name]
+    except (IndexError, KeyError):
+        return None
+
+
 def _row(row: sqlite3.Row) -> EngagementRecord:
+    """Hydrate a record, including its resolved scope + live allowed/discovered sets.
+
+    A pre-scope row (no scope_spec) reads back as a single-host scope on its target — the
+    old behaviour, unchanged. A scope that somehow fails to re-parse degrades the same way
+    (fail-closed to the named target only), never to "everything".
+    """
+    target = row["target"]
+    spec = (_col(row, "scope_spec") or "").strip() or target
+    try:
+        ips = tuple(json.loads(_col(row, "scope_ips") or "[]"))
+    except (ValueError, TypeError):
+        ips = ()
+    try:
+        parsed = scope_mod.parse_scope(spec, resolve=False)
+    except ValueError:
+        parsed = scope_mod.parse_scope(scope_mod.bare_host(target) or target, resolve=False)
+    in_scope, out_scope = _discovered(row["engagement_id"])
+    seeds = [h for h in parsed.seed_hosts]
     return EngagementRecord(
         engagement_id=row["engagement_id"],
-        target=row["target"],
+        target=target,
         authorization=row["authorization"],
         active=bool(row["active"]),
         entered_at=row["entered_at"],
         exited_at=row["exited_at"],
         session_id=row["session_id"],
+        scope=parsed.raw,
+        scope_include=parsed.includes(),
+        scope_exclude=parsed.excludes(),
+        scope_ips=[str(i) for i in ips],
+        allowed_hosts=seeds + [h for h in in_scope if h not in seeds],
+        discovered_in_scope=in_scope,
+        discovered_out_of_scope=out_scope,
     )
+
+
+def resolved_scope(record: EngagementRecord) -> scope_mod.ResolvedScope:
+    """The engagement's scope as a live matcher (no DNS — the seed IPs were resolved at entry).
+
+    Fails closed: an unparseable stored scope degrades to the named target alone, never to a
+    wider one.
+    """
+    try:
+        parsed = scope_mod.parse_scope(record.scope or record.target, resolve=False)
+    except ValueError:  # pragma: no cover - defensive; enter() already validated
+        parsed = scope_mod.parse_scope(
+            scope_mod.bare_host(record.target) or record.target, resolve=False
+        )
+    return scope_mod.ResolvedScope(
+        raw=parsed.raw,
+        include=parsed.include,
+        exclude=parsed.exclude,
+        seed_hosts=parsed.seed_hosts,
+        seed_ips=tuple(record.scope_ips),
+    )
+
+
+def _discovered(engagement_id: str) -> tuple[list[str], list[str]]:
+    """(in-scope, out-of-scope) hosts recon has revealed for this engagement, oldest first."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT host, in_scope FROM engagement_discovered WHERE engagement_id = ? "
+            "ORDER BY first_seen, host",
+            (engagement_id,),
+        ).fetchall()
+    return (
+        [r["host"] for r in rows if r["in_scope"]],
+        [r["host"] for r in rows if not r["in_scope"]],
+    )
+
+
+def record_discoveries(
+    record: EngagementRecord, output: str, run_id: str | None = None
+) -> dict[str, list[str] | bool]:
+    """RECON-DRIVEN EXPANSION — mine ``output`` for hosts and sort them by the scope.
+
+    In-scope hosts are added to the engagement's LIVE ALLOWED SET (so the proposer can pivot
+    to them and the argv target-lock names them); out-of-scope hosts are recorded read-only
+    and surfaced, NEVER added. This can only ever add something the scope ALREADY covered —
+    it does not widen the scope, and it does not approve anything: every command that touches
+    a newly-discovered host still needs its own individual human approval.
+
+    Returns ``{"added": [...], "out_of_scope": [...], "truncated": bool}`` (only hosts seen
+    for the FIRST time appear). Never raises — expansion must not break a run.
+    """
+    added: list[str] = []
+    seen_out: list[str] = []
+    truncated = False
+    try:
+        matcher = resolved_scope(record)
+        known_in, known_out = _discovered(record.engagement_id)
+        known = set(known_in) | set(known_out) | {h.lower() for h in matcher.seed_hosts}
+        known.add(scope_mod.bare_host(record.target).lower())
+        total = len(known_in) + len(known_out)
+        for host in scope_mod.extract_hosts(output or ""):
+            if host in known:
+                continue
+            if total >= MAX_DISCOVERED_TOTAL:
+                truncated = True
+                break
+            if matcher.in_scope(host):
+                if len(added) >= MAX_ADDED_PER_RUN:
+                    truncated = True
+                    continue
+                added.append(host)
+            else:
+                if len(seen_out) >= MAX_SEEN_PER_RUN:
+                    truncated = True
+                    continue
+                seen_out.append(host)
+            known.add(host)
+            total += 1
+        if added or seen_out:
+            now = _now()
+            rows = [(record.engagement_id, h, 1, now, run_id) for h in added]
+            rows += [(record.engagement_id, h, 0, now, run_id) for h in seen_out]
+            with _write_lock, _connect() as conn:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO engagement_discovered "
+                    "(engagement_id, host, in_scope, first_seen, run_id) VALUES (?, ?, ?, ?, ?)",
+                    rows,
+                )
+    except Exception:  # pragma: no cover - expansion is best-effort, never load-bearing
+        return {"added": added, "out_of_scope": seen_out, "truncated": truncated}
+    return {"added": added, "out_of_scope": seen_out, "truncated": truncated}

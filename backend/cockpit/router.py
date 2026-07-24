@@ -142,12 +142,16 @@ def enter_engagement(req: EngagementEnterRequest) -> EngagementRecord:
 
     The engagement sandbox is FULLY OPEN (Wall A down): it reaches the internet, your LAN, and
     your own machine. You are responsible for authorization and for staying in scope, and human
-    approval of every command is the ONLY guard. Engagement mode is never hands-off. Returns the
-    engagement id the exec path must reference to run against the named target. 422 if the
-    target/authorization is missing (both are required — mode cannot be entered by accident).
+    approval of every command is the ONLY guard. Engagement mode is never hands-off.
+
+    ``scope`` is the authorized PROGRAM SCOPE (hosts, *.wildcards, CIDRs, !exclusions); it
+    defaults to the named target alone. It is parsed + resolved here and FAILS CLOSED — 422 if
+    it is empty, malformed, wholly unresolvable, or does not contain the named target. Returns
+    the engagement id the exec path must reference to run against that scope. 422 too if the
+    target/authorization is missing (both required — mode cannot be entered by accident).
     """
     try:
-        return engagement.enter(req.target, req.authorization, req.session_id)
+        return engagement.enter(req.target, req.authorization, req.session_id, req.scope)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

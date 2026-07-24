@@ -4,23 +4,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PageShell } from "./PageShell";
 import {
   ApiError,
-  getCockpitStatus,
+  getKaliStatus,
   runKali,
-  type CockpitStatus,
+  type KaliStatus,
   type KaliResult,
 } from "@/lib/api";
 
 /**
- * :kali — a HUMAN-ONLY interactive shell into the isolated lab sandbox.
+ * :kali — a HUMAN-ONLY interactive shell into the OPEN (full-network-reach) sandbox.
  *
- * Unlike :cockpit (allowlisted, recon-only, per-command approval), this runs whatever
- * you type as `sh -c` inside the sandbox — a full shell, pipes and all. That is safe
- * ONLY because the sandbox is egress-less, hardened and disposable, and the target
- * container is hardcoded server-side (this UI sends no target). Isolation is re-checked
- * on the backend before every command; if it isn't provably isolated, nothing runs.
- *
- * The command input is driven by a person at this terminal — there is no autonomous
- * path to it. Every command + its output is recorded to the engagement session.
+ * Unlike :cockpit (allowlisted, recon-only, isolated), this runs whatever you type as
+ * `sh -c` inside a SEPARATE, intentionally NON-isolated container that reaches the
+ * internet, the host and the LAN. The target container is hardcoded server-side (this
+ * UI sends no target). There is no isolation here — the safety that remains is that it
+ * is HUMAN-driven only (no autonomous path to it), disposable, and audited. Every
+ * command + its output is recorded to the engagement session.
  */
 
 type Block = {
@@ -32,7 +30,7 @@ type Block = {
 };
 
 export function KaliShell() {
-  const [status, setStatus] = useState<CockpitStatus | null>(null);
+  const [status, setStatus] = useState<KaliStatus | null>(null);
   const [command, setCommand] = useState("");
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [running, setRunning] = useState(false);
@@ -45,7 +43,7 @@ export function KaliShell() {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const refreshStatus = useCallback((signal?: AbortSignal) => {
-    getCockpitStatus(signal)
+    getKaliStatus(signal)
       .then(setStatus)
       .catch(() => setStatus(null));
   }, []);
@@ -138,32 +136,32 @@ export function KaliShell() {
     <PageShell crumbs={[{ label: "kali" }]}>
       <div className="hp-kali">
         <header className="hp-kali-head">
-          <div className="hp-ap-kicker">human-only · isolated sandbox</div>
+          <div className="hp-ap-kicker">human-only · full network reach · NOT isolated</div>
           <h1 className="hp-kali-title">:kali</h1>
           <p className="hp-kali-sub">
-            A full interactive shell <b>inside the isolated lab sandbox</b>. Whatever
-            you type runs there — pipes, redirects, your whole toolkit. There is no
-            allowlist here: <b>you</b> are the operator. The sandbox is egress-less and
-            disposable, and the target container is fixed — commands can only ever reach
-            that one contained box.
+            A full interactive shell in a sandbox with <b>full network reach</b> — it
+            reaches the internet, this host, and your LAN. Whatever you type runs there:
+            pipes, redirects, your whole toolkit. There is no allowlist and{" "}
+            <b>no isolation</b> here — <b>you</b> are the operator. The container is
+            fixed and disposable, and this is a human-only terminal.
           </p>
         </header>
 
-        {/* isolation / readiness banner — same gate the cockpit shows */}
+        {/* readiness banner — availability only; makes NO isolation claim (there is none) */}
         <div
-          className={`hp-ck-banner ${ready ? "hp-ck-ok" : "hp-ck-warn"}`}
+          className={`hp-ck-banner ${ready ? "hp-kali-warnbanner" : "hp-ck-warn"}`}
           role="status"
         >
           {status ? (
             ready ? (
               <>
-                <span className="hp-ck-dot" /> sandbox <b>{status.sandbox}</b> isolated
-                · egress blocked · shell contained to this box
+                <span className="hp-kali-dot" /> shell <b>{status.container}</b> · full
+                network reach · <b>NOT isolated</b> · human-only
               </>
             ) : (
               <>
                 <span className="hp-ck-dot" /> not ready —{" "}
-                {status.detail || "sandbox unavailable"}. Bring the stack up:{" "}
+                {status.detail || "open sandbox unavailable"}. Bring the stack up:{" "}
                 <code>docker compose -f docker/docker-compose.yml up -d</code>
               </>
             )
@@ -200,7 +198,7 @@ export function KaliShell() {
             {blocks.length === 0 && (
               <span className="hp-ck-empty">
                 type a command and press Enter — it runs inside{" "}
-                {status?.sandbox ?? "the sandbox"}…
+                {status?.container ?? "the open sandbox"}…
               </span>
             )}
 
@@ -265,7 +263,7 @@ export function KaliShell() {
               value={command}
               onChange={(e) => setCommand(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder={ready ? "id · ls -la · nmap hackpit-lab-target" : "sandbox not ready"}
+              placeholder={ready ? "id · ls -la · curl https://example.com" : "sandbox not ready"}
               spellCheck={false}
               autoComplete="off"
               autoCorrect="off"
@@ -282,11 +280,12 @@ export function KaliShell() {
         </section>
 
         <p className="hp-kali-note">
-          Runs as <code>sh -c</code> inside <b>{status?.sandbox ?? "the sandbox"}</b>.
-          Egress is blocked, so reaching the internet (e.g.{" "}
-          <code>curl https://example.com</code>) simply fails — that is the containment,
-          not a filter. Every command is recorded to the engagement session. Local dev
-          tool: not for exposure without auth.
+          Runs as <code>sh -c</code> inside <b>{status?.container ?? "the open sandbox"}</b>,
+          which has <b>full network reach</b> — the internet, this host, and your LAN are
+          all reachable (that is the intent, not a bug). Every command is recorded to the
+          engagement session. This is a <b>localhost-only</b> dev tool with no auth: because
+          the shell now reaches your host and LAN, it <b>must not</b> be exposed off
+          localhost without authentication.
         </p>
       </div>
     </PageShell>

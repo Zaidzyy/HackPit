@@ -702,6 +702,19 @@ export async function execCockpitStream(
 
 // --- :kali — human-only arbitrary shell into the isolated sandbox ---------------
 
+/** Availability of the :kali OPEN sandbox (GET /cockpit/kali/status). Note: `isolated`
+ *  is always false — :kali intentionally has full network reach. */
+export type KaliStatus = {
+  container: string;
+  isolated: boolean;
+  up: boolean;
+  ready: boolean;
+  detail: string;
+};
+
+export const getKaliStatus = (signal?: AbortSignal) =>
+  getJSON<KaliStatus>("/cockpit/kali/status", signal);
+
 /** The captured result of one :kali shell run (POST /cockpit/kali). */
 export type KaliResult = {
   run_id: string;

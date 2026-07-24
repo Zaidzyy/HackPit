@@ -4147,6 +4147,24 @@ a.hp-card {
   color: var(--accent);
   font-weight: 500;
 }
+/* :kali readiness banner — amber caution (NOT the green "isolated/ok" the cockpit uses).
+   The shell has full network reach, so the banner must never read as a safe/green state. */
+.hp-kali-warnbanner {
+  border-color: rgba(240, 162, 74, 0.5);
+  background: color-mix(in srgb, #f0a24a 8%, var(--panel));
+}
+.hp-kali-warnbanner b {
+  color: #f0a24a;
+  font-weight: 600;
+}
+.hp-kali-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: #f0a24a;
+  box-shadow: 0 0 10px #f0a24a;
+}
 /* command-history clear button in the terminal chrome bar */
 .hp-kali-clear {
   font-family: var(--font-jetbrains-mono), monospace;

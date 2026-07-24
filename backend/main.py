@@ -49,6 +49,7 @@ from schema import Code, Entry  # noqa: E402  (pipeline/schema.py — canonical 
 import attack_path  # noqa: E402
 import chat as chat_assistant  # noqa: E402  (backend/chat.py — engagement assistant)
 import llm  # noqa: E402
+import orchestrator  # noqa: E402  (backend/orchestrator.py — the loop's propose step)
 import report as report_gen  # noqa: E402  (backend/report.py — LLM report drafting)
 import sessions as sessions_db  # noqa: E402  (backend/sessions.py — SQLite store)
 from cockpit import runstore as cockpit_runstore  # noqa: E402
@@ -671,6 +672,38 @@ class SessionRenameIn(BaseModel):
     label: str = Field(min_length=1)
 
 
+# --- the orchestrator loop: propose the NEXT single command (no execution) ---
+class LoopProposeIn(BaseModel):
+    avoid: list[str] = Field(
+        default_factory=list,
+        description="Command lines the operator skipped — propose something different.",
+    )
+
+
+class LoopProposal(BaseModel):
+    command: str = Field(description="Proposed allowlisted command (e.g. 'nmap').")
+    args: list[str] = Field(description="Proposed argv tokens (targeting the lab).")
+    rationale: str = Field(description="Why the agent proposes this as the next step.")
+    step_id: str | None = Field(
+        None, description="The plan step id this realizes, if any."
+    )
+    gate_ok: bool = Field(
+        description="Advisory pre-check: does this pass the M1 allowlist + target-lock? "
+        "The executor re-checks all gates at run time; a false proposal is never auto-run."
+    )
+    gate_reason: str = Field(
+        description="Why the pre-check failed (empty when gate_ok)."
+    )
+
+
+class LoopProposeOut(BaseModel):
+    done: bool = Field(description="True when the agent proposes no further step.")
+    proposal: LoopProposal | None = Field(
+        None, description="The next proposed command — NOT executed; awaits human approval."
+    )
+    reason: str | None = Field(None, description="Why the loop is done, when done.")
+
+
 # --------------------------------------------------------------------------- #
 # endpoints
 # --------------------------------------------------------------------------- #
@@ -995,6 +1028,28 @@ def generate_report(session_id: str) -> dict[str, Any]:
         "report_generated_at": ts,
         "model_used": model_used,
     }
+
+
+@app.post("/sessions/{session_id}/loop/propose", response_model=LoopProposeOut)
+def loop_propose(session_id: str, req: LoopProposeIn = Body(default=None)) -> dict[str, Any]:
+    """Propose the NEXT single recon command for the guided loop — does NOT execute.
+
+    Reads the session's composed plan + its recorded cockpit runs (the results so far)
+    and asks the LLM for the one next allowlisted command against the isolated lab. The
+    returned proposal is a SUGGESTION only: it is not run here, and it advances nothing.
+    Execution happens separately through POST /cockpit/exec (the M1 executor, all four
+    gates), only after a human approves. See docs/cockpit-loop.md.
+    """
+    session = sessions_db.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    plan = session.get("path") or {}
+    runs = [r.model_dump() for r in cockpit_runstore.list_runs_for_session(session_id)]
+    avoid = list(req.avoid) if req and req.avoid else []
+    try:
+        return orchestrator.propose_next(plan, runs, llm.load_config(), avoid)
+    except llm.LLMError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @app.post("/sessions/{session_id}/chat", response_model=ChatOut)

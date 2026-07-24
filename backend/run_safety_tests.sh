@@ -29,6 +29,9 @@ echo "== cockpit safety-layer tests (allowlist / target / approval / isolation /
 echo "== :kali containment tests (human-only / hardcoded-open-container / no-isolation-gate / audit) =="
 "$PY" test_kali.py
 
+echo "== orchestrator-loop tests (proposer cannot execute / no :kali path / gate pre-check) =="
+"$PY" test_loop.py
+
 echo "== engagement/report path tests (run recorded + report evidence + scope) =="
 "$PY" test_engagement.py
 

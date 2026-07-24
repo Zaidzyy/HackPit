@@ -147,11 +147,14 @@ def test_kali_is_human_only() -> None:
     autonomous executor/agent path. A full-reach shell wired to the agent = autonomous
     attacks on host/LAN/internet. Scan the whole (non-venv) source tree."""
     backend = Path(__file__).parent
-    allowed = {"kali.py", "router.py", "test_kali.py"}
+    # Only kali.py (defines) + router.py (the HTTP route) may reference the shell.
+    # Test files are skipped: they are not the runtime agent path, and several
+    # legitimately name run_kali inside assertions that a module must NOT call it.
+    allowed = {"kali.py", "router.py"}
     py_files = list(backend.glob("*.py")) + list((backend / "cockpit").glob("*.py"))
     offenders = []
     for f in py_files:
-        if f.name in allowed:
+        if f.name in allowed or f.name.startswith("test_"):
             continue
         text = f.read_text(encoding="utf-8")
         if "run_kali" in text or "import kali" in text or "from .kali" in text or "cockpit.kali" in text:

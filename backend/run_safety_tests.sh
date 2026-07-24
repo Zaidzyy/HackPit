@@ -26,7 +26,7 @@ echo "== attack-path composer regressions =="
 echo "== cockpit safety-layer tests (allowlist / target / approval / isolation / order) =="
 "$PY" test_cockpit.py
 
-echo "== :kali containment tests (isolation-refusal / hardcoded container / audit) =="
+echo "== :kali containment tests (human-only / hardcoded-open-container / no-isolation-gate / audit) =="
 "$PY" test_kali.py
 
 echo "== engagement/report path tests (run recorded + report evidence + scope) =="

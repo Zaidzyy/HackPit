@@ -20,7 +20,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from . import allowlist, config, executor, runstore
-from .kali import KaliRefused, KaliRequest, KaliResult, run_kali
+from .kali import KaliRefused, KaliRequest, KaliResult, kali_status, run_kali
 from .models import AllowlistItem, AllowlistResponse, ExecRequest, RunRecord
 from .sandbox import SandboxError, assert_isolation_proven, is_sandbox_up
 
@@ -96,26 +96,33 @@ def exec_command(request: ExecRequest):
     )
 
 
+@router.get("/kali/status")
+def get_kali_status() -> dict[str, Any]:
+    """Availability of the :kali OPEN sandbox — drives the UI banner (no isolation claim)."""
+    return kali_status()
+
+
 @router.post("/kali", response_model=KaliResult)
 def kali_shell(request: KaliRequest) -> KaliResult:
-    """:kali — HUMAN-ONLY interactive shell into the isolated sandbox.
+    """:kali — HUMAN-ONLY interactive shell into the OPEN (full-network-reach) sandbox.
 
-    Runs ONE arbitrary command as ``docker exec <SANDBOX_CONTAINER> sh -c "<command>"``.
-    The container is a code constant (config.SANDBOX_CONTAINER) — there is NO field in
-    the request that can redirect it elsewhere. Isolation is re-checked first; if the
-    sandbox is not provably isolated, a 409 is returned and nothing runs.
+    Runs ONE arbitrary command as ``docker exec <KALI_OPEN_CONTAINER> sh -c "<command>"``.
+    The container is a code constant (config.KALI_OPEN_CONTAINER) — there is NO field in
+    the request that can redirect it elsewhere. This sandbox is intentionally NOT isolated
+    (it reaches the internet + host + LAN), so there is NO isolation gate here; the only
+    pre-check is availability (409 if the open container isn't running).
 
-    SECURITY: this endpoint has NO auth and is a LOCALHOST DEV TOOL. Arbitrary shell is
-    safe here only because the sandbox is egress-less + hardened + disposable and target
-    is hardcoded (see cockpit/kali.py). It is human-driven ONLY — the autonomous
-    orchestrator has no path to it. If this app is ever exposed/deployed, this route MUST
-    be put behind authentication first.
+    SECURITY — now far more load-bearing: this endpoint has NO auth, is a LOCALHOST DEV
+    TOOL, and the shell it drives reaches your HOST and LAN (not just a disposable lab).
+    It is human-driven ONLY — the autonomous orchestrator/agent/executor has NO code path
+    to run_kali (regression-locked). If this app is ever exposed/deployed, this route MUST
+    be put behind authentication first — exposure is far worse than before.
     """
     try:
         return run_kali(request)
     except KaliRefused as exc:
-        # Isolation gate refused — nothing was executed.
-        raise HTTPException(status_code=409, detail={"gate": "sandbox", "reason": str(exc)})
+        # Open sandbox unavailable (not running) — nothing was executed.
+        raise HTTPException(status_code=409, detail={"gate": "unavailable", "reason": str(exc)})
 
 
 @router.get("/runs", response_model=list[RunRecord])

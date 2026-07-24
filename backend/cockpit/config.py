@@ -9,9 +9,18 @@ from __future__ import annotations
 import os
 
 # --- Sandbox (where allowlisted commands run) -------------------------------
-# The Kali sandbox container that the backend execs into. Overridable by env for
-# local dev only; defaults to the Compose service name in docker/.
+# The ISOLATED Kali sandbox the cockpit executor + future autonomous agent exec into.
+# Egress-less (`internal: true` network) — this is the safety net guarded by the
+# executor's 4th gate, assert_isolation_proven. Overridable by env for local dev only.
 SANDBOX_CONTAINER = os.environ.get("HACKPIT_SANDBOX_CONTAINER", "hackpit-kali-sandbox")
+
+# --- :kali OPEN sandbox (human-only shell with FULL network reach) -----------
+# A SEPARATE container the :kali human-only shell execs into. On a normal bridge
+# (NAT egress): it reaches the internet + host + LAN. This is intentional and applies
+# to :kali ONLY (POST /cockpit/kali) — the cockpit/agent path never touches it. It is
+# NOT isolated, so :kali does NOT run assert_isolation_proven. Hardcoded (never a
+# request field) so a request can't redirect the exec elsewhere.
+KALI_OPEN_CONTAINER = os.environ.get("HACKPIT_KALI_OPEN_CONTAINER", "hackpit-kali-open")
 
 # --- Lab target (the ONLY thing the sandbox may be pointed at) ---------------
 # The self-hosted vulnerable app on the isolated network. While unsupervised this

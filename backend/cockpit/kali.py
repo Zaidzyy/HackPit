@@ -1,46 +1,42 @@
-""":kali — the human-only interactive shell INTO the isolated sandbox.
+""":kali — the human-only interactive shell with FULL NETWORK REACH.
 
-This is the ONE feature that runs arbitrary commands. Unlike the allowlisted cockpit
-executor (argv, no shell, recon-only), :kali intentionally runs ``sh -c "<command>"``
-so a human operator gets pipes, redirects and their full toolkit — "command injection"
-is the point, because the human typing *is* the operator. That is safe ONLY because of
-the containment model below; it is NOT made safe by input filtering (there is none, on
-purpose — do not add fake sanitisation that pretends arbitrary shell is "safe").
+This is the ONE feature that runs arbitrary commands. It runs ``sh -c "<command>"`` inside
+a SEPARATE, intentionally NON-isolated sandbox (``hackpit-kali-open``) that has NAT egress
+— it reaches the internet, the host, and the LAN. That is Zaid's informed decision. It is
+NOT made safe by input filtering (there is none, on purpose — do not add fake sanitisation
+that pretends arbitrary shell is "safe").
 
-THE CONTAINMENT MODEL (all of these must hold — this is the whole safety story):
+WHY THIS DOESN'T TOUCH THE COCKPIT'S SAFETY NET:
+The cockpit executor + the future autonomous agent exec into a DIFFERENT container,
+``config.SANDBOX_CONTAINER`` (``hackpit-kali-sandbox``), which stays egress-less
+(``internal: true``) and behind all four gates — including ``assert_isolation_proven``.
+:kali uses its own ``config.KALI_OPEN_CONTAINER`` and does NOT run the isolation gate
+(it is intentionally not isolated). The two never mix.
+
+WHAT STILL HOLDS FOR :kali (the containment that remains):
 
 1. HARDCODED TARGET CONTAINER. Every exec is
-       docker exec <SANDBOX_CONTAINER> sh -c "<command>"
-   with the container name taken from ``config.SANDBOX_CONTAINER`` — a code constant,
-   NEVER a field in the request. There is no input that can redirect the exec to the
-   host, to another container, or to any other target. This is rule #1: the shell can
-   only ever reach into that one isolated box. (Regression-locked in test_kali.py.)
+       docker exec <KALI_OPEN_CONTAINER> sh -c "<command>"
+   with the container name taken from ``config.KALI_OPEN_CONTAINER`` — a code constant,
+   NEVER a field in the request. No input can redirect the exec to another container.
+   (Regression-locked in test_kali.py.)
 
-2. EGRESS-LESS + HARDENED + DISPOSABLE SANDBOX (M1). The sandbox sits on an
-   ``internal: true`` Docker network (no route to host/internet), with cap_drop ALL and
-   no-new-privileges, and resets via ``docker compose down -v``. So arbitrary commands
-   are contained: ``curl evil.com`` simply fails.
+2. HUMAN-ONLY — the rule that matters MOST now. :kali is a full-reach shell, so an
+   autonomous agent wired to it = autonomous attacks on the host, the LAN and the
+   internet. The orchestrator / agent / executor MUST have ZERO code path to
+   ``run_kali``; nothing in that path imports this module. (Regression-locked by
+   test_kali_is_human_only, which scans the source tree.)
 
-3. ISOLATION RE-CHECKED BEFORE EVERY EXEC. We call the M1 gate
-   ``assert_isolation_proven`` on every run; if the sandbox is ever attached to a
-   non-internal (egress) network, the shell REFUSES to run. :kali drops M1's other
-   gates (allowlist / target-lock / per-command approval — a human typing is the
-   approval) but isolation is NEVER dropped.
+3. DISPOSABLE + HARDENED. The open sandbox still runs cap_drop ALL + no-new-privileges
+   and resets via ``docker compose down -v``.
 
-4. HUMAN-ONLY. This module is driven by a person at a terminal. The orchestrator /
-   autonomous agent MUST NEVER be wired to it — there is deliberately no code path from
-   the agent/executor to ``run_kali`` (an autonomous agent + an arbitrary shell = the
-   RCE nightmare). Keep them physically separate: nothing in the agent/exec path imports
-   this module.
+4. AUDIT + LIMITS. Every command + output is recorded to the engagement session (reuses
+   the M1 run store), with a per-command timeout and an output-size cap.
 
-5. AUDIT + LIMITS. Every command + its output is recorded to the engagement session
-   (reusing the M1 run store), with a per-command timeout and an output-size cap so a
-   command can neither hang nor flood.
-
-6. LOCAL-ONLY. This is a localhost dev tool with NO auth. If the app is ever exposed or
-   deployed, this endpoint MUST get authentication first — otherwise it is an open
-   shell-into-the-sandbox for anyone who can reach it (still contained to the disposable
-   lab, but not something to expose). See the matching note on the route in router.py.
+5. LOCAL-ONLY, AUTH REQUIRED BEFORE EXPOSURE — now far more load-bearing. An exposed
+   :kali endpoint reaches your HOST and LAN, not just a disposable lab. It has NO auth;
+   if this app is ever exposed or deployed, this endpoint MUST be put behind
+   authentication first. See the matching note on the route in router.py.
 """
 
 from __future__ import annotations
@@ -53,7 +49,6 @@ from pydantic import BaseModel, Field
 
 from . import config, runstore
 from .models import RunRecord
-from .sandbox import assert_isolation_proven  # re-exported for tests to monkeypatch
 
 # Per-command hard ceilings. A free shell must neither hang nor flood the audit log.
 KALI_TIMEOUT_SECONDS = 60
@@ -62,10 +57,10 @@ KALI_OUTPUT_CAP = 200_000  # chars per stream
 
 
 class KaliRequest(BaseModel):
-    """A request to run ONE arbitrary shell command inside the sandbox.
+    """A request to run ONE arbitrary shell command inside the open sandbox.
 
     NOTE — deliberately there is NO container / target / host field. The container is a
-    code constant (config.SANDBOX_CONTAINER); nothing in this request can redirect the
+    code constant (config.KALI_OPEN_CONTAINER); nothing in this request can redirect the
     exec anywhere else. Adding such a field would break containment rule #1.
     """
 
@@ -92,11 +87,30 @@ class KaliResult(BaseModel):
 
 
 class KaliRefused(RuntimeError):
-    """Raised when the isolation gate refuses the run (nothing was executed)."""
+    """Raised when the open sandbox isn't available (nothing was executed).
+
+    NOTE: this is an AVAILABILITY check (is the container running?), NOT an isolation
+    gate — :kali is intentionally not isolated. The cockpit executor keeps the real
+    isolation gate; :kali does not.
+    """
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _container_running(name: str) -> bool:
+    """True iff the named container exists and is running (availability only)."""
+    try:
+        p = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", name],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+        )
+        return p.returncode == 0 and p.stdout.strip() == "true"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
 
 
 def _cap(text: str) -> tuple[str, bool]:
@@ -107,26 +121,28 @@ def _cap(text: str) -> tuple[str, bool]:
 
 
 def run_kali(request: KaliRequest) -> KaliResult:
-    """Run one arbitrary shell command inside the sandbox and capture its result.
+    """Run one arbitrary shell command inside the OPEN sandbox and capture its result.
 
-    Isolation is re-checked FIRST — if the sandbox is not provably isolated, this raises
-    ``KaliRefused`` and NOTHING runs. Otherwise the command runs as
-    ``docker exec <SANDBOX_CONTAINER> sh -c "<command>"`` (container hardcoded) with a
-    hard timeout and an output cap, and the run is recorded to the engagement session.
+    :kali is intentionally NOT isolated, so there is NO ``assert_isolation_proven`` gate
+    here (that gate lives on the cockpit executor's isolated sandbox and would correctly
+    refuse every full-reach command). The only pre-check is availability: if the open
+    container isn't running, this raises ``KaliRefused`` and nothing runs. Otherwise the
+    command runs as ``docker exec <KALI_OPEN_CONTAINER> sh -c "<command>"`` (container
+    hardcoded) with a hard timeout and an output cap, and the run is recorded.
     """
-    # Gate: the sandbox must be provably isolated (internal-only networks). This is the
-    # one M1 gate :kali keeps. It is re-checked on EVERY exec, before anything runs.
-    try:
-        assert_isolation_proven()
-    except Exception as exc:  # SandboxError (or any inspect failure) => refuse to run
-        raise KaliRefused(str(exc)) from exc
+    # Availability (NOT isolation): refuse cleanly if the open sandbox isn't up.
+    if not _container_running(config.KALI_OPEN_CONTAINER):
+        raise KaliRefused(
+            f"open sandbox '{config.KALI_OPEN_CONTAINER}' is not running — bring the "
+            "stack up (docker compose -f docker/docker-compose.yml up -d)"
+        )
 
     run_id = uuid.uuid4().hex[:12]
     started_at = _now()
 
     # The container is a CONSTANT, never from the request. `sh -c` is intentional: the
-    # human operator gets a full shell inside the contained box.
-    argv = ["docker", "exec", config.SANDBOX_CONTAINER, "sh", "-c", request.command]
+    # human operator gets a full shell — here, one with full network reach.
+    argv = ["docker", "exec", config.KALI_OPEN_CONTAINER, "sh", "-c", request.command]
 
     timed_out = False
     try:
@@ -151,12 +167,12 @@ def run_kali(request: KaliRequest) -> KaliResult:
 
     # Audit: record every run to the engagement session (reusing the M1 run store). The
     # command line is stored as the args of a `sh -c` invocation so the log is honest
-    # about what actually ran. target = the sandbox itself (the box the shell reached).
+    # about what actually ran. target = the open sandbox (the box the shell reached).
     record = RunRecord(
         run_id=run_id,
         command="sh -c",
         args=[request.command],
-        target=config.SANDBOX_CONTAINER,
+        target=config.KALI_OPEN_CONTAINER,
         approved=True,  # a human typing the command IS the approval
         exit_code=exit_code,
         stdout=stdout,
@@ -174,7 +190,7 @@ def run_kali(request: KaliRequest) -> KaliResult:
     return KaliResult(
         run_id=run_id,
         command=request.command,
-        container=config.SANDBOX_CONTAINER,
+        container=config.KALI_OPEN_CONTAINER,
         exit_code=exit_code,
         stdout=stdout,
         stderr=stderr,
@@ -184,3 +200,19 @@ def run_kali(request: KaliRequest) -> KaliResult:
         truncated=t1 or t2,
         session_id=request.session_id,
     )
+
+
+def kali_status() -> dict:
+    """Availability of the :kali OPEN sandbox — drives the UI banner.
+
+    Reports whether the open container is up. It makes NO isolation claim (there is none):
+    the banner must say 'full network reach · NOT isolated', never 'isolated'.
+    """
+    up = _container_running(config.KALI_OPEN_CONTAINER)
+    return {
+        "container": config.KALI_OPEN_CONTAINER,
+        "isolated": False,  # intentionally — :kali has full network reach
+        "up": up,
+        "ready": up,
+        "detail": "" if up else "open sandbox container is not running",
+    }

@@ -89,6 +89,31 @@ def test_never_auto_run_engagement() -> None:
     print("  NEVER-AUTO-RUN: engagement needs an individual approval (no batch/auto): PASS")
 
 
+def test_iter_run_prevalidated_still_needs_approval() -> None:
+    """Belt-and-suspenders (ENGAGEMENT only): even in the PREVALIDATED path — which SKIPS
+    validate_request — iter_run refuses an unapproved engagement command. With Wall A down,
+    approval is the sole floor on a real target, so its enforcement must not depend on every
+    future caller remembering to validate first. Exactly ONE rejected event (gate=approval);
+    nothing runs (no start/stdout/stderr/exit — so no docker exec against the real target)."""
+    restore = _patch_active(_fake_engagement(_REAL))
+    try:
+        req = ExecRequest(
+            command="nmap", args=["-sV", _REAL],
+            engagement_id="eng-test000000", approved=False,
+        )
+        # Fully consuming is safe: the guard yields the rejection and returns BEFORE any exec.
+        events = list(E.iter_run(req, prevalidated=True))
+        assert len(events) == 1, f"expected exactly one event, got {[e.get('type') for e in events]}"
+        assert events[0]["type"] == "rejected" and events[0].get("gate") == "approval", \
+            "prevalidated engagement + unapproved MUST reject at the approval gate"
+        assert not any(
+            e["type"] in ("start", "stdout", "stderr", "exit") for e in events
+        ), "nothing may run — no command may reach the real target"
+    finally:
+        restore()
+    print("  BELT-AND-SUSPENDERS: prevalidated engagement still refuses unapproved (gate=approval): PASS")
+
+
 def test_explicit_entry_required() -> None:
     """An engagement_id that doesn't resolve to an ACTIVE engagement is refused — never run,
     never downgraded to lab."""
@@ -328,6 +353,7 @@ def test_mode_round_trips() -> None:
 
 if __name__ == "__main__":
     test_never_auto_run_engagement()
+    test_iter_run_prevalidated_still_needs_approval()
     test_explicit_entry_required()
     test_engagement_target_lock()
     test_engagement_heuristic_red_confirm()

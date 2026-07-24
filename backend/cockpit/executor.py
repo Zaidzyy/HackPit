@@ -270,6 +270,21 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
         return
     if eng is not None:
         mode = "engagement"
+        # Belt-and-suspenders (ENGAGEMENT ONLY): with Wall A down, per-command human
+        # approval is the SOLE floor on a real target, so its enforcement must not depend
+        # solely on every future caller remembering to run validate_request first. Re-check
+        # approval here even in the prevalidated path. This is a pure no-op for valid flows —
+        # the router runs validate_request (which rejects an unapproved engagement at the
+        # approval gate) before it ever sets prevalidated=True. The LAB branch below is
+        # deliberately left byte-for-byte unchanged.
+        if not request.approved:
+            yield {
+                "type": "rejected",
+                "gate": "approval",
+                "reason": "engagement mode: every command needs an individual human approval "
+                "(approved=true) — never hands-off / no batch approval on a real target",
+            }
+            return
         container = config.ENGAGE_SANDBOX_CONTAINER
         aliases = _engagement_aliases(eng.target)
         target = _resolved_target(request.command, request.args, allowed=aliases, default=eng.target)

@@ -4275,6 +4275,10 @@ a.hp-card {
   color: var(--accent);
   background: var(--accent-soft);
 }
+/* Engagement: the loop/manual toggle follows the mode note — give it breathing room. */
+.hp-ck-note + .hp-cv-execmode {
+  margin-top: 12px;
+}
 .hp-loop {
   margin-bottom: 22px;
 }
@@ -5395,7 +5399,11 @@ a.hp-card {
 /* ── Engagement mode (REAL-TARGET, supervised, highest-risk) ───────────────── */
 /* Target-mode switch: lab (isolated) vs engagement (real target). Always shown. */
 .hp-cv-targetmode {
-  display: inline-flex;
+  /* block-level (own line) but compact, so the loop/manual toggle drops to the line below
+     it in lab mode — matching how engagement stacks them. */
+  display: flex;
+  width: fit-content;
+  align-self: flex-start;
   gap: 2px;
   padding: 3px;
   border: 1px solid var(--border);

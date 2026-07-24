@@ -649,3 +649,84 @@ parser resolves combined/joined/valued/flag-like forms; and the freeze test trip
 about execution, the sandbox, or allowlist MEMBERSHIP changed — only flag STRICTNESS.
 
 **DO NOT push — Zaid reviews the parser + the frozen schemas first.**
+
+---
+
+## Session 2026-07-24 (SUPERVISED — THE RISK TURN: active tools, ALL flags + red-confirm)
+
+Goal: expand the allowlist to ACTIVE web-exploitation tools so the human-approved agent can
+EXPLOIT the isolated lab (Juice Shop). Zaid's decision: allow ALL flags on active tools —
+full capability — but dangerous flags are DETECTED, shown RED, and require an explicit extra
+confirm. Nothing is blocked; dangerous flags just can't be approved by accident. Built in
+verified increments E1–E6, committed each, NOT pushed.
+
+### The model (two modes)
+- RECON (nmap/curl/whatweb): STRICT flag allowlist + metachars rejected everywhere — UNCHANGED.
+- ACTIVE (sqlmap/ffuf/nuclei): ALL flags permitted (no flag-allowlist rejection); metachars
+  allowed in VALUE args (payloads) but not flag NAMES; per-tool target-lock; dangerous flags
+  DETECTED (never blocked) + RED + explicit-confirm-required.
+
+### Per-tool DANGEROUS_FLAGS (frozen — test_active_tools_frozen trips on any change)
+| tool | dangerous_flags (detected → red-confirm) | target flag(s) |
+|---|---|---|
+| sqlmap | `--os-shell --os-cmd --os-pwn --os-bof --os-smbrelay --sql-shell -e --eval --file-read --file-write --file-dest --tamper` | `-u` / `--url` |
+| ffuf | `-config` (loads arbitrary config) | `-u` |
+| nuclei | `-code` (code-protocol templates), `-headless` | `-u` / `-target` |
+These are: run code / touch the target OS or filesystem / load arbitrary scripts or config.
+The set is conservative and extensible — a reviewed change trips the freeze test.
+
+### The crux — detection is COMPLETE (a missed form = a silent dangerous approval)
+One authoritative active-arg walk (`allowlist._iter_active`) backs detection, the target-lock,
+and the value-only metachar rule, so they can never diverge on how a form is parsed. Every
+dangerous flag is detected in EVERY form (test_dangerous_flag_detection_every_form, verified
+live):
+- plain `--os-shell`; `=`-joined `--os-shell=1`; combined short `-e` inside a cluster `-abe`;
+  Go-style single-dash long flags `-config`/`-code` (caught via a whole-token candidate);
+  and the `-- --os-shell` trick (the `--` marker is NOT honored, so it can't hide a flag).
+- Over-inclusive by design: a false positive costs only a confirm; a false negative is the
+  failure mode we refuse. Benign sqlmap/ffuf/nuclei stay clean; recon is never flagged.
+
+### Target-lock per tool (test_active_target_lock, verified live)
+Each active tool is bound to the lab via ITS OWN target flag (sqlmap `-u`/`--url`, ffuf `-u`,
+nuclei `-u`/`-target`) — a wordlist/data operand with a dot is NOT mistaken for a host. A
+non-lab target rejects at gate=target; a missing target fails closed; file-based targets
+(`-r`/`-l`) need an explicit lab `-u`. Isolation is the backstop for non-target egress.
+
+### Red-confirm (test_danger_confirm_gate, verified live)
+Enforced BOTH server-side (the real guarantee) and in the UI:
+- Executor gains a DANGER gate after approval, before isolation: a command with any dangerous
+  flag is refused (gate=danger, flags named) unless `dangerous_ack` is explicitly true. Order:
+  not-approved→approval; approved+no-ack→danger; approved+ack→isolation. "Approve blocked
+  without explicit confirm" is test-locked.
+- CockpitLoop shows detected dangerous flags RED with a per-proposal confirm checkbox; APPROVE
+  is disabled until it's checked, then sends `dangerous_ack`. Ack resets on every new proposal.
+
+### Increments (local commits, NOT pushed)
+- E1 active tools all-flags · E2 dangerous DETECTION (every form) · E3 metachar relaxation +
+  per-tool target-lock · E4 red-confirm (backend danger gate + UI + loop prompt) · E5 tests ·
+  E6 bake active tools into the sandbox image.
+
+### E6 — end-to-end, LIVE against the isolated Juice Shop (Ollama qwen3:8b for automation)
+Rebuilt the sandbox image with sqlmap (apt) + ffuf + nuclei (pinned binaries); all six tools
+resolve in `hackpit-kali-sandbox` and the isolation proof still passes 4/4 (egress-less).
+Through the FULL gated executor (`docker exec` into the isolated sandbox):
+- DANGER GATE (live): `sqlmap -u <lab> --os-shell` approved but NOT confirmed → gate=danger
+  (`['--os-shell']`); with `dangerous_ack` → clears to isolation/exec.
+- TARGET-LOCK (live): `sqlmap -u http://evil.com/ …` → gate=target.
+- REAL EXPLOIT (live): `sqlmap -u http://hackpit-lab-target:3000/rest/products/search?q=1 -p q
+  --technique=U --dbms=sqlite --level=3 --risk=2` → found the UNION-based SQLi (9 columns,
+  SQLite), exit 0, recorded as run `7953424b525c`.
+- REPORT (live): `compose_report` over the recorded run produced a full report whose Evidence
+  section reproduces the sqlmap finding VERBATIM and cites `run-7953424b525c`. llm_config.json
+  switched to ollama for this and RESTORED to {claude-agent-sdk, opus} (confirmed).
+- Cockpit UI verified live at :3000 (progressive-disclosure entry). The red-confirm frame is a
+  human click-through (not scripted here) — its enforcement is the server-side danger gate.
+
+### Safety gates (the risk turn — all hold)
+LAB-LOCKED (per-tool target-lock, tested + live) · ISOLATED (egress-less, proof 4/4) ·
+HUMAN-APPROVED · agent has ZERO path to :kali/egress (unchanged) · dangerous flags NOT blocked
+but DETECTED every form + RED + explicit-confirm-required (test-locked + live) · metachar
+relaxation SURGICAL (active VALUE args only) · recon tools UNCHANGED (strict). Full safety
+suite green; frontend tsc + eslint clean; llm_config restored.
+
+**DO NOT push — Zaid reviews the dangerous-flag detection completeness + the per-tool target-lock first.**

@@ -272,14 +272,16 @@ export function CockpitLoop({
           {/* dangerous flags: detected, shown RED, require an explicit confirm to approve */}
           {isDanger && (
             <div className="hp-loop-danger" role="alert">
-              <p className="hp-loop-danger-head">
-                ⚠ dangerous {danger.length === 1 ? "flag" : "flags"} detected —{" "}
-                <span className="hp-loop-danger-flags">{danger.join("  ·  ")}</span>
-              </p>
+              <p className="hp-loop-danger-head">⚠ flagged as dangerous</p>
+              <ul className="hp-loop-danger-flags">
+                {danger.map((reason, i) => (
+                  <li key={i}>{reason}</li>
+                ))}
+              </ul>
               <p className="hp-loop-danger-note">
-                {danger.length === 1 ? "This flag runs" : "These flags run"} code, touch the
-                target’s OS/filesystem, or load arbitrary scripts. Nothing is blocked — but
-                approving is a conscious choice, not an accident.
+                This command can run arbitrary code, open a shell, or reach out over the
+                network. Nothing is blocked — the sandbox is isolated — but approving is a
+                conscious choice, not an accident.
               </p>
               {phase === "awaiting" && (
                 <label className="hp-loop-danger-ack">
@@ -288,9 +290,7 @@ export function CockpitLoop({
                     checked={dangerAck}
                     onChange={(e) => setDangerAck(e.target.checked)}
                   />
-                  <span>
-                    Yes, run <b>{danger.join(", ")}</b> against the isolated lab.
-                  </span>
+                  <span>Yes, I mean to run this against the isolated lab.</span>
                 </label>
               )}
             </div>

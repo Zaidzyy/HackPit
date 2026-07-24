@@ -13,7 +13,7 @@ import {
 /**
  * :kali — a HUMAN-ONLY interactive shell into the OPEN (full-network-reach) sandbox.
  *
- * Unlike :cockpit (allowlisted, recon-only, isolated), this runs whatever you type as
+ * Unlike :cockpit (argv-only, lab-locked, isolated, heuristic red-confirm), this runs whatever you type as
  * `sh -c` inside a SEPARATE, intentionally NON-isolated container that reaches the
  * internet, the host and the LAN. The target container is hardcoded server-side (this
  * UI sends no target). There is no isolation here — the safety that remains is that it

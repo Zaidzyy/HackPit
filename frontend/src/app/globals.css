@@ -4483,9 +4483,16 @@ a.hp-card {
   letter-spacing: 0.2px;
 }
 .hp-loop-danger-flags {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  list-style: square;
   font-family: var(--font-jetbrains-mono), monospace;
-  color: #ff4d4d;
-  font-weight: 700;
+  font-size: 11.5px;
+  color: #ff6a5a;
+  font-weight: 600;
+}
+.hp-loop-danger-flags li {
+  margin: 2px 0;
 }
 .hp-loop-danger-note {
   margin: 6px 0 0;

@@ -25,7 +25,7 @@ const PRESET_ARGS: Record<string, string> = {
 type Line = { kind: "stdout" | "stderr" | "meta" | "err"; text: string };
 
 /**
- * Milestone-1 cockpit surface. Pick an allowlisted command, review it, APPROVE &
+ * Cockpit surface. Pick (or type) a command, review it, APPROVE &
  * RUN (the human control point), and watch its output stream live from the
  * isolated sandbox. Every command is gated server-side (allowlist + lab-only
  * target + explicit approval + isolation); the UI just makes the approval real.
@@ -226,9 +226,9 @@ export function CockpitScreen({
             </button>
           </div>
           <p className="hp-ck-note">
-            Only the allowlisted command set may run, and only against{" "}
-            <b>{allow?.lab_target ?? "the lab"}</b>. Approval is per command — there
-            is no autonomous mode.
+            Any command may run, but only against <b>{allow?.lab_target ?? "the lab"}</b>{" "}
+            in the isolated sandbox. Approval is per command — there is no autonomous mode —
+            and commands that run arbitrary code need an extra confirm.
           </p>
         </section>
 

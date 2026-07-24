@@ -43,8 +43,8 @@ if [ "$1" = "--with-proof" ]; then
   echo "== live Docker isolation PROOF (lab — must exit 0) =="
   sh ../docker/proof/isolation_proof.sh
   echo
-  echo "== live Docker SCOPE-LOCK proof (engagement — egress reaches the authorized scope ONLY — must exit 0) =="
-  sh ../docker/proof/engage_scope_proof.sh
+  echo "== live Docker FULLY-OPEN proof (engagement — Wall A down, full reach — must exit 0) =="
+  sh ../docker/proof/engage_open_proof.sh
 else
   echo
   echo "Hermetic safety tests passed."

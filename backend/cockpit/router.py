@@ -19,7 +19,7 @@ from typing import Any, Iterator
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from . import allowlist, config, engagement, executor, runstore, sandbox, scope
+from . import allowlist, config, engagement, executor, runstore
 from .kali import KaliRefused, KaliRequest, KaliResult, kali_status, run_kali
 from .models import (
     AllowlistItem,
@@ -33,7 +33,6 @@ from .sandbox import (
     SandboxError,
     assert_isolation_proven,
     is_engage_sandbox_up,
-    is_engage_firewall_up,
     is_sandbox_up,
 )
 
@@ -117,32 +116,22 @@ def exec_command(request: ExecRequest):
 
 @router.get("/engagement")
 def get_engagement() -> dict[str, Any]:
-    """The active engagement (if any) + scope-lock readiness — drives the UI mode indicator.
+    """The active engagement (if any) + sandbox availability — drives the UI mode indicator.
 
     Read-only. The UI must ALWAYS show which mode is active; when an engagement is active it
-    shows the named target + that the sandbox is SCOPE-LOCKED (egress reaches ONLY the resolved
-    scope — the operator's own machine and out-of-scope networks are NOT reachable). Readiness
-    requires BOTH the sandbox and the scope-lock firewall sidecar to be running. This never
-    enters/exits mode.
+    shows the named target + that the sandbox is FULLY OPEN (Wall A down — the only guard is
+    human-approve-each). This never enters/exits mode.
     """
     active = engagement.list_active()
     up = is_engage_sandbox_up()
-    fw = is_engage_firewall_up()
-    ready = up and fw
     return {
         "active": [e.model_dump() for e in active],
         "sandbox": config.ENGAGE_SANDBOX_CONTAINER,
-        "firewall": config.ENGAGE_FIREWALL_CONTAINER,
         "up": up,
-        "firewall_up": fw,
-        # Scope-locked: egress is default-deny + allow-only-scope (a real, network-enforced floor).
-        "scope_locked": True,
-        "ready": ready,
-        "detail": (
-            "" if ready
-            else "engagement sandbox is not running" if not up
-            else "scope-lock firewall sidecar is not running"
-        ),
+        # Fully open: readiness is just availability (there is no Wall A / isolation to verify).
+        "open": True,
+        "ready": up,
+        "detail": "" if up else "engagement sandbox is not running",
     }
 
 
@@ -151,42 +140,24 @@ def enter_engagement(req: EngagementEnterRequest) -> EngagementRecord:
     """DELIBERATELY enter real-target engagement mode. This is the explicit, warned switch
     that LEAVES THE ISOLATED LAB.
 
-    ``target`` is the authorized SCOPE — a single host/URL or a CIDR. On entry the backend
-    resolves it (host -> IPs, CIDR -> range) and applies the SCOPE-LOCK: the engagement
-    sandbox's egress becomes DEFAULT-DENY, reachable ONLY within that scope (your own host,
-    out-of-scope LAN, cloud metadata, and the rest of the internet are dropped). The guided
-    loop may then DRAFT commands, but human approval of EVERY command is still required. Returns
-    the engagement id the exec path must reference. 422 if scope/authorization is missing or the
-    scope can't be resolved; 503 if the scope-lock firewall isn't running (fail-closed —
-    engagement mode can't be entered without a working network floor).
+    The engagement sandbox is FULLY OPEN (Wall A down): it reaches the internet, your LAN, and
+    your own machine. You are responsible for authorization and for staying in scope, and human
+    approval of every command is the ONLY guard. Engagement mode is never hands-off. Returns the
+    engagement id the exec path must reference to run against the named target. 422 if the
+    target/authorization is missing (both are required — mode cannot be entered by accident).
     """
     try:
-        resolved = scope.resolve_scope(req.target)
+        return engagement.enter(req.target, req.authorization, req.session_id)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"invalid scope: {exc}")
-    try:
-        sandbox.apply_scope(list(resolved.allow_tokens), scope.hosts_line(resolved))
-    except SandboxError as exc:
-        raise HTTPException(status_code=503, detail=f"could not apply scope-lock: {exc}")
-    try:
-        return engagement.enter(
-            req.target, req.authorization, req.session_id,
-            resolved_scope=list(resolved.allow_tokens), scope_kind=resolved.kind,
-        )
-    except ValueError as exc:
-        # entry rejected after rules were applied -> reset the firewall so nothing lingers open
-        sandbox.clear_scope()
         raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.post("/engagement/{engagement_id}/exit")
 def exit_engagement(engagement_id: str) -> dict[str, Any]:
-    """Leave engagement mode for this id — no further engagement-mode runs against it, and the
-    scope-lock is reset to DEFAULT-DENY (the sandbox then reaches nothing)."""
+    """Leave engagement mode for this id — no further engagement-mode runs against it."""
     exited = engagement.exit_engagement(engagement_id)
     if not exited:
         raise HTTPException(status_code=404, detail="no active engagement with that id")
-    sandbox.clear_scope()
     return {"engagement_id": engagement_id, "exited": True}
 
 

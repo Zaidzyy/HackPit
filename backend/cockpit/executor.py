@@ -21,7 +21,7 @@ from typing import Any, Iterator
 
 from . import allowlist, config, engagement, runstore
 from .models import EngagementRecord, ExecRejected, ExecRequest, RunRecord
-from .sandbox import SandboxError, assert_isolation_proven, assert_scope_locked
+from .sandbox import SandboxError, assert_isolation_proven
 
 _IPV4 = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 
@@ -204,26 +204,16 @@ def _validate_lab(request: ExecRequest) -> ExecRejected | None:
 
 
 def _validate_engagement(request: ExecRequest, eng: EngagementRecord) -> ExecRejected | None:
-    """ENGAGEMENT mode gates (REAL target, SCOPE-LOCKED egress). Order:
-        SCOPE-LOCK (network floor) → target-lock (named target) → NEVER-AUTO-RUN human
-        approval → heuristic danger red-confirm.
+    """ENGAGEMENT mode gates (REAL target, NO isolation floor, WALL A DOWN). Order:
+        target-lock (the engagement's named target) → NEVER-AUTO-RUN human approval →
+        heuristic danger red-confirm.
 
-    The floor is now NETWORK-enforced: :func:`assert_scope_locked` confirms the egress firewall
-    is default-DENY and allows ONLY this engagement's resolved scope (the engagement analog of
-    the lab's isolation gate) BEFORE anything runs — a flushed/widened/absent ruleset refuses.
-    Because a command physically cannot leave scope, the guided loop may DRAFT commands here;
-    NEVER-AUTO-RUN still requires an INDIVIDUAL human approval of EVERY command (no batch /
-    approve-all / autonomy), manual OR loop-proposed. The argv target-lock stays as cheap
-    defense-in-depth but is explicitly NOT the bound — the scope-lock is.
+    There is NO isolation gate and NO Wall-A gate here — the sandbox is FULLY OPEN (internet +
+    LAN + host + metadata) on purpose. Nothing bounds WHERE it can reach. The ONLY bound is the
+    per-command human approval below (there is no batch/approve-all path) plus the heuristic
+    red-confirm — a conscious human on every single command. That guard now protects real
+    targets AND the operator's own machine; it must hold every command, every time.
     """
-    # SCOPE-LOCK: the real network floor. Refuse unless the egress rules are confirmed applied
-    # AND match this engagement's resolved scope. This is what makes the loop safe on a real
-    # target — a hallucinated command cannot leave the scope.
-    try:
-        assert_scope_locked(eng.resolved_scope)
-    except SandboxError as exc:
-        return ExecRejected(reason=f"scope-lock not confirmed: {exc}", gate="scope")
-
     ok, reason = check_target_lock(
         request.args, request.command, allowed=_engagement_aliases(eng.target), label=eng.target
     )

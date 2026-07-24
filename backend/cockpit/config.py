@@ -22,22 +22,16 @@ SANDBOX_CONTAINER = os.environ.get("HACKPIT_SANDBOX_CONTAINER", "hackpit-kali-sa
 # request field) so a request can't redirect the exec elsewhere.
 KALI_OPEN_CONTAINER = os.environ.get("HACKPIT_KALI_OPEN_CONTAINER", "hackpit-kali-open")
 
-# --- Engagement sandbox (REAL-TARGET mode — SCOPE-LOCKED egress, per-target network floor) ---
-# The sandbox the cockpit execs into ONLY in explicit engagement mode (POST
-# /cockpit/engagement/enter). Its egress is a DEFAULT-DENY firewall that allows ONLY the
-# engagement's resolved authorized scope (a single host's IPs, or a CIDR). It shares the
-# firewall sidecar's netns, so it keeps cap_drop:ALL + no-new-privileges and cannot alter the
-# rules or leave scope. Because the containment is NETWORK-enforced, the guided loop may DRAFT
-# commands here; NEVER-AUTO-RUN still requires human approval of EVERY command. The scope-lock
-# gate (assert_scope_locked) is the engagement analog of assert_isolation_proven. Hardcoded
-# (never a request field) so a request can't redirect the exec elsewhere.
+# --- Engagement sandbox (REAL-TARGET mode — FULLY OPEN, NO isolation floor, WALL A DOWN) -----
+# The egress-capable sandbox the cockpit execs into ONLY in explicit engagement mode
+# (POST /cockpit/engagement/enter). Wall A is DOWN (Zaid's informed decision): on a normal
+# NAT bridge it has FULL network reach — internet + LAN + host + cloud metadata. Nothing
+# bounds WHERE it can reach; the ONLY guard on a real-target run is HUMAN APPROVAL OF EVERY
+# COMMAND (explicit entry + approve-each + heuristic red-confirm; never hands-off). It keeps
+# cap_drop:ALL + no-new-privileges. It is NOT isolated, so it does NOT run
+# assert_isolation_proven and there is NO Wall-A gate to assert. Hardcoded (never a request
+# field) so a request can't redirect the exec elsewhere.
 ENGAGE_SANDBOX_CONTAINER = os.environ.get("HACKPIT_ENGAGE_CONTAINER", "hackpit-engage-sandbox")
-
-# The NET_ADMIN firewall SIDECAR that OWNS the engagement sandbox's netns and enforces the
-# scope-lock (default-DENY + allow-only-scope). The backend programs its rules at engagement
-# ENTER (scope_lock.sh apply <resolved-scope>) and resets them at EXIT (scope_lock.sh deny),
-# and re-reads them before every engagement exec (assert_scope_locked). Hardcoded.
-ENGAGE_FIREWALL_CONTAINER = os.environ.get("HACKPIT_ENGAGE_FIREWALL", "hackpit-engage-firewall")
 
 # --- Lab target (the ONLY thing the sandbox may be pointed at) ---------------
 # The self-hosted vulnerable app on the isolated network. While unsupervised this

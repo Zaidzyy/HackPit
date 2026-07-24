@@ -37,7 +37,7 @@ export function CockpitLoop({
 }: {
   sessionId: string;
   /** When set, approved proposals run in REAL-TARGET engagement mode against this engagement
-   *  (routing through the scope-lock + never-auto-run gates). Omit for isolated lab mode. */
+   *  (routing through _validate_engagement: target -> approval -> danger). Omit for lab mode. */
   engagementId?: string | null;
   onStepActive?: (stepId: string | null) => void;
   onStepDone?: (stepId: string | null) => void;
@@ -122,8 +122,8 @@ export function CockpitLoop({
         dangerous_ack: dangerAck, // true only after the explicit confirm; ignored if none
         session_id: sessionId,
         step_id: stepId ?? undefined,
-        // In engagement mode this routes the run through _validate_engagement (scope-lock ->
-        // target -> approval -> danger). The loop DRAFTS; this only fires on the human's click.
+        // In engagement mode this routes the run through _validate_engagement (target ->
+        // approval -> danger). The loop DRAFTS; this only fires on the human's click.
         engagement_id: engagementId ?? undefined,
       },
       (ev: ExecEvent) => {
@@ -191,7 +191,7 @@ export function CockpitLoop({
           <p className="hp-ck-sub">
             The agent proposes each step; <b>you approve every command</b> before it runs
             {engagementId
-              ? " against the scope-locked real target"
+              ? " against the fully-open real target"
               : " in the isolated sandbox"}
             . It adapts to each result and proposes the next. Nothing runs without your
             approval.

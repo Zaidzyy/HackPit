@@ -1,6 +1,8 @@
 # Engagement SCOPE-LOCK
 
-**Branch:** `engagement-scope-lock` (off `main`) · **Status:** S1–S2 done + proven; S3–S6 in progress · **Not pushed.**
+> ⚠ **TOGGLE STATE:** On the **`engagement-wall-a-down`** branch, **Wall A is DOWN** — the scope-lock below is **NOT active**; engagement egress is **FULLY OPEN** (reaches internet + LAN + host + metadata), the guided loop is retained, and human-approve-each is the only guard. The scope-lock described in this doc lives on the **`engagement-scope-lock`** branch ("Wall A up") and is fully recoverable. See [[wall-a-toggle]].
+
+**Branch:** `engagement-scope-lock` (off `main`) · **Status:** S1–S6 done + proven (scope-lock branch) · **Not pushed.**
 
 Zaid's decision (supersedes the Wall-A-down flip): engagement mode gets a **real network floor** again, but as a **per-target SCOPE-LOCK**, and the guided loop becomes available on real targets — because the containment is now **network-enforced**, not "no floor at all." ("Wall A" is now a toggle: this is Wall A **UP**. If Zaid says "wall A down", revert to fully-open and drop the scope-lock — everything else stays.)
 

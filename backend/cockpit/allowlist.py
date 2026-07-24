@@ -115,8 +115,16 @@ def has_forbidden_chars(token: str) -> bool:
 def _is_flag_token(token: str) -> bool:
     """True if a token is flag-shaped (a leading '-' plus at least one more char).
 
-    A lone ``-`` (stdin) is an operand, not a flag; so are bare words. Only
-    flag-shaped tokens are checked against the per-command ``allowed_flags``.
+    A lone ``-`` (stdin) is an operand, not a flag; so are bare words and negative
+    numbers/flag-like strings when they are the VALUE of a preceding value-flag (the
+    walk consumes those before they reach here). Only flag-shaped tokens that are NOT
+    such a value are checked against the per-command ``allowed_flags``.
+
+    Note ``--`` (POSIX end-of-options) IS flag-shaped and is deliberately NOT honored
+    as an operand marker — honoring it would switch off flag enforcement (and, via
+    :func:`extract_hostish`, the target-lock) for every token after it, a fail-open
+    hole. It is instead treated as an un-listed flag and rejected. No recon command
+    needs it.
     """
     return len(token) >= 2 and token[0] == "-"
 
@@ -150,16 +158,25 @@ def _check_short_flag(
     An atomic multi-char flag (``-sV``, ``-T4``, ``-p-``) is matched whole first; else
     the token is treated getopt-style as a cluster where each letter is its own short
     flag (``-sI`` = ``-s`` + ``-I``). Every resolved flag must be in ``allowed``.
+
+    A value-flag stops the cluster: its value is either the REMAINDER of this token
+    (inline getopt form, ``-XGET`` = ``-X`` value ``GET``; ``-p3000``) or, if it is the
+    last letter, the NEXT token (``takes_next_value=True``). Either way the value is
+    never re-scanned as a flag — so a flag-like or negative-number value cannot be
+    misread as an un-listed flag.
     """
-    if token in allowed:  # atomic multi-char flag
+    if token in allowed:  # atomic multi-char flag (-sV, -T4, -p-)
         return None, token in value_flags
-    for ch in token[1:]:  # getopt cluster: each letter is a flag
+    cluster = token[1:]  # getopt cluster: each letter is a short flag
+    for idx, ch in enumerate(cluster):
         flag = "-" + ch
         if flag not in allowed:
             return flag, False
-    # if the final letter is a value-flag, the next token is its value
-    last = "-" + token[-1]
-    return None, last in value_flags
+        if flag in value_flags:
+            has_inline_value = idx + 1 < len(cluster)
+            # inline value → consume within this token; else the value is the next one
+            return None, not has_inline_value
+    return None, False  # all boolean flags, no value follows
 
 
 def _first_disallowed_flag(spec: CommandSpec, args: list[str]) -> str | None:

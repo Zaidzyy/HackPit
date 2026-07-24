@@ -24,21 +24,25 @@ import {
  */
 
 type Phase = "idle" | "proposing" | "awaiting" | "running" | "done" | "error";
-type Line = { kind: "stdout" | "stderr" | "meta" | "err"; text: string };
+type Line = { kind: "stdout" | "stderr" | "meta" | "err" | "disc"; text: string };
 
 const cmdline = (p: LoopProposal) => `${p.command} ${p.args.join(" ")}`.trim();
 
 export function CockpitLoop({
   sessionId,
   engagementId = null,
+  scopeLabel = null,
   onStepActive,
   onStepDone,
   onRunRecorded,
 }: {
   sessionId: string;
-  /** When set, approved proposals run in REAL-TARGET engagement mode against this engagement
-   *  (routing through _validate_engagement: target -> approval -> danger). Omit for lab mode. */
+  /** When set, the agent DRAFTS against this engagement's real target + authorized scope, and
+   *  approved proposals run in REAL-TARGET engagement mode (routing through
+   *  _validate_engagement: target -> approval -> danger). Omit for lab mode. */
   engagementId?: string | null;
+  /** The authorized scope, shown so the operator can see what the agent may draft against. */
+  scopeLabel?: string | null;
   onStepActive?: (stepId: string | null) => void;
   onStepDone?: (stepId: string | null) => void;
   onRunRecorded?: () => void;
@@ -92,7 +96,7 @@ export function CockpitLoop({
         );
         setPhase("error");
       });
-  }, [sessionId, onStepActive]);
+  }, [sessionId, engagementId, onStepActive]);
 
   const start = useCallback(() => {
     avoidRef.current = [];
@@ -141,6 +145,17 @@ export function CockpitLoop({
             break;
           case "rejected":
             push({ kind: "err", text: `✕ rejected [${ev.gate}] — ${ev.reason}` });
+            break;
+          case "discovered":
+            // Engagement only: hosts this run revealed, sorted by the authorized scope. The
+            // in-scope ones become pivots the next draft may use; out-of-scope ones never do.
+            if (ev.in_scope.length)
+              push({ kind: "disc", text: `+ in scope: ${ev.in_scope.join(", ")}` });
+            if (ev.out_of_scope.length)
+              push({
+                kind: "disc",
+                text: `· seen, OUT of scope (not added): ${ev.out_of_scope.join(", ")}`,
+              });
             break;
           case "error":
             push({ kind: "err", text: `✕ ${ev.reason}` });
@@ -197,6 +212,12 @@ export function CockpitLoop({
               : " in the isolated sandbox"}
             . It adapts to each result and proposes the next. Nothing runs without your
             approval.
+            {engagementId && scopeLabel && (
+              <>
+                {" "}
+                It drafts against your authorized scope: <code>{scopeLabel}</code>.
+              </>
+            )}
           </p>
         </div>
         <div className="hp-loop-status" role="status">
@@ -292,8 +313,11 @@ export function CockpitLoop({
               </ul>
               <p className="hp-loop-danger-note">
                 This command can run arbitrary code, open a shell, or reach out over the
-                network. Nothing is blocked — the sandbox is isolated — but approving is a
-                conscious choice, not an accident.
+                network. Nothing is blocked —{" "}
+                {engagementId
+                  ? "but this sandbox is FULLY OPEN and the target is real, so approving is a deliberate act"
+                  : "the sandbox is isolated — but approving is a conscious choice, not an accident"}
+                .
               </p>
               {phase === "awaiting" && (
                 <label className="hp-loop-danger-ack">
@@ -302,7 +326,11 @@ export function CockpitLoop({
                     checked={dangerAck}
                     onChange={(e) => setDangerAck(e.target.checked)}
                   />
-                  <span>Yes, I mean to run this against the isolated lab.</span>
+                  <span>
+                    {engagementId
+                      ? "Yes, I mean to run this against the real, authorized target."
+                      : "Yes, I mean to run this against the isolated lab."}
+                  </span>
                 </label>
               )}
             </div>

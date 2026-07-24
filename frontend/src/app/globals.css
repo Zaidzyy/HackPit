@@ -5523,3 +5523,73 @@ a.hp-card {
 .hp-eng-ack input {
   margin-top: 2px;
 }
+
+/* Authorized program scope + the LIVE allowed set (seed hosts + in-scope recon finds). */
+.hp-eng-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 13px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.hp-eng-scope-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.hp-eng-scope-key {
+  flex: 0 0 118px;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.hp-eng-scope-count {
+  opacity: 0.7;
+}
+.hp-eng-scope-vals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+.hp-eng-chip {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 11.5px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--white);
+}
+/* discovered by recon and in scope — added to the live allowed set */
+.hp-eng-chip.is-new {
+  border-color: rgba(95, 208, 138, 0.45);
+  color: #8fe0ae;
+}
+/* excluded, or seen but out of scope — never targetable */
+.hp-eng-chip.is-out {
+  border-color: rgba(240, 60, 60, 0.35);
+  color: #ff9a86;
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 106, 82, 0.5);
+}
+.hp-ck-hint {
+  margin: -4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+.hp-ck-hint code {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--white) 75%, transparent);
+}
+/* a recon-discovery line in the terminal stream */
+.hp-ck-disc {
+  color: #8fe0ae;
+}

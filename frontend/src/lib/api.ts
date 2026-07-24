@@ -615,6 +615,17 @@ export type ExecEvent =
   | { type: "stderr"; line: string }
   | { type: "exit"; run_id: string; code: number | null; finished_at: string }
   | { type: "rejected"; gate: string; reason: string }
+  /** ENGAGEMENT only — recon-driven expansion. Hosts this run's output revealed, split by the
+   *  authorized scope: `in_scope` joined the live allowed set, `out_of_scope` is surfaced
+   *  read-only and never targetable. Adding a host approves nothing: every command against one
+   *  still needs its own individual approval. */
+  | {
+      type: "discovered";
+      run_id: string;
+      in_scope: string[];
+      out_of_scope: string[];
+      truncated: boolean;
+    }
   | { type: "error"; reason: string };
 
 export type ExecPayload = {
@@ -642,6 +653,20 @@ export type EngagementRecord = {
   entered_at: string;
   exited_at: string | null;
   session_id: string | null;
+  /** The authorized PROGRAM SCOPE, exactly as the operator wrote it. */
+  scope: string;
+  /** IN-SCOPE patterns (exact hosts, *.wildcards, CIDRs). */
+  scope_include: string[];
+  /** Exclusions — these always beat a matching include. */
+  scope_exclude: string[];
+  /** Addresses the scope's exact hosts resolved to at entry. */
+  scope_ips: string[];
+  /** LIVE allowed set: the scope's hosts + every in-scope host recon has revealed. */
+  allowed_hosts: string[];
+  /** Hosts recon revealed that the scope covers (auto-added to the allowed set). */
+  discovered_in_scope: string[];
+  /** Hosts recon revealed that the scope does NOT cover — read-only, never targetable. */
+  discovered_out_of_scope: string[];
 };
 
 /** Active engagement(s) + sandbox availability (GET /cockpit/engagement). Drives the UI mode
@@ -661,16 +686,26 @@ export const getEngagementStatus = (signal?: AbortSignal) =>
   getJSON<EngagementStatus>("/cockpit/engagement", signal);
 
 /** DELIBERATELY enter real-target engagement mode. `target` is the real authorized host/URL;
- *  `authorization` is the operator's acknowledgement they own/are authorized to test it. */
+ *  `authorization` is the operator's acknowledgement they own/are authorized to test it;
+ *  `scope` is the authorized PROGRAM SCOPE (comma/space-separated exact hosts, *.wildcards,
+ *  CIDRs, plus !exclusions) — omit it to scope the engagement to the target alone. The scope
+ *  is resolved server-side and fails closed (422) if it is empty, malformed, unresolvable, or
+ *  does not contain the named target. */
 export const enterEngagement = (
   target: string,
   authorization: string,
   sessionId?: string | null,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  scope?: string | null
 ) =>
   postJSON<EngagementRecord>(
     "/cockpit/engagement/enter",
-    { target, authorization, session_id: sessionId ?? null },
+    {
+      target,
+      authorization,
+      session_id: sessionId ?? null,
+      scope: scope?.trim() ? scope.trim() : null,
+    },
     signal
   );
 

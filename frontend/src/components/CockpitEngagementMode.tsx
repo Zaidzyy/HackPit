@@ -20,11 +20,16 @@ import { CockpitLoop } from "./CockpitLoop";
  * your own machine — nothing bounds where it can reach. The guided loop may DRAFT commands, but
  * every command still needs the operator's explicit approval — the loop never fires on its own,
  * and there is no batch, no approve-all. Human approval of EVERY command is the ONLY guard.
- * You enter engagement mode explicitly (naming the real target + acknowledging you are
- * authorized), then approve each command (drafted by the loop or typed yourself) one at a time.
+ * You enter engagement mode explicitly (naming the real target, the authorized PROGRAM SCOPE,
+ * and acknowledging you are authorized), then approve each command (drafted by the loop or
+ * typed yourself) one at a time.
+ *
+ * The scope is what the loop is told it may target and what the argv target-lock checks — but
+ * with the sandbox fully open, that lock is best-effort defence in depth, not a network bound.
+ * The panel below is deliberately honest about that.
  */
 
-type Line = { kind: "stdout" | "stderr" | "meta" | "err"; text: string };
+type Line = { kind: "stdout" | "stderr" | "meta" | "err" | "disc"; text: string };
 
 export function CockpitEngagementMode({
   sessionId = null,
@@ -38,6 +43,7 @@ export function CockpitEngagementMode({
 
   // enter form
   const [target, setTarget] = useState("");
+  const [scopeSpec, setScopeSpec] = useState("");
   const [auth, setAuth] = useState("");
   const [entering, setEntering] = useState(false);
   const [enterErr, setEnterErr] = useState<string | null>(null);
@@ -89,7 +95,7 @@ export function CockpitEngagementMode({
     if (!t || !a || entering) return;
     setEntering(true);
     setEnterErr(null);
-    enterEngagement(t, a, sessionId)
+    enterEngagement(t, a, sessionId, undefined, scopeSpec)
       .then((rec) => {
         setActive(rec);
         setArgsText(rec.target); // seed the first command with the target
@@ -99,7 +105,7 @@ export function CockpitEngagementMode({
         setEnterErr(err instanceof ApiError ? err.message : "Couldn’t enter engagement mode.")
       )
       .finally(() => setEntering(false));
-  }, [target, auth, entering, sessionId, refresh]);
+  }, [target, auth, scopeSpec, entering, sessionId, refresh]);
 
   const doExit = useCallback(() => {
     if (!active) return;
@@ -146,6 +152,18 @@ export function CockpitEngagementMode({
           case "rejected":
             push({ kind: "err", text: `✕ rejected [${ev.gate}] — ${ev.reason}` });
             break;
+          case "discovered":
+            // Recon-driven expansion: in-scope hosts joined the allowed set; out-of-scope
+            // ones are shown but never targetable. Neither approves anything.
+            if (ev.in_scope.length)
+              push({ kind: "disc", text: `+ in scope: ${ev.in_scope.join(", ")}` });
+            if (ev.out_of_scope.length)
+              push({
+                kind: "disc",
+                text: `· seen, OUT of scope (not added): ${ev.out_of_scope.join(", ")}`,
+              });
+            if (ev.truncated) push({ kind: "disc", text: "· …more discoveries were capped" });
+            break;
           case "error":
             push({ kind: "err", text: `✕ ${ev.reason}` });
             break;
@@ -166,8 +184,9 @@ export function CockpitEngagementMode({
         setRunning(false);
         setDangerAck(false); // re-confirm consciously for the next command
         onRunRecorded?.();
+        refresh(); // pick up any hosts this run added to the live allowed set
       });
-  }, [active, running, args, command, preview, dangerAck, sessionId, onRunRecorded]);
+  }, [active, running, args, command, preview, dangerAck, sessionId, onRunRecorded, refresh]);
 
   // ---- NOT ENTERED: the deliberate, warned entry ---------------------------- //
   if (!active) {
@@ -198,6 +217,27 @@ export function CockpitEngagementMode({
               disabled={entering}
             />
           </label>
+          <label className="hp-ck-field">
+            <span>
+              authorized scope (optional — defaults to just the target)
+            </span>
+            <input
+              type="text"
+              value={scopeSpec}
+              onChange={(e) => setScopeSpec(e.target.value)}
+              placeholder="e.g. example.com, *.example.com, 10.10.10.0/24, !admin.example.com"
+              spellCheck={false}
+              autoComplete="off"
+              disabled={entering}
+            />
+          </label>
+          <p className="hp-ck-hint">
+            Exact hosts, <code>*.wildcards</code> and CIDRs, separated by commas; prefix a
+            pattern with <code>!</code> to exclude it. A wildcard covers <b>subdomains only</b>
+            — list the apex too if it is in scope. The loop may target anything in scope, and
+            in-scope hosts that recon discovers are added automatically; you still approve
+            every command.
+          </p>
           <label className="hp-ck-field">
             <span>authorization acknowledgement (required)</span>
             <input
@@ -253,7 +293,7 @@ export function CockpitEngagementMode({
       <div className="hp-eng-mode" role="status">
         <span className="hp-eng-mode-tag">ENGAGEMENT · REAL TARGET</span>
         <span className="hp-eng-mode-target">
-          target locked to <b>{active.target}</b>
+          target <b>{active.target}</b>
         </span>
         <span className="hp-eng-wall-bad">
           {ready ? "FULLY OPEN · full reach" : "sandbox not running"}
@@ -263,11 +303,84 @@ export function CockpitEngagementMode({
         </button>
       </div>
 
+      {/* The authorized scope + the LIVE allowed set (seed hosts + in-scope recon finds). */}
+      <section className="hp-eng-scope" aria-label="Authorized scope">
+        <div className="hp-eng-scope-row">
+          <span className="hp-eng-scope-key">in scope</span>
+          <span className="hp-eng-scope-vals">
+            {(active.scope_include.length ? active.scope_include : [active.target]).map((p) => (
+              <code key={p} className="hp-eng-chip">
+                {p}
+              </code>
+            ))}
+          </span>
+        </div>
+        {active.scope_exclude.length > 0 && (
+          <div className="hp-eng-scope-row">
+            <span className="hp-eng-scope-key">excluded</span>
+            <span className="hp-eng-scope-vals">
+              {active.scope_exclude.map((p) => (
+                <code key={p} className="hp-eng-chip is-out">
+                  !{p}
+                </code>
+              ))}
+            </span>
+          </div>
+        )}
+        <div className="hp-eng-scope-row">
+          <span className="hp-eng-scope-key">
+            allowed hosts{" "}
+            <span className="hp-eng-scope-count">({active.allowed_hosts.length})</span>
+          </span>
+          <span className="hp-eng-scope-vals">
+            {active.allowed_hosts.map((h) => (
+              <code
+                key={h}
+                className={`hp-eng-chip${
+                  active.discovered_in_scope.includes(h) ? " is-new" : ""
+                }`}
+                title={
+                  active.discovered_in_scope.includes(h)
+                    ? "discovered by recon — in scope, so added automatically"
+                    : "from the scope you entered"
+                }
+              >
+                {h}
+              </code>
+            ))}
+          </span>
+        </div>
+        {active.discovered_out_of_scope.length > 0 && (
+          <div className="hp-eng-scope-row">
+            <span className="hp-eng-scope-key">
+              seen, out of scope{" "}
+              <span className="hp-eng-scope-count">
+                ({active.discovered_out_of_scope.length})
+              </span>
+            </span>
+            <span className="hp-eng-scope-vals">
+              {active.discovered_out_of_scope.map((h) => (
+                <code
+                  key={h}
+                  className="hp-eng-chip is-out"
+                  title="revealed by recon but NOT in your scope — never added, never targeted"
+                >
+                  {h}
+                </code>
+              ))}
+            </span>
+          </div>
+        )}
+      </section>
+
       <p className="hp-ck-note">
         No isolation floor, no Wall A — the sandbox reaches the internet, your LAN, and your own
-        machine. The guided loop may <b>draft</b> commands, but <b>you approve every command</b>
-        before it runs — the loop never fires on its own, and there is no batch or approve-all.
-        Human approval of every command is the <b>only</b> guard.
+        machine. The scope above is what the agent is told it may target and what the argument
+        check enforces, but <b>nothing stops an off-scope packet at the network layer</b> — that
+        check is best-effort defence in depth, not a wall. The guided loop may <b>draft</b>
+        commands, but <b>you approve every command</b> before it runs — including commands
+        against hosts recon discovered. The loop never fires on its own; there is no batch or
+        approve-all. Human approval of every command is the <b>only</b> guard.
       </p>
 
       <div className="hp-cv-execmode" role="tablist" aria-label="Execution mode">
@@ -301,7 +414,11 @@ export function CockpitEngagementMode({
           <CockpitLoop
             sessionId={sessionId}
             engagementId={active.engagement_id}
-            onRunRecorded={onRunRecorded}
+            scopeLabel={active.scope || active.target}
+            onRunRecorded={() => {
+              onRunRecorded?.();
+              refresh(); // a loop run may have expanded the live allowed set
+            }}
           />
         ) : (
           <p className="hp-cv-hint">
@@ -323,7 +440,10 @@ export function CockpitEngagementMode({
           />
         </label>
         <label className="hp-ck-field hp-ck-args">
-          <span>arguments (must reference {active.target})</span>
+          <span>
+            arguments (must reference a host in scope
+            {active.scope && active.scope !== active.target ? `: ${active.scope}` : ` — ${active.target}`})
+          </span>
           <input
             type="text"
             value={argsText}

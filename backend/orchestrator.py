@@ -146,7 +146,7 @@ def precheck(command: str, args: list[str]) -> tuple[bool, str]:
     ok, reason = allowlist.validate(command, args)
     if not ok:
         return False, reason
-    ok, reason = executor.check_target_lock(args)
+    ok, reason = executor.check_target_lock(args, command)
     if not ok:
         return False, reason
     return True, ""

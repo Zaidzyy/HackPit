@@ -65,11 +65,11 @@ def _host_of(token: str) -> str | None:
     return t or None
 
 
-def check_target_lock(args: list[str]) -> tuple[bool, str]:
-    """Pure target-lock: the lab must be explicitly targeted, no other host allowed.
+def _recon_target_lock(args: list[str]) -> tuple[bool, str]:
+    """RECON target-lock: every hostish operand must be the lab; at least one required.
 
-    Returns (ok, reason). A token is either the lab alias, another host (→ reject),
-    or a non-host operand (→ ignore). At least one lab reference is required.
+    A token is either the lab alias, another host (→ reject), or a non-host operand
+    (→ ignore). Unchanged from the recon milestone.
     """
     found_lab = False
     for token in allowlist.extract_hostish(args):
@@ -88,9 +88,48 @@ def check_target_lock(args: list[str]) -> tuple[bool, str]:
     return True, ""
 
 
-def _resolved_target(args: list[str]) -> str:
+def _active_target_lock(command: str, args: list[str]) -> tuple[bool, str]:
+    """ACTIVE target-lock: bind the tool's TARGET (its ``target_flags`` value) to the lab.
+
+    Only the designated target flag(s) are lab-checked (sqlmap ``-u``, ffuf ``-u``,
+    nuclei ``-u``/``-target``) — so a wordlist/data operand with a dot is not mistaken for
+    a target host. At least one lab target is required (fail closed); isolation is the
+    backstop for any non-target egress (``--proxy``, ``-interactsh-server``…).
+    """
+    targets = allowlist.extract_active_targets(command, args)
+    if not targets:
+        return False, (
+            f"no lab target — {command} must point at the lab via its target flag "
+            "(e.g. -u http://<lab>/…)"
+        )
+    for token in targets:
+        host = _host_of(token)
+        if host not in config.LAB_TARGET_ALIASES:
+            return False, f"target '{host}' is not the lab — only the lab is allowed"
+    return True, ""
+
+
+def check_target_lock(args: list[str], command: str | None = None) -> tuple[bool, str]:
+    """Pure target-lock. Dispatches by tool MODE: active tools bind their per-tool target
+    flag to the lab; recon tools (or an unknown command) use the hostish-operand rule.
+
+    ``command`` is optional for backward compatibility — omitted → recon behavior.
+    """
+    spec = allowlist.ALLOWLIST.get(command) if command else None
+    if spec is not None and spec.active:
+        return _active_target_lock(command, args)  # type: ignore[arg-type]
+    return _recon_target_lock(args)
+
+
+def _resolved_target(command: str, args: list[str]) -> str:
     """The lab host this command targets (for the record/UI)."""
-    for token in allowlist.extract_hostish(args):
+    spec = allowlist.ALLOWLIST.get(command)
+    tokens = (
+        allowlist.extract_active_targets(command, args)
+        if spec is not None and spec.active
+        else allowlist.extract_hostish(args)
+    )
+    for token in tokens:
         host = _host_of(token)
         if token in config.LAB_TARGET_ALIASES or host in config.LAB_TARGET_ALIASES:
             return host or config.LAB_TARGET_HOST
@@ -103,7 +142,7 @@ def validate_request(request: ExecRequest) -> ExecRejected | None:
     if not ok:
         return ExecRejected(reason=reason, gate="allowlist")
 
-    ok, reason = check_target_lock(request.args)
+    ok, reason = check_target_lock(request.args, request.command)
     if not ok:
         return ExecRejected(reason=reason, gate="target")
 
@@ -138,7 +177,7 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
             return
 
     run_id = uuid.uuid4().hex[:12]
-    target = _resolved_target(request.args)
+    target = _resolved_target(request.command, request.args)
     started_at = _now()
     argv = ["docker", "exec", config.SANDBOX_CONTAINER, request.command, *request.args]
 

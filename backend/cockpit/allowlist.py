@@ -337,28 +337,35 @@ def _iter_active(spec: "CommandSpec", args: list[str]):
         base, sep, eqval = tok.partition("=")
         has_eq = sep == "="
         candidates = {base}
+        name = base
+
+        # Always decompose a single-dash token into letter candidates for DETECTION
+        # (over-inclusive: catches -e in a cluster). This does NOT drive value/target
+        # semantics unless the WHOLE token isn't itself a known value flag — so a Go-style
+        # single-dash long flag (-target, -config) is treated as one flag, not -t + value.
         vflag: str | None = None
         inline: str | None = None
-        name = base
-        if not base.startswith("--"):  # single-dash: decompose + peel any inline value
+        if not base.startswith("--"):
             letters, vflag, inline = _split_short_active(base, vf)
             candidates.update(letters)
-            if inline is not None:
-                name = base[: len(base) - len(inline)]
 
         value: str | None = None
         value_taker: str | None = None
         took_next = False
         if has_eq:
-            value, value_taker = eqval, base
-        elif inline is not None:
-            value, value_taker = inline, vflag
+            value, value_taker = eqval, base            # --flag=value / -x=value
         elif base in vf:
-            value_taker = base
+            value_taker = base                          # whole token is a value flag
+            if i + 1 < n:
+                value, took_next = args[i + 1], True     # space-separated value
+        elif inline is not None:
+            name = base[: len(base) - len(inline)]       # short cluster: -xPAYLOAD
+            value, value_taker = inline, vflag
         elif vflag is not None:
-            value_taker = vflag
-        if value is None and value_taker is not None and i + 1 < n:
-            value, took_next = args[i + 1], True
+            value_taker = vflag                          # short cluster ending in value flag
+            if i + 1 < n:
+                value, took_next = args[i + 1], True
+        # else: a boolean flag (long, or a short cluster with no value flag) — no value
 
         yield {"candidates": candidates, "name": name, "value": value, "value_taker": value_taker}
         i += 2 if took_next else 1
@@ -379,6 +386,40 @@ def dangerous_flags_present(command: str, args: list[str]) -> list[str]:
     for rec in _iter_active(spec, args):
         hits |= rec["candidates"] & spec.dangerous_flags
     return sorted(hits)
+
+
+def _active_flagname_with_metachar(spec: "CommandSpec", args: list[str]) -> str | None:
+    """For an ACTIVE tool: the first flag-NAME containing a metachar, or None.
+
+    VALUE args are exempt (operands, consumed values, and the ``=``-joined/inline value part)
+    — payloads legitimately carry metacharacters and argv exec makes them safe. The
+    surgical relaxation is strictly: values may, flag names may not (recon tools stay
+    fully strict). Reuses the same walk as detection, so a flag-like value that is really
+    a value (``--data '--x;y'``) is exempt exactly as detection treats it as a value.
+    """
+    for rec in _iter_active(spec, args):
+        if has_forbidden_chars(rec["name"]):
+            return rec["name"]
+    return None
+
+
+def extract_active_targets(command: str, args: list[str]) -> list[str]:
+    """The target value(s) an ACTIVE tool is pointed at — the values of its ``target_flags``
+    (sqlmap ``-u``/``--url``, ffuf ``-u``, nuclei ``-u``/``-target``). Empty if none present.
+
+    The executor binds each to the lab. A tool invoked with no ``target_flags`` value is
+    rejected there (fail closed) — file-based targets (``-r``/``-l``) can't be statically
+    bound to the lab, so an explicit lab ``-u``/``-target`` is required; isolation is the
+    backstop for any non-target egress (``--proxy``, ``-interactsh-server``…).
+    """
+    spec = ALLOWLIST.get(command)
+    if spec is None or not spec.active:
+        return []
+    targets: list[str] = []
+    for rec in _iter_active(spec, args):
+        if rec["value_taker"] in spec.target_flags and rec["value"] is not None:
+            targets.append(rec["value"])
+    return targets
 
 
 def extract_hostish(args: list[str]) -> list[str]:
@@ -404,8 +445,8 @@ def validate(command: str, args: list[str]) -> tuple[bool, str]:
     per-command flag policy.
 
     RECON (strict): metachar-free args + every flag on ``allowed_flags``.
-    ACTIVE (all-flags): every flag permitted; no flag-allowlist rejection. (E3 relaxes the
-    metachar rule for VALUE args so payloads can carry metacharacters.)
+    ACTIVE (all-flags): every flag permitted; metachars allowed in VALUE args (payloads)
+    but refused in a flag NAME (surgical relaxation — argv exec makes payload metachars safe).
     """
     if not is_allowed_command(command):
         return False, f"command '{command}' is not on the allowlist"
@@ -415,12 +456,12 @@ def validate(command: str, args: list[str]) -> tuple[bool, str]:
         return False, f"too many args for '{command}' (max {spec.max_args})"
 
     if spec.active:
-        # ACTIVE: all flags allowed (full capability). No flag-allowlist rejection. The
-        # metachar check still runs here (belt) — E3 relaxes it to VALUE args only so
-        # payloads can carry metacharacters (argv exec makes that safe).
-        for a in args:
-            if has_forbidden_chars(a):
-                return False, f"argument contains a forbidden character: {a!r}"
+        # ACTIVE: all flags allowed (full capability), no flag-allowlist rejection. Metachars
+        # are permitted in VALUE args (payloads) but still refused in a flag NAME — the
+        # relaxation is surgical (values only, active tools only; recon stays fully strict).
+        bad_name = _active_flagname_with_metachar(spec, args)
+        if bad_name is not None:
+            return False, f"flag name contains a forbidden character: {bad_name!r}"
         return True, ""
 
     # RECON (strict): metachar-free + strict per-command flag allowlist.

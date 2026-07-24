@@ -699,3 +699,61 @@ export async function execCockpitStream(
     }
   }
 }
+
+// --- :kali — human-only arbitrary shell into the isolated sandbox ---------------
+
+/** The captured result of one :kali shell run (POST /cockpit/kali). */
+export type KaliResult = {
+  run_id: string;
+  command: string;
+  container: string;
+  exit_code: number | null;
+  stdout: string;
+  stderr: string;
+  started_at: string;
+  finished_at: string;
+  timed_out: boolean;
+  truncated: boolean;
+  session_id: string | null;
+};
+
+/**
+ * Run ONE arbitrary shell command inside the isolated sandbox.
+ *
+ * The container is hardcoded server-side — this payload carries no target. A refusal
+ * (sandbox not provably isolated) comes back as HTTP 409 with { detail: { gate, reason } };
+ * it is surfaced as an ApiError naming the gate + reason, and nothing ran.
+ */
+export async function runKali(
+  payload: { command: string; session_id?: string | null },
+  signal?: AbortSignal
+): Promise<KaliResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/cockpit/kali`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+      signal,
+    });
+  } catch {
+    throw new ApiError(0, `Cannot reach the API at ${API_URL}. Is it running?`);
+  }
+  if (!res.ok) {
+    let msg = `Request failed (${res.status}).`;
+    try {
+      const body = (await res.json()) as {
+        detail?: { gate?: string; reason?: string } | string;
+      };
+      if (body?.detail && typeof body.detail === "object") {
+        msg = `[${body.detail.gate}] ${body.detail.reason}`;
+      } else if (typeof body?.detail === "string") {
+        msg = body.detail;
+      }
+    } catch {
+      /* keep fallback */
+    }
+    throw new ApiError(res.status, msg);
+  }
+  return (await res.json()) as KaliResult;
+}

@@ -4119,6 +4119,120 @@ a.hp-card {
   font-size: clamp(18px, 2.4vw, 22px);
 }
 
+/* --- :kali — human-only interactive shell into the isolated sandbox --- */
+.hp-kali {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 8px 0 80px;
+}
+.hp-kali-head {
+  margin-bottom: 22px;
+}
+.hp-kali-title {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: clamp(28px, 4.4vw, 40px);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--white);
+  margin: 0 0 8px;
+}
+.hp-kali-sub {
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1.55;
+  max-width: 680px;
+  margin: 0;
+}
+.hp-kali-sub b {
+  color: var(--accent);
+  font-weight: 500;
+}
+/* command-history clear button in the terminal chrome bar */
+.hp-kali-clear {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.hp-kali-clear:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent-line);
+}
+.hp-kali-clear:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* one command + its output in the scrollback */
+.hp-kali-block {
+  margin-bottom: 10px;
+}
+.hp-kali-cmd {
+  color: var(--white);
+}
+.hp-kali-prompt {
+  color: var(--accent);
+  font-weight: 500;
+  user-select: none;
+}
+.hp-kali-exit {
+  color: var(--dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-top: 2px;
+}
+.hp-kali-trunc {
+  color: #f0a24a;
+}
+/* the live prompt input line at the bottom of the terminal */
+.hp-kali-inputline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #040505;
+  border-top: 1px solid var(--border);
+  padding: 10px 14px;
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 12.5px;
+}
+.hp-kali-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--white);
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 12.5px;
+}
+.hp-kali-input::placeholder {
+  color: var(--dim);
+}
+.hp-kali-input:disabled {
+  opacity: 0.55;
+}
+.hp-kali-note {
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.6;
+  max-width: 720px;
+  margin: 16px 0 0;
+}
+.hp-kali-note code {
+  font-family: var(--font-jetbrains-mono), monospace;
+  color: var(--white);
+  font-size: 11px;
+}
+.hp-kali-note b {
+  color: var(--accent);
+  font-weight: 500;
+}
+
 /* --- engagement: recorded runs + generated report (cockpit) --- */
 .hp-ck-eng {
   margin-top: 22px;

@@ -25,6 +25,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from adgraph import collector as C
+from adgraph import orchestrator as ORCH
 from adgraph import parser as P
 from adgraph import paths as PA
 from adgraph import router as R
@@ -35,7 +36,9 @@ from adgraph import techniques as T
 from cockpit import executor as E
 from cockpit.models import EngagementRecord, ExecRequest
 
-_ADGRAPH_MODULES = [C, P, PA, R, S, SC, ST, T]
+# ORCH (the AD reasoning layer) is scanned here too: it is the one module in the package an
+# LLM drives, so it is the one that most needs to be provably unable to run anything.
+_ADGRAPH_MODULES = [C, ORCH, P, PA, R, S, SC, ST, T]
 
 # Tokens that would indicate a module can execute something itself.
 _EXEC_TOKENS = ["subprocess", "Popen", "os.system", "docker exec", "pty.spawn", "os.exec"]

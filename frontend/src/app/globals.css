@@ -6686,3 +6686,166 @@ a.hp-card {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ----------------------------------------------------------------------- *
+ *  Tool arsenal — the curated toolbox catalog (DATA: copy-ready templates)
+ * ----------------------------------------------------------------------- */
+.hp-ta { max-width: 1000px; margin: 0 auto; }
+.hp-ta-note {
+  margin: 0 0 20px;
+  padding: 11px 15px;
+  border: 1px solid color-mix(in srgb, #e0c15a 30%, transparent);
+  background: color-mix(in srgb, #e0c15a 8%, transparent);
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: color-mix(in srgb, var(--white) 72%, transparent);
+}
+.hp-ta-controls { margin-bottom: 22px; }
+.hp-ta-search {
+  width: 100%;
+  padding: 11px 15px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--white) 15%, transparent);
+  background: color-mix(in srgb, var(--white) 5%, transparent);
+  color: var(--white);
+  font-size: 13.5px;
+}
+.hp-ta-search:focus {
+  outline: none;
+  border-color: color-mix(in srgb, #e0c15a 55%, transparent);
+}
+.hp-ta-cats { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.hp-ta-cat {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--white) 13%, transparent);
+  background: none;
+  color: color-mix(in srgb, var(--white) 58%, transparent);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.hp-ta-cat.hp-on {
+  border-color: color-mix(in srgb, #e0c15a 60%, transparent);
+  background: color-mix(in srgb, #e0c15a 14%, transparent);
+  color: var(--white);
+}
+.hp-ta-empty {
+  padding: 28px;
+  text-align: center;
+  font-size: 13px;
+  color: color-mix(in srgb, var(--white) 55%, transparent);
+}
+.hp-ta-group { margin-bottom: 34px; }
+.hp-ta-groupname {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin: 0 0 14px;
+  font-size: 12px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: #e0c15a;
+}
+.hp-ta-groupname span {
+  font-size: 10.5px;
+  color: color-mix(in srgb, var(--white) 40%, transparent);
+}
+.hp-ta-tool {
+  margin-bottom: 14px;
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--white) 11%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--white) 3%, transparent);
+}
+.hp-ta-toolhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.hp-ta-toolhead h3 {
+  margin: 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 15px;
+  color: var(--white);
+}
+.hp-ta-alias {
+  font-size: 11px;
+  color: color-mix(in srgb, var(--white) 45%, transparent);
+}
+.hp-ta-phases {
+  margin-left: auto;
+  font-size: 10.5px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--white) 38%, transparent);
+}
+.hp-ta-purpose {
+  margin: 8px 0 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--white) 78%, transparent);
+}
+.hp-ta-templates { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 11px; }
+.hp-ta-tplhead { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+.hp-ta-tpllabel {
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--white) 52%, transparent);
+}
+.hp-ta-cmd {
+  margin: 0;
+  padding: 10px 13px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--white) 9%, transparent);
+  background: color-mix(in srgb, #000 28%, transparent);
+  overflow-x: auto;
+}
+.hp-ta-cmd code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12.5px;
+  color: color-mix(in srgb, var(--white) 88%, transparent);
+  white-space: pre;
+}
+.hp-ta-tplnote {
+  margin: 5px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--white) 52%, transparent);
+}
+.hp-ta-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.hp-ta-tag {
+  padding: 2px 9px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--white) 7%, transparent);
+  font-size: 10.5px;
+  color: color-mix(in srgb, var(--white) 58%, transparent);
+}
+.hp-ta-kb {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: #e0c15a;
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, #e0c15a 32%, transparent);
+}
+.hp-ta-kb:hover { border-bottom-color: #e0c15a; }
+.hp-ta-flags { margin-top: 12px; }
+.hp-ta-flags summary {
+  cursor: pointer;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--white) 42%, transparent);
+}
+.hp-ta-flags dl { margin: 10px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; }
+.hp-ta-flags dl > div { display: contents; }
+.hp-ta-flags dt {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--white) 78%, transparent);
+}
+.hp-ta-flags dd {
+  margin: 0;
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--white) 55%, transparent);
+}
+@media (max-width: 640px) {
+  .hp-ta-phases, .hp-ta-kb { margin-left: 0; }
+}

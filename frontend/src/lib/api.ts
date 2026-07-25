@@ -1505,3 +1505,44 @@ export type CodeScanReport = { markdown: string; filename: string };
 /** Render the scan you are looking at as a Markdown report (no re-scan). */
 export const renderCodeScanReport = (result: CodeScanResult, signal?: AbortSignal) =>
   postJSON<CodeScanReport>("/codescan/report", result, signal);
+
+// ---- tool arsenal (curated catalog + invocation templates) ---------------- //
+//
+// Read-only catalog. A template is a STRING to copy; it becomes a command only by
+// going through the gated cockpit executor with an explicit human approval.
+
+export type ArsenalTemplate = {
+  label: string;
+  /** Invocation with <placeholders> — copy and fill. */
+  template: string;
+  note: string;
+  placeholders: string[];
+};
+
+export type ArsenalTool = {
+  name: string;
+  aliases: string[];
+  category: string;
+  purpose: string;
+  phases: string[];
+  techniques: string[];
+  docs: string;
+  templates: ArsenalTemplate[];
+  /** Common flags — informational only; the executor has no allowlist. */
+  flags: { flag: string; what: string }[];
+  /** KB entry documenting this tool; null when the KB doesn't (never fabricated). */
+  kb_entry_id: string | null;
+  kb_title: string | null;
+};
+
+export type ArsenalResponse = {
+  total: number;
+  categories: string[];
+  placeholders: Record<string, string>;
+  tools: ArsenalTool[];
+  /** Always true — this is a catalog, not an engine. */
+  executes_nothing: boolean;
+};
+
+export const getArsenal = (signal?: AbortSignal) =>
+  getJSON<ArsenalResponse>("/arsenal", signal);

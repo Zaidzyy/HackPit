@@ -51,11 +51,14 @@ export function ComposingLoader({ config }: { config?: LLMConfig | null }) {
         {reduced ? (
           <span>{PHASES[0]}</span>
         ) : (
+          /* No `exit` transition here on purpose. An exit only runs under an
+             AnimatePresence wrapper, and there isn't one — the phase line is swapped by
+             remounting on `key`. The prop was dead code; adding the wrapper instead would
+             introduce a real exit animation and change how the line reads. */
           <motion.span
             key={i}
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.4 }}
           >
             {PHASES[i]}

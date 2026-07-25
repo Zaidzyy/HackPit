@@ -23,6 +23,9 @@ PY="${PY:-.venv/Scripts/python.exe}"
 echo "== attack-path composer regressions =="
 "$PY" test_attack_path.py
 
+echo "== target-substitution polish (range rewrite / foreign-host flag / target-lock backstop) =="
+"$PY" test_target_substitution.py
+
 echo "== cockpit safety-layer tests (allowlist / target / approval / isolation / order) =="
 "$PY" test_cockpit.py
 

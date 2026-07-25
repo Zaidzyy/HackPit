@@ -1682,6 +1682,15 @@ def compose(
                 phases = merged
             except llm.LLMError:
                 pass
+            # CHANNEL-2 LEAKAGE GUARD (plan quality — the executor's target-lock /
+            # scope-lock is the safety backstop). Writeup steps are skipped: they
+            # are the user's own for THIS box, not model output.
+            leak_hosts, leak_secrets = context_channel.collect_literals(
+                ctx_sources, adapt_facts
+            )
+            phases, context_leaks = context_channel.scrub_phases(
+                phases, leak_hosts, leak_secrets, target
+            )
             phases = _ensure_priority_coverage(phases, priority)
             phases, scoped = _filter_out_of_scope(phases, oos)
             # ATT&CK-tag every step (deterministic, catalog-only) so the plan carries the
@@ -1729,6 +1738,18 @@ def compose(
 
     if not phases:
         raise llm.LLMError("the model did not produce any usable steps")
+
+    # CHANNEL-2 LEAKAGE GUARD — see the note in context_channel.scrub_phases: the
+    # injected writeup/methodology text carries another box's hosts, creds and
+    # paths, and this re-points or drops any that resurfaced in the model's own
+    # output. PLAN QUALITY: the executor's target-lock / scope-lock is the safety
+    # backstop that refuses an off-target host regardless.
+    leak_hosts, leak_secrets = context_channel.collect_literals(
+        ctx_sources, adapt_facts
+    )
+    phases, context_leaks = context_channel.scrub_phases(
+        phases, leak_hosts, leak_secrets, target
+    )
 
     phases = _ensure_priority_coverage(phases, priority)
     phases, scoped = _filter_out_of_scope(phases, oos)

@@ -302,6 +302,198 @@ def build_context_block(sources: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+# --------------------------------------------------------------------------- #
+# CH3 — the LEAKAGE guard
+# --------------------------------------------------------------------------- #
+# Injected background carries box-specific literals: the writeup's 10.10.11.x,
+# its `dev.forest.htb`, its cracked password, its /home/svc-alfresco path, its
+# flag. A model reasoning from that text can echo one into a generated step, and
+# a step aimed at another box's host is a WRONG step.
+#
+# This is a PLAN-QUALITY guard, not the safety boundary. The safety boundary is
+# the executor: every command goes through the target-lock / scope-lock, so a
+# leaked off-target host is REFUSED at execution time whether or not this guard
+# catches it (backend/cockpit — see docs/CHANNEL2-GROUNDING.md). What this guard
+# buys is a plan that doesn't waste the operator's time pointing at the wrong
+# machine, and one that never surfaces another box's credential as if it were
+# an asset of this engagement.
+_LEAK_IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_LEAK_HOST_RE = re.compile(
+    r"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"(?:htb|thm|local|lan|internal|corp|box|vuln|[a-z]{2,24})\b",
+    re.I,
+)
+_LEAK_CRED_RE = re.compile(
+    r"(?:pass(?:word|wd)?|pwd|creds?|secret|api[_-]?key|token)\s*[:=]\s*"
+    r"(?P<v>[^\s'\"`,;<>]{4,64})",
+    re.I,
+)
+_LEAK_PAIR_RE = re.compile(
+    r"\b(?P<v>[A-Za-z][\w.$-]{2,32}:[^\s'\"`,;<>]{4,48})\b"
+)
+_LEAK_FLAG_RE = re.compile(r"\b(?:HTB|THM|FLAG|flag)\{[^}\n]{1,120}\}")
+_LEAK_PATH_RE = re.compile(
+    r"(?:/(?:home|root|Users)/[\w.$-]+(?:/[\w.$-]+)*|"
+    r"[A-Za-z]:\\\\?Users\\\\?[\w.$-]+(?:\\\\?[\w.$-]+)*)"
+)
+
+# Public infrastructure and non-routable addresses that appear in ANY notes and
+# are never a box's identity. Rewriting these would corrupt a legitimate command
+# (a `git clone` of a tool, a loopback listener, a 0.0.0.0 bind).
+_BENIGN_HOSTS = {
+    "github.com", "raw.githubusercontent.com", "gist.github.com", "gitlab.com",
+    "bitbucket.org", "pypi.org", "files.pythonhosted.org", "npmjs.com",
+    "registry.npmjs.org", "example.com", "example.org", "example.net",
+    "localhost", "google.com", "microsoft.com", "live.com", "windows.com",
+    "portswigger.net", "hackthebox.com", "hackthebox.eu", "app.hackthebox.com",
+    "tryhackme.com", "exploit-db.com", "cve.mitre.org", "attack.mitre.org",
+    "owasp.org", "kali.org", "docker.io", "hub.docker.com", "python.org",
+    "crackstation.net", "virustotal.com", "shodan.io", "wikipedia.org",
+}
+_BENIGN_IPS = {"127.0.0.1", "0.0.0.0", "255.255.255.0", "255.255.0.0", "8.8.8.8"}
+# suffixes that only ever name a lab/CTF machine, never public infrastructure
+_LAB_TLDS = {"htb", "thm", "local", "lan", "internal", "corp", "box", "vuln"}
+
+# fields on a step that are MODEL PROSE — the model's own words, so the place a
+# read literal can resurface. A grounded step's commands are copied verbatim from
+# the KB entry and are never model output, so they are not scanned here.
+_PROSE_FIELDS = ("why", "target_adaptation", "on_success", "on_blocked")
+
+
+def _host_literals(text: str) -> set[str]:
+    """Box-identity hosts/IPs in the text (benign public infra excluded)."""
+    out: set[str] = set()
+    for ip in _LEAK_IP_RE.findall(text):
+        parts = ip.split(".")
+        if all(p.isdigit() and int(p) <= 255 for p in parts) and ip not in _BENIGN_IPS:
+            out.add(ip)
+    for host in _LEAK_HOST_RE.findall(text):
+        h = host.lower().strip(".")
+        if _LEAK_IP_RE.fullmatch(h):
+            continue
+        # benign by itself or by parent (docs.github.com is github.com's)
+        labels = h.split(".")
+        if any(
+            ".".join(labels[i:]) in _BENIGN_HOSTS for i in range(len(labels) - 1)
+        ):
+            continue
+        # a bare "file.txt"-shaped token is not a host
+        if h.rsplit(".", 1)[-1] in {"txt", "md", "py", "sh", "js", "json", "yml",
+                                    "yaml", "php", "asp", "aspx", "exe", "dll",
+                                    "zip", "log", "conf", "ini", "xml", "html"}:
+            continue
+        out.add(h)
+        # a lab domain's PARENT is the same box's identity: seeing
+        # "dev.forest.htb" also makes "forest.htb" a literal of that box, and the
+        # model routinely writes the parent (a realm, an /etc/hosts line) even
+        # when only the subdomain was in the text.
+        labels = h.split(".")
+        if len(labels) > 2 and labels[-1] in _LAB_TLDS:
+            out.add(".".join(labels[-2:]))
+    return out
+
+
+def _secret_literals(text: str) -> set[str]:
+    """Credentials, tokens and flags in the text — never substitutable, only dropped."""
+    out: set[str] = set()
+    for m in _LEAK_CRED_RE.finditer(text):
+        out.add(m.group("v"))
+    for m in _LEAK_PAIR_RE.finditer(text):
+        v = m.group("v")
+        if "://" in v or v.split(":", 1)[0].lower() in {"http", "https", "ftp", "smb"}:
+            continue
+        out.add(v)
+    out.update(_LEAK_FLAG_RE.findall(text))
+    out.update(_LEAK_PATH_RE.findall(text))
+    return {v for v in out if len(v) >= 4}
+
+
+def collect_literals(
+    sources: list[dict[str, Any]], facts: str | None = None
+) -> tuple[set[str], set[str]]:
+    """Literals carried by the INJECTED background, split by how they can be fixed.
+
+    Returns ``(hosts, secrets)``: hosts/IPs can be re-pointed at the real target;
+    credentials, flags and box-specific paths cannot be — they can only be
+    dropped. Anything that also appears in ``facts`` (the goal / pasted scope) is
+    NOT a leak: it is this engagement's own identifier, and the operator named it.
+    """
+    text = "\n".join(s.get("excerpt") or "" for s in sources)
+    if not text:
+        return set(), set()
+    hay = (facts or "").lower()
+    hosts = {h for h in _host_literals(text) if h.lower() not in hay}
+    secrets = {s for s in _secret_literals(text) if s.lower() not in hay}
+    return hosts, secrets
+
+
+def _scrub_text(
+    text: str, hosts: set[str], secrets: set[str], target_host: str | None
+) -> tuple[str, int]:
+    """Re-point leaked hosts at the real target; return ("", n) if a secret leaked."""
+    hits = 0
+    low = text.lower()
+    if any(s.lower() in low for s in secrets):
+        return "", 1  # a credential/flag/box path from another box — drop it whole
+    out = text
+    for h in sorted(hosts, key=len, reverse=True):
+        if re.search(re.escape(h), out, re.I):
+            if not target_host:
+                return "", hits + 1  # nothing to re-point at — drop rather than mislead
+            out = re.sub(re.escape(h), target_host, out, flags=re.I)
+            hits += 1
+    return out, hits
+
+
+def scrub_phases(
+    phases: list[dict[str, Any]],
+    hosts: set[str],
+    secrets: set[str],
+    target: str | None,
+) -> tuple[list[dict[str, Any]], int]:
+    """POST-generation scan: no literal read on Channel 2 survives into a step.
+
+    Scanned surfaces are exactly the MODEL's own output — every step's prose
+    fields, and an ai_suggested step's commands. A grounded step's commands come
+    verbatim from the cited KB entry (Channel 1) and a writeup step's come from
+    the user's own writeup, so neither is model output and neither is touched:
+    this guard cannot alter Channel-1 behaviour.
+
+    Leaked hosts are re-pointed at the real target; leaked credentials, flags and
+    box paths are dropped (there is nothing to re-point them to). Returns the
+    phases and the number of scrubbed literals. A no-op when nothing was injected.
+    """
+    if not hosts and not secrets:
+        return phases, 0
+    host_only = re.sub(r"^https?://", "", target or "", flags=re.I).split("/", 1)[0]
+    leaks = 0
+    for ph in phases:
+        for step in ph.get("steps") or []:
+            if step.get("from_writeup"):
+                continue  # the user's own writeup for THIS box — not model output
+            for field in _PROSE_FIELDS:
+                val = step.get(field)
+                if not val:
+                    continue
+                cleaned, n = _scrub_text(val, hosts, secrets, host_only)
+                if n:
+                    leaks += n
+                    if cleaned:
+                        step[field] = cleaned
+                    else:
+                        step.pop(field, None)
+            if not step.get("ai_suggested"):
+                continue  # grounded commands are the KB's, never the model's
+            kept: list[dict[str, Any]] = []
+            for cmd in step.get("commands") or []:
+                cleaned, n = _scrub_text(cmd.get("cmd") or "", hosts, secrets, host_only)
+                leaks += n
+                if cleaned:
+                    kept.append({**cmd, "cmd": cleaned})
+            step["commands"] = kept
+    return phases, leaks
+
+
 def provenance(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Compact, user-facing record of what Channel 2 fed the planner."""
     return [

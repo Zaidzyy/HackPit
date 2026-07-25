@@ -71,6 +71,12 @@ echo "== :code scan tests (normalisation / malformed output / merge / KB links /
 echo "== :code scan SAFETY invariants (static-only / orthogonal / bounded / read-only) =="
 "$PY" test_codescan_safety.py
 
+echo "== tool arsenal tests (catalog / lookup / target-faithful render / provenance tags) =="
+"$PY" test_arsenal.py
+
+echo "== tool arsenal SAFETY invariants (executes nothing / NO gate bypassed / gates unchanged) =="
+"$PY" test_arsenal_safety.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

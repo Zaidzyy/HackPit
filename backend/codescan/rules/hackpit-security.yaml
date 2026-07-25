@@ -1,0 +1,325 @@
+# HackPit bundled Semgrep ruleset — OFFLINE by design.
+#
+# Semgrep's registry configs (`--config auto`, `p/security-audit`) fetch rules over the
+# network. This file is the default instead: a focused, high-signal security set that ships
+# with the repo, so a scan needs no network, no account and no registry availability, and
+# returns the same findings today and next year. A registry config can still be passed
+# explicitly when the operator wants the full catalogue (see docs/CODE-SCAN.md).
+#
+# Scope: the injection/deserialization/crypto/secret classes that a reviewer actually acts on,
+# across the languages this project is most likely to be pointed at. Each rule carries CWE +
+# OWASP metadata so a finding can be grouped and, where possible, tied back to a KB technique.
+rules:
+  # ---------------------------------------------------------------- injection
+  - id: hp-python-sql-string-build
+    languages: [python]
+    severity: ERROR
+    message: >-
+      SQL statement built by string concatenation/formatting. A caller-controlled value lands
+      in the query text. Use parameterized queries (cursor.execute(sql, params)).
+    metadata:
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+      owasp: "A03:2021 - Injection"
+      category: injection
+    patterns:
+      - pattern-either:
+          - pattern: $C.execute("..." % ...)
+          - pattern: $C.execute("..." + ...)
+          - pattern: $C.execute(f"...")
+          - pattern: $C.executemany("..." % ...)
+          - pattern: $C.executemany(f"...")
+
+  - id: hp-python-os-command-injection
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Shell command built from a variable. If any part is caller-controlled this is command
+      injection. Pass an argv LIST and avoid shell=True.
+    metadata:
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+      owasp: "A03:2021 - Injection"
+      category: injection
+    patterns:
+      - pattern-either:
+          - pattern: os.system("..." + ...)
+          - pattern: os.system(f"...")
+          - pattern: os.popen("..." + ...)
+          - pattern: subprocess.$F(..., shell=True, ...)
+
+  - id: hp-js-command-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Shell command built from a template/concatenation. Use execFile/spawn with an argument
+      array instead of exec with an interpolated string.
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+      owasp: "A03:2021 - Injection"
+      category: injection
+    patterns:
+      - pattern-either:
+          - pattern: child_process.exec(`...${...}...`, ...)
+          - pattern: child_process.exec($A + $B, ...)
+          - pattern: exec(`...${...}...`, ...)
+
+  - id: hp-js-eval-on-input
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      eval()/Function() on a dynamic value executes attacker-controlled code. Parse the data
+      instead (JSON.parse) or dispatch through an explicit allowlist.
+    metadata:
+      cwe: "CWE-95: Eval Injection"
+      owasp: "A03:2021 - Injection"
+      category: injection
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: new Function($X)
+      - pattern-not: eval("...")
+
+  - id: hp-python-eval-exec
+    languages: [python]
+    severity: ERROR
+    message: >-
+      eval()/exec() on a dynamic value executes caller-controlled code. Use ast.literal_eval
+      for data, or an explicit dispatch table for behaviour.
+    metadata:
+      cwe: "CWE-95: Eval Injection"
+      owasp: "A03:2021 - Injection"
+      category: injection
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: exec($X)
+      - pattern-not: eval("...")
+      - pattern-not: exec("...")
+
+  # --------------------------------------------------------------------- xss
+  - id: hp-js-dom-xss-sink
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Untrusted value written to an HTML sink (innerHTML / outerHTML / document.write). Set
+      textContent, or sanitize before injecting markup.
+    metadata:
+      cwe: "CWE-79: Improper Neutralization of Input During Web Page Generation"
+      owasp: "A03:2021 - Injection"
+      category: xss
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = $X
+          - pattern: $EL.outerHTML = $X
+          - pattern: document.write($X)
+      - pattern-not: $EL.innerHTML = "..."
+
+  - id: hp-react-dangerously-set-html
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      dangerouslySetInnerHTML renders raw markup. If the value is not sanitized server-side
+      this is stored/reflected XSS.
+    metadata:
+      cwe: "CWE-79: Cross-site Scripting"
+      owasp: "A03:2021 - Injection"
+      category: xss
+    # The attribute must be matched inside an element — a bare JSX attribute is not a
+    # parseable JavaScript expression on its own.
+    pattern: "<$EL dangerouslySetInnerHTML={{__html: $X}} />"
+
+  # ------------------------------------------------------- path / ssrf / xxe
+  - id: hp-python-path-traversal
+    languages: [python]
+    severity: WARNING
+    message: >-
+      File path built from a caller-supplied value. Without normalization + a root check this
+      reads or writes outside the intended directory (../).
+    metadata:
+      cwe: "CWE-22: Improper Limitation of a Pathname to a Restricted Directory"
+      owasp: "A01:2021 - Broken Access Control"
+      category: path-traversal
+    patterns:
+      - pattern-either:
+          - pattern: open($BASE + $USER, ...)
+          - pattern: open(f"...{$USER}...", ...)
+          - pattern: os.path.join($BASE, $REQ.$ANY)
+
+  - id: hp-python-ssrf-request
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Outbound HTTP request to a caller-controlled URL — SSRF. Validate against an allowlist
+      and block link-local/metadata ranges (169.254.169.254).
+    metadata:
+      cwe: "CWE-918: Server-Side Request Forgery"
+      owasp: "A10:2021 - Server-Side Request Forgery"
+      category: ssrf
+    patterns:
+      - pattern-either:
+          - pattern: requests.$M($URL, ...)
+          - pattern: urllib.request.urlopen($URL, ...)
+      - pattern-not: requests.$M("...", ...)
+      - pattern-not: urllib.request.urlopen("...", ...)
+
+  - id: hp-python-xxe-parser
+    languages: [python]
+    severity: ERROR
+    message: >-
+      XML parsed with a resolver that honours external entities — XXE (file read / SSRF).
+      Use defusedxml, or disable entity resolution on the parser.
+    metadata:
+      cwe: "CWE-611: Improper Restriction of XML External Entity Reference"
+      owasp: "A05:2021 - Security Misconfiguration"
+      category: xxe
+    patterns:
+      - pattern-either:
+          - pattern: xml.etree.ElementTree.fromstring($X)
+          - pattern: xml.etree.ElementTree.parse($X)
+          - pattern: lxml.etree.fromstring($X)
+          - pattern: lxml.etree.parse($X)
+
+  # ----------------------------------------------------------- deserialization
+  - id: hp-python-unsafe-deserialization
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Deserializing untrusted data with pickle/yaml.load/marshal executes arbitrary code on
+      load. Use json, or yaml.safe_load.
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      owasp: "A08:2021 - Software and Data Integrity Failures"
+      category: deserialization
+    patterns:
+      - pattern-either:
+          - pattern: pickle.loads(...)
+          - pattern: pickle.load(...)
+          - pattern: cPickle.loads(...)
+          - pattern: marshal.loads(...)
+          - pattern: yaml.load($X)
+
+  # ------------------------------------------------------------------ crypto
+  - id: hp-weak-hash-algorithm
+    languages: [python]
+    severity: WARNING
+    message: >-
+      MD5/SHA1 are broken for security use. Use SHA-256+ for integrity, and bcrypt/scrypt/
+      argon2 for passwords.
+    metadata:
+      cwe: "CWE-327: Use of a Broken or Risky Cryptographic Algorithm"
+      owasp: "A02:2021 - Cryptographic Failures"
+      category: crypto
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5(...)
+          - pattern: hashlib.sha1(...)
+
+  - id: hp-tls-verification-disabled
+    languages: [python]
+    severity: ERROR
+    message: >-
+      TLS certificate verification disabled — the connection is trivially machine-in-the-middled.
+      Fix the trust store instead of turning verification off.
+    metadata:
+      cwe: "CWE-295: Improper Certificate Validation"
+      owasp: "A02:2021 - Cryptographic Failures"
+      category: crypto
+    patterns:
+      - pattern-either:
+          - pattern: requests.$M(..., verify=False, ...)
+          - pattern: ssl._create_unverified_context(...)
+
+  - id: hp-js-tls-verification-disabled
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      NODE_TLS_REJECT_UNAUTHORIZED=0 / rejectUnauthorized:false disables certificate
+      validation process-wide.
+    metadata:
+      cwe: "CWE-295: Improper Certificate Validation"
+      owasp: "A02:2021 - Cryptographic Failures"
+      category: crypto
+    patterns:
+      - pattern-either:
+          - pattern: "rejectUnauthorized: false"
+          - pattern: 'process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"'
+
+  - id: hp-insecure-random-for-secrets
+    languages: [python]
+    severity: WARNING
+    message: >-
+      random module is predictable and not for tokens/keys/passwords. Use the secrets module
+      (or os.urandom).
+    metadata:
+      cwe: "CWE-338: Use of Cryptographically Weak Pseudo-Random Number Generator"
+      owasp: "A02:2021 - Cryptographic Failures"
+      category: crypto
+    patterns:
+      - pattern-either:
+          - pattern: random.randint(...)
+          - pattern: random.choice(...)
+          - pattern: random.random()
+
+  # ------------------------------------------------------------------ authnz
+  - id: hp-jwt-verification-disabled
+    languages: [python, javascript, typescript]
+    severity: ERROR
+    message: >-
+      JWT signature verification disabled — any attacker-minted token is accepted. Verify with
+      the expected algorithm and key.
+    metadata:
+      cwe: "CWE-347: Improper Verification of Cryptographic Signature"
+      owasp: "A07:2021 - Identification and Authentication Failures"
+      category: auth
+    patterns:
+      - pattern-either:
+          - pattern: jwt.decode(..., verify=False, ...)
+          - pattern: 'jwt.decode(..., options={..., "verify_signature": False, ...}, ...)'
+          - pattern: 'jwt.verify($T, $K, {algorithms: ["none"]})'
+
+  # ----------------------------------------------------------------- secrets
+  - id: hp-hardcoded-credential
+    languages: [python, javascript, typescript]
+    severity: WARNING
+    message: >-
+      Credential-looking literal committed in source. Move it to the environment or a secret
+      store, and rotate it — it is in version-control history either way.
+    metadata:
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      owasp: "A07:2021 - Identification and Authentication Failures"
+      category: secrets
+    # A regex, not a syntactic pattern: a committed key is a TOKEN SHAPE, and the shape is
+    # what identifies it regardless of where in the syntax tree it sits.
+    pattern-regex: >-
+      (sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN
+      [A-Z ]*PRIVATE KEY-----)
+
+  # -------------------------------------------------------- misconfiguration
+  - id: hp-debug-mode-enabled
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Debug mode enabled. In production this exposes stack traces, config and (Flask/Werkzeug)
+      an interactive console.
+    metadata:
+      cwe: "CWE-489: Active Debug Code"
+      owasp: "A05:2021 - Security Misconfiguration"
+      category: misconfiguration
+    patterns:
+      - pattern-either:
+          - pattern: $APP.run(..., debug=True, ...)
+          - pattern: DEBUG = True
+
+  - id: hp-cors-allow-all-with-credentials
+    languages: [python, javascript, typescript]
+    severity: ERROR
+    message: >-
+      CORS allows every origin together with credentials — any site can make authenticated
+      cross-origin requests. Pin the origins.
+    metadata:
+      cwe: "CWE-942: Permissive Cross-domain Policy with Untrusted Domains"
+      owasp: "A05:2021 - Security Misconfiguration"
+      category: misconfiguration
+    patterns:
+      - pattern-either:
+          - pattern: 'allow_origins=["*"]'
+          - pattern: 'origin: "*"'

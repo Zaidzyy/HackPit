@@ -11,3 +11,12 @@ dependencies = [
     # Lexical mode needs none of it, so /search still works if this is absent.
     "numpy>=2.0",
 ]
+
+[project.optional-dependencies]
+# STATIC analysis scanners for the :code scan feature (backend/codescan). OPTIONAL on
+# purpose: without them every other route works and the scan endpoints report a clean
+# "not installed" instead of failing. Install with:  cd backend && uv pip install semgrep bandit
+codescan = [
+    "semgrep>=1.100",
+    "bandit>=1.7",
+]

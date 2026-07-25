@@ -1482,3 +1482,9 @@ export const runCodeScan = (
   },
   signal?: AbortSignal
 ) => postJSON<CodeScanResult>("/codescan/scan", payload, signal);
+
+export type CodeScanReport = { markdown: string; filename: string };
+
+/** Render the scan you are looking at as a Markdown report (no re-scan). */
+export const renderCodeScanReport = (result: CodeScanResult, signal?: AbortSignal) =>
+  postJSON<CodeScanReport>("/codescan/report", result, signal);

@@ -6,6 +6,7 @@ import { PageShell } from "./PageShell";
 import {
   ApiError,
   getCodeScanTools,
+  renderCodeScanReport,
   runCodeScan,
   type CodeScanFinding,
   type CodeScanResult,
@@ -40,6 +41,7 @@ export function CodeScanScreen() {
   const [error, setError] = useState<string | null>(null);
   const [sevFilter, setSevFilter] = useState<CodeScanSeverity | "all">("all");
   const [catFilter, setCatFilter] = useState<string>("all");
+  const [exporting, setExporting] = useState(false);
 
   const missing = (tools.data?.tools ?? []).filter((t) => !t.installed);
   const semgrepMissing = !tools.data?.ready && !tools.loading && !!tools.data;
@@ -63,6 +65,30 @@ export function CodeScanScreen() {
       );
     } finally {
       setScanning(false);
+    }
+  }
+
+  /**
+   * Export the scan currently on screen. The backend renders the report from this exact
+   * result rather than re-scanning, so the document can't drift from what was shown.
+   */
+  async function exportReport() {
+    if (!result || exporting) return;
+    setExporting(true);
+    try {
+      const doc = await renderCodeScanReport(result);
+      const url = URL.createObjectURL(
+        new Blob([doc.markdown], { type: "text/markdown;charset=utf-8" })
+      );
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = doc.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError((e as ApiError)?.message ?? "Could not render the report.");
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -160,6 +186,14 @@ export function CodeScanScreen() {
                 <b>{result.summary.files_affected}</b> files ·{" "}
                 {result.files_scanned} files scanned · {result.duration_s}s ·{" "}
                 {result.tools_run.join(" + ") || "no scanner"}
+                <button
+                  type="button"
+                  className="hp-cs-export"
+                  onClick={() => void exportReport()}
+                  disabled={exporting}
+                >
+                  {exporting ? "rendering…" : "export report ↓"}
+                </button>
               </div>
               <div className="hp-cs-sevbar">
                 {SEVERITIES.map((s) => {

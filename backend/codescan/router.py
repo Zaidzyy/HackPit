@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from . import findings as fmod
 from . import kb_link
+from . import report as report_mod
 from . import runner
 
 router = APIRouter(prefix="/codescan", tags=["codescan"])
@@ -205,4 +206,26 @@ def codescan_scan(req: ScanIn = Body(...)) -> dict[str, Any]:
         "findings": [f.to_dict() for f in merged],
         "warnings": warnings,
         "static_only": True,
+    }
+
+
+class ReportOut(BaseModel):
+    markdown: str
+    filename: str = Field(description="Suggested download name.")
+
+
+@router.post("/report", response_model=ReportOut)
+def codescan_report(result: ScanOut = Body(...)) -> dict[str, Any]:
+    """Render a scan result as a Markdown report.
+
+    Takes the scan payload back rather than re-scanning, so the report is exactly the run
+    the operator is looking at — same findings, same counts, no drift between the screen and
+    the document, and no second pass over the tree.
+    """
+    payload = result.model_dump()
+    stem = (payload.get("path") or "codebase").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    safe = "".join(ch if (ch.isalnum() or ch in "-_.") else "-" for ch in stem) or "codebase"
+    return {
+        "markdown": report_mod.render_markdown(payload),
+        "filename": f"code-scan-{safe}.md",
     }

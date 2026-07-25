@@ -17,7 +17,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import attck, catalog
+from . import attck, catalog, tagging
 from .resolver import (SOURCES, footprint, footprint_for_argv, footprint_for_run,
                        footprint_for_step)
 
@@ -26,11 +26,19 @@ router = APIRouter(prefix="/detection", tags=["detection"])
 # run_id -> RunRecord-ish dict | None. Injected by main.py.
 RunLookup = Callable[[str], "dict | None"]
 _RUN_LOOKUP: RunLookup | None = None
+# session_id -> [RunRecord-ish dict]. Injected by main.py.
+RunsLookup = Callable[[str], "list[dict]"]
+_RUNS_LOOKUP: RunsLookup | None = None
 
 
 def set_run_lookup(fn: RunLookup | None) -> None:
     global _RUN_LOOKUP
     _RUN_LOOKUP = fn
+
+
+def set_runs_lookup(fn: RunsLookup | None) -> None:
+    global _RUNS_LOOKUP
+    _RUNS_LOOKUP = fn
 
 
 # --------------------------------------------------------------------------- #
@@ -122,6 +130,48 @@ def detection_footprint_run(
     return out
 
 
+@router.post("/tag")
+def detection_tag(req: FootprintIn) -> dict[str, Any]:
+    """The COMPACT ATT&CK tag for one command — technique ids, tactics, loudness.
+
+    Deterministic and catalog-only (never the LLM), so the UI can tag a list of steps or runs
+    cheaply. ``tag`` is null when the curated map does not cover the command; ask
+    ``POST /detection/footprint`` for the ai_suggested reading in that case.
+    """
+    tag = tagging.tag_argv(req.argv) if req.argv else tagging.tag_command(req.command, req.args)
+    return {"argv": req.argv or " ".join([req.command, *req.args]).strip(), "tag": tag}
+
+
+@router.get("/runs")
+def detection_runs(
+    session_id: str = Query(..., description="Engagement whose recorded runs to tag."),
+) -> dict[str, Any]:
+    """ATT&CK tags for every recorded run on an engagement, plus a coverage summary.
+
+    READ-ONLY, and deliberately kept OUT of the cockpit: the run store and every execution path
+    are untouched by this feature. The tag is a pure function of the command + argv the run
+    already persisted, so it is derived here at read time rather than stored.
+    """
+    if _RUNS_LOOKUP is None:
+        raise HTTPException(status_code=503, detail="runs lookup not wired")
+    runs = _RUNS_LOOKUP(session_id) or []
+    rows, tags = [], []
+    for run in runs:
+        tag = tagging.tag_run(run)
+        tags.append(tag)
+        rows.append({
+            "run_id": run.get("run_id"),
+            "command": run.get("command"),
+            "args": run.get("args") or [],
+            "target": run.get("target"),
+            "mode": run.get("mode") or "lab",
+            "started_at": run.get("started_at"),
+            "step_id": run.get("step_id"),
+            "attck": tag,
+        })
+    return {"session_id": session_id, "runs": rows, "summary": tagging.summarize(tags)}
+
+
 @router.get("/technique/{technique_id}")
 def detection_technique(technique_id: str) -> dict[str, Any]:
     """One ATT&CK technique as the panel renders it (tactic, data components, log channels)."""
@@ -171,4 +221,4 @@ def detection_catalog() -> dict[str, Any]:
     }
 
 
-__all__ = ["router", "set_run_lookup"]
+__all__ = ["router", "set_run_lookup", "set_runs_lookup"]

@@ -60,6 +60,7 @@ from adgraph.router import router as ad_router, set_grounder  # noqa: E402
 from detection.router import (  # noqa: E402  (backend/detection — purple-team footprint)
     router as detection_router,
     set_run_lookup as set_detection_run_lookup,
+    set_runs_lookup as set_detection_runs_lookup,
 )
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
@@ -363,9 +364,16 @@ def _detection_run_lookup(run_id: str) -> dict | None:
     return rec.model_dump() if rec is not None else None
 
 
-# Wire the run lookup into the detection router (so /detection/footprint/run/{id} can describe
-# what a run left behind). Read path only — the detection package never executes anything.
+def _detection_runs_lookup(session_id: str) -> list[dict]:
+    """Read an engagement's recorded runs for the detection panel to TAG. Read-only."""
+    return [r.model_dump() for r in cockpit_runstore.list_runs_for_session(session_id)]
+
+
+# Wire the run lookups into the detection router (so /detection/footprint/run/{id} and
+# /detection/runs can describe what runs left behind). READ path only — the detection package
+# never executes anything, and the cockpit package is untouched by this feature.
 set_detection_run_lookup(_detection_run_lookup)
+set_detection_runs_lookup(_detection_runs_lookup)
 
 
 # --------------------------------------------------------------------------- #
@@ -567,6 +575,14 @@ class AttackStep(BaseModel):
         default=None,
         description="Optional branch hint — the pivot if this step 403s or fails. "
         "Present only where a real branch exists.",
+    )
+    attck: dict[str, Any] | None = Field(
+        default=None,
+        description="DETECTION FOOTPRINT TAG (purple-team, read-only). The MITRE ATT&CK "
+        "technique(s) + tactic this step's first command maps to, plus a loud-vs-quiet "
+        "rating — i.e. what a DEFENDER would see if this step ran. Derived deterministically "
+        "from the curated ATT&CK/SigmaHQ map (no LLM); null when the command is not in that "
+        "map. Describes detection only — it is never guidance on avoiding it.",
     )
 
 

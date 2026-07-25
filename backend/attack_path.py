@@ -24,6 +24,7 @@ import re
 from typing import Any, Callable
 
 import llm
+from detection import tagging as detection_tagging  # ATT&CK tags on steps (read-only, no LLM)
 
 # --------------------------------------------------------------------------- #
 # the five canonical phases, in execution order
@@ -1611,6 +1612,9 @@ def compose(
                 pass
             phases = _ensure_priority_coverage(phases, priority)
             phases, scoped = _filter_out_of_scope(phases, oos)
+            # ATT&CK-tag every step (deterministic, catalog-only) so the plan carries the
+            # defender's view alongside the operator's. Purely additive annotation.
+            phases = detection_tagging.tag_phases(phases)
             damaged = bool((wu.get("meta") or {}).get("source_damaged"))
             return {
                 "goal": goal,
@@ -1647,6 +1651,7 @@ def compose(
     phases, scoped = _filter_out_of_scope(phases, oos)
     if not phases:
         raise llm.LLMError("all composed steps were out of scope")
+    phases = detection_tagging.tag_phases(phases)   # ATT&CK tag each step (see above)
 
     return {
         "goal": goal,

@@ -183,12 +183,16 @@ _METHODOLOGY_QUERY = "methodology workflow approach process phases prioritisatio
 def is_methodology_doc(entry: dict) -> bool:
     """True when the entry is a METHODOLOGY / workflow / process doc.
 
+    Decided on the TITLE, deliberately — the KB's ``methodology`` CATEGORY is the
+    HackTricks section name, and two thirds of what sits in it are ordinary
+    technique pages ("Docker Forensics", "Telecom Network Exploitation"). Reading
+    one of those as "the methodology to follow" would frame a single technique as
+    the plan's shape. The process words are the reliable signal.
+
     This is a Channel-2 SELECTION predicate only. It decides what may be read as
     background; it does not (and must not) feed step-eligibility — that stays
     entirely with ``attack_path.is_step_eligible``.
     """
-    if entry.get("category") == "methodology":
-        return True
     return bool(_METHODOLOGY_TITLE_RE.search(entry.get("title") or ""))
 
 

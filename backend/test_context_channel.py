@@ -84,6 +84,11 @@ def test_channel1_filters_unchanged() -> None:
     # selection predicate is independent of step-eligibility in both directions.
     assert CC.is_methodology_doc(_METHODOLOGY) is True
     assert CC.is_methodology_doc(arsenal) is False  # "arsenal" is a Channel-1 concern
+    # the KB's "methodology" CATEGORY is a section name and mostly holds ordinary
+    # technique pages — one must never be read as "the methodology to follow".
+    assert CC.is_methodology_doc(
+        _entry(id="ht-docker-forensics", title="Docker Forensics", category="methodology")
+    ) is False, "a technique page in the methodology category is not a methodology"
     for doc in (_LEAKY_WRITEUP, arsenal):
         before = AP.is_step_eligible(doc)
         CC.writeup_context(doc, "goal")

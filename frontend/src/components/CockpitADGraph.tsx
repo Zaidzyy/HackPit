@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
+import { CockpitADOrchestrator } from "./CockpitADOrchestrator";
 import { DetectionDisclosure } from "./DetectionPanel";
 import {
   ApiError,
@@ -63,7 +64,12 @@ export function CockpitADGraph({
   engagementId?: string | null;
   scopeLabel?: string | null;
 }) {
+  const [graphId, setGraphId] = useState<string | null>(null);
   const [domain, setDomain] = useState<string | null>(null);
+  // ORCHESTRATION STATE — which principals the operator controls and which edges are walked.
+  // Held here so the agent's proposals and the rendered path stay in step.
+  const [owned, setOwned] = useState<string[]>([]);
+  const [traversed, setTraversed] = useState<string[]>([]);
   const [nodes, setNodes] = useState<Map<string, ADNode>>(new Map());
   const [result, setResult] = useState<ADPathResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -98,7 +104,10 @@ export function CockpitADGraph({
     setOpenEdge(null);
     try {
       const ing = await adIngest({ use_sample: true, session_id: sessionId });
+      setGraphId(ing.graph_id);
       setDomain(ing.domain);
+      setOwned([SAMPLE_START]);
+      setTraversed([]);
       setWarnings(ing.warnings);
       // compute the route to DA (sample's owned start is TYWIN) + load the node map for icons
       const [pathRes, g] = await Promise.all([
@@ -263,6 +272,27 @@ export function CockpitADGraph({
           {walked.size}/{path.edges.length} walked
         </span>
       </header>
+
+      {/* AD ORCHESTRATION — the agent proposes the next edge; the human approves each one.
+          It runs nothing itself: approval goes to the same gated executor the manual walk
+          below already uses, and the walk never advances on its own. */}
+      {graphId && (
+        <CockpitADOrchestrator
+          graphId={graphId}
+          owned={owned}
+          traversed={traversed}
+          engagementId={engagementId}
+          scopeLabel={scopeLabel}
+          sessionId={sessionId}
+          onAdvanced={(next, kind) => {
+            setOwned(next.owned);
+            setTraversed(next.traversed);
+            // light the matching hop on the rendered route, if this edge is on it
+            const idx = path.edges.findIndex((e) => e.kind === kind);
+            if (idx >= 0) setWalked((w) => new Set(w).add(idx));
+          }}
+        />
+      )}
 
       {/* the route: typed nodes with abuse edges between them, igniting in sequence */}
       <div className="hp-adg-route" role="list">

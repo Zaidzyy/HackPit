@@ -56,7 +56,11 @@ from cockpit import runstore as cockpit_runstore  # noqa: E402
 from cockpit import engagement as cockpit_engagement  # noqa: E402
 from cockpit.router import router as cockpit_router  # noqa: E402
 from adgraph import store as ad_store  # noqa: E402  (backend/adgraph — AD attack-path graph)
-from adgraph.router import router as ad_router, set_grounder  # noqa: E402
+from adgraph.router import (  # noqa: E402
+    router as ad_router,
+    set_grounder,
+    set_scope_resolver as set_ad_scope_resolver,
+)
 from detection.router import (  # noqa: E402  (backend/detection — purple-team footprint)
     router as detection_router,
     set_run_lookup as set_detection_run_lookup,
@@ -1232,6 +1236,13 @@ def _loop_scope_context(engagement_id: str | None) -> orchestrator.ScopeContext 
         out_of_scope_seen=tuple(record.discovered_out_of_scope),
         in_scope=matcher.in_scope,
     )
+
+
+# Wire that SAME resolver into the AD orchestrator. Mode resolution lives here, so the AD
+# proposer — like the cockpit loop's — has no capability to enter or look up an engagement; it
+# only ever receives an inert, read-only description of what it may target, and an id that is
+# set but not active fails CLOSED with 409 rather than silently degrading to lab mode.
+set_ad_scope_resolver(_loop_scope_context)
 
 
 @app.post("/sessions/{session_id}/loop/propose", response_model=LoopProposeOut)

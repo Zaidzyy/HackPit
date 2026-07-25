@@ -1090,6 +1090,110 @@ export const adTechnique = (
   signal?: AbortSignal
 ) => postJSON<ADTechnique>("/cockpit/ad/technique", body, signal);
 
+// ---- AD orchestration: the agent PROPOSES the next edge ------------------- //
+
+/**
+ * One proposed abuse step. The agent picked the EDGE from the graph's real frontier; the
+ * command came from the deterministic KB-grounded technique catalog, not from the model.
+ * Nothing here has run — approving it sends it to the same gated executor every other
+ * cockpit command uses.
+ */
+export type ADProposal = {
+  edge: {
+    source: string;
+    target: string;
+    kind: string;
+    source_label: string;
+    target_label: string;
+  };
+  technique: {
+    title: string | null;
+    summary: string | null;
+    tool: string | null;
+    destructive: boolean;
+    grounded: boolean;
+    entry_id: string | null;
+    entry_title: string | null;
+  };
+  command: string;
+  args: string[];
+  cmd_display: string;
+  rationale: string;
+  /** False for an edge that is inherited rights (MemberOf) — nothing to run, nothing to approve. */
+  runnable: boolean;
+  /**
+   * Why a command is or isn't present. "ready" = we have argv. "note-only" = the technique is
+   * prose, which is correct for inherited rights. "unparsable" = a real command line came back
+   * that wouldn't tokenise.
+   */
+  resolution: "ready" | "note-only" | "unparsable";
+  /**
+   * A DESTRUCTIVE abuse with no runnable command. There is no executor gate to lean on here
+   * because there is nothing to send to it, so this must never render as the benign
+   * "nothing to run" case — whatever the operator supplies by hand changes a real domain.
+   */
+  destructive_unresolved: boolean;
+  /** Advisory pre-check against the SAME target/scope matcher the executor uses. */
+  gate_ok: boolean;
+  gate_reason: string;
+  dangerous_flags: string[];
+  /** True when the executor WILL demand the explicit red confirm (mirrors its rule exactly). */
+  requires_confirm: boolean;
+  /** The technique catalog's independent "this is destructive" opinion. */
+  destructive_technique: boolean;
+};
+
+export type ADProposeResult = {
+  done: boolean;
+  proposal: ADProposal | null;
+  reason: string | null;
+  candidates: number;
+  goal: string;
+  goal_label: string;
+  state: { owned: string[]; traversed: string[] };
+  mode: "lab" | "engagement";
+  note: string;
+};
+
+export type ADAdvanceResult = {
+  state: { owned: string[]; traversed: string[] };
+  owned_label: string;
+  objective_reached: boolean;
+  remaining_frontier: number;
+};
+
+/** Ask the agent for the next edge to abuse. Executes NOTHING — returns a proposal. */
+export const adOrchestratePropose = (
+  body: {
+    graph_id: string;
+    owned: string[];
+    traversed?: string[];
+    target?: string | null;
+    dc?: string | null;
+    engagement_id?: string | null;
+    avoid?: string[];
+  },
+  signal?: AbortSignal
+) => postJSON<ADProposeResult>("/cockpit/ad/orchestrate/propose", body, signal);
+
+/**
+ * Record that an abuse step SUCCEEDED. `run_id` must name an approved run that exited 0 —
+ * the walk does not advance on a refused, unapproved or failed step. Called by the UI after
+ * a run the human approved; never automatically.
+ */
+export const adOrchestrateAdvance = (
+  body: {
+    graph_id: string;
+    owned: string[];
+    traversed: string[];
+    source: string;
+    target: string;
+    kind: string;
+    run_id?: string | null;
+  },
+  signal?: AbortSignal
+) => postJSON<ADAdvanceResult>("/cockpit/ad/orchestrate/advance", body, signal);
+
 /** Build (do NOT run) the collector ExecRequest. The returned `request` is sent to
  *  execCockpitStream to run through the gated executor (approve-each, scope-locked DC). */
 export type ADCollectPreview = {

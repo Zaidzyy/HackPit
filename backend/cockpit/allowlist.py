@@ -99,6 +99,87 @@ _SHELL_MARKERS = (
 )
 
 
+# --------------------------------------------------------------------------- #
+# AD ABUSE SHAPES
+#
+# Added because the AD agent DRAFTS these steps, which makes the red confirm the last thing
+# standing between a proposal and a domain. Measured against the AD technique catalog, 10 of
+# its 12 destructive abuses — DCSync and ForceChangePassword among them — resolved to commands
+# nothing above flagged: they are not interpreters, not netcat, not msfvenom, so they sailed
+# through on approval alone.
+#
+# Flagged by SHAPE, not by binary. `nxc --shares` (read-only) must stay clean while
+# `nxc --sam` (credential dump) trips, because a confirm that fires on everything is a confirm
+# the operator learns to click through — confirm fatigue is its own safety failure.
+# --------------------------------------------------------------------------- #
+def _ad_tool(command: str) -> str:
+    """Normalise an AD tool name. impacket ships the same script three ways
+    (``secretsdump.py``, ``impacket-secretsdump``, ``secretsdump``)."""
+    base = os.path.basename(str(command)).lower()
+    for suffix in (".py", ".exe", ".ps1"):
+        base = base.removesuffix(suffix)
+    return base.removeprefix("impacket-")
+
+
+# Always credential theft — replicating, dumping or parsing secrets.
+_AD_CRED_DUMP = frozenset({
+    "secretsdump", "mimikatz", "lsassy", "nanodump", "procdump", "pwdump", "gsecdump",
+    "safetykatz", "sharpdump", "dumpert", "handlekatz", "krbrelayx",
+})
+# Always remote code execution on a domain host — drops a service/process on a real machine.
+_AD_REMOTE_EXEC = frozenset({
+    "psexec", "wmiexec", "smbexec", "atexec", "dcomexec", "evil-winrm", "winrs",
+    "smbclient-ng", "wmipersist",
+})
+# Always mutates the directory, mints credentials, or coerces/relays authentication.
+_AD_DIR_WRITE = frozenset({
+    "dacledit", "owneredit", "rbcd", "addcomputer", "pywhisker", "whisker",
+    "targetedkerberoast", "ticketer", "goldenpac", "raisechild", "ntlmrelayx",
+    "mitm6", "responder", "petitpotam", "coercer", "printerbug", "dfscoerce",
+    "shadowcoerce", "certipy-relay",
+})
+# Argument shapes that turn an otherwise-general tool into a credential dump.
+_AD_DUMP_MARKERS = (
+    "-just-dc", "--ntds", "--sam", "--lsa", "-use-vss", "dcsync", "lsadump",
+    "sekurlsa", "-m lsassy", "-m nanodump", "-m procdump", "--gmsa", "--laps",
+    "--dpapi", "-just-dc-ntlm", "-just-dc-user",
+)
+# Per-tool subcommands that mutate the directory or mint credentials.
+_AD_WRITE_SUBCOMMANDS: dict[str, tuple[str, ...]] = {
+    "bloodyad": ("set ", "add ", "remove "),
+    "certipy": ("req", "shadow", "relay", "forge", "ca", "template", "cert", "auth"),
+    "net": ("password", "/add", "/delete", "/active:"),
+    "rubeus": ("ptt", "golden", "silver", "s4u", "asktgt", "changepw", "tgtdeleg", "dump"),
+    "bloodhound-ce": (),
+}
+
+
+def _ad_abuse_reasons(command: str, args: list[str]) -> list[str]:
+    """Reasons an AD-abuse command must demand the explicit confirm (empty if it need not)."""
+    base = _ad_tool(command)
+    blob = " ".join(str(a) for a in args).lower()
+    reasons: list[str] = []
+
+    if base in _AD_CRED_DUMP:
+        reasons.append(f"{base}: dumps/replicates domain credentials")
+    if base in _AD_REMOTE_EXEC:
+        reasons.append(f"{base}: remote code execution on a domain host")
+    if base in _AD_DIR_WRITE:
+        reasons.append(f"{base}: modifies the directory / coerces or relays authentication")
+
+    for marker in _AD_DUMP_MARKERS:
+        if marker in blob:
+            reasons.append(f"credential-dump flag: {marker!r}")
+            break
+
+    verbs = _AD_WRITE_SUBCOMMANDS.get(base, ())
+    for verb in verbs:
+        if verb in blob:
+            reasons.append(f"{base} {verb.strip()}: writes to the directory / mints credentials")
+            break
+    return reasons
+
+
 def dangerous_command_heuristic(command: str, args: list[str]) -> list[str]:
     """Return human-readable reasons this command looks dangerous (empty if it doesn't).
 
@@ -123,6 +204,10 @@ def dangerous_command_heuristic(command: str, args: list[str]) -> list[str]:
             reasons.append(f"{cmd}: raw network tool — can carry a reverse shell")
     if cmd in _FRAMEWORKS:
         reasons.append(f"{cmd}: exploitation framework / payload generator")
+
+    # AD ABUSE — credential replication, remote exec on a domain host, directory writes.
+    # Additive: it can only ever ADD reasons, so every command flagged before is still flagged.
+    reasons.extend(_ad_abuse_reasons(command, args))
 
     # scan the whole arg vector for reverse-shell / code-exec shapes (payloads, one-liners)
     blob = " ".join(str(a) for a in args).lower()

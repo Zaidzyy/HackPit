@@ -18,6 +18,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from . import orchestrator as ad_orch
 from . import store
 from .collector import CollectorParams, ParseError, build_collector_request, ingest_collection
 from .parser import parse_collection
@@ -30,10 +31,29 @@ router = APIRouter(prefix="/cockpit/ad", tags=["ad-graph"])
 # Injected by main.py (set_grounder) — maps a technique's KB seeds to a grounded command set.
 _GROUNDER: Grounder | None = None
 
+# Injected by main.py (set_scope_resolver) — maps an engagement id to an INERT, read-only
+# description of what the orchestrator may target. Deliberately injected rather than looked up
+# here: like the cockpit loop's proposer, this package must have no capability to enter or
+# resolve an engagement, only to be handed one. The resolver also fails CLOSED (409) on an id
+# that is set but not active, so AD orchestration is never silently downgraded to lab mode
+# against a real-target id.
+_SCOPE_RESOLVER: Any | None = None
+
 
 def set_grounder(fn: Grounder | None) -> None:
     global _GROUNDER
     _GROUNDER = fn
+
+
+def set_scope_resolver(fn: Any | None) -> None:
+    global _SCOPE_RESOLVER
+    _SCOPE_RESOLVER = fn
+
+
+def _scope_ctx(engagement_id: str | None):
+    if not engagement_id or _SCOPE_RESOLVER is None:
+        return None
+    return _SCOPE_RESOLVER(engagement_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -222,5 +242,145 @@ def ad_collect_preview(req: CollectPreviewIn) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# AD ORCHESTRATION — the agent proposes the next edge; the human approves each one
+#
+# There is NO run endpoint here, deliberately. An approved proposal is sent to the SAME
+# gated executor every other cockpit command uses (POST /cockpit/exec), which re-checks
+# approval, scope/target and the danger confirm. Adding a run path here would be a second
+# execution path, which is exactly what must not exist.
+# --------------------------------------------------------------------------- #
+class OrchestrateIn(BaseModel):
+    graph_id: str
+    owned: list[str] = Field(
+        default_factory=list, description="Node ids of principals the operator controls."
+    )
+    traversed: list[str] = Field(
+        default_factory=list, description="Edge keys ('source|target|kind') already walked."
+    )
+    target: str | None = Field(
+        None, description="Objective node id; omit to auto-pick Domain Admins."
+    )
+    dc: str | None = Field(None, description="Domain controller host, for command templating.")
+    engagement_id: str | None = Field(
+        None, description="Engagement to scope the proposal's pre-check to. Omit for lab."
+    )
+    avoid: list[str] = Field(
+        default_factory=list, description="Edge keys the operator skipped — do not re-propose."
+    )
+
+
+class AdvanceIn(BaseModel):
+    """Advance the walk AFTER a step actually succeeded. Never auto-called."""
+
+    graph_id: str
+    owned: list[str] = Field(default_factory=list)
+    traversed: list[str] = Field(default_factory=list)
+    source: str
+    target: str
+    kind: str
+    run_id: str | None = Field(
+        None, description="The recorded run that carried out this abuse. Required unless the "
+        "edge resolves to no command (inherited rights, e.g. MemberOf).",
+    )
+
+
+@router.post("/orchestrate/propose")
+def ad_orchestrate_propose(req: OrchestrateIn) -> dict[str, Any]:
+    """Propose the NEXT edge to abuse. Executes NOTHING.
+
+    Returns a proposal the human reviews and explicitly approves. Approval sends it to
+    ``POST /cockpit/exec`` — the same gated executor as every other command. Nothing here
+    runs, batches, or approves, and there is no way to ask this endpoint to.
+    """
+    import llm  # local import: the reasoning layer is optional, the graph works without it
+
+    graph = _rebuild_graph(_load_graph_obj(req.graph_id))
+    goal = req.target or default_high_value_target(graph)
+    if not goal:
+        raise HTTPException(status_code=422, detail="no high-value objective in this collection")
+    state = ad_orch.AdState.from_dict({"owned": req.owned, "traversed": req.traversed})
+    if not state.owned:
+        raise HTTPException(
+            status_code=422,
+            detail="no owned principal — mark the principal you control before asking for a "
+                   "proposal; the agent reasons out from what you already have",
+        )
+    try:
+        out = ad_orch.propose_next(
+            graph, state, goal, llm.load_config(), _GROUNDER, req.dc,
+            _scope_ctx(req.engagement_id), req.avoid,
+        )
+    except llm.LLMError as exc:
+        # the manual walk the operator already had is unaffected
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {
+        **out,
+        "goal": goal,
+        "goal_label": (graph.node(goal).label if graph.node(goal) else goal),
+        "state": state.to_dict(),
+        "mode": "engagement" if req.engagement_id else "lab",
+        "note": "PROPOSAL ONLY — nothing has run. Approve it to send it to POST /cockpit/exec, "
+                "which re-checks approval, scope and the danger confirm.",
+    }
+
+
+@router.post("/orchestrate/advance")
+def ad_orchestrate_advance(req: AdvanceIn) -> dict[str, Any]:
+    """Record that an abuse step SUCCEEDED: mark the edge traversed, the target owned.
+
+    Advancement is tied to evidence, not to a claim. ``run_id`` must name a recorded run that
+    was APPROVED and exited 0 — so the walk cannot move forward on a step that was refused,
+    never approved, or failed. The only exception is an edge that resolves to no command at
+    all (inherited rights like MemberOf): there is nothing to run, so there is no run to cite,
+    and the server confirms that from the graph rather than taking the client's word.
+
+    This endpoint executes nothing. It is called by the UI after a run the human approved.
+    """
+    from cockpit import runstore
+
+    graph = _rebuild_graph(_load_graph_obj(req.graph_id))
+    edge = next(
+        (e for e in graph.edges
+         if e.source == req.source and e.target == req.target and e.kind == req.kind),
+        None,
+    )
+    if edge is None:
+        raise HTTPException(status_code=404, detail="that edge is not in this collection")
+
+    prop = ad_orch.proposal_for_edge(graph, edge, "", _GROUNDER)
+    if prop["runnable"]:
+        if not req.run_id:
+            raise HTTPException(
+                status_code=422,
+                detail="this edge has a command, so advancing it requires the run_id of the "
+                       "approved run that carried it out",
+            )
+        run = runstore.get_run(req.run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="no such run")
+        if not getattr(run, "approved", False):
+            raise HTTPException(
+                status_code=409,
+                detail="that run was not approved — the walk does not advance on an "
+                       "unapproved step",
+            )
+        if run.exit_code != 0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"that run exited {run.exit_code} — the walk advances only on success",
+            )
+
+    state = ad_orch.AdState.from_dict({"owned": req.owned, "traversed": req.traversed})
+    new_state = ad_orch.advance(state, req.source, req.target, req.kind)
+    goal = default_high_value_target(graph)
+    return {
+        "state": new_state.to_dict(),
+        "owned_label": (graph.node(req.target).label if graph.node(req.target) else req.target),
+        "objective_reached": bool(goal and new_state.is_owned(goal)),
+        "remaining_frontier": len(ad_orch.frontier(graph, new_state)),
+    }
+
+
 # expose the reconstructor for tests
-__all__ = ["router", "set_grounder"]
+__all__ = ["router", "set_grounder", "set_scope_resolver"]

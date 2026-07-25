@@ -56,6 +56,9 @@ echo "== AD graph parser + path tests (BloodHound -> graph -> route to Domain Ad
 echo "== AD collector tests (argv-only / unapproved / scope-locked DC / failure / no exec) =="
 "$PY" test_adgraph_collector.py
 
+echo "== AD orchestration tests (frontier / proposals / synthetic walk to Domain Admin) =="
+"$PY" test_adorch.py
+
 echo "== AD ORCHESTRATION safety (agent proposes only / never-auto-run / destructive red-confirm) =="
 "$PY" test_adorch_safety.py
 

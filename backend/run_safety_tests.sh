@@ -62,6 +62,9 @@ echo "== detection footprint tests (matching / ATT&CK / grounded+ai_suggested / 
 echo "== detection SAFETY invariants (no exec / read-only / cockpit untouched / describes-not-evades) =="
 "$PY" test_detection_safety.py
 
+echo "== Channel-2 context grounding (Channel-1 filters unchanged / leak guard / no-op / budget) =="
+"$PY" test_context_channel.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

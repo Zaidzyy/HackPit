@@ -17,6 +17,11 @@ import { useApi } from "@/lib/useApi";
 const SCAN_COLOR = "#7ec8a0";
 
 const SEVERITIES: CodeScanSeverity[] = ["critical", "high", "medium", "low", "info"];
+/** The severities worth opening on. A repo-wide scan returns hundreds of `low` findings —
+ *  mostly Bandit `assert_used` in test files — and opening on all of them buries the few
+ *  that matter. Low/info are one click away, never removed. */
+const IMPORTANT: CodeScanSeverity[] = ["critical", "high", "medium"];
+type SevFilter = CodeScanSeverity | "all" | "important";
 const SEV_COLOR: Record<CodeScanSeverity, string> = {
   critical: "#ff5c7a",
   high: "#f0776a",
@@ -39,7 +44,9 @@ export function CodeScanScreen() {
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<CodeScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [sevFilter, setSevFilter] = useState<CodeScanSeverity | "all">("all");
+  // Defaults to medium+ so the screen opens on signal, not on noise. The scan and its
+  // data are unchanged — this is only what is shown first.
+  const [sevFilter, setSevFilter] = useState<SevFilter>("important");
   const [catFilter, setCatFilter] = useState<string>("all");
   const [exporting, setExporting] = useState(false);
 
@@ -96,7 +103,10 @@ export function CodeScanScreen() {
     const all = result?.findings ?? [];
     return all.filter(
       (f) =>
-        (sevFilter === "all" || f.severity === sevFilter) &&
+        (sevFilter === "all" ||
+          (sevFilter === "important"
+            ? IMPORTANT.includes(f.severity)
+            : f.severity === sevFilter)) &&
         (catFilter === "all" || f.category === catFilter)
     );
   }, [result, sevFilter, catFilter]);
@@ -196,6 +206,24 @@ export function CodeScanScreen() {
                 </button>
               </div>
               <div className="hp-cs-sevbar">
+                {/* SCOPE — medium+ by default; low/info are one click away, never removed. */}
+                <button
+                  type="button"
+                  className={`hp-cs-scope${sevFilter === "important" ? " hp-on" : ""}`}
+                  onClick={() => setSevFilter("important")}
+                  title="Show critical, high and medium only"
+                >
+                  medium+
+                </button>
+                <button
+                  type="button"
+                  className={`hp-cs-scope${sevFilter === "all" ? " hp-on" : ""}`}
+                  onClick={() => setSevFilter("all")}
+                  title="Show every finding, including low and info"
+                >
+                  all {result.summary.total}
+                </button>
+                <span className="hp-cs-sevsep" aria-hidden />
                 {SEVERITIES.map((s) => {
                   const n = result.summary.by_severity[s] ?? 0;
                   if (!n) return null;
@@ -211,12 +239,12 @@ export function CodeScanScreen() {
                     </button>
                   );
                 })}
-                {(sevFilter !== "all" || catFilter !== "all") && (
+                {(sevFilter !== "important" || catFilter !== "all") && (
                   <button
                     type="button"
                     className="hp-cs-clear"
                     onClick={() => {
-                      setSevFilter("all");
+                      setSevFilter("important");
                       setCatFilter("all");
                     }}
                   >

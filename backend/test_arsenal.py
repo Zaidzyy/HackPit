@@ -134,6 +134,37 @@ def test_tagging_reads_the_command_not_the_model() -> None:
     print("  tagging reads the program name; labels untouched; unknown stays untagged: PASS")
 
 
+def test_a_leading_comment_does_not_hide_the_tool() -> None:
+    """KB entries routinely open with an explanatory comment. Reading only the first line
+    meant the step went untagged even though the next line ran a catalogued tool."""
+    ars = _load()
+    phases = [{"phase": "enumeration", "steps": [
+        {"title": "commented", "commands": [
+            {"cmd": "# enumerate SMB shares on the DC\nnxc smb 10.0.0.5 -u u -p p --shares"}]},
+        {"title": "blank-first", "commands": [{"cmd": "\n\nnmap -sCV 10.0.0.5"}]},
+        {"title": "multi-comment", "commands": [
+            {"cmd": "# step 1\n#  (and a note)\nsudo /usr/bin/ffuf -u http://x/FUZZ"}]},
+        {"title": "comment-only", "commands": [{"cmd": "# just a note, nothing to run"}]},
+    ]}]
+    planner.tag_steps(ars, phases)
+    got = {s["title"]: (s.get("arsenal") or {}).get("tool") for s in phases[0]["steps"]}
+    assert got["commented"] == "netexec", f"a leading # comment must not hide the tool: {got}"
+    assert got["blank-first"] == "nmap"
+    assert got["multi-comment"] == "ffuf", "wrapper+path stripping still applies after comments"
+    assert got["comment-only"] is None, "a comment-only block runs nothing and stays untagged"
+
+    # …and a NORMAL command is parsed exactly as before — the change is leading-only
+    for cmd, expect in (("nmap -sCV 10.0.0.5", "nmap"),
+                        ("sudo /usr/bin/ffuf -u x", "ffuf"),
+                        ("subfinder -d x | httpx", "subfinder"),
+                        ("echo hello", None)):
+        tool = planner.match_tool(ars, cmd)
+        assert (tool.name if tool else None) == expect, f"{cmd!r} changed: {tool}"
+    # a '#' that is an ARGUMENT, not a comment line, is untouched
+    assert planner._program("nmap -sCV 10.0.0.5 # scan") == "nmap"
+    print("  a leading #-comment no longer hides the tool; normal commands parse unchanged: PASS")
+
+
 def test_empty_arsenal_is_a_no_op() -> None:
     empty = loader.Arsenal()
     assert planner.prompt_block(empty) == ""
@@ -198,6 +229,7 @@ if __name__ == "__main__":
     test_render_never_invents_a_host()
     test_render_uses_the_composers_substitution()
     test_tagging_reads_the_command_not_the_model()
+    test_a_leading_comment_does_not_hide_the_tool()
     test_empty_arsenal_is_a_no_op()
     test_prompt_block_is_bounded_and_says_it_is_a_reference()
     test_prompt_block_ranks_on_the_goals_words()

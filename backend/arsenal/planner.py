@@ -36,11 +36,23 @@ _WRAPPER_RE = re.compile(r"^\s*(?:sudo|time|env\s+\S+=\S+|nohup)\s+", re.I)
 
 
 def _program(cmd: str) -> str:
-    """The program a command line actually runs — first token, wrappers and paths stripped."""
+    """The program a command line actually runs — first token, wrappers and paths stripped.
+
+    Leading blank and ``#`` comment lines are skipped to find the first REAL command line.
+    KB entries routinely open with an explanatory comment (``# enumerate SMB shares``), and
+    reading only line one meant the whole step went untagged even though the next line ran a
+    catalogued tool. Only LEADING comments/blanks are skipped — once a real line is found it
+    is parsed exactly as before.
+    """
     text = (cmd or "").strip()
     if not text:
         return ""
-    text = text.split("\n", 1)[0]
+    text = next(
+        (ln for ln in text.splitlines() if ln.strip() and not ln.strip().startswith("#")),
+        "",
+    )
+    if not text:
+        return ""
     # take the last pipeline segment's head too, so `subfinder ... | httpx ...` reports both
     text = _WRAPPER_RE.sub("", text)
     head = text.split()[0] if text.split() else ""

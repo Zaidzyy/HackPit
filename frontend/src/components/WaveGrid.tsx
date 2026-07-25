@@ -41,6 +41,23 @@ export function WaveGrid() {
       "(prefers-reduced-motion: reduce)"
     ).matches;
 
+    // ACCENT IS CACHED, not read per frame. accentRGB() calls getComputedStyle on the root
+    // element, which forces a style recalculation; it was being called TWICE inside frame(),
+    // so a page sitting idle did ~120 forced recalcs a second for a value that changes only
+    // when the operator picks a new accent.
+    //
+    // The picker sets --accent as an inline style on <html> (see TopBar.setAccent), so a
+    // MutationObserver on that attribute catches the change exactly, and synchronously —
+    // the reskin is still instant. Steady-state cost drops to zero.
+    let accent = accentRGB();
+    const accentObserver = new MutationObserver(() => {
+      accent = accentRGB();
+    });
+    accentObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["style", "class"],
+    });
+
     function resize() {
       DPR = Math.min(window.devicePixelRatio || 1, 2);
       W = cv!.width = window.innerWidth * DPR;
@@ -54,7 +71,7 @@ export function WaveGrid() {
       const gap = 42 * DPR;
       const cols = Math.ceil(W / gap) + 2;
       const rows = Math.ceil(H / gap) + 2;
-      const [ar, ag, ab] = accentRGB();
+      const [ar, ag, ab] = accent;
 
       for (let j = 0; j < rows; j++) {
         for (let i = 0; i < cols; i++) {
@@ -79,7 +96,7 @@ export function WaveGrid() {
       // soft moving accent glow
       const gx = W * (0.5 + 0.28 * Math.sin(t * 0.6));
       const gy = H * (0.35 + 0.2 * Math.cos(t * 0.5));
-      const [r, g, b] = accentRGB();
+      const [r, g, b] = accent;
       const rad = cx!.createRadialGradient(gx, gy, 0, gx, gy, 420 * DPR);
       rad.addColorStop(0, `rgba(${r},${g},${b},0.05)`);
       rad.addColorStop(1, "rgba(0,0,0,0)");
@@ -114,6 +131,7 @@ export function WaveGrid() {
 
     return () => {
       cancelAnimationFrame(raf);
+      accentObserver.disconnect();
       window.removeEventListener("resize", resize);
       document.removeEventListener("visibilitychange", onVisibility);
     };

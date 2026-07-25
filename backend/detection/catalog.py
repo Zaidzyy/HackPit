@@ -680,9 +680,12 @@ SUBCOMMAND_TOOLS: dict[str, dict[str, str]] = {
     "crackmapexec": {"smb": "smb_enum", "ldap": "ldap_query", "winrm": "winrm",
                      "mssql": "mssql_exec", "rdp": "rdp", "ssh": "brute_force"},
     "cme": {"smb": "smb_enum", "ldap": "ldap_query", "winrm": "winrm", "mssql": "mssql_exec"},
-    "net": {"rpc": "group_add", "user": "ldap_query", "group": "group_add",
-            "localgroup": "group_add", "view": "smb_enum", "use": "smb_enum",
-            "share": "smb_enum", "accounts": "ldap_query"},
+    # NB: no "rpc" key — `net rpc …` is a transport, not the action. The real verb that
+    # follows it (password / group / addmem / user / share) is what the defender sees.
+    "net": {"password": "password_reset", "addmem": "group_add", "delmem": "group_add",
+            "group": "group_add", "localgroup": "group_add", "user": "ldap_query",
+            "view": "smb_enum", "use": "smb_enum", "share": "smb_enum",
+            "accounts": "ldap_query", "rights": "acl_abuse"},
     "certipy": {"shadow": "shadow_credentials", "auth": "shadow_credentials",
                 "req": "shadow_credentials", "find": "ldap_query", "relay": "relay_poison"},
     "bloodyad": {"add": "acl_abuse", "set": "acl_abuse", "get": "ldap_query",
@@ -717,6 +720,11 @@ class ArgSignal:
     stealth: bool = False             # True = an ATT&CK Stealth / Defense-Impairment mapping
     louder: bool = False              # True = bumps the loudness rating up one step
     case_sensitive: bool = False      # True for flag-shaped patterns where -D != -d (nmap)
+    # Spec keys this signal may fire on. Empty = any command. Short flags are reused across
+    # tools with entirely different meanings (nmap's -S is a spoofed source; net's -S is the
+    # server), so a flag-shaped signal must say which activity it belongs to or it will
+    # mislabel unrelated commands.
+    applies_to: tuple[str, ...] = ()
 
 
 ARG_SIGNALS: tuple[ArgSignal, ...] = (
@@ -758,7 +766,8 @@ ARG_SIGNALS: tuple[ArgSignal, ...] = (
              "produces MORE alertable traffic, not less.",
         stealth=True,
         louder=True,
-        case_sensitive=True,   # -D (decoys) is not -d (debug)
+        case_sensitive=True,      # -D (decoys) is not -d (debug)
+        applies_to=("portscan",),  # nmap's -S/-D; `net ... -S <server>` is a different flag
     ),
     ArgSignal(
         id="fragmented_scan",
@@ -773,7 +782,8 @@ ARG_SIGNALS: tuple[ArgSignal, ...] = (
              "(Stealth, TA0005). Fragmented or heavily-delayed probes are anomalous in their own "
              "right — IDS fragmentation handling is a standard, long-standing detection.",
         stealth=True,
-        case_sensitive=True,   # -f (fragment) is not -F (fast scan)
+        case_sensitive=True,      # -f (fragment) is not -F (fast scan)
+        applies_to=("portscan",)
     ),
     ArgSignal(
         id="payload_tamper",
@@ -892,11 +902,6 @@ def lookup(command: str, args: list[str] | None = None) -> Match:
     tool = normalize_tool(command)
     joined = " ".join([tool, *argv])
 
-    signals = tuple(
-        sig for sig in ARG_SIGNALS
-        if re.search(sig.pattern, joined, 0 if sig.case_sensitive else re.IGNORECASE)
-    )
-
     spec: FootprintSpec | None = None
     matched_on = ""
 
@@ -923,6 +928,13 @@ def lookup(command: str, args: list[str] | None = None) -> Match:
         key = ALIASES.get(tool)
         if key:
             spec, matched_on = SPECS.get(key), "tool"
+
+    # Argument signals last, so a signal scoped to a spec (applies_to) knows what it matched.
+    signals = tuple(
+        sig for sig in ARG_SIGNALS
+        if (not sig.applies_to or (spec is not None and spec.key in sig.applies_to))
+        and re.search(sig.pattern, joined, 0 if sig.case_sensitive else re.IGNORECASE)
+    )
 
     return Match(spec=spec, signals=signals, matched_on=matched_on if spec else "")
 

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { CopyButton } from "./CopyButton";
+import { DetectionDisclosure } from "./DetectionPanel";
 import { useReducedMotion } from "@/lib/useReducedMotion";
 import type { AttackPath, AttackPhase, AttackStep } from "@/lib/api";
 
@@ -293,6 +294,19 @@ function NodeDetail({
           <Link className="hp-cm-detail-entry" href={`/entry/${encodeURIComponent(step.entry_id)}`}>
             open technique →
           </Link>
+        )}
+
+        {/* The purple-team flip: the same step, seen from the DEFENDER's chair — ATT&CK tag,
+            the telemetry it generates, the rule that would fire, how loud it is. Read-only
+            annotation; it never changes what the step runs. */}
+        {step.commands.length > 0 && (
+          <div className="hp-det-row">
+            <DetectionDisclosure
+              tag={step.attck}
+              source={{ kind: "step", step }}
+              heading={`If this step ran: ${step.title}`}
+            />
+          </div>
         )}
       </aside>
     </div>

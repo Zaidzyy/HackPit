@@ -105,14 +105,15 @@ def tag_argv(cmdline: str) -> dict[str, Any] | None:
 
 def first_command(step: dict[str, Any] | Any) -> str:
     """The first real (non-comment, non-blank) command line in a step's commands."""
+    from .resolver import first_command_line  # local: keeps this module import-light
+
     if hasattr(step, "model_dump"):
         step = step.model_dump()
     for c in (dict(step or {}).get("commands") or []):
         raw = (c.get("cmd") if isinstance(c, dict) else getattr(c, "cmd", "")) or ""
-        for line in str(raw).splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                return line
+        line = first_command_line(str(raw))
+        if line:
+            return line
     return ""
 
 

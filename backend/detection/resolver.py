@@ -446,14 +446,39 @@ def _apply_signals_to_ai(shaped: dict[str, Any], signals: tuple[catalog.ArgSigna
     return shaped
 
 
+def first_command_line(block: str) -> str:
+    """The first REAL command line in a block — comments and blanks skipped.
+
+    KB and catalog commands routinely arrive as a small script: a ``# what this does`` comment,
+    then the command, sometimes over continuation lines. Annotating the comment would be
+    meaningless (and would push every such block down the ai_suggested path), so the first
+    non-comment, non-blank line is the actor.
+    """
+    lines = str(block or "").splitlines()
+    for i, raw in enumerate(lines):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # fold shell line-continuations into one command line
+        while line.endswith("\\") and i + 1 < len(lines):
+            i += 1
+            line = line[:-1].rstrip() + " " + lines[i].strip()
+        return line
+    return ""
+
+
 def footprint_for_argv(argv: list[str] | str, **kw) -> dict[str, Any]:
-    """Footprint for a whole command line — ``['nmap','-sV','host']`` or ``'nmap -sV host'``."""
+    """Footprint for a whole command line — ``['nmap','-sV','host']`` or ``'nmap -sV host'``.
+
+    A multi-line block is accepted: the first real command line in it is what gets annotated.
+    """
     if isinstance(argv, str):
+        line = first_command_line(argv)
         try:
             import shlex
-            parts = shlex.split(argv)
+            parts = shlex.split(line)
         except ValueError:      # unbalanced quotes in a hand-written step command
-            parts = argv.split()
+            parts = line.split()
     else:
         parts = [str(a) for a in argv]
     if not parts:
@@ -483,15 +508,10 @@ def footprint_for_step(step: dict[str, Any] | Any, **kw) -> dict[str, Any]:
     if hasattr(step, "model_dump"):
         step = step.model_dump()
     step = dict(step or {})
-    cmds = step.get("commands") or []
     first = ""
-    for c in cmds:
+    for c in (step.get("commands") or []):
         raw = (c.get("cmd") if isinstance(c, dict) else getattr(c, "cmd", "")) or ""
-        for line in str(raw).splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                first = line
-                break
+        first = first_command_line(str(raw))
         if first:
             break
     if not first:
@@ -502,5 +522,5 @@ def footprint_for_step(step: dict[str, Any] | Any, **kw) -> dict[str, Any]:
 
 __all__ = [
     "footprint", "footprint_for_argv", "footprint_for_run", "footprint_for_step",
-    "assert_describes_not_prescribes", "SOURCES",
+    "first_command_line", "assert_describes_not_prescribes", "SOURCES",
 ]

@@ -6030,3 +6030,335 @@ a.hp-card {
 .hp-cs-in {
   color: var(--white);
 }
+
+/* ------------------------------------------------------------------ *
+ *  DETECTION FOOTPRINT — the purple-team panel (see DetectionPanel.tsx)
+ *
+ *  Deliberately a COOL hue, not the amber operator accent: everywhere
+ *  else in the app the surface is the attacker's; this one is the
+ *  defender's. Amber = what you can do. Blue = what they can see.
+ *
+ *  THE LINE: this panel DESCRIBES detection. It never teaches evasion.
+ * ------------------------------------------------------------------ */
+:root {
+  --det: #7fb4ff;
+  --det-soft: rgba(127, 180, 255, 0.1);
+  --det-line: rgba(127, 180, 255, 0.32);
+  --det-quiet: #6f7d8c;
+  --det-moderate: #6fd0c4;
+  --det-notable: #ffc46b;
+  --det-loud: #ff8a7a;
+}
+
+/* ---- the inline chip on a step row / recorded run ---- */
+.hp-det-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.2px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--det-line);
+  background: var(--det-soft);
+  color: var(--det);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.hp-det-chip:hover { background: rgba(127, 180, 255, 0.18); }
+.hp-det-chip.is-unmapped {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: transparent;
+  color: var(--dim);
+}
+.hp-det-chip-ids { font-weight: 700; }
+.hp-det-chip-more,
+.hp-det-chip-tactic { color: var(--grey); }
+.hp-det-chip-loud { text-transform: uppercase; letter-spacing: 0.6px; opacity: 0.9; }
+.hp-det-chip-stealth {
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.7px;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid rgba(190, 150, 255, 0.5);
+  color: #c9a9ff;
+}
+.hp-det-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--det-quiet);
+  flex: none;
+}
+.hp-det-dot.is-quiet { background: var(--det-quiet); }
+.hp-det-dot.is-moderate { background: var(--det-moderate); }
+.hp-det-dot.is-notable { background: var(--det-notable); }
+.hp-det-dot.is-loud { background: var(--det-loud); box-shadow: 0 0 8px rgba(255, 138, 122, 0.55); }
+.hp-det-dot.is-unknown { background: transparent; border: 1px solid var(--dim); }
+
+/* ---- the drawer ---- */
+.hp-det {
+  margin-top: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--det-line);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(127, 180, 255, 0.06), rgba(10, 12, 14, 0.6));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.hp-det-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hp-det-kicker {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--det);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.hp-det-eye { color: var(--det); }
+.hp-det-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--dim);
+}
+.hp-det-badge.is-grounded { color: #8fe0ae; border-color: rgba(95, 208, 138, 0.45); }
+.hp-det-badge.is-ai { color: #ffcf8f; border-color: rgba(255, 190, 100, 0.4); }
+.hp-det-x {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 13px;
+}
+.hp-det-heading { margin: 0; font-size: 12px; color: var(--grey); }
+.hp-det-loading, .hp-det-error { margin: 0; font-size: 12px; color: var(--dim); }
+.hp-det-error { color: #ff9a86; }
+.hp-det-argv {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 11.5px;
+  color: var(--grey);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  white-space: pre;
+}
+.hp-det-activity { margin: 0; font-size: 14px; font-weight: 700; }
+.hp-det-blueview {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--white);
+  border-left: 2px solid var(--det-line);
+  padding-left: 10px;
+}
+
+/* ---- the loud-vs-quiet meter ---- */
+.hp-det-loud { display: flex; flex-direction: column; gap: 5px; }
+.hp-det-loud-head { display: flex; align-items: center; gap: 9px; }
+.hp-det-loud-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  color: var(--dim);
+}
+.hp-det-loud-bar { display: flex; gap: 3px; }
+.hp-det-loud-seg {
+  width: 26px;
+  height: 5px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+}
+.hp-det-loud-seg.is-on.is-quiet { background: var(--det-quiet); }
+.hp-det-loud-seg.is-on.is-moderate { background: var(--det-moderate); }
+.hp-det-loud-seg.is-on.is-notable { background: var(--det-notable); }
+.hp-det-loud-seg.is-on.is-loud { background: var(--det-loud); }
+.hp-det-loud-word {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  font-weight: 700;
+}
+.hp-det-loud.is-quiet .hp-det-loud-word { color: var(--det-quiet); }
+.hp-det-loud.is-moderate .hp-det-loud-word { color: var(--det-moderate); }
+.hp-det-loud.is-notable .hp-det-loud-word { color: var(--det-notable); }
+.hp-det-loud.is-loud .hp-det-loud-word { color: var(--det-loud); }
+.hp-det-loud-meaning, .hp-det-loud-why {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--grey);
+}
+.hp-det-loud-why { color: var(--dim); }
+
+/* ---- blocks ---- */
+.hp-det-block { display: flex; flex-direction: column; gap: 6px; }
+.hp-det-h {
+  margin: 0;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--dim);
+}
+.hp-det-h-note { text-transform: none; letter-spacing: 0; opacity: 0.8; }
+
+.hp-det-tactics { display: flex; flex-wrap: wrap; gap: 6px; }
+.hp-det-tactic {
+  font-size: 10.5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--det-line);
+  color: var(--det);
+}
+.hp-det-tactic.is-stealth {
+  border-color: rgba(190, 150, 255, 0.5);
+  color: #c9a9ff;
+}
+.hp-det-tactic-aka { color: var(--dim); font-size: 9.5px; }
+
+.hp-det-techs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.hp-det-tech { display: flex; align-items: baseline; gap: 8px; font-size: 12px; flex-wrap: wrap; }
+.hp-det-tech-id {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-weight: 700;
+  color: var(--det);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--det-line);
+}
+.hp-det-tech-id:hover { color: var(--white); }
+.hp-det-tech-name { color: var(--grey); }
+.hp-det-tech-stealth, .hp-det-tech-ai {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid rgba(190, 150, 255, 0.45);
+  color: #c9a9ff;
+}
+.hp-det-tech-ai { border-color: rgba(255, 190, 100, 0.4); color: #ffcf8f; }
+.hp-det-stealth-note {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #c9a9ff;
+  border-left: 2px solid rgba(190, 150, 255, 0.4);
+  padding-left: 9px;
+}
+
+.hp-det-telemetry, .hp-det-signals, .hp-det-sigma {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.hp-det-telemetry li {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--grey);
+  padding-left: 14px;
+  position: relative;
+}
+.hp-det-telemetry li::before {
+  content: "\25B8";
+  position: absolute;
+  left: 0;
+  color: var(--det);
+  opacity: 0.7;
+}
+
+.hp-det-rule { display: flex; align-items: baseline; gap: 8px; font-size: 12px; flex-wrap: wrap; }
+.hp-det-rule-title { color: var(--white); text-decoration: none; border-bottom: 1px dotted var(--border-2); }
+.hp-det-rule-title:hover { color: var(--det); }
+.hp-det-rule-id { font-size: 10px; color: var(--dim); font-family: var(--font-jetbrains-mono), monospace; }
+.hp-det-level {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: var(--dim);
+  flex: none;
+}
+.hp-det-level.is-low { color: #8fe0ae; border-color: rgba(95, 208, 138, 0.4); }
+.hp-det-level.is-medium { color: var(--det-notable); border-color: rgba(255, 196, 107, 0.45); }
+.hp-det-level.is-high { color: #ff9a86; border-color: rgba(240, 82, 82, 0.5); }
+.hp-det-level.is-critical { color: #fff; background: rgba(240, 82, 82, 0.28); border-color: rgba(240, 82, 82, 0.7); }
+.hp-det-nosigma { margin: 0; font-size: 11.5px; color: var(--dim); line-height: 1.5; }
+
+.hp-det-signal { display: flex; flex-direction: column; gap: 2px; }
+.hp-det-signal-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--white);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.hp-det-signal.is-stealth .hp-det-signal-label { color: #c9a9ff; }
+.hp-det-signal-louder {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 138, 122, 0.5);
+  color: var(--det-loud);
+}
+.hp-det-signal-note { font-size: 11.5px; line-height: 1.5; color: var(--grey); }
+
+.hp-det-why { margin: 0; font-size: 11px; color: var(--dim); line-height: 1.5; }
+.hp-det-foot {
+  margin: 2px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--dim);
+}
+.hp-det-attr { opacity: 0.75; }
+
+/* ---- the engagement-panel roll-up ---- */
+.hp-det-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--det-line);
+  border-radius: 8px;
+  background: var(--det-soft);
+  font-size: 11px;
+  color: var(--grey);
+}
+.hp-det-summary-label {
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  font-size: 10px;
+  color: var(--det);
+}
+.hp-det-summary-tac {
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--det-line);
+  color: var(--det);
+  font-size: 10px;
+}
+.hp-det-summary-tac.is-stealth { border-color: rgba(190, 150, 255, 0.5); color: #c9a9ff; }
+/* chip, then (when opened) the full-width drawer stacked under it */
+.hp-det-row { margin-top: 8px; }
+.hp-det-row > .hp-det-chip { margin-bottom: 2px; }

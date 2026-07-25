@@ -10,6 +10,7 @@ import { LLMSettingsModal } from "./LLMSettingsModal";
 import { ModelBadge } from "./ModelBadge";
 import { TargetTypeChips } from "./TargetTypeChips";
 import { ComposingLoader } from "./ComposingLoader";
+import { DetectionDisclosure } from "./DetectionPanel";
 import {
   ApiError,
   composeAttackPath,
@@ -494,6 +495,18 @@ function StepCard({ step }: { step: AttackStep }) {
               <Branch text={step.on_blocked} />
             </p>
           )}
+        </div>
+      )}
+
+      {/* The defender's view of this step: ATT&CK tag, telemetry, the rule that would fire,
+          and how loud it is. Annotation only — it never alters the step above. */}
+      {step.commands.length > 0 && (
+        <div className="hp-det-row">
+          <DetectionDisclosure
+            tag={step.attck}
+            source={{ kind: "step", step }}
+            heading={`If this step ran: ${step.title}`}
+          />
         </div>
       )}
     </article>

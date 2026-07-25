@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
+import { DetectionDisclosure } from "./DetectionPanel";
 import {
   ApiError,
   adComputePath,
@@ -520,6 +521,18 @@ function EdgeDrawer({
         Runs through the gated executor — argv-only, {engagement ? "engagement scope-locked" : "isolated lab"},
         approve-each. The graph never runs anything on its own.
       </p>
+
+      {/* The same hop, from the DEFENDER's chair: the ATT&CK technique this abuse maps to, the
+          directory/host events it throws, and the public rule that would catch it. Purely
+          descriptive — it changes nothing about the command above. */}
+      {cmd && (
+        <div className="hp-det-row">
+          <DetectionDisclosure
+            source={{ kind: "argv", argv: cmd, context: `Active Directory abuse: ${edge.kind}` }}
+            heading={`If this hop ran: ${edge.source_label} —${edge.kind}→ ${edge.target_label}`}
+          />
+        </div>
+      )}
     </motion.section>
   );
 }

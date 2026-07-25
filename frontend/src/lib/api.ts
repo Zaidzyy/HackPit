@@ -171,6 +171,13 @@ export type AttackStep = {
    */
   on_success?: string;
   on_blocked?: string;
+  /**
+   * DETECTION FOOTPRINT TAG (purple-team). The ATT&CK technique(s) + tactic this
+   * step's first command maps to, plus a loud-vs-quiet rating — what a DEFENDER
+   * would see if the step ran. Null/absent when the curated map doesn't cover the
+   * command (the drawer can still fetch an ai_suggested reading on demand).
+   */
+  attck?: DetectionTag | null;
 };
 
 export type AttackPhase = {
@@ -1057,6 +1064,187 @@ export const adCollectPreview = (
   },
   signal?: AbortSignal
 ) => postJSON<ADCollectPreview>("/cockpit/ad/collect/preview", body, signal);
+
+// --- detection footprint: the PURPLE-TEAM view (see backend/detection/) -------------------
+//
+// READ-ONLY ANNOTATION. Every call here DESCRIBES what a defender would see for a command that
+// has already been (or is about to be) approved and run through the gated executor: the ATT&CK
+// technique + tactic, the telemetry it generates, the SigmaHQ rule that would fire, and how
+// loud it is. Nothing here runs anything or changes any gate.
+//
+// THE LINE: this shows the footprint. It is not, and must never become, evasion guidance —
+// there is no "make this quieter" call, by design. A "quiet" rating marks a gap in the
+// DEFENDER's coverage, not a lane for the operator.
+
+/** Loud-vs-quiet signal rating. Higher = more likely to raise a high-confidence alert. */
+export type Loudness = "quiet" | "moderate" | "notable" | "loud";
+
+export type DetectionTactic = {
+  id: string;
+  name: string;
+  /** The name this tactic used to carry (ATT&CK v19 renamed TA0005 to "Stealth"). */
+  also_known_as?: string | null;
+  url?: string;
+};
+
+export type DetectionTechnique = {
+  id: string;
+  name: string;
+  url: string;
+  tactics?: DetectionTactic[];
+  /** Present on the compact tag instead of `tactics`. */
+  tactic_ids?: string[];
+  tactic_names?: string[];
+  data_components?: string[];
+  log_sources?: string[];
+  stealth?: boolean;
+  /** "grounded" (curated ATT&CK/SigmaHQ map) or "ai_suggested" (model reading). */
+  source?: "grounded" | "ai_suggested";
+  known?: boolean;
+};
+
+/** The compact tag carried by every planned step and recorded run. */
+export type DetectionTag = {
+  activity: string;
+  grounded: boolean;
+  techniques: DetectionTechnique[];
+  tactics: DetectionTactic[];
+  stealth: boolean;
+  loudness: Loudness;
+  loudness_score: number;
+  signals: string[];
+};
+
+/** One real SigmaHQ rule that would fire. `url` points at the rule in the public repo. */
+export type SigmaRuleRef = {
+  id: string;
+  title: string;
+  path?: string;
+  url: string;
+  level: string;
+};
+
+/** An argument-level signal — an escalation, or a stealth-shaped flag SURFACED (never advised). */
+export type DetectionSignal = {
+  id: string;
+  label: string;
+  note: string;
+  stealth: boolean;
+  louder: boolean;
+  techniques: string[];
+};
+
+/** The full defender's-eye view of one command. */
+export type DetectionFootprint = {
+  command: string;
+  args: string[];
+  argv: string;
+  activity: string;
+  /** True = every field below comes from the curated ATT&CK/SigmaHQ map. */
+  grounded: boolean;
+  /** True = the model's own reading (render with a "verify" badge, like a composed step). */
+  ai_suggested: boolean;
+  matched_on: string;
+  spec_key?: string;
+  techniques: DetectionTechnique[];
+  tactics: DetectionTactic[];
+  stealth: { present: boolean; techniques: string[]; note: string };
+  /** Concrete things a defender would see — event ids, log lines, flow shapes. */
+  telemetry: string[];
+  sigma: SigmaRuleRef[];
+  loudness: { level: Loudness | ""; score: number; meaning: string; why: string };
+  blue_view: string;
+  signals: DetectionSignal[];
+  why: string;
+  sources: Record<string, string>;
+  run_id?: string;
+  mode?: string;
+};
+
+export type DetectionSources = {
+  attack: string;
+  attack_attribution: string;
+  attack_version: string;
+  sigma: string;
+  sigma_license: string;
+  techniques: number;
+  specs: number;
+  sigma_rules: number;
+  arg_signals: number;
+  loudness_scale: { level: Loudness; score: number; meaning: string }[];
+  tactic_aliases: Record<string, string>;
+  the_line: string;
+  read_only: boolean;
+};
+
+export type DetectionRunsOut = {
+  session_id: string;
+  runs: {
+    run_id: string;
+    command: string;
+    args: string[];
+    target: string;
+    mode: string;
+    started_at: string;
+    step_id: string | null;
+    attck: DetectionTag | null;
+  }[];
+  summary: {
+    tagged: number;
+    untagged: number;
+    techniques: DetectionTechnique[];
+    tactics: DetectionTactic[];
+    stealth: boolean;
+    loudest: Loudness | "";
+    loudest_score: number;
+  };
+};
+
+/** The footprint for one command. `allow_llm: false` gives a purely grounded answer. */
+export const detectionFootprint = (
+  body: {
+    command?: string;
+    args?: string[];
+    argv?: string;
+    context?: string;
+    allow_llm?: boolean;
+  },
+  signal?: AbortSignal
+) => postJSON<DetectionFootprint>("/detection/footprint", body, signal);
+
+/** The footprint for an attack-path step (annotates its first real command). */
+export const detectionFootprintStep = (
+  step: AttackStep,
+  allowLlm = true,
+  signal?: AbortSignal
+) =>
+  postJSON<DetectionFootprint>(
+    "/detection/footprint/step",
+    { step, allow_llm: allowLlm },
+    signal
+  );
+
+/** The footprint for a recorded run — what blue saw when it actually ran. */
+export const detectionFootprintRun = (
+  runId: string,
+  allowLlm = true,
+  signal?: AbortSignal
+) =>
+  getJSON<DetectionFootprint>(
+    `/detection/footprint/run/${encodeURIComponent(runId)}?allow_llm=${allowLlm}`,
+    signal
+  );
+
+/** ATT&CK tags for every recorded run on an engagement, plus a coverage summary. */
+export const detectionRuns = (sessionId: string, signal?: AbortSignal) =>
+  getJSON<DetectionRunsOut>(
+    `/detection/runs?session_id=${encodeURIComponent(sessionId)}`,
+    signal
+  );
+
+/** Where the knowledge comes from + the line the panel holds (for the About box). */
+export const detectionSources = (signal?: AbortSignal) =>
+  getJSON<DetectionSources>("/detection/sources", signal);
 
 // --- live sessions: catch + drive ONE shell by hand (see backend/cockpit/session.py) ---
 //

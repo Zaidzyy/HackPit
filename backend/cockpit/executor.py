@@ -17,7 +17,7 @@ import subprocess
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Iterator
+from typing import Any, Iterator, NamedTuple
 
 from . import allowlist, config, engagement, runstore
 from .models import EngagementRecord, ExecRejected, ExecRequest, RunRecord
@@ -270,6 +270,60 @@ def _validate_engagement(request: ExecRequest, eng: EngagementRecord) -> ExecRej
     return None
 
 
+class EngagementInactive(RuntimeError):
+    """The request names an engagement that is no longer active — nothing may run.
+
+    Raised by :func:`resolve_mode` so a run can NEVER silently fall back to LAB mode
+    against an id that was meant for a real target.
+    """
+
+
+class ResolvedMode(NamedTuple):
+    """Which sandbox a request execs into, and what it is pointed at."""
+
+    mode: str  # "lab" | "engagement"
+    container: str  # the sandbox container for that mode
+    target: str  # the resolved target, for the record/UI
+    engagement: EngagementRecord | None
+
+
+def resolve_mode(request: ExecRequest) -> ResolvedMode:
+    """The SINGLE SOURCE OF TRUTH for which container a mode execs into.
+
+    Shared by :func:`iter_run` (one-shot commands) and the live-session manager
+    (cockpit/session.py), so a long-lived session can never bind to a different sandbox
+    than a one-shot command would in the same mode. LAB → the isolated, egress-less
+    sandbox; ENGAGEMENT → the fully-open engagement sandbox.
+
+    Raises :class:`EngagementInactive` when ``engagement_id`` is set but no longer
+    active. Pure: it only reads the engagement record and resolves names — it never
+    executes anything, so calling it before a gate re-check is safe.
+    """
+    eng = _engagement_for(request)
+    if request.engagement_id and eng is None:
+        raise EngagementInactive("engagement is no longer active — refusing to run")
+    if eng is not None:
+        allowed, in_scope, _label = _engagement_lock(eng)
+        return ResolvedMode(
+            mode="engagement",
+            container=config.ENGAGE_SANDBOX_CONTAINER,
+            target=_resolved_target(
+                request.command,
+                request.args,
+                allowed=allowed,
+                default=eng.target,
+                in_scope=in_scope,
+            ),
+            engagement=eng,
+        )
+    return ResolvedMode(
+        mode="lab",
+        container=config.SANDBOX_CONTAINER,
+        target=_resolved_target(request.command, request.args),
+        engagement=None,
+    )
+
+
 def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[str, Any]]:
     """Validate then stream a run as events.
 
@@ -289,23 +343,19 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
 
     # Route by mode. An engagement_id that is set but no longer active is refused here too
     # (even when prevalidated), so a run can NEVER fall back to lab against a real-target id.
-    eng = _engagement_for(request)
-    if request.engagement_id and eng is None:
-        yield {
-            "type": "rejected",
-            "gate": "engagement",
-            "reason": "engagement is no longer active — refusing to run",
-        }
+    try:
+        mode, container, target, eng = resolve_mode(request)
+    except EngagementInactive as exc:
+        yield {"type": "rejected", "gate": "engagement", "reason": str(exc)}
         return
     if eng is not None:
-        mode = "engagement"
         # Belt-and-suspenders (ENGAGEMENT ONLY): with Wall A down, per-command human
         # approval is the SOLE floor on a real target, so its enforcement must not depend
         # solely on every future caller remembering to run validate_request first. Re-check
         # approval here even in the prevalidated path. This is a pure no-op for valid flows —
         # the router runs validate_request (which rejects an unapproved engagement at the
-        # approval gate) before it ever sets prevalidated=True. The LAB branch below is
-        # deliberately left byte-for-byte unchanged.
+        # approval gate) before it ever sets prevalidated=True. The LAB path is deliberately
+        # left behaviourally unchanged.
         if not request.approved:
             yield {
                 "type": "rejected",
@@ -314,15 +364,6 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
                 "(approved=true) — never hands-off / no batch approval on a real target",
             }
             return
-        container = config.ENGAGE_SANDBOX_CONTAINER
-        allowed, in_scope, _label = _engagement_lock(eng)
-        target = _resolved_target(
-            request.command, request.args, allowed=allowed, default=eng.target, in_scope=in_scope
-        )
-    else:
-        mode = "lab"
-        container = config.SANDBOX_CONTAINER
-        target = _resolved_target(request.command, request.args)
 
     run_id = uuid.uuid4().hex[:12]
     started_at = _now()

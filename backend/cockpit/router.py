@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from . import allowlist, config, engagement, executor, runstore
+from . import session as live_session
 from .kali import KaliRefused, KaliRequest, KaliResult, kali_status, run_kali
 from .models import (
     AllowlistItem,
@@ -192,6 +193,104 @@ def kali_shell(request: KaliRequest) -> KaliResult:
     except KaliRefused as exc:
         # Open sandbox unavailable (not running) — nothing was executed.
         raise HTTPException(status_code=409, detail={"gate": "unavailable", "reason": str(exc)})
+
+
+# --- Live sessions (catch + drive ONE shell by hand — see cockpit/session.py) ------ #
+#
+# Two gates, both load-bearing:
+#   START is a GATED COMMAND      -> POST /cockpit/session/start goes through the real
+#                                    executor gates (approve-each + heuristic red-confirm
+#                                    + mode gate, argv-only). No new capability.
+#   STDIN is *** HUMAN-ONLY ***   -> POST /cockpit/session/{sid}/stdin is the ONLY path to
+#                                    a live process's stdin and exists to serve a HUMAN's
+#                                    UI action. The orchestrator/agent/loop has ZERO path
+#                                    here (source-scan locked, like :kali). The loop may
+#                                    propose starting a session; it can never drive one.
+
+
+@router.get("/session/status")
+def get_session_status() -> dict[str, Any]:
+    """Live-session counts + bounds — drives the panel header. Read-only."""
+    return live_session.session_status()
+
+
+@router.get("/session", response_model=list[live_session.SessionInfo])
+def list_sessions() -> list[live_session.SessionInfo]:
+    """Every session this backend knows about (live and finished). Read-only."""
+    return live_session.list_sessions()
+
+
+@router.post("/session/start", response_model=live_session.SessionInfo)
+def start_session(req: live_session.SessionStartRequest) -> live_session.SessionInfo:
+    """Start ONE long-lived session — a GATED command that happens to outlive the request.
+
+    Runs the mode's real gates first (lab: target→approval→danger→isolation; engagement:
+    engagement→target→approval→danger). A listener/handler trips the danger heuristic, so
+    ``dangerous_ack`` is required in practice. If any gate fails, NOTHING starts and a 403
+    is returned naming the gate. The sandbox is derived from the mode, never the request.
+    """
+    try:
+        return live_session.start(req)
+    except live_session.SessionRefused as exc:
+        status = 409 if exc.gate in {"unavailable", "limit"} else 403
+        raise HTTPException(status_code=status, detail={"gate": exc.gate, "reason": exc.reason})
+
+
+@router.get("/session/{sid}/stream")
+def stream_session(sid: str, after: int = Query(-1, description="Resume after this seq.")):
+    """Stream a session's output as SSE. Read-only — subscribing never writes to it.
+
+    ``after`` resumes from a sequence number, so a reconnect replays the rolling tail
+    instead of losing it. The stream closes when the session finishes.
+    """
+    try:
+        events = live_session.iter_events(sid, after=after)
+    except live_session.SessionNotFound:
+        raise HTTPException(status_code=404, detail="no such session")
+
+    def gen() -> Iterator[str]:
+        for event in events:
+            yield _sse(event)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/session/{sid}/stdin", response_model=live_session.SessionInfo)
+def write_session_stdin(sid: str, req: live_session.SessionStdinRequest):
+    """*** HUMAN-ONLY *** — write one line to a live session's stdin.
+
+    THIS ROUTE IS THE INVARIANT. It exists to serve a HUMAN typing into the session
+    panel, and it is the only path to a running process's stdin. The autonomous
+    orchestrator/agent/loop has NO code path to ``session.write_stdin`` — regression-
+    locked by a source scan across the backend tree, exactly like :kali. A live session
+    is already-approved and already-running, so anything able to type into it would be
+    executing un-gated commands; that must never be reachable by the agent.
+
+    SECURITY: like the rest of the cockpit this is a LOCALHOST DEV TOOL with no auth. An
+    exposed instance would hand a stranger a live shell in whatever the session is bound
+    to — put it behind authentication before any exposure.
+    """
+    try:
+        return live_session.write_stdin(sid, req.data)
+    except live_session.SessionNotFound:
+        raise HTTPException(status_code=404, detail="no such session")
+    except live_session.SessionRefused as exc:
+        raise HTTPException(
+            status_code=409, detail={"gate": exc.gate, "reason": exc.reason}
+        )
+
+
+@router.post("/session/{sid}/kill", response_model=live_session.SessionInfo)
+def kill_session(sid: str) -> live_session.SessionInfo:
+    """Terminate a live session and flush its transcript to the record. Idempotent."""
+    try:
+        return live_session.kill(sid)
+    except live_session.SessionNotFound:
+        raise HTTPException(status_code=404, detail="no such session")
 
 
 @router.get("/runs", response_model=list[RunRecord])

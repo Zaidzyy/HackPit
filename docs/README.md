@@ -17,6 +17,11 @@ runbooks). Populated as the project grows.
   route to Domain Admin → animated cockpit UI with KB-grounded, gated abuse steps. Collector +
   parser + path engine + walk-the-path wiring; every AD command routes through the gated executor.
   Built against synthetic data; live collection/execution deferred to an AD lab.
+- [`C2-SESSION-PANEL.md`](C2-SESSION-PANEL.md) — the live session panel: catch and drive ONE
+  interactive shell by hand. Session-START is a gated command (approve + heuristic red-confirm +
+  mode gate); a live session's stdin is HUMAN-ONLY (source-scan locked, like `:kali`); containment
+  is the mode it started in (lab isolation / engagement scope-lock); the transcript is recorded to
+  the report. LAB e2e verified; engagement e2e deferred to a human-present session.
 
 Safety invariants that hold across all Cockpit work: four independent gates (allowlist → target
 lock → approval → isolation), recon-only allowlist, lab-only target, no autonomy. M3 only *records*

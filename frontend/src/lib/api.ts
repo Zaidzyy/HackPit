@@ -246,9 +246,18 @@ export class ApiError extends Error {
 /** Pull a human-readable message out of a FastAPI error body, if present. */
 async function errorMessage(res: Response, fallback: string): Promise<string> {
   try {
-    const body = (await res.json()) as { detail?: unknown };
+    const body = (await res.json()) as {
+      detail?: string | { gate?: string; reason?: string };
+    };
     if (typeof body?.detail === "string" && body.detail.trim()) {
       return body.detail;
+    }
+    // Cockpit gate rejections carry { detail: { gate, reason } }. Surface them as
+    // "[gate] reason" so callers can key off the gate (e.g. the session panel's
+    // "[danger]" red-confirm) instead of getting a generic "Request failed".
+    if (body?.detail && typeof body.detail === "object") {
+      const { gate, reason } = body.detail;
+      if (gate || reason) return `[${gate ?? "error"}] ${reason ?? ""}`.trim();
     }
   } catch {
     /* non-JSON body — use the fallback */

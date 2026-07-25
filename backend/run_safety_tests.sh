@@ -32,6 +32,9 @@ echo "== :kali containment tests (human-only / hardcoded-open-container / no-iso
 echo "== orchestrator-loop tests (proposer cannot execute / no :kali path / gate pre-check) =="
 "$PY" test_loop.py
 
+echo "== live-session tests (start is GATED / stdin HUMAN-ONLY / mode-bound / recorded) =="
+"$PY" test_session.py
+
 echo "== engagement/report path tests (run recorded + report evidence + scope) =="
 "$PY" test_engagement.py
 

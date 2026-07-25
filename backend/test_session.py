@@ -391,7 +391,127 @@ def test_stdin_write_is_capped() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 3. RECORDING — the transcript lands in the report, tagged with its mode.
+# 3. CONTAINMENT — a session is bounded by the MODE it started in.
+# --------------------------------------------------------------------------- #
+
+
+def _patch_active(rec):
+    """Make the executor resolve THIS engagement (or none), as test_engagement_mode does."""
+    from cockpit import engagement as ENG
+
+    orig = ENG.get_active
+    ENG.get_active = lambda eid: rec if (rec and eid == rec.engagement_id) else None
+    return lambda: setattr(ENG, "get_active", orig)
+
+
+def _fake_engagement():
+    from cockpit.models import EngagementRecord
+
+    return EngagementRecord(
+        engagement_id="eng-sess000000",
+        target="scanme.nmap.org",
+        authorization="authorized test target",
+        active=True,
+        entered_at="2026-07-25T00:00:00+00:00",
+        scope="scanme.nmap.org",
+        scope_include=["scanme.nmap.org"],
+        allowed_hosts=["scanme.nmap.org"],
+    )
+
+
+def test_engagement_session_is_bounded_by_the_scope_lock() -> None:
+    """An ENGAGEMENT session binds to the engagement sandbox and its authorized scope.
+
+    In-scope target starts; out-of-scope is refused at the target gate. There is no
+    isolation floor in engagement mode, so the scope-lock + approve-each are the bound.
+    """
+    eng = _fake_engagement()
+    restore = _patch_active(eng)
+    try:
+        with _Spy(isolated=False) as spy:  # engagement has NO isolation floor by design
+            in_scope = _req(target="scanme.nmap.org", engagement_id=eng.engagement_id)
+            assert S.validate_start(in_scope) is None, "an in-scope engagement session must start"
+            info = S.start(in_scope)
+            assert info.mode == "engagement", info
+            assert info.container == config.ENGAGE_SANDBOX_CONTAINER, info.container
+            argv = spy.procs[0].argv
+            assert argv[3] == config.ENGAGE_SANDBOX_CONTAINER, argv
+            assert argv[3] != config.SANDBOX_CONTAINER, "must NOT reach the isolated lab box"
+            assert argv[3] != config.KALI_OPEN_CONTAINER, "must NOT reach the :kali open box"
+
+            # Out of scope -> refused at the target gate, nothing starts.
+            out = _req(target="evil.com", engagement_id=eng.engagement_id)
+            rejected = S.validate_start(out)
+            assert rejected is not None and rejected.gate == "target", rejected
+            assert "scope" in rejected.reason.lower(), rejected.reason
+
+            # An unknown/exited engagement is refused — never downgraded to lab.
+            unknown = _req(target="scanme.nmap.org", engagement_id="eng-gone000000")
+            rejected = S.validate_start(unknown)
+            assert rejected is not None and rejected.gate == "engagement", rejected
+    finally:
+        restore()
+    print("  engagement session is scope-locked to the engagement sandbox: PASS")
+
+
+def test_engagement_session_still_needs_approval_and_ack() -> None:
+    """No autonomy on a real target: approve-each + red-confirm hold for sessions too."""
+    eng = _fake_engagement()
+    restore = _patch_active(eng)
+    try:
+        with _Spy(isolated=False) as spy:
+            r = S.validate_start(
+                _req(target="scanme.nmap.org", engagement_id=eng.engagement_id, approved=False)
+            )
+            assert r is not None and r.gate == "approval", r
+            r = S.validate_start(
+                _req(
+                    target="scanme.nmap.org",
+                    engagement_id=eng.engagement_id,
+                    dangerous_ack=False,
+                )
+            )
+            assert r is not None and r.gate == "danger", r
+            assert not spy.procs, "nothing may start while a gate refuses"
+    finally:
+        restore()
+    print("  engagement session keeps approve-each + red-confirm: PASS")
+
+
+def test_lab_mode_is_unchanged_by_sessions() -> None:
+    """Sessions add NO new capability and change nothing about lab execution.
+
+    The lab keeps its four gates and its isolated container; the session module reaches
+    neither the :kali open box nor any shell, and one-shot lab runs are untouched.
+    """
+    from cockpit.models import ExecRequest
+
+    # The lab one-shot path still resolves to the isolated sandbox with its gates intact.
+    resolved = EX.resolve_mode(ExecRequest(command="nmap", args=["-sV", config.LAB_TARGET_HOST]))
+    assert resolved.mode == "lab" and resolved.container == config.SANDBOX_CONTAINER
+    assert resolved.engagement is None
+    with _Spy(isolated=False):
+        r = EX.validate_request(
+            ExecRequest(
+                command="nmap", args=["-sV", config.LAB_TARGET_HOST], approved=True
+            )
+        )
+        assert r is not None and r.gate == "sandbox", "lab still fails closed without isolation"
+
+    # The session module is not a shell and has no :kali path.
+    src = Path(S.__file__).read_text(encoding="utf-8")
+    for bad in ("run_kali", "from .kali", "cockpit.kali", 'KALI_OPEN_CONTAINER'):
+        assert bad not in src, f"session.py must not reference '{bad}'"
+    assert '"sh", "-c"' not in src and "'sh', '-c'" not in src, (
+        "sessions are argv-only — session.py must never build a shell invocation"
+    )
+    # It execs into exactly the two mode containers, chosen by resolve_mode.
+    assert "executor.resolve_mode" in src, "the container must come from the shared resolver"
+    print("  lab mode unchanged; sessions add no new capability: PASS")
+
+
+# --------------------------------------------------------------------------- #
+# 4. RECORDING — the transcript lands in the report, tagged with its mode.
 # --------------------------------------------------------------------------- #
 
 
@@ -495,6 +615,9 @@ if __name__ == "__main__":
     test_stdin_refuses_when_session_is_not_live()
     test_stdin_is_recorded_as_human_input()
     test_stdin_write_is_capped()
+    test_engagement_session_is_bounded_by_the_scope_lock()
+    test_engagement_session_still_needs_approval_and_ack()
+    test_lab_mode_is_unchanged_by_sessions()
     test_transcript_reaches_the_report_tagged_with_mode()
     test_transcript_is_capped()
     test_reaper_kills_idle_and_overlong_sessions()

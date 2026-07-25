@@ -201,6 +201,21 @@ def _runs_digest(
     return "\n".join(lines)
 
 
+def _arsenal_reference(goal: str) -> str:
+    """The tool catalog's invocations, as prompt reference for the next proposal.
+
+    Best-effort and additive: any problem loading the catalog yields "", which makes the
+    proposer prompt byte-for-byte what it was before the arsenal existed.
+    """
+    try:
+        import attack_path
+        from arsenal import planner as arsenal_planner
+
+        return arsenal_planner.prompt_block(attack_path._arsenal(), needle=goal)
+    except Exception:  # noqa: BLE001 - a reference block must never break the loop
+        return ""
+
+
 def build_user_prompt(
     plan: dict, runs: list[dict], avoid: list[str], scope_ctx: ScopeContext | None = None
 ) -> str:
@@ -234,6 +249,13 @@ def build_user_prompt(
         lab = config.LAB_TARGET_HOST
         lines = [f"GOAL: {goal}", f"LAB TARGET: {lab}", ""]
         digest = _runs_digest(runs)
+    # TOOL ARSENAL — well-formed invocations for the standard toolbox, as REFERENCE for the
+    # one command this turn proposes. It restricts nothing (there is no allowlist); it makes
+    # the proposal well-formed. The command still needs the operator's approval to run.
+    arsenal_block = _arsenal_reference(goal)
+    if arsenal_block:
+        lines.append(arsenal_block)
+        lines.append("")
     lines.append("THE PLAN (composed; use it to ground your next step):")
     lines.append(_plan_digest(plan))
     lines.append("")

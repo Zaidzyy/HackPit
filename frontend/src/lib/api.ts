@@ -178,6 +178,23 @@ export type AttackStep = {
    * command (the drawer can still fetch an ai_suggested reading on demand).
    */
   attck?: DetectionTag | null;
+  /**
+   * TOOL ARSENAL PROVENANCE — which catalogued tool this step actually runs, read from
+   * the command's own program name (never from anything the model claimed). Null when
+   * the step runs no catalogued tool. Informational only: it is not a claim that the
+   * command was verified, and it changes nothing about how the step runs.
+   */
+  arsenal?: ArsenalTag | null;
+};
+
+/** The catalogued tool a step runs — see /arsenal. */
+export type ArsenalTag = {
+  tool: string;
+  category: string;
+  purpose: string;
+  /** KB entry documenting this tool, when one exists. */
+  kb_entry_id: string | null;
+  docs: string;
 };
 
 export type AttackPhase = {

@@ -25,6 +25,7 @@ from typing import Any, Callable
 
 import context_channel  # Channel 2 — CONTEXT background for the prompt, never steps
 import llm
+from arsenal import planner as arsenal_planner  # tool catalog: prompt reference + step tags
 from detection import tagging as detection_tagging  # ATT&CK tags on steps (read-only, no LLM)
 
 # --------------------------------------------------------------------------- #
@@ -765,13 +766,17 @@ def build_user_prompt(
     profile: dict[str, Any] | None = None,
     scope_text: str | None = None,
     context_block: str | None = None,
+    arsenal_block: str | None = None,
 ) -> str:
     """Build the composer prompt.
 
     ``context_block`` is CHANNEL 2 (see ``context_channel``): bounded background
     the model reasons FROM — a matched writeup's approach, the methodology to
-    follow. It is appended as background only; when it is empty the prompt is
-    byte-for-byte the pre-Channel-2 prompt.
+    follow. ``arsenal_block`` is the TOOL CATALOG's invocations for these phases,
+    a reference that makes proposed commands well-formed and consistent.
+
+    Both are appended as reference only; when both are empty the prompt is
+    byte-for-byte what it was before either existed.
     """
     ctx = ctx or {}
     lines: list[str] = []
@@ -835,6 +840,8 @@ def build_user_prompt(
         )
     if context_block:
         lines.append(context_block)
+    if arsenal_block:
+        lines.append(arsenal_block)
     lines.append("")
     gap = f" relevant to a {box_type} target" if box_type else ""
     lines.append(
@@ -1561,6 +1568,39 @@ def _augment_writeup(
 
 
 # --------------------------------------------------------------------------- #
+# TOOL ARSENAL — the catalog, loaded once (see backend/arsenal)
+# --------------------------------------------------------------------------- #
+_ARSENAL: Any = None
+
+
+def _arsenal() -> Any:
+    """The tool catalog, loaded lazily and cached.
+
+    Best-effort: if the catalog is missing or malformed, composition proceeds with an EMPTY
+    arsenal — the prompt block is "" and tagging is a no-op, so a broken catalog degrades to
+    exactly the pre-arsenal behaviour instead of failing a compose.
+    """
+    global _ARSENAL
+    if _ARSENAL is None:
+        try:
+            from arsenal import loader as arsenal_loader
+
+            _ARSENAL = arsenal_loader.load()
+        except Exception:  # noqa: BLE001 - a catalog problem must never fail a composition
+            from arsenal.loader import Arsenal
+
+            _ARSENAL = Arsenal()
+    return _ARSENAL
+
+
+def set_arsenal(value: Any) -> None:
+    """Inject a loaded (and KB-linked) catalog — main.py does this at startup so the tags
+    carry KB entry ids. Tests use it to install an empty catalog."""
+    global _ARSENAL
+    _ARSENAL = value
+
+
+# --------------------------------------------------------------------------- #
 # CHANNEL 2 — CONTEXT sources for the prompt (never steps; see context_channel)
 # --------------------------------------------------------------------------- #
 def _channel2_sources(
@@ -1696,6 +1736,7 @@ def compose(
             # ATT&CK-tag every step (deterministic, catalog-only) so the plan carries the
             # defender's view alongside the operator's. Purely additive annotation.
             phases = detection_tagging.tag_phases(phases)
+            arsenal_planner.tag_steps(_arsenal(), phases)  # which tool each step runs
             damaged = bool((wu.get("meta") or {}).get("source_damaged"))
             return {
                 "goal": goal,
@@ -1732,8 +1773,15 @@ def compose(
         writeup_id=box_writeup["id"] if box_writeup else None,
     )
     context_block = context_channel.build_context_block(ctx_sources)
+    # TOOL ARSENAL — the catalog's invocations as prompt REFERENCE, so proposed
+    # commands are well-formed and consistent across a broad toolset. It grants
+    # nothing: the executor has no allowlist, so any tool was always proposable.
+    arsenal_block = arsenal_planner.prompt_block(
+        _arsenal(), needle=" ".join(priority) or goal
+    )
     user = build_user_prompt(
-        goal, target_type, grouped, ctx, profile, scope_text, context_block
+        goal, target_type, grouped, ctx, profile, scope_text, context_block,
+        arsenal_block,
     )
     raw = llm.chat(_SYSTEM, user, cfg)
     parsed = llm.extract_json(raw)
@@ -1759,6 +1807,10 @@ def compose(
     if not phases:
         raise llm.LLMError("all composed steps were out of scope")
     phases = detection_tagging.tag_phases(phases)   # ATT&CK tag each step (see above)
+    # ARSENAL PROVENANCE — record which catalogued tool each step actually runs, read
+    # from the command's own program name. Additive annotation: it changes no command
+    # and no grounded/ai_suggested label, and it is not a claim that the step is verified.
+    arsenal_planner.tag_steps(_arsenal(), phases)
 
     return {
         "goal": goal,

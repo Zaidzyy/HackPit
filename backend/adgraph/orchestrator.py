@@ -265,6 +265,32 @@ def proposal_for_edge(
     cmds = tech.get("commands") or []
     raw_cmd = (cmds[0].get("cmd") if cmds else "") or ""
     command, args = _argv(raw_cmd)
+    destructive = bool(tech.get("destructive"))
+
+    # WHY THE COMMAND IS ABSENT MATTERS, and conflating the cases is dangerous.
+    #
+    #   ready       we have a program + argv to hand to the executor
+    #   note-only   the technique yields prose, not a command. For MemberOf that is correct
+    #               and benign — inherited rights are not something you run.
+    #   unparsable  a real command line came back but would not tokenise into argv.
+    #
+    # Live verification against a real model caught the reason this distinction has to exist:
+    # with the KB grounder wired, DCSync and ForceChangePassword came back with no usable
+    # command, so the proposal reported requires_confirm=False and a domain-wide credential
+    # replication rendered as though it were free. Whatever the flavour, a DESTRUCTIVE abuse
+    # with nothing to send to a gate must read as "this needs your attention" — there is no
+    # executor decision to lean on, because there is nothing to send.
+    runnable_line = next(
+        (ln for ln in (raw_cmd or "").splitlines()
+         if ln.strip() and not ln.strip().startswith("#")),
+        "",
+    )
+    if command:
+        resolution = "ready"
+    elif runnable_line:
+        resolution = "unparsable"
+    else:
+        resolution = "note-only"
     gate_ok, gate_reason = _precheck(command, args, scope_ctx)
     dangerous = allowlist.dangerous_command_heuristic(command, args) if command else []
     return {
@@ -293,6 +319,8 @@ def proposal_for_edge(
         # nothing to approve because there is nothing to run. The human still advances it by
         # hand; the graph never advances itself.
         "runnable": bool(command),
+        # "ready" | "note-only" (prose, correct for inherited rights) | "unparsable".
+        "resolution": resolution,
         # advisory only — the executor re-checks all of this at run time
         "gate_ok": gate_ok,
         "gate_reason": gate_reason,
@@ -305,7 +333,12 @@ def proposal_for_edge(
         # separate on purpose: it is not what the executor enforces, which makes it a usable
         # cross-check. Any edge the catalog calls destructive whose command does NOT trip the
         # heuristic is a hole in the heuristic — asserted in test_adorch_safety.py.
-        "destructive_technique": bool(tech.get("destructive")),
+        "destructive_technique": destructive,
+        # A DESTRUCTIVE abuse with no runnable command, whichever flavour. There is no
+        # executor gate to lean on here BECAUSE there is nothing to send to it, so this
+        # warning carries the weight: whatever the operator supplies by hand changes a real
+        # domain. Never let this render as the benign "nothing to run" case.
+        "destructive_unresolved": destructive and not command,
     }
 
 

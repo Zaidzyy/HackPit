@@ -191,6 +191,9 @@ export function CockpitADOrchestrator({
   const p = proposal;
   const blocked = !!p && (!p.runnable || !p.gate_ok);
   const needsAck = !!p && p.requires_confirm;
+  // the card reads RED for either reason: the gate will demand a confirm, OR it is a
+  // destructive abuse we could not resolve and therefore cannot gate at all.
+  const looksDestructive = !!p && (p.requires_confirm || p.destructive_unresolved);
 
   return (
     <section className="hp-ado" aria-label="AD orchestration">
@@ -220,7 +223,7 @@ export function CockpitADOrchestrator({
       {!p && !done && reason && !thinking && <p className="hp-ado-err">{reason}</p>}
 
       {p && (
-        <div className={`hp-ado-card${needsAck ? " is-destructive" : ""}`}>
+        <div className={`hp-ado-card${looksDestructive ? " is-destructive" : ""}`}>
           <div className="hp-ado-edge">
             <span className="hp-ado-principal">{p.edge.source_label}</span>
             <span className="hp-ado-arrow">
@@ -248,6 +251,16 @@ export function CockpitADOrchestrator({
                 {p.command} {p.args.join(" ")}
               </code>
             </pre>
+          ) : p.destructive_unresolved ? (
+            /* A DESTRUCTIVE abuse we could not resolve a command for. There is no executor
+               gate to lean on — there is nothing to send to it — so this must never read as
+               the benign "nothing to run" case. */
+            <p className="hp-ado-unresolved">
+              ⚠ <b>Destructive abuse, no command resolved.</b> The technique for this edge
+              ({p.technique.title}) did not come back with a runnable command, so there is
+              nothing to send to the gates. Anything you run here by hand will change a real
+              domain — work it out yourself and run it through the executor deliberately.
+            </p>
           ) : (
             <p className="hp-ado-inherit">
               This edge is inherited rights — there is no command to run. Advance it by hand

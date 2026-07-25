@@ -209,6 +209,47 @@ def test_every_destructive_technique_trips_the_heuristic() -> None:
           "trips the danger gate: PASS")
 
 
+def test_a_destructive_abuse_never_renders_as_benign() -> None:
+    """REGRESSION — found by driving a real model against the running backend.
+
+    The hermetic tests passed ``grounder=None``, so techniques always fell back to their
+    catalog template and always produced a command. With the KB grounder wired, a grounded
+    entry can come back empty or comment-only: DCSync and ForceChangePassword resolved to NO
+    command, which made ``requires_confirm`` False and rendered a domain-wide credential
+    replication as though it were free.
+
+    "No command" now has to say WHY. ``no-command`` is the benign case (MemberOf is inherited
+    rights). ``unresolved`` is a real abuse whose command did not come back usable, and when
+    the technique is destructive that combination is flagged explicitly — there is no executor
+    gate to lean on, because there is nothing to send to it.
+    """
+    g = P.parse_collection(S.sample_collection())
+
+    def empty_grounder(seeds):
+        """A KB hit whose commands are unusable — exactly the live failure."""
+        return {"id": "kb-1", "title": "Empty entry", "commands": [{"lang": "bash", "cmd": "# just a note\n"}]}
+
+    destructive_seen = 0
+    for kind in SC.ABUSABLE_EDGES:
+        prop = O.proposal_for_edge(g, _synthetic_edge(g, kind), "", empty_grounder)
+        if not prop["destructive_technique"]:
+            continue
+        destructive_seen += 1
+        if not prop["runnable"]:
+            assert prop["destructive_unresolved"], (
+                f"{kind}: a destructive abuse with no usable command must be flagged, not "
+                "presented as benign"
+            )
+    assert destructive_seen, "no destructive edges were exercised"
+
+    # and the benign case is still classed benign
+    member_of = _synthetic_edge(g, "MemberOf")
+    benign = O.proposal_for_edge(g, member_of, "")
+    assert benign["resolution"] == "note-only" and not benign["destructive_unresolved"], benign
+    print(f"  a destructive abuse whose command does not resolve is FLAGGED, never rendered "
+          f"as benign ({destructive_seen} destructive kinds, grounder wired): PASS")
+
+
 def test_read_only_ad_enumeration_stays_clean() -> None:
     """The other half of the same claim. A confirm that fires on everything is one the operator
     learns to click through, so read-only enumeration must NOT be flagged."""
@@ -293,6 +334,7 @@ if __name__ == "__main__":
     test_a_proposed_ad_step_runs_nothing_unapproved()
     test_destructive_ad_abuse_requires_the_red_confirm()
     test_every_destructive_technique_trips_the_heuristic()
+    test_a_destructive_abuse_never_renders_as_benign()
     test_read_only_ad_enumeration_stays_clean()
     test_off_scope_ad_host_is_refused()
     test_proposal_is_argv_only()

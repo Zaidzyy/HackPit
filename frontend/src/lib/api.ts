@@ -1121,6 +1121,18 @@ export type ADProposal = {
   rationale: string;
   /** False for an edge that is inherited rights (MemberOf) — nothing to run, nothing to approve. */
   runnable: boolean;
+  /**
+   * Why a command is or isn't present. "ready" = we have argv. "note-only" = the technique is
+   * prose, which is correct for inherited rights. "unparsable" = a real command line came back
+   * that wouldn't tokenise.
+   */
+  resolution: "ready" | "note-only" | "unparsable";
+  /**
+   * A DESTRUCTIVE abuse with no runnable command. There is no executor gate to lean on here
+   * because there is nothing to send to it, so this must never render as the benign
+   * "nothing to run" case — whatever the operator supplies by hand changes a real domain.
+   */
+  destructive_unresolved: boolean;
   /** Advisory pre-check against the SAME target/scope matcher the executor uses. */
   gate_ok: boolean;
   gate_reason: string;

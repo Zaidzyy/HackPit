@@ -55,6 +55,8 @@ import sessions as sessions_db  # noqa: E402  (backend/sessions.py — SQLite st
 from cockpit import runstore as cockpit_runstore  # noqa: E402
 from cockpit import engagement as cockpit_engagement  # noqa: E402
 from cockpit.router import router as cockpit_router  # noqa: E402
+from adgraph import store as ad_store  # noqa: E402  (backend/adgraph — AD attack-path graph)
+from adgraph.router import router as ad_router, set_grounder  # noqa: E402
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
 CAPTIONS_PATH = REPO_ROOT / "data" / "images" / "captions.json"
@@ -270,6 +272,8 @@ async def lifespan(app: FastAPI):
     cockpit_runstore.init_db()
     # engagement-mode records (deliberate real-target entry) share it too.
     cockpit_engagement.init_db()
+    # parsed AD attack-path graphs share it too.
+    ad_store.init_db()
     yield
     STATE.entries = []
     STATE.by_id = {}
@@ -294,6 +298,9 @@ app.add_middleware(
 
 # Cockpit — live, human-approved execution against the isolated lab (see cockpit/).
 app.include_router(cockpit_router)
+# AD attack-path graph (see adgraph/). Read-only graph/parse/path/technique endpoints; every
+# abuse command it surfaces still runs ONLY through the cockpit executor above.
+app.include_router(ad_router)
 
 
 # --------------------------------------------------------------------------- #
@@ -308,6 +315,38 @@ def _resilient_search(q: str, top: int, mode: str) -> list[dict]:
         if mode == "lexical":
             raise
         return kb_search.search(STATE.entries, q, top, mode="lexical")
+
+
+# Only these KB categories may GROUND an AD abuse edge — so a network-scan / web entry can
+# never supply the command for an ACL/delegation/DCSync abuse (that would look authoritative
+# but be wrong). If nothing AD-relevant matches, the technique's own catalog template is used
+# (ai_suggested), exactly like the kill-chain map falls back to general knowledge.
+_AD_GROUND_CATEGORIES = frozenset({"active-directory", "windows"})
+
+
+def _ad_kb_grounder(seeds: str) -> dict | None:
+    """Ground an AD abuse edge in the KB: the best AD-relevant entry (with commands) for the
+    technique's seed terms, via the SAME hybrid search + entry_commands the attack-path composer
+    uses. Returns ``{id, title, commands}`` or None (→ the catalog fallback / ai_suggested).
+    Restricted to AD/Windows entries so an off-topic hit can't mis-ground the abuse. The AD
+    graph router calls this via set_grounder so adgraph has no import cycle with the app.
+    """
+    try:
+        hits = _resilient_search(seeds, 8, "hybrid")
+    except Exception:
+        return None
+    for h in hits:
+        e = STATE.by_id.get(h.get("id"))
+        if not e or e.get("category") not in _AD_GROUND_CATEGORIES:
+            continue
+        cmds = attack_path.entry_commands(e)
+        if cmds:
+            return {"id": e["id"], "title": e.get("title") or e["id"], "commands": cmds}
+    return None
+
+
+# Wire the KB grounder into the AD graph router (technique endpoint uses it for grounding).
+set_grounder(_ad_kb_grounder)
 
 
 # --------------------------------------------------------------------------- #

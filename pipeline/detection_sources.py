@@ -117,8 +117,11 @@ def _fetch(url: str, cache: Path | None, name: str, timeout: int = 600) -> bytes
     return data
 
 
-def check_attack(cache: Path | None) -> list[str]:
-    """Every technique row must match live ATT&CK: name, tactics, log sources, non-revoked."""
+def check_attack(cache: Path | None) -> tuple[list[str], dict]:
+    """Every technique row must match live ATT&CK: name, tactics, log sources, non-revoked.
+
+    Returns the errors plus the upstream technique table, so the KB-citation check can reuse the
+    parsed bundle instead of downloading it a second time."""
     errs: list[str] = []
     bundle = json.loads(_fetch(ATTACK_URL, cache, "enterprise-attack.json"))
     objs = bundle["objects"]
@@ -202,11 +205,13 @@ def check_attack(cache: Path | None) -> list[str]:
             if up_logs and l not in up_logs:
                 errs.append(f"{tech.id}: log source {l!r} not listed upstream")
 
-    return errs
+    return errs, techs
 
 
-def check_sigma(cache: Path | None) -> list[str]:
-    """Every cited Sigma rule must exist upstream at that path, with that UUID and title."""
+def check_sigma(cache: Path | None) -> tuple[list[str], dict]:
+    """Every cited Sigma rule must exist upstream at that path, with that UUID and title.
+
+    Returns the errors plus the upstream rule table (repo path -> {id, title, level})."""
     errs: list[str] = []
     blob = _fetch(SIGMA_ZIP, cache, "sigma-master.zip")
     rules: dict[str, dict] = {}
@@ -244,6 +249,68 @@ def check_sigma(cache: Path | None) -> list[str]:
             errs.append(f"sigma {key!r}: title {rule.title!r} != upstream {up['title']!r}")
         if up["level"] and up["level"] != rule.level:
             errs.append(f"sigma {key!r}: level {rule.level!r} != upstream {up['level']!r}")
+    return errs, rules
+
+
+# --------------------------------------------------------------------------- #
+# the DEFENSIVE KB reference pages cite the same two sources — check them too
+# --------------------------------------------------------------------------- #
+AUTHORED_KB = REPO_ROOT / "pipeline" / "authored" / "authored_entries.jsonl"
+_ATT_URL = re.compile(r"attack\.mitre\.org/techniques/(T\d{4})(?:/(\d{3}))?")
+_SIGMA_URL = re.compile(r"github\.com/SigmaHQ/sigma/blob/master/(rules[\w./-]*\.yml)")
+_UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
+
+
+def check_kb_citations(attack_bundle: dict | None, sigma_rules: dict | None) -> list[str]:
+    """The evasion-taxonomy reference pages cite ATT&CK ids and SigmaHQ rules in prose.
+
+    Those citations are load-bearing — a reader will follow them — so they are verified exactly
+    like the catalog's: every technique id must exist upstream and not be revoked, every Sigma
+    path must exist, and every UUID quoted must be a real rule id.
+
+    Also asserts the invariant that makes these pages safe to ship: they carry NO command blocks,
+    so the attack-path composer can never surface one as a runnable step.
+    """
+    errs: list[str] = []
+    if not AUTHORED_KB.exists():
+        return ["authored KB file not found: " + str(AUTHORED_KB)]
+
+    rows = [json.loads(l) for l in AUTHORED_KB.read_text(encoding="utf-8").splitlines() if l.strip()]
+    pages = [r for r in rows if (r.get("meta") or {}).get("type") == "detection-reference"]
+    if not pages:
+        return ["no detection-reference pages found in the authored KB"]
+
+    for page in pages:
+        pid = page["id"]
+        if page.get("category") != "reference":
+            errs.append(f"{pid}: must be category 'reference' (it is {page.get('category')!r})")
+        n_code = sum(len(s.get("code") or []) for s in page.get("steps") or [])
+        if n_code:
+            errs.append(
+                f"{pid}: carries {n_code} command block(s) — a detection-reference page must "
+                f"carry NONE, or the attack-path composer can surface it as a runnable step"
+            )
+        blob = page.get("body_md", "") + " " + " ".join(page.get("references") or [])
+
+        for tid, sub in _ATT_URL.findall(blob):
+            full = f"{tid}.{sub}" if sub else tid
+            if attack_bundle is not None:
+                up = attack_bundle.get(full)
+                if up is None:
+                    errs.append(f"{pid}: cites {full}, which is not in ATT&CK Enterprise")
+                elif up.get("revoked") or up.get("x_mitre_deprecated"):
+                    errs.append(f"{pid}: cites {full}, which is revoked/deprecated upstream")
+
+        if sigma_rules is not None:
+            by_uuid = {v["id"] for v in sigma_rules.values()}
+            for path in _SIGMA_URL.findall(blob):
+                if path not in sigma_rules:
+                    errs.append(f"{pid}: cites SigmaHQ path {path}, which does not exist")
+            for uuid in _UUID.findall(blob):
+                if uuid not in by_uuid:
+                    errs.append(f"{pid}: cites Sigma UUID {uuid}, which is not a real rule id")
+
+    print(f"  ({len(pages)} detection-reference pages checked)")
     return errs
 
 
@@ -266,12 +333,21 @@ def main() -> int:
 
     if args.verify:
         print(f"\n== MITRE ATT&CK Enterprise v{attck.ATTACK_VERSION} ==")
-        a = check_attack(cache)
+        a, upstream_techs = check_attack(cache)
         print("  OK" if not a else "\n".join("  FAIL " + e for e in a))
         print("\n== SigmaHQ ruleset ==")
-        s = check_sigma(cache)
+        s, upstream_rules = check_sigma(cache)
         print("  OK" if not s else "\n".join("  FAIL " + e for e in s))
-        errs += a + s
+        print("\n== defensive KB pages (citations + the no-commands lock) ==")
+        k = check_kb_citations(upstream_techs, upstream_rules)
+        print("  OK" if not k else "\n".join("  FAIL " + e for e in k))
+        errs += a + s + k
+    else:
+        # offline: the no-commands lock still holds without network
+        print("\n== defensive KB pages (the no-commands lock) ==")
+        k = check_kb_citations(None, None)
+        print("  OK" if not k else "\n".join("  FAIL " + e for e in k))
+        errs += k
 
     print(f"\n{len(errs)} problem(s).")
     return 1 if errs else 0

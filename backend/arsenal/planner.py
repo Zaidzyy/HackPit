@@ -61,6 +61,31 @@ def programs(cmd: str) -> list[str]:
 # --------------------------------------------------------------------------- #
 # into the prompt
 # --------------------------------------------------------------------------- #
+_WORD_RE = re.compile(r"[a-z0-9.+-]{3,}")
+
+
+def _haystack(tool: Tool) -> str:
+    return " ".join(
+        (tool.name, " ".join(tool.aliases), tool.category, tool.purpose,
+         " ".join(tool.techniques), " ".join(t.label for t in tool.templates))
+    ).lower()
+
+
+def _relevance(tool: Tool, needle: str) -> int:
+    """How many of the needle's WORDS this tool matches.
+
+    Token-wise on purpose. The needle is a real phrase — a goal, or the profiler's
+    priority bug classes ("IDOR SSRF authentication bypass") — and a whole-phrase
+    substring test never matches anything, so every goal scored zero and the block
+    fell back to one fixed alphabetical slice of the catalog. Scoring per word makes
+    an AD goal actually surface the AD tools. A tool that matches nothing scores 0,
+    and the sort below is stable, so a needle that matches nothing leaves the order
+    exactly as the no-needle block has it.
+    """
+    hay = _haystack(tool)
+    return sum(1 for w in set(_WORD_RE.findall((needle or "").lower())) if w in hay)
+
+
 def prompt_block(
     arsenal: Arsenal,
     phases: list[str] | None = None,
@@ -84,8 +109,9 @@ def prompt_block(
     for phase in wanted:
         picks = [t for t in arsenal.by_phase(phase) if t.name not in seen]
         if needle:
-            ranked = {t.name for t in arsenal.by_technique(needle)}
-            picks.sort(key=lambda t: (t.name not in ranked, t.name))
+            # STABLE sort on relevance alone — ties keep catalog order, so a needle
+            # that matches nothing yields byte-for-byte the no-needle block.
+            picks.sort(key=lambda t: -_relevance(t, needle))
         picks = picks[:_TOOLS_PER_PHASE]
         if not picks:
             continue

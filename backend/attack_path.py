@@ -23,6 +23,7 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
+import context_channel  # Channel 2 — CONTEXT background for the prompt, never steps
 import llm
 from detection import tagging as detection_tagging  # ATT&CK tags on steps (read-only, no LLM)
 
@@ -763,7 +764,15 @@ def build_user_prompt(
     ctx: dict[str, Any] | None = None,
     profile: dict[str, Any] | None = None,
     scope_text: str | None = None,
+    context_block: str | None = None,
 ) -> str:
+    """Build the composer prompt.
+
+    ``context_block`` is CHANNEL 2 (see ``context_channel``): bounded background
+    the model reasons FROM — a matched writeup's approach, the methodology to
+    follow. It is appended as background only; when it is empty the prompt is
+    byte-for-byte the pre-Channel-2 prompt.
+    """
     ctx = ctx or {}
     lines: list[str] = []
     lines.append(f"GOAL: {goal}")
@@ -824,6 +833,8 @@ def build_user_prompt(
             "(the library is thin for this goal — rely more on clearly-marked "
             "ai_suggested steps, but never fabricate an entry_id.)"
         )
+    if context_block:
+        lines.append(context_block)
     lines.append("")
     gap = f" relevant to a {box_type} target" if box_type else ""
     lines.append(
@@ -1639,7 +1650,19 @@ def compose(
 
     # (2) KB-FIRST + AI-SUGGESTED FALLBACK
     grouped = retrieve(by_id, goal, target_type, search_fn, ctx, profile)
-    user = build_user_prompt(goal, target_type, grouped, ctx, profile, scope_text)
+    # CHANNEL 2 — CONTEXT. The matched writeup's CONTENT becomes reasoning
+    # background here (in mode 1 the writeup already IS the path, so injecting it
+    # would be redundant). Channel 1's step pool is untouched: the writeup is
+    # still excluded from grounding and can never become a step.
+    ctx_sources: list[dict[str, Any]] = []
+    if box_writeup and box_writeup["id"] in by_id:
+        wu_ctx = context_channel.writeup_context(by_id[box_writeup["id"]], goal)
+        if wu_ctx:
+            ctx_sources.append(wu_ctx)
+    context_block = context_channel.build_context_block(ctx_sources)
+    user = build_user_prompt(
+        goal, target_type, grouped, ctx, profile, scope_text, context_block
+    )
     raw = llm.chat(_SYSTEM, user, cfg)
     parsed = llm.extract_json(raw)
     phases = _ground(parsed, by_id, target, adapt_facts)

@@ -31,7 +31,11 @@ from typing import Any, Callable
 WRITEUP_CHARS = 2800        # one writeup excerpt
 METHODOLOGY_CHARS = 1200    # one methodology/workflow doc excerpt
 METHODOLOGY_DOCS = 2        # how many methodology docs are ever injected
-TOTAL_CONTEXT_CHARS = 6000  # whole Channel-2 block, all sources together
+TOTAL_CONTEXT_CHARS = 6000  # excerpt BODY across all sources, together
+# Absolute ceiling on the rendered block (bodies + the fixed headers + titles).
+# build_context_block() slices to this, so no combination of sources — however
+# long, however many — can push the prompt past a known bound.
+MAX_BLOCK_CHARS = TOTAL_CONTEXT_CHARS + 1600
 
 _SECTION_CHARS = 900        # one excerpted section
 _CODE_PREVIEW_LINES = 2     # keep a code block's first lines (which TOOL), not a dump
@@ -296,10 +300,10 @@ def build_context_block(sources: list[dict[str, Any]]) -> str:
             lines.append(
                 _WRITEUP_HEADER if src["kind"] == "writeup" else _METHODOLOGY_HEADER
             )
-        lines.append(f"### {src['kind']}: {src['title']}")
+        lines.append(f"### {src['kind']}: {src['title'][:120]}")
         lines.append(body)
         budget -= len(body)
-    return "\n".join(lines)
+    return "\n".join(lines)[:MAX_BLOCK_CHARS]
 
 
 # --------------------------------------------------------------------------- #

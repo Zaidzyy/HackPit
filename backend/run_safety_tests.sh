@@ -56,6 +56,12 @@ echo "== AD collector tests (argv-only / unapproved / scope-locked DC / failure 
 echo "== AD graph SAFETY invariants (no exec in adgraph / zero :kali / collector+abuse gated / lab unchanged) =="
 "$PY" test_adgraph_safety.py
 
+echo "== detection footprint tests (matching / ATT&CK / grounded+ai_suggested / tagging / report) =="
+"$PY" test_detection.py
+
+echo "== detection SAFETY invariants (no exec / read-only / cockpit untouched / describes-not-evades) =="
+"$PY" test_detection_safety.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

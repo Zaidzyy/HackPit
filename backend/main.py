@@ -57,6 +57,10 @@ from cockpit import engagement as cockpit_engagement  # noqa: E402
 from cockpit.router import router as cockpit_router  # noqa: E402
 from adgraph import store as ad_store  # noqa: E402  (backend/adgraph — AD attack-path graph)
 from adgraph.router import router as ad_router, set_grounder  # noqa: E402
+from detection.router import (  # noqa: E402  (backend/detection — purple-team footprint)
+    router as detection_router,
+    set_run_lookup as set_detection_run_lookup,
+)
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
 CAPTIONS_PATH = REPO_ROOT / "data" / "images" / "captions.json"
@@ -301,6 +305,10 @@ app.include_router(cockpit_router)
 # AD attack-path graph (see adgraph/). Read-only graph/parse/path/technique endpoints; every
 # abuse command it surfaces still runs ONLY through the cockpit executor above.
 app.include_router(ad_router)
+# Detection footprint (see detection/). READ-ONLY purple-team annotation: what a DEFENDER would
+# see for a command/step/run — ATT&CK tag, telemetry, the Sigma rule that would fire, loudness.
+# It executes nothing and changes no gate; it only describes.
+app.include_router(detection_router)
 
 
 # --------------------------------------------------------------------------- #
@@ -347,6 +355,17 @@ def _ad_kb_grounder(seeds: str) -> dict | None:
 
 # Wire the KB grounder into the AD graph router (technique endpoint uses it for grounding).
 set_grounder(_ad_kb_grounder)
+
+
+def _detection_run_lookup(run_id: str) -> dict | None:
+    """Read one recorded cockpit run for the detection panel to ANNOTATE. Read-only."""
+    rec = cockpit_runstore.get_run(run_id)
+    return rec.model_dump() if rec is not None else None
+
+
+# Wire the run lookup into the detection router (so /detection/footprint/run/{id} can describe
+# what a run left behind). Read path only — the detection package never executes anything.
+set_detection_run_lookup(_detection_run_lookup)
 
 
 # --------------------------------------------------------------------------- #

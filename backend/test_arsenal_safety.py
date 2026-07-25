@@ -186,6 +186,135 @@ def test_no_template_can_smuggle_a_host() -> None:
     print("  no template hardcodes a host — the target always comes from the engagement: PASS")
 
 
+def test_the_catalog_is_inert_data() -> None:
+    """The catalog is JSON — plain dicts, lists and strings. There is nothing in the file
+    that could execute even in principle, whatever its size."""
+    import json
+
+    raw = json.loads((_PKG / "tools.json").read_text(encoding="utf-8"))
+
+    def inert(node: object) -> bool:
+        if isinstance(node, dict):
+            return all(isinstance(k, str) and inert(v) for k, v in node.items())
+        if isinstance(node, list):
+            return all(inert(v) for v in node)
+        return isinstance(node, (str, int, float, bool)) or node is None
+
+    assert inert(raw), "the catalog holds something that is not plain JSON data"
+    print(f"  the catalog is inert JSON — {len(raw['tools'])} tools, nothing executable: PASS")
+
+
+def test_no_import_time_dependency_on_the_composer() -> None:
+    """The arsenal must not depend on the attack-path composer to be imported.
+
+    Stated precisely, because the honest claim is narrower than "it never references
+    attack_path": rendering routes through the composer's ``substitute_target`` so a filled
+    template is target-faithful. That single reference is a GUARDED, LAZY import inside one
+    function body — the package imports and renders fine without it, and it pulls in a
+    substitution helper, never an execution path.
+    """
+    for path in _SOURCES:
+        code = _code_only(path.read_text(encoding="utf-8"))
+        for line in code.splitlines():
+            # anchored at column 0 — an INDENTED import is inside a function, which is
+            # the lazy form this test is explicitly allowing.
+            assert not re.match(r"(?:from|import)\s+attack_path\b", line), (
+                f"{path.name} imports attack_path at module level"
+            )
+        for m in re.finditer(r"(?:from|import)\s+attack_path\b", code):
+            indent = code[:m.start()].split("\n")[-1]
+            assert indent.strip() == "" and indent, (
+                f"{path.name} references attack_path outside a function body"
+            )
+    # and it really does import standalone
+    import importlib
+
+    assert importlib.import_module("arsenal.loader") is not None
+    print("  no import-time dependency on the composer (one guarded lazy import): PASS")
+
+
+def test_every_template_renders_target_faithfully() -> None:
+    """EVERY template of EVERY tool, rendered — no foreign host survives, and nothing
+    unfilled is hidden. This is the claim that has to scale with the catalog: 34 tools
+    could be eyeballed, 73 cannot."""
+    ars = loader.load()
+    foreign_host = re.compile(
+        r"\b(?:[a-z0-9-]+\.)+(?:htb|thm|local|vh|lab|test)\b"
+        r"|\b(?:[a-z0-9-]+\.)?example\.(?:com|org|net)\b",
+        re.I,
+    )
+    private_ip = re.compile(
+        r"(?<![\d.])(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}(?!\d)"
+    )
+    checked = 0
+    for tool in ars.tools:
+        for tpl in tool.templates:
+            cmd, unfilled = loader.render(
+                tpl.template, _LAB, None, __import__("attack_path").substitute_target
+            )
+            where = f"{tool.name}/{tpl.label}"
+            assert not foreign_host.search(cmd), f"{where} rendered a foreign host: {cmd}"
+            assert not private_ip.search(cmd), f"{where} rendered a private/example IP: {cmd}"
+            if "<target>" in tpl.template:
+                assert _LAB in cmd, f"{where} did not receive the engagement target"
+                assert "<target>" not in cmd, f"{where} left <target> unfilled"
+            # anything still unfilled must remain VISIBLE, never silently guessed
+            for ph in unfilled:
+                assert ph in cmd, f"{where} hid an unfilled placeholder {ph}"
+            checked += 1
+    print(f"  all {checked} templates across {len(ars.tools)} tools render "
+          "target-faithfully, no foreign host: PASS")
+
+
+def test_the_callback_placeholder_is_never_rewritten_to_the_target() -> None:
+    """A payload's callback address belongs to the OPERATOR. The composer rewrites any
+    placeholder spelling ip/host/target, so the catalog spells this one <listener> — if that
+    ever regressed, msfvenom templates would point the shell at the victim."""
+    import attack_path as AP
+
+    for token in ("<listener>", "<listener-port>"):
+        assert AP.substitute_target(f"LHOST={token}", _LAB) == f"LHOST={token}", (
+            f"{token} was rewritten to the target"
+        )
+    ars = loader.load()
+    for tool in ars.tools:
+        for tpl in tool.templates:
+            assert "<lhost>" not in tpl.template.lower(), (
+                f"{tool.name}/{tpl.label} uses <lhost>, which the composer would rewrite"
+            )
+    print("  the operator's callback placeholder survives substitution untouched: PASS")
+
+
+def test_every_alias_tags_back_to_its_own_tool() -> None:
+    """Provenance must survive the name a step actually types. ``_program`` strips .exe/.py,
+    so an alias can normalise to something the catalog does not hold — winPEASx64.exe did
+    exactly that, and a step running it would have gone untagged."""
+    ars = loader.load()
+    broken = [
+        (tool.name, alias)
+        for tool in ars.tools
+        for alias in tool.names()
+        if (m := planner.match_tool(ars, f"{alias} <target>")) is None or m.name != tool.name
+    ]
+    assert not broken, f"these names/aliases do not tag back to their tool: {broken}"
+    print(f"  every name and alias across {len(ars.tools)} tools tags back: PASS")
+
+
+def test_impacket_is_catalogued_as_its_individual_scripts() -> None:
+    """impacket is not one binary, and a template that pretended otherwise would be a stub."""
+    ars = loader.load()
+    for script in ("GetUserSPNs.py", "GetNPUsers.py", "secretsdump.py", "psexec.py",
+                   "wmiexec.py", "smbexec.py", "ntlmrelayx.py", "mssqlclient.py"):
+        tool = ars.get(script)
+        assert tool is not None, f"{script} is not in the catalog"
+        assert tool.templates, f"{script} has no invocation"
+        # both the .py and the packaged impacket- form must resolve
+        assert ars.get(script.removesuffix(".py")) is tool
+        assert ars.get(f"impacket-{script.removesuffix('.py')}") is tool
+    assert ars.get("impacket") is None, "impacket must not be catalogued as a single binary"
+    print("  the impacket suite is catalogued per script, both invocation forms: PASS")
+
+
 def test_prompt_block_is_not_an_allowlist() -> None:
     """The block must not read as a restriction — the executor has no allowlist, and a
     reference that sounded like one would misdescribe the system."""
@@ -203,5 +332,11 @@ if __name__ == "__main__":
     test_the_executor_knows_nothing_about_the_arsenal()
     test_executor_gates_are_byte_for_byte_unchanged()
     test_no_template_can_smuggle_a_host()
+    test_the_catalog_is_inert_data()
+    test_no_import_time_dependency_on_the_composer()
+    test_every_template_renders_target_faithfully()
+    test_the_callback_placeholder_is_never_rewritten_to_the_target()
+    test_every_alias_tags_back_to_its_own_tool()
+    test_impacket_is_catalogued_as_its_individual_scripts()
     test_prompt_block_is_not_an_allowlist()
     print("ALL tool-arsenal safety-invariant tests pass")

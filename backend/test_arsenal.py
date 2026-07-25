@@ -159,6 +159,37 @@ def test_prompt_block_is_bounded_and_says_it_is_a_reference() -> None:
     print("  prompt block bounded, line-cut, and framed as reference not allowlist: PASS")
 
 
+def _block_tools(block: str) -> list[str]:
+    return [ln[2:].split(" — ")[0] for ln in block.splitlines() if ln.startswith("- ")]
+
+
+def test_prompt_block_ranks_on_the_goals_words() -> None:
+    """The block is capped, so at 73 tools WHICH tools it carries is the whole question.
+
+    Ranking is per WORD. A whole-phrase substring test never matched a real goal, so every
+    goal scored zero and the block fell back to one fixed slice of the catalog regardless of
+    what was being attacked.
+    """
+    ars = _load()
+
+    ad = _block_tools(planner.prompt_block(ars, needle="kerberoast the domain controller"))
+    assert any(t in ad for t in ("GetUserSPNs.py", "rubeus", "secretsdump.py")), (
+        f"an AD goal must surface the AD tools — got {ad}"
+    )
+
+    web = _block_tools(planner.prompt_block(ars, needle="find SQL injection and XSS in the web app"))
+    assert "sqlmap" in web and "dalfox" in web, f"a web goal must surface the web tools — got {web}"
+    assert "GetUserSPNs.py" not in web, f"a web goal must not lead with kerberoasting — got {web}"
+
+    # the two goals must actually differ — that is the whole point of ranking
+    assert set(ad) != set(web), "ranking produced the same block for AD and web goals"
+
+    # a needle that matches nothing is not a reshuffle: the sort is stable on relevance
+    # alone, so it must reproduce the no-needle block byte for byte.
+    assert planner.prompt_block(ars, needle="zzz qqq nothingmatches") == planner.prompt_block(ars)
+    print("  prompt block ranks on the goal's words; a non-matching goal is unchanged: PASS")
+
+
 if __name__ == "__main__":
     test_catalog_is_well_formed()
     test_every_category_and_phase_is_covered()
@@ -169,4 +200,5 @@ if __name__ == "__main__":
     test_tagging_reads_the_command_not_the_model()
     test_empty_arsenal_is_a_no_op()
     test_prompt_block_is_bounded_and_says_it_is_a_reference()
+    test_prompt_block_ranks_on_the_goals_words()
     print("ALL tool-arsenal tests pass")

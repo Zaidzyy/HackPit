@@ -3,14 +3,20 @@
 An engagement is no longer locked to ONE exact host. The operator names a *program scope* at
 entry — the same shape a real bug-bounty/pentest scope takes:
 
-    scanme.nmap.org, *.example.com, 10.10.10.0/24, !admin.example.com
+    *   |   scanme.nmap.org, *.example.com, 10.10.10.0/24, !admin.example.com
 
+* ``*``         — EVERYTHING: every name, every address. The deliberate opt-out — with it
+                  the target check passes every host, which is the same behaviour as having
+                  no scope model at all. It must be TYPED (an empty scope is still refused),
+                  so the record shows ``scope: *`` and the report reads as an unbounded run
+                  by choice rather than by omission.
 * ``host``      — an exact host or IP (``scanme.nmap.org``, ``10.10.10.5``). A URL form is
                   accepted and reduced to its bare host.
-* ``*.domain``  — a WILDCARD: every SUBdomain of ``domain``. It does NOT cover the apex —
-                  list ``example.com`` too if the apex is in scope (fail-closed on purpose).
+* ``*.domain``  — a WILDCARD: every SUBdomain of ``domain``, AND the apex itself (a real
+                  program that scopes ``*.example.com`` means ``example.com`` too).
 * ``CIDR``      — a network range (``10.10.10.0/24``), matched against IP tokens.
-* ``!pattern``  — an EXCLUSION (any of the three forms). Exclusions always win.
+* ``!pattern``  — an EXCLUSION (any of the forms). Exclusions always win — including over
+                  ``*``, so ``*, !prod.example.com`` is "everything except that one host".
 
 Matching is deliberately LEXICAL/NUMERIC and does no DNS at match time: a *name* is judged
 against the host + wildcard patterns, an *IP* against the CIDR patterns and the addresses the
@@ -71,7 +77,7 @@ def bare_host(token: str) -> str:
 
 @dataclass(frozen=True)
 class ScopePattern:
-    """One parsed scope pattern. ``kind`` is 'host' | 'wildcard' | 'cidr'."""
+    """One parsed scope pattern. ``kind`` is 'any' | 'host' | 'wildcard' | 'cidr'."""
 
     raw: str
     kind: str
@@ -79,6 +85,8 @@ class ScopePattern:
     exclude: bool = False
 
     def matches(self, host: str, ip: ipaddress._BaseAddress | None) -> bool:
+        if self.kind == "any":
+            return True  # '*' — every name and every address
         if self.kind == "cidr":
             if ip is None:
                 return False
@@ -87,7 +95,12 @@ class ScopePattern:
             except ValueError:  # pragma: no cover - validated at parse time
                 return False
         if self.kind == "wildcard":
-            return host.endswith(self.value) and len(host) > len(self.value)
+            # The APEX counts: a real program that scopes '*.example.com' means
+            # example.com too, and refusing the apex only ever refused a command
+            # the operator was authorized to run.
+            return host == self.value[1:] or (
+                host.endswith(self.value) and len(host) > len(self.value)
+            )
         # exact host (name or IP literal)
         return host == self.value
 
@@ -132,9 +145,17 @@ class ResolvedScope:
     def excludes(self) -> list[str]:
         return [p.raw for p in self.exclude]
 
+    def unbounded(self) -> bool:
+        """True when the scope is '*' — the operator declared everything authorized, so the
+        target check passes every host. Surfaced in the UI banner and the report: an
+        unbounded run is a deliberate choice and should read as one."""
+        return any(p.kind == "any" for p in self.include)
+
     def describe(self) -> str:
         """One-line human/LLM-readable summary of the scope."""
         inc = ", ".join(self.includes()) or "(none)"
+        if self.unbounded():
+            inc = "* (everything — no target check)"
         exc = ", ".join(self.excludes())
         return f"IN SCOPE: {inc}" + (f" | OUT OF SCOPE: {exc}" if exc else "")
 
@@ -146,6 +167,13 @@ def _parse_one(token: str) -> ScopePattern:
         exclude, raw = True, raw[1:].strip()
     if not raw:
         raise ValueError("empty scope pattern")
+
+    # '*' — EVERYTHING. The deliberate opt-out of the target check: with it in the
+    # scope, every host passes and the argv lock stops refusing anything. Typed, not
+    # defaulted (an empty scope is still refused), so the engagement record shows
+    # 'scope: *' and the report says plainly that the run was unbounded.
+    if raw == "*":
+        return ScopePattern(raw="*", kind="any", value="*", exclude=exclude)
 
     if raw.startswith("*."):
         suffix = bare_host(raw[1:]).lower()  # '*.example.com' -> '.example.com'
@@ -217,7 +245,7 @@ def parse_scope(spec: str, resolve: bool = True) -> ResolvedScope:
             for addr in _resolve(h):
                 if addr not in ips:
                     ips.append(addr)
-        wide = any(p.kind in ("wildcard", "cidr") for p in include)
+        wide = any(p.kind in ("any", "wildcard", "cidr") for p in include)
         if hosts and not ips and not wide:
             raise ValueError(
                 "could not resolve any in-scope host — check the scope (DNS failed for: "

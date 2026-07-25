@@ -225,18 +225,19 @@ export function CockpitEngagementMode({
               type="text"
               value={scopeSpec}
               onChange={(e) => setScopeSpec(e.target.value)}
-              placeholder="e.g. example.com, *.example.com, 10.10.10.0/24, !admin.example.com"
+              placeholder="e.g. *  ·  or: example.com, *.example.com, 10.10.10.0/24, !admin.example.com"
               spellCheck={false}
               autoComplete="off"
               disabled={entering}
             />
           </label>
           <p className="hp-ck-hint">
-            Exact hosts, <code>*.wildcards</code> and CIDRs, separated by commas; prefix a
-            pattern with <code>!</code> to exclude it. A wildcard covers <b>subdomains only</b>
-            — list the apex too if it is in scope. The loop may target anything in scope, and
-            in-scope hosts that recon discovers are added automatically; you still approve
-            every command.
+            <code>*</code> means <b>everything is authorized</b> — the target check passes any
+            host you name. Otherwise: exact hosts, <code>*.wildcards</code> and CIDRs, separated
+            by commas; prefix a pattern with <code>!</code> to exclude it (exclusions win, even
+            over <code>*</code>). A wildcard covers subdomains <b>and</b> the apex. The loop may
+            target anything in scope, and in-scope hosts that recon discovers are added
+            automatically; you still approve every command.
           </p>
           <label className="hp-ck-field">
             <span>authorization acknowledgement (required)</span>

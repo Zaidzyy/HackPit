@@ -110,9 +110,11 @@ class EngagementEnterRequest(BaseModel):
     scope: str | None = Field(
         None,
         description="The authorized PROGRAM SCOPE: in-scope patterns separated by commas or "
-        "spaces — exact hosts, *.wildcards, CIDRs — plus !exclusions "
-        "(e.g. 'example.com, *.example.com, 10.10.10.0/24, !admin.example.com'). A wildcard "
-        "covers SUBdomains only; list the apex too if it is in scope. Omit to scope the "
+        "spaces — '*' for everything, exact hosts, *.wildcards, CIDRs — plus !exclusions "
+        "(e.g. '*' or 'example.com, *.example.com, 10.10.10.0/24, !admin.example.com'). "
+        "'*' means every host is authorized: the target check passes everything, which is "
+        "the same as having no scope at all — it must be typed deliberately and is recorded "
+        "as 'scope: *'. A wildcard covers SUBdomains AND the apex. Omit to scope the "
         "engagement to the named target alone. Refused (422) if empty, malformed, wholly "
         "unresolvable, or if it does not contain the named target.",
     )

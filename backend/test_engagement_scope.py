@@ -109,10 +109,38 @@ def test_out_of_scope_targets_are_rejected() -> None:
     print("  unrelated / suffix-trick / out-of-CIDR / EXCLUDED targets are refused: PASS")
 
 
-def test_a_targetless_command_is_refused() -> None:
-    ok, reason = _lock(_eng(), ["-sV", "--top-ports", "100"])
-    assert not ok and "no target" in reason, reason
-    print("  a command that references no in-scope target is refused: PASS")
+def test_a_targetless_command_is_allowed_in_engagement() -> None:
+    """A command naming NO host passes in engagement mode. The hosts of `nmap -iL
+    targets.txt` live in the file — this lock can't see them either way, so refusing
+    protected nothing and only blocked a legitimate, human-approved command. LAB is
+    unchanged (see test_lab_mode_is_untouched)."""
+    for args in (
+        ["-sV", "--top-ports", "100"],          # no host anywhere
+        ["-iL", "targets.txt", "-oA", "out"],   # hosts are in the FILE
+        ["--help"],
+    ):
+        ok, reason = _lock(_eng(), args)
+        assert ok, f"a target-less engagement command must run: {args} ({reason})"
+    # naming an OUT-OF-SCOPE host is still refused — this relaxed the empty case only
+    ok, reason = _lock(_eng(), ["-iL", "targets.txt", "evil.com"])
+    assert not ok and "scope" in reason, reason
+    print("  a target-less engagement command runs; a named out-of-scope host still doesn't: PASS")
+
+
+def test_star_scope_refuses_nothing() -> None:
+    """'*' is the opt-out: with it, the target check passes every host — identical to
+    having no scope model. Exclusions still win."""
+    eng = _eng(scope="*")
+    for args in (["-sV", "evil.com"], ["-p-", "203.0.113.9"],
+                 ["-u", "http://anything.internal/x"], ["--top-ports", "100"]):
+        ok, reason = _lock(eng, args)
+        assert ok, f"'*' scope must allow {args} ({reason})"
+    excl = _eng(scope="*, !prod.example.com")
+    ok, _ = _lock(excl, ["-sV", "stage.example.com"])
+    assert ok
+    ok, reason = _lock(excl, ["-sV", "prod.example.com"])
+    assert not ok and "scope" in reason, "an exclusion still beats '*'"
+    print("  '*' scope refuses nothing; an exclusion still wins: PASS")
 
 
 # --------------------------------------------------------------------------- #
@@ -310,7 +338,8 @@ if __name__ == "__main__":
     test_in_scope_targets_pass()
     test_seed_ip_of_an_exact_host_passes()
     test_out_of_scope_targets_are_rejected()
-    test_a_targetless_command_is_refused()
+    test_a_targetless_command_is_allowed_in_engagement()
+    test_star_scope_refuses_nothing()
     test_expansion_adds_only_in_scope_hosts()
     test_expansion_never_widens_the_scope()
     test_never_auto_run_holds_for_a_discovered_host()

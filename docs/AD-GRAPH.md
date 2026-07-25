@@ -71,10 +71,11 @@ The collector module **executes nothing** — it builds the request the human ap
 captured output. On this branch it is unit-tested against captured/sample output but **not run
 live** (no AD lab).
 
-> **Scope note (surfaced by the tests):** an AD engagement scope must list the **domain apex**
-> explicitly (`sevenkingdoms.local`), because a `*.wildcard` covers subdomains only and
-> `bloodhound-python -d sevenkingdoms.local` puts the apex on the argv. A good AD scope is e.g.
-> `sevenkingdoms.local, *.sevenkingdoms.local, 10.10.10.0/24`.
+> **Scope note:** `bloodhound-python -d sevenkingdoms.local` puts the **domain apex** on the
+> argv. A `*.wildcard` now covers the apex as well as its subdomains, so
+> `*.sevenkingdoms.local` is enough on its own — listing the apex explicitly still works and
+> reads clearer. A good AD scope is e.g. `sevenkingdoms.local, *.sevenkingdoms.local,
+> 10.10.10.0/24`, or `*` to run unbounded.
 
 ---
 

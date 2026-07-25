@@ -126,8 +126,14 @@ def check_target_lock(
     lock is an aid to the human, not a guarantee. ``command`` is for signature compatibility.
 
     A token is an allowed/in-scope target, another host (→ reject), or a non-host operand
-    (→ ignore). At least one target reference is required so a command isn't silently
-    target-less.
+    (→ ignore).
+
+    TARGET-LESS COMMANDS split by mode. In LAB a command must still reference the lab —
+    isolation is the real bound there and the rule is part of the locked lab invariant. In
+    ENGAGEMENT a command that names no host at all is ALLOWED: the hosts of ``nmap -iL
+    targets.txt`` live in the file, so refusing it protected nothing (this lock cannot see
+    into files either way) while blocking a legitimate, human-approved command. Refusing
+    where the check has no information is friction without safety.
     """
     is_lab = allowed is None and in_scope is None
     allow = allowed if allowed is not None else config.LAB_TARGET_ALIASES
@@ -145,10 +151,8 @@ def check_target_lock(
             else:
                 return False, f"target '{host}' is not in the engagement scope '{label}'"
         # else: bare non-host operand → ignore
-    if not found:
-        if is_lab:
-            return False, "no lab target specified — the command must reference the lab"
-        return False, f"no target specified — the command must reference the scope '{label}'"
+    if not found and is_lab:
+        return False, "no lab target specified — the command must reference the lab"
     return True, ""
 
 

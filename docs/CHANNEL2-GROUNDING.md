@@ -116,12 +116,19 @@ infrastructure — github, pypi, loopback, `0.0.0.0`, matched by parent domain t
 
 ### The executor is the safety backstop
 
-**This guard is for plan quality, not safety.** The safety boundary is, and
-remains, the executor: every command passes the target-lock / scope-lock, so a
-leaked off-target host is **refused at execution time** whether or not this guard
-catches it. Nothing in Channel 2 executes anything or changes any gate.
+**This guard is for plan quality, not safety.** The safety boundary is the
+executor: a command passes the target-lock / scope-lock, so a leaked off-target
+host is **refused at execution time** whether or not this guard catches it.
+Nothing in Channel 2 executes anything or changes any gate.
 `test_context_channel.py` asserts the backstop directly —
 `check_target_lock(["-sV", "10.10.10.161"])` is refused.
+
+**One exception, by design:** an engagement entered with `scope: *` has opted out
+of the target check entirely (see `docs/ENGAGEMENT-LOOP-REAL-TARGET.md`), so a
+leaked host is *not* refused there — per-command human approval is the only bound.
+That is the operator's deliberate choice, not a gap. It also means this
+plan-quality guard is doing more work on an unbounded engagement than a scoped
+one, which is the right way round.
 
 ---
 

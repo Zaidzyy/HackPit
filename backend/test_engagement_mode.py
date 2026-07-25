@@ -143,11 +143,14 @@ def test_engagement_target_lock() -> None:
             ExecRequest(command="nmap", args=["-sV", "example.com"], engagement_id="eng-test000000", approved=True)
         )
         assert r is not None and r.gate == "target" and _REAL in r.reason, "a non-target host must reject at target"
-        # a target-less command is rejected
+        # a target-less command PASSES in engagement mode: its hosts (if any) live in a
+        # file the lock can't read either way, so refusing protected nothing and only
+        # blocked a legitimate, human-approved command. LAB still requires the lab target
+        # (test_engagement_scope.test_lab_target_lock_unchanged).
         r = E.validate_request(
             ExecRequest(command="nmap", args=["--help"], engagement_id="eng-test000000", approved=True)
         )
-        assert r is not None and r.gate == "target", "a target-less command must reject at target"
+        assert r is None, "a target-less engagement command must pass the target gate"
     finally:
         restore()
     print("  TARGET-LOCK: engagement locked to the named target (host/URL); others rejected: PASS")

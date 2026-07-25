@@ -30,10 +30,24 @@ example.com, *.example.com, 10.10.10.0/24, !admin.example.com
 
 | Pattern | Meaning |
 |---|---|
+| `*` | **everything** — every name, every address. The deliberate opt-out: the target check passes any host, which is the same behaviour as having no scope model at all. |
 | `example.com` | exactly that host (a URL form is reduced to its bare host) |
-| `*.example.com` | every **sub**domain — **not** the apex; list `example.com` too if it is in scope |
+| `*.example.com` | every **sub**domain **and the apex** — a program that scopes `*.example.com` means `example.com` too |
 | `10.10.10.0/24` | a network range, matched against IP tokens |
-| `!pattern` | an **exclusion** (any of the three forms). Exclusions always win. |
+| `!pattern` | an **exclusion** (any of the forms). Exclusions always win — including over `*`, so `*, !prod.example.com` is "everything except that one host". |
+
+### `*` — running unbounded, on purpose
+
+`*` is how you turn the target check off for one engagement. It is **typed, never defaulted**:
+an empty scope is still refused at entry, so an unbounded run is always a choice the operator
+made, and the record carries `scope: *` so the report reads as unbounded **by intent** rather
+than by omission.
+
+With `*` the engagement behaves exactly as it would if the scope model had been deleted: full
+network reach (Wall A is down), every host you name passes, and **per-command human approval is
+the only bound**. With a real program scope you keep the argv check as a cheap catch for the
+wrong-host mistake — a mistyped octet, a stale paste, a host the planner suggested that belongs
+to someone else's box.
 
 Separators are commas, spaces or newlines. Omitting the scope entirely scopes the engagement to
 the named target alone — exactly the old single-host behaviour.

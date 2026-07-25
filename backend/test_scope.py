@@ -100,16 +100,40 @@ def test_exact_host_matching() -> None:
     print("  exact-host scope: only that host passes: PASS")
 
 
-def test_wildcard_matching_excludes_the_apex() -> None:
+def test_star_scope_is_everything() -> None:
+    """'*' is the deliberate opt-out: every name and every address is in scope, so the
+    target check refuses nothing — the same behaviour as having no scope model at all."""
+    s = _scope("*")
+    assert s.unbounded() is True
+    for token in ("example.com", "a.b.evil.co.uk", "10.10.10.5", "203.0.113.9",
+                  "http://anything.internal:8080/x", "scanme.nmap.org"):
+        assert s.in_scope(token), f"'*' must cover {token}"
+    assert "everything" in s.describe(), s.describe()
+
+    # exclusions still win over '*' — "everything except that one host"
+    s2 = _scope("*, !prod.example.com")
+    assert s2.in_scope("stage.example.com") and not s2.in_scope("prod.example.com")
+
+    # a normal scope is NOT unbounded, and '*' must still be typed (never defaulted)
+    assert _scope("example.com").unbounded() is False
+    print("  '*' scope covers every host; exclusions still win; must be typed: PASS")
+
+
+def test_wildcard_matching_covers_the_apex() -> None:
     s = _scope("*.example.com")
     assert s.in_scope("api.example.com")
     assert s.in_scope("a.b.example.com"), "a wildcard covers deep subdomains"
-    assert not s.in_scope("example.com"), "a wildcard does NOT cover the apex (fail-closed)"
+    # a real program that scopes '*.example.com' means the apex too — refusing it only
+    # ever refused a command the operator was authorized to run.
+    assert s.in_scope("example.com"), "a wildcard covers the apex"
+    # the suffix tricks must still fail — this widened the apex, nothing else
     assert not s.in_scope("notexample.com")
     assert not s.in_scope("example.com.evil.com")
-    apex = _scope("example.com, *.example.com")
-    assert apex.in_scope("example.com"), "the apex passes when it is listed explicitly"
-    print("  *.wildcard covers subdomains only (apex must be listed): PASS")
+    assert not s.in_scope("evilexample.com")
+    excl = _scope("*.example.com, !example.com")
+    assert not excl.in_scope("example.com"), "an exclusion can still carve the apex back out"
+    assert excl.in_scope("api.example.com")
+    print("  *.wildcard covers subdomains AND the apex; suffix tricks still fail: PASS")
 
 
 def test_exclusions_always_win() -> None:
@@ -179,7 +203,8 @@ if __name__ == "__main__":
     test_fail_closed_when_nothing_resolves()
     test_wildcard_scope_survives_dns_failure()
     test_exact_host_matching()
-    test_wildcard_matching_excludes_the_apex()
+    test_star_scope_is_everything()
+    test_wildcard_matching_covers_the_apex()
     test_exclusions_always_win()
     test_cidr_matching()
     test_seed_ips_let_an_ip_reach_a_named_host()

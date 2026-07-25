@@ -65,6 +65,12 @@ echo "== detection SAFETY invariants (no exec / read-only / cockpit untouched / 
 echo "== Channel-2 context grounding (Channel-1 filters unchanged / leak guard / no-op / budget) =="
 "$PY" test_context_channel.py
 
+echo "== :code scan tests (normalisation / malformed output / merge / KB links / report) =="
+"$PY" test_codescan.py
+
+echo "== :code scan SAFETY invariants (static-only / orthogonal / bounded / read-only) =="
+"$PY" test_codescan_safety.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

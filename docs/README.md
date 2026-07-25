@@ -22,6 +22,12 @@ runbooks). Populated as the project grows.
   mode gate); a live session's stdin is HUMAN-ONLY (source-scan locked, like `:kali`); containment
   is the mode it started in (lab isolation / engagement scope-lock); the transcript is recorded to
   the report. LAB e2e verified; engagement e2e deferred to a human-present session.
+- [`DETECTION-FOOTPRINT.md`](DETECTION-FOOTPRINT.md) — the purple-team panel: for every step and
+  every run, what a DEFENDER would see. ATT&CK technique + tactic (Stealth/TA0005 surfaced with
+  its old "Defense Evasion" name), the telemetry it generates, the SigmaHQ rule that would fire,
+  and a loud-vs-quiet rating. Grounded in MITRE ATT&CK v19.1 + the SigmaHQ ruleset and
+  machine-verified against both. READ-ONLY: it executes nothing and changes no gate. It DESCRIBES
+  detection and never teaches evasion — a rule enforced in code, not just in review.
 
 Safety invariants that hold across all Cockpit work: four independent gates (allowlist → target
 lock → approval → isolation), recon-only allowlist, lab-only target, no autonomy. M3 only *records*

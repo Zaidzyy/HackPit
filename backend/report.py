@@ -148,9 +148,27 @@ def _run_ref(run: dict) -> str:
     return f"run-{run.get('run_id', '')}"
 
 
+# A live interactive session records itself with this command name (see
+# cockpit/session.py). Kept as a LITERAL on purpose: importing the session module here
+# would break its human-only source-scan lock, and the report has no business reaching it.
+_SESSION_RUN_COMMAND = "session"
+
+
+def _is_session_run(run: dict) -> bool:
+    """True if this record is an interactive session transcript, not a one-shot command."""
+    return (run.get("command") or "") == _SESSION_RUN_COMMAND
+
+
 def _run_cmdline(run: dict) -> str:
-    """The exact command line for a run: 'curl -sSI http://…'."""
+    """The exact command line for a run: 'curl -sSI http://…'.
+
+    For a SESSION record the stored command is the marker ``session`` and the args are
+    the argv that started it, so the marker is dropped — what is shown is the real
+    listener/handler command line the operator approved.
+    """
     args = run.get("args") or []
+    if _is_session_run(run):
+        return " ".join(str(a) for a in args).strip()
     return " ".join([run.get("command", ""), *[str(a) for a in args]]).strip()
 
 
@@ -222,25 +240,35 @@ def build_evidence_section(session: dict) -> str:
         raw = _run_output(run)
         exit_code = run.get("exit_code")
         # A real-target engagement run is called out as such — it was NOT run against the
-        # isolated lab, so the report must not blur it with lab evidence.
+        # isolated lab, so the report must not blur it with lab evidence. An interactive
+        # SESSION is called out too: its output is a transcript the operator drove by hand
+        # over time, not the output of one command, and the reader must not read it as one.
+        is_session = _is_session_run(run)
+        kind = "interactive session" if is_session else "sandbox execution"
         if (run.get("mode") or "lab") == "engagement":
-            header = f"### {_run_ref(run)} · REAL-TARGET ENGAGEMENT"
+            header = f"### {_run_ref(run)} · REAL-TARGET ENGAGEMENT · {kind}"
         else:
-            header = f"### {_run_ref(run)} · sandbox execution (isolated lab)"
+            header = f"### {_run_ref(run)} · {kind} (isolated lab)"
         target = run.get("target")
         if target:
             header += f" · target {target}"
         out.append(header)
         out.append("")
         cf = _fence_for(cmdline)
-        out.append("Command:")
+        out.append("Session started with:" if is_session else "Command:")
         out.append("")
         out.append(f"{cf}bash")
         out.append(cmdline)
         out.append(cf)
         out.append("")
         of = _fence_for(raw)
-        out.append(f"Output (exit {exit_code}):")
+        if is_session:
+            out.append(
+                f"Session transcript (exit {exit_code}) — lines prefixed `$ ` are what "
+                "the operator typed; everything else is what the session returned:"
+            )
+        else:
+            out.append(f"Output (exit {exit_code}):")
         out.append("")
         out.append(f"{of}\n{raw}\n{of}")
         out.append("")

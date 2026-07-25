@@ -390,6 +390,99 @@ def test_stdin_write_is_capped() -> None:
     print("  stdin write is capped: PASS")
 
 
+# --------------------------------------------------------------------------- #
+# 3. RECORDING — the transcript lands in the report, tagged with its mode.
+# --------------------------------------------------------------------------- #
+
+
+def test_transcript_reaches_the_report_tagged_with_mode() -> None:
+    """A session transcript is report evidence, tagged lab vs REAL-TARGET like other runs.
+
+    It must also be marked as an INTERACTIVE SESSION: a reader must not mistake a
+    hand-driven transcript for the output of one command.
+    """
+    import report
+
+    with _Spy() as spy:
+        info = S.start(_req(session_id="eng-report"))
+        S.write_stdin(info.sid, "whoami")
+        S.kill(info.sid)
+        rec = spy.saved[-1].model_dump()
+
+    # LAB session -> isolated-lab evidence, named as a session.
+    md = report.build_evidence_section({"execution_runs": [rec]})
+    assert "interactive session (isolated lab)" in md, md
+    assert "REAL-TARGET" not in md, "a lab session must not be tagged real-target"
+    # The `session` marker is dropped — the reader sees the real listener command line.
+    assert "nc -lvnp 4444" in md and "session nc -lvnp" not in md, md
+    assert "Session transcript" in md, "the block must be labelled a transcript"
+    assert S.STDIN_MARK + "whoami" in md, "what the operator typed must appear verbatim"
+    assert f"run-{info.run_id}" in md, "the transcript must be citable by run id"
+
+    # ENGAGEMENT session -> called out as a real target, never blurred with lab evidence.
+    eng_rec = {**rec, "mode": "engagement", "target": "app.example.com"}
+    eng_md = report.build_evidence_section({"execution_runs": [eng_rec]})
+    assert "REAL-TARGET ENGAGEMENT · interactive session" in eng_md, eng_md
+    assert "isolated lab" not in eng_md, "a real-target session must not read as lab evidence"
+    assert "target app.example.com" in eng_md
+
+    # A one-shot command record is UNCHANGED by the session handling.
+    plain = {**rec, "command": "nmap", "args": ["-sV", "hackpit-lab-target"]}
+    plain_md = report.build_evidence_section({"execution_runs": [plain]})
+    assert "sandbox execution (isolated lab)" in plain_md
+    assert "nmap -sV hackpit-lab-target" in plain_md
+    assert "interactive session" not in plain_md
+    print("  transcript reaches the report, tagged with mode: PASS")
+
+
+def test_transcript_is_capped() -> None:
+    """A flooding session cannot blow up memory or the audit record."""
+    with _Spy() as spy:
+        info = S.start(_req())
+        live = S._sessions[info.sid]
+        live.emit({"type": "stdout", "line": "x"}, transcript_text="A" * (S.SESSION_TRANSCRIPT_CAP + 5000))
+        text = live.transcript_text()
+        assert len(text) <= S.SESSION_TRANSCRIPT_CAP + 64, "transcript must be capped"
+        assert "truncated" in text, "truncation must be marked in the transcript"
+        assert live.info.truncated is True, "the record must be flagged truncated"
+        S.kill(info.sid)
+        assert spy.saved, "a capped session is still recorded"
+    print("  transcript is capped (no flood): PASS")
+
+
+def test_reaper_kills_idle_and_overlong_sessions() -> None:
+    """An unattended caught shell does not live forever."""
+    import time as _t
+
+    with _Spy():
+        info = S.start(_req())
+        live = S._sessions[info.sid]
+        # Pretend the last I/O was long ago.
+        live.last_io = _t.monotonic() - (S.SESSION_IDLE_TIMEOUT_SECONDS + 10)
+        killed = S._reap_once()
+        assert info.sid in killed, "an idle session must be reaped"
+        assert S.get(info.sid).state == "killed"
+        assert "idle" in S.get(info.sid).detail
+
+        info2 = S.start(_req())
+        live2 = S._sessions[info2.sid]
+        live2.started_mono = _t.monotonic() - (S.SESSION_MAX_LIFETIME_SECONDS + 10)
+        killed2 = S._reap_once()
+        assert info2.sid in killed2, "a session past max lifetime must be reaped"
+        assert "lifetime" in S.get(info2.sid).detail
+    print("  reaper kills idle + overlong sessions: PASS")
+
+
+def test_shutdown_kills_every_live_session() -> None:
+    """Backend teardown never leaves a caught shell running."""
+    with _Spy():
+        a = S.start(_req())
+        b = S.start(_req())
+        S.shutdown_all()
+        assert S.get(a.sid).state == "killed" and S.get(b.sid).state == "killed"
+    print("  shutdown kills every live session: PASS")
+
+
 if __name__ == "__main__":
     test_start_requires_approval()
     test_start_trips_the_danger_heuristic()
@@ -402,4 +495,8 @@ if __name__ == "__main__":
     test_stdin_refuses_when_session_is_not_live()
     test_stdin_is_recorded_as_human_input()
     test_stdin_write_is_capped()
+    test_transcript_reaches_the_report_tagged_with_mode()
+    test_transcript_is_capped()
+    test_reaper_kills_idle_and_overlong_sessions()
+    test_shutdown_kills_every_live_session()
     print("ALL live-session containment tests pass")

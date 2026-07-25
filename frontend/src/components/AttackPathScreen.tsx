@@ -312,6 +312,30 @@ export function AttackPathScreen() {
               </Link>
             )}
 
+            {/* CHANNEL 2 — what the planner READ to reason with. Not steps, and
+                not a step's source: the grounded/ai_suggested labels below are
+                unchanged by this. It's here so the reasoning is inspectable. */}
+            {!!result.context_sources?.length && (
+              <div className="hp-ap-informed">
+                <span className="hp-ap-informed-lbl">informed by</span>
+                {result.context_sources.map((src, i) => (
+                  <span key={src.id}>
+                    {i > 0 && <span aria-hidden="true">· </span>}
+                    <Link
+                      href={`/entry/${encodeURIComponent(src.id)}`}
+                      className="hp-ap-informed-src"
+                    >
+                      {src.title}
+                    </Link>{" "}
+                    <span className="hp-ap-informed-kind">{src.kind}</span>
+                  </span>
+                ))}
+                <span className="hp-ap-informed-kind">
+                  read as background — never a step
+                </span>
+              </div>
+            )}
+
             <div className="hp-ap-startbar">
               <div className="hp-ap-starttext">
                 <span className="hp-ap-startbadge">preview</span>

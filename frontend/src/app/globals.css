@@ -3907,6 +3907,44 @@ a.hp-card {
   color: #f0a24a;
 }
 
+/* attack-path: "informed by" — CHANNEL 2 provenance. The documents the planner
+   READ as background (a box writeup's approach, the methodology docs). They are
+   not steps and not sources of a step: quieter than the writeup link above. */
+.hp-ap-informed {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -6px 0 18px;
+  padding: 9px 14px;
+  border: 1px dashed color-mix(in srgb, var(--white) 14%, transparent);
+  border-radius: 10px;
+  font-size: 12px;
+  letter-spacing: 0.2px;
+  color: color-mix(in srgb, var(--white) 55%, transparent);
+}
+.hp-ap-informed-lbl {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: color-mix(in srgb, var(--white) 40%, transparent);
+}
+.hp-ap-informed-src {
+  color: color-mix(in srgb, var(--white) 78%, transparent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--white) 20%, transparent);
+}
+.hp-ap-informed-src:hover {
+  color: var(--white);
+  border-bottom-color: color-mix(in srgb, var(--white) 55%, transparent);
+}
+.hp-ap-informed-kind {
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--white) 38%, transparent);
+}
+
 /* ----------------------------------------------------------------------- *
  *  Cockpit (M1) — human-approved execution surface
  * ----------------------------------------------------------------------- */

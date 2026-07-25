@@ -1714,6 +1714,9 @@ def compose(
                 if damaged
                 else None,
                 "augmented": augmented,
+                # CHANNEL-2 PROVENANCE — what the planner READ (never a step).
+                "context_sources": context_channel.provenance(ctx_sources),
+                "context_leaks": context_leaks,
                 "model_used": cfg["model"] if augmented else "your writeup",
                 "provider": cfg["provider"] if augmented else "writeup",
             }
@@ -1768,6 +1771,11 @@ def compose(
         "origin": "composed",
         "origin_label": None,
         "origin_note": None,
+        # CHANNEL-2 PROVENANCE — the writeup/methodology the planner reasoned
+        # FROM. Step labelling (grounded vs ai_suggested) is unchanged: Channel 2
+        # improves the quality of a step, it never relabels one.
+        "context_sources": context_channel.provenance(ctx_sources),
+        "context_leaks": context_leaks,
         "model_used": cfg["model"],
         "provider": cfg["provider"],
     }

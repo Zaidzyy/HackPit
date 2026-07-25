@@ -206,6 +206,15 @@ export type TargetProfile = {
   out_of_scope: string[];
 };
 
+/** A document injected into the planner's prompt as reasoning background. */
+export type ContextSource = {
+  kind: "writeup" | "methodology";
+  id: string;
+  title: string;
+  /** Size of the injected excerpt — the retrieval is budgeted, not the whole doc. */
+  chars: number;
+};
+
 export type AttackPath = {
   goal: string;
   target_type: string | null;
@@ -233,6 +242,18 @@ export type AttackPath = {
   origin_note?: string | null;
   /** Writeup origin: true when supplement steps were added beyond the writeup. */
   augmented?: boolean;
+  /**
+   * Channel 2 — the documents the planner READ as background (a matched box
+   * writeup's approach, the methodology docs for this goal). They shaped
+   * technique choice and the plan's flow; none of them became a step, and none
+   * of them changes a step's grounded/ai_suggested label. Empty when nothing
+   * matched, in which case the composition is identical to pre-Channel-2.
+   */
+  context_sources?: ContextSource[];
+  /** Box-specific literals from that background caught in the model's output
+   * and re-pointed at the target or dropped (plan quality; the executor's
+   * target/scope lock is the safety backstop). */
+  context_leaks?: number;
   /** Model that composed the path (e.g. "qwen3:8b"); "your writeup" for writeups. */
   model_used: string;
   provider: string;

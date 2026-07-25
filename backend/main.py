@@ -616,6 +616,18 @@ class TargetProfile(BaseModel):
     )
 
 
+class ContextSource(BaseModel):
+    """CHANNEL 2 — a document the planner READ as background (see
+    backend/context_channel.py). Its content shaped technique choice and the
+    plan's flow; it never became a step, and its presence here changes no step's
+    grounded/ai_suggested label."""
+
+    kind: str = Field(description="'writeup' | 'methodology'.")
+    id: str = Field(description="KB entry id — links to /entry/{id}.")
+    title: str
+    chars: int = Field(description="Size of the injected excerpt (budgeted).")
+
+
 class AttackPathOut(BaseModel):
     goal: str
     target_type: str | None
@@ -660,6 +672,18 @@ class AttackPathOut(BaseModel):
         default=False,
         description="Writeup origin only: True when the LLM added grounded/"
         "AI-suggested supplement steps beyond the writeup's own steps.",
+    )
+    context_sources: list[ContextSource] = Field(
+        default_factory=list,
+        description="Channel 2: the writeup / methodology docs whose CONTENT was "
+        "injected as reasoning background. Empty when nothing matched (Channel 2 "
+        "was then a no-op and the composition is identical to pre-Channel-2).",
+    )
+    context_leaks: int = Field(
+        default=0,
+        description="How many box-specific literals from that background were "
+        "caught in the model's output and re-pointed at the target or dropped. "
+        "Plan quality only — the executor's target/scope lock is the backstop.",
     )
     model_used: str
     provider: str

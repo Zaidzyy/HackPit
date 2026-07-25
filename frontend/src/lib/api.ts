@@ -1048,3 +1048,140 @@ export const adCollectPreview = (
   },
   signal?: AbortSignal
 ) => postJSON<ADCollectPreview>("/cockpit/ad/collect/preview", body, signal);
+
+// --- live sessions: catch + drive ONE shell by hand (see backend/cockpit/session.py) ---
+//
+// TWO GATES, both server-side and both load-bearing:
+//   START  is a GATED COMMAND — startSession() goes through the same executor gates a
+//          one-shot command does (approve-each + heuristic red-confirm + mode gate,
+//          argv-only). A listener trips the heuristic, so dangerous_ack is required.
+//   STDIN  is *** HUMAN-ONLY *** — writeSessionStdin() exists to serve a HUMAN typing
+//          into the panel. Nothing agent-driven may ever call it; the backend locks that
+//          with a source scan. Do NOT wire this into the loop or any automated flow.
+
+/** The public state of one live session. `sid` is the LIVE SESSION id; `session_id`
+ *  keeps its repo-wide meaning — the engagement the transcript is recorded against. */
+export type SessionInfo = {
+  sid: string;
+  state: "active" | "exited" | "killed";
+  /** Which sandbox this session is bound to — drives the panel's mode banner. */
+  mode: "lab" | "engagement";
+  container: string;
+  /** The gate-validated declared bind target. */
+  target: string;
+  command: string;
+  args: string[];
+  run_id: string;
+  engagement_id: string | null;
+  session_id: string | null;
+  step_id: string | null;
+  started_at: string;
+  finished_at: string | null;
+  exit_code: number | null;
+  truncated: boolean;
+  detail: string;
+};
+
+export type SessionStatus = {
+  live: number;
+  total: number;
+  max_live: number;
+  idle_timeout_seconds: number;
+  max_lifetime_seconds: number;
+};
+
+/** One event from a session's output stream. */
+export type SessionEvent = {
+  seq: number;
+  type: "start" | "stdout" | "stderr" | "stdin" | "exit" | "killed" | "error";
+  line?: string;
+  reason?: string;
+  code?: number | null;
+  state?: string;
+  [k: string]: unknown;
+};
+
+export type SessionStartPayload = {
+  command: string;
+  args: string[];
+  /** The DECLARED bind target. Validated server-side by the mode's target-lock. */
+  target: string;
+  approved: boolean;
+  dangerous_ack: boolean;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  step_id?: string | null;
+};
+
+export const getSessionStatus = (signal?: AbortSignal) =>
+  getJSON<SessionStatus>("/cockpit/session/status", signal);
+
+export const listLiveSessions = (signal?: AbortSignal) =>
+  getJSON<SessionInfo[]>("/cockpit/session", signal);
+
+/** Start ONE long-lived session. A gate failure comes back as 403 (nothing started)
+ *  with { detail: { gate, reason } }; a 409 means unavailable or at the session cap. */
+export const startSession = (payload: SessionStartPayload, signal?: AbortSignal) =>
+  postJSON<SessionInfo>("/cockpit/session/start", payload, signal);
+
+/**
+ * *** HUMAN-ONLY *** — send one line to a live session's stdin.
+ *
+ * Call this ONLY from a human's direct UI action (the panel's input line). A live
+ * session is already approved and already running, so anything automated typing into
+ * it would be executing un-gated commands. The backend refuses to let the agent path
+ * reach this at all; keep the frontend honest to the same rule.
+ */
+export const writeSessionStdin = (sid: string, data: string, signal?: AbortSignal) =>
+  postJSON<SessionInfo>(
+    `/cockpit/session/${encodeURIComponent(sid)}/stdin`,
+    { data },
+    signal
+  );
+
+export const killSession = (sid: string, signal?: AbortSignal) =>
+  postJSON<SessionInfo>(`/cockpit/session/${encodeURIComponent(sid)}/kill`, {}, signal);
+
+/**
+ * Stream a session's output. Read-only — subscribing never writes to the process.
+ * `after` resumes from a sequence number so a reconnect replays the rolling tail.
+ * Resolves when the session finishes and the stream closes.
+ */
+export async function streamSession(
+  sid: string,
+  onEvent: (ev: SessionEvent) => void,
+  after = -1,
+  signal?: AbortSignal
+): Promise<void> {
+  let res: Response;
+  const url = `${API_URL}/cockpit/session/${encodeURIComponent(sid)}/stream?after=${after}`;
+  try {
+    res = await fetch(url, { headers: { Accept: "text/event-stream" }, signal });
+  } catch {
+    throw new ApiError(0, `Cannot reach the API at ${API_URL}. Is it running?`);
+  }
+  if (!res.ok || !res.body) {
+    throw new ApiError(res.status, await errorMessage(res, `Stream failed (${res.status}).`));
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let sep: number;
+    while ((sep = buf.indexOf("\n\n")) >= 0) {
+      const frame = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      const dataLine = frame.split("\n").find((l) => l.startsWith("data:"));
+      if (!dataLine) continue;
+      try {
+        onEvent(JSON.parse(dataLine.slice(5).trim()) as SessionEvent);
+      } catch {
+        /* ignore a malformed frame */
+      }
+    }
+  }
+}

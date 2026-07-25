@@ -215,7 +215,7 @@ def get_session_status() -> dict[str, Any]:
 
 
 @router.get("/session", response_model=list[live_session.SessionInfo])
-def list_sessions() -> list[live_session.SessionInfo]:
+def list_live_sessions() -> list[live_session.SessionInfo]:
     """Every session this backend knows about (live and finished). Read-only."""
     return live_session.list_sessions()
 

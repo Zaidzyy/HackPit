@@ -5868,3 +5868,165 @@ a.hp-card {
 .hp-adg-walked-tag { font-size: 12px; color: #8fe0ae; }
 .hp-adg-drawer-foot { font-size: 11px; color: var(--dim); opacity: 0.85; margin: 2px 0 0; }
 .hp-adg-out { margin-top: 4px; }
+
+/* --- live session panel (:session) -------------------------------------------
+   Reuses the :kali / cockpit terminal chrome (.hp-ck-out*, .hp-kali-input*). Only
+   the session-specific chrome lives here: the mode banner, the start form, the
+   danger red-confirm and the kill button. */
+
+/* REAL-TARGET banner. Deliberately NOT the green .hp-ck-ok the lab uses — driving a
+   live shell on a real host must never read as a safe/green state. */
+.hp-cs-realbanner {
+  border-color: rgba(228, 90, 90, 0.55);
+  background: color-mix(in srgb, #e45a5a 10%, var(--panel));
+}
+.hp-cs-realbanner b {
+  color: #e45a5a;
+  font-weight: 600;
+}
+.hp-cs-state {
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  font-size: 11px;
+}
+
+/* start form */
+.hp-cs-start {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 16px;
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.hp-cs-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.hp-cs-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 150px;
+}
+.hp-cs-grow {
+  flex: 1;
+  min-width: 220px;
+}
+.hp-cs-field > span {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--dim);
+}
+.hp-cs-field input {
+  background: #040505;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--white);
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 12.5px;
+  outline: none;
+}
+.hp-cs-field input:focus {
+  border-color: var(--accent-line);
+}
+.hp-cs-field input::placeholder {
+  color: var(--dim);
+}
+.hp-cs-hint {
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0;
+}
+.hp-cs-hint b {
+  color: var(--white);
+  font-weight: 500;
+}
+.hp-cs-hint code {
+  font-family: var(--font-jetbrains-mono), monospace;
+  color: var(--white);
+  font-size: 11px;
+}
+.hp-cs-go {
+  align-self: flex-start;
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--bg);
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  padding: 9px 16px;
+  cursor: pointer;
+}
+.hp-cs-go:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* the danger gate's RED CONFIRM — the backend refused; the operator re-confirms. */
+.hp-cs-danger {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid rgba(228, 90, 90, 0.55);
+  background: color-mix(in srgb, #e45a5a 8%, var(--panel));
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.hp-cs-danger b {
+  color: #e45a5a;
+  font-size: 13px;
+}
+.hp-cs-danger-why {
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.hp-cs-confirm {
+  align-self: flex-start;
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #fff;
+  background: #b23c3c;
+  border: none;
+  border-radius: 6px;
+  padding: 9px 16px;
+  cursor: pointer;
+}
+.hp-cs-confirm:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* kill button in the terminal chrome bar */
+.hp-cs-kill {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #e45a5a;
+  background: transparent;
+  border: 1px solid rgba(228, 90, 90, 0.5);
+  border-radius: 5px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.hp-cs-kill:hover {
+  background: rgba(228, 90, 90, 0.14);
+}
+
+/* a line the HUMAN typed, echoed in the scrollback */
+.hp-cs-in {
+  color: var(--white);
+}

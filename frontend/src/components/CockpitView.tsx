@@ -130,6 +130,9 @@ export function CockpitView() {
           <Link href="/cockpit/ad" className="hp-cv-adlink">
             🌐 AD attack-path graph — BloodHound → route to Domain Admin →
           </Link>
+          <Link href="/cockpit/session" className="hp-cv-adlink">
+            ⌁ live session — catch a shell and drive it by hand →
+          </Link>
         </header>
 
         <section className="hp-cv-map-section">

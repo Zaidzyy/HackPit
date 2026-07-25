@@ -2,8 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
+import type { LLMConfig } from "@/lib/api";
 import { useReducedMotion } from "@/lib/useReducedMotion";
 
+/**
+ * The stages a composition actually goes through, in order. Defined ONCE here so
+ * the Companion's composer and the cockpit's plot-path read identically — they
+ * call the same backend and pass through the same phases, so a second copy of
+ * this list could only ever drift out of sync with the first.
+ */
 const PHASES = [
   "reading the knowledge base",
   "retrieving recon techniques",
@@ -13,11 +20,17 @@ const PHASES = [
 ];
 
 /**
- * On-theme "composing your attack path…" state. Composition on the local model
- * can take a minute+, so the wait cycles through the pipeline stages to make
- * the latency legible rather than dead. Reduced motion shows a static line.
+ * On-theme "composing your attack path…" state, SHARED by the Companion's
+ * attack-path composer and the cockpit's plot-path. Composition can take a
+ * minute+, so the wait cycles through the pipeline stages to make the latency
+ * legible rather than dead. Reduced motion shows a static line.
+ *
+ * The closing note names the ACTIVE model and distinguishes frontier from local
+ * the same way `ModelBadge` does (`provider === "ollama"` is the local one) —
+ * "running <model> locally" is simply false when the composer is pointed at a
+ * frontier provider, and both surfaces read the same `/llm-config`.
  */
-export function ComposingLoader({ model }: { model?: string }) {
+export function ComposingLoader({ config }: { config?: LLMConfig | null }) {
   const reduced = useReducedMotion();
   const [i, setI] = useState(0);
 
@@ -60,11 +73,19 @@ export function ComposingLoader({ model }: { model?: string }) {
       </div>
 
       <div className="hp-ap-loading-note">
-        {model ? (
-          <>
-            running <b>{model}</b> locally — this can take a minute on the first
-            call.
-          </>
+        {config ? (
+          config.provider === "ollama" ? (
+            <>
+              running <b>{config.model}</b> locally — this can take a minute on
+              the first call.
+            </>
+          ) : (
+            <>
+              running <b>{config.model}</b>
+              <span className="hp-ap-local"> · {config.provider}</span> — this
+              can take a minute.
+            </>
+          )
         ) : (
           <>this can take a minute on a local model.</>
         )}

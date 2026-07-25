@@ -9,6 +9,7 @@ import { CockpitScreen } from "./CockpitScreen";
 import { CockpitLoop } from "./CockpitLoop";
 import { CockpitEngagement } from "./CockpitEngagement";
 import { CockpitEngagementMode } from "./CockpitEngagementMode";
+import { ComposingLoader } from "./ComposingLoader";
 import { LLMSettingsModal } from "./LLMSettingsModal";
 import { ModelBadge } from "./ModelBadge";
 import { TargetTypeChips } from "./TargetTypeChips";
@@ -206,9 +207,16 @@ export function CockpitView() {
             onOpenSettings={() => setSettingsOpen(true)}
           />
 
-          {error && <p className="hp-cv-error">{error}</p>}
+          {/* The SAME composing animation the Companion's composer shows — same
+              phases, same model note — because plot-path calls the same backend
+              and passes through the same stages. Previously the cockpit sat on
+              the "plot a path to begin" hint for the whole compose, which read
+              as though nothing were happening. */}
+          {loading && <ComposingLoader config={config} />}
 
-          {!path && !error && (
+          {error && !loading && <p className="hp-cv-error">{error}</p>}
+
+          {!path && !error && !loading && (
             <p className="hp-cv-hint">plot a path to begin</p>
           )}
 

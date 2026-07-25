@@ -194,7 +194,7 @@ export function AttackPathScreen() {
           </div>
         </form>
 
-        {loading && <ComposingLoader model={config?.model} />}
+        {loading && <ComposingLoader config={config} />}
 
         {error && !loading && (
           <div className="hp-ap-error">

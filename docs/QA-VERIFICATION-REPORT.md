@@ -115,12 +115,21 @@ During browser automation, `Page.captureScreenshot` repeatedly timed out (30s "r
 
 **What the investigation actually found.** The count-up is not the expensive thing. `StatCounter`
 is bounded (~66 renders over 1.1s, one text node each) and `ComposingLoader` renders once per
-1800ms. The dominant cost is `WaveGrid`: a full-screen canvas rAF loop, mounted by BOTH
-`PageShell` and `HackPitShell` — so it runs on *every* page, continuously, redrawing a
-`cols x rows` field of `arc()`+`fill()` plus a radial gradient every frame. It never yields an
-idle frame, which is a plausible mechanic for a CDP screenshot ("wait for a stable frame")
-timing out, and it explains why the correlation was with *animated* views rather than with the
-count-up specifically.
+1800ms. The dominant cost is `WaveGrid`: a full-screen canvas rAF loop redrawing a
+`cols x rows` field of `arc()`+`fill()` plus a radial gradient every frame. Both shells mount
+one (`HackPitShell` on `/`, `PageShell` on every other route), so **one** instance runs on
+*every* page, continuously. It never yields an idle frame, which is a plausible mechanic for a
+CDP screenshot ("wait for a stable frame") timing out, and it explains why the correlation was
+with *animated* views rather than with the count-up specifically.
+
+*Checked 2026-07-26 — it does NOT double-mount.* Worth ruling out explicitly, since "mounted by
+both shells" reads just as easily as "two run at once". The shells are used on disjoint routes
+and neither nests the other. Across all 13 shell-rendering components there is exactly one case
+of a shell renderer rendering another — `CockpitView` → `<CockpitScreen embedded>` — and
+`CockpitScreen` returns its inner content *without* the shell when `embedded` is set
+(`if (embedded) return inner;`). No route file mounts a shell twice either. So there is no
+second canvas to drop: the per-frame cost is one loop, and the accent caching below is the
+whole of what was reclaimed.
 
 **Fixed (clean, invisible).** `accentRGB()` — which calls `getComputedStyle` on the root
 element, forcing a style recalculation — was being called **twice inside `frame()`**, i.e.

@@ -1,0 +1,208 @@
+"""FastAPI routes for the :code scan (static AppSec) panel.
+
+Read-only analysis. These routes launch a SCANNER over a path the operator names and return
+what it found. They execute none of the scanned code, take no target, open no socket on the
+codebase's behalf, and touch nothing in the engagement / executor / target-lock / scope /
+isolation model — this router imports none of it.
+
+The KB tie-in is injected by main.py (:func:`set_kb`), the same pattern
+``adgraph.router.set_grounder`` and ``detection.router.set_run_lookup`` use, so the package
+keeps no import cycle with the app layer and works with no KB at all.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Any, Callable
+
+from fastapi import APIRouter, Body, HTTPException
+from pydantic import BaseModel, Field
+
+from . import findings as fmod
+from . import kb_link
+from . import runner
+
+router = APIRouter(prefix="/codescan", tags=["codescan"])
+
+# Injected by main.py: (by_id, search_fn, is_eligible, is_focused). All optional — with no KB
+# the scan runs identically, just without technique links.
+_KB: dict[str, Any] = {"by_id": {}, "search": None, "eligible": None, "focused": None}
+
+
+def set_kb(
+    by_id: dict[str, dict] | None = None,
+    search_fn: Callable[[str, int, str], list[dict]] | None = None,
+    eligible: Callable[[dict], bool] | None = None,
+    focused: Callable[[dict], bool] | None = None,
+) -> None:
+    _KB.update(
+        by_id=by_id or {}, search=search_fn, eligible=eligible, focused=focused
+    )
+
+
+# --------------------------------------------------------------------------- #
+# models
+# --------------------------------------------------------------------------- #
+class ToolStatus(BaseModel):
+    name: str
+    installed: bool
+    path: str | None = Field(default=None, description="Resolved executable path.")
+    install_hint: str = Field(description="Exact command to install it.")
+
+
+class ToolsOut(BaseModel):
+    tools: list[ToolStatus]
+    ready: bool = Field(description="True when at least Semgrep is available.")
+    ruleset: str = Field(description="Bundled offline Semgrep ruleset path.")
+
+
+class ScanIn(BaseModel):
+    path: str = Field(min_length=1, description="Codebase FOLDER to analyse (read-only).")
+    timeout_s: int = Field(
+        default=runner.DEFAULT_TIMEOUT_S, ge=5, le=runner.MAX_TIMEOUT_S,
+        description="Per-scanner wall-clock bound; the scanner is killed at this point.",
+    )
+    semgrep_config: str | None = Field(
+        default=None,
+        description="Optional Semgrep ruleset override (e.g. 'p/security-audit'). A registry "
+        "ruleset REQUIRES network access; the default bundled ruleset does not.",
+    )
+    use_bandit: bool = Field(
+        default=True, description="Also run Bandit when the tree contains Python."
+    )
+
+
+class FindingOut(BaseModel):
+    rule_id: str
+    tool: str = Field(description="'semgrep' | 'bandit' | 'bandit+semgrep' (corroborated).")
+    severity: str = Field(description="critical | high | medium | low | info.")
+    file: str
+    line: int
+    message: str
+    category: str
+    cwe: str | None = None
+    owasp: str | None = None
+    confidence: str | None = None
+    tool_severity: str | None = Field(
+        default=None, description="The scanner's own severity word, before mapping."
+    )
+    tools: list[str] = Field(default_factory=list)
+    kb_entry_id: str | None = Field(
+        default=None, description="KB technique behind this defect; null when none matched."
+    )
+    kb_title: str | None = None
+
+
+class ScanOut(BaseModel):
+    path: str
+    files_scanned: int
+    duration_s: float
+    tools_run: list[str]
+    ruleset: str
+    summary: dict[str, Any]
+    findings: list[FindingOut]
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal notes: a scanner skipped, rule errors, partial results.",
+    )
+    static_only: bool = Field(
+        default=True,
+        description="Always true — the scanned code is parsed, never executed.",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# routes
+# --------------------------------------------------------------------------- #
+@router.get("/tools", response_model=ToolsOut)
+def codescan_tools() -> dict[str, Any]:
+    """Which scanners are installed. The UI uses this to show an install hint instead of
+    failing a scan that was never going to work."""
+    found = runner.available()
+    tools = [
+        ToolStatus(
+            name=name,
+            installed=bool(path),
+            path=path,
+            install_hint=f"cd backend && uv pip install {name}",
+        )
+        for name, path in found.items()
+    ]
+    return {
+        "tools": tools,
+        "ready": bool(found.get("semgrep")),
+        "ruleset": str(runner.BUNDLED_RULES),
+    }
+
+
+@router.post("/scan", response_model=ScanOut)
+def codescan_scan(req: ScanIn = Body(...)) -> dict[str, Any]:
+    """Run the scanners over a codebase path and return normalized findings.
+
+    STATIC ONLY: the scanners parse the files. Nothing here executes, imports or evaluates
+    the code under review (``runner._spawn`` asserts that only a scanner is ever launched).
+    """
+    started = time.monotonic()
+    try:
+        target = runner.resolve_target(req.path)
+    except runner.ScanError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    file_count, too_big = runner.count_files(target)
+    if too_big:
+        raise HTTPException(
+            status_code=400,
+            detail=f"that tree has more than {runner.MAX_FILES:,} files — point the scan at a "
+            "subdirectory (a whole drive is not a codebase)",
+        )
+
+    warnings: list[str] = []
+    tools_run: list[str] = []
+    all_findings: list[fmod.Finding] = []
+    ruleset = req.semgrep_config or str(runner.BUNDLED_RULES)
+
+    # --- Semgrep (required: it is the multi-language half) --------------------
+    try:
+        raw = runner.run_semgrep(target, req.timeout_s, req.semgrep_config)
+        all_findings.extend(fmod.from_semgrep(raw, target))
+        tools_run.append("semgrep")
+        errors = raw.get("errors") or []
+        if errors:
+            warnings.append(
+                f"semgrep reported {len(errors)} rule/parse error(s) — results may be partial"
+            )
+    except runner.ScannerMissing as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except runner.ScanTimeout as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
+    except runner.ScanError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # --- Bandit (Python only, and never fatal) --------------------------------
+    if req.use_bandit and runner.has_python(target):
+        try:
+            raw_b = runner.run_bandit(target, req.timeout_s)
+            all_findings.extend(fmod.from_bandit(raw_b, target))
+            tools_run.append("bandit")
+        except runner.ScannerMissing:
+            warnings.append("bandit is not installed — Python-specific checks were skipped")
+        except runner.ScanTimeout:
+            warnings.append(f"bandit exceeded {req.timeout_s}s and was stopped — results are "
+                            "semgrep-only")
+        except runner.ScanError as exc:
+            warnings.append(f"bandit did not complete: {exc}")
+
+    merged = fmod.merge(all_findings)
+    kb_link.link(merged, _KB["by_id"], _KB["search"], _KB["eligible"], _KB["focused"])
+
+    return {
+        "path": str(target),
+        "files_scanned": file_count,
+        "duration_s": round(time.monotonic() - started, 2),
+        "tools_run": tools_run,
+        "ruleset": ruleset,
+        "summary": fmod.summarize(merged),
+        "findings": [f.to_dict() for f in merged],
+        "warnings": warnings,
+        "static_only": True,
+    }

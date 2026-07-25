@@ -62,6 +62,10 @@ from detection.router import (  # noqa: E402  (backend/detection — purple-team
     set_run_lookup as set_detection_run_lookup,
     set_runs_lookup as set_detection_runs_lookup,
 )
+from codescan.router import (  # noqa: E402  (backend/codescan — STATIC AppSec analysis)
+    router as codescan_router,
+    set_kb as set_codescan_kb,
+)
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
 CAPTIONS_PATH = REPO_ROOT / "data" / "images" / "captions.json"
@@ -279,7 +283,16 @@ async def lifespan(app: FastAPI):
     cockpit_engagement.init_db()
     # parsed AD attack-path graphs share it too.
     ad_store.init_db()
+    # :code scan — hand the KB to the SAST panel so a finding can point at the technique
+    # behind it. Optional by design: with no KB the scan runs identically, just unlinked.
+    set_codescan_kb(
+        STATE.by_id,
+        _resilient_search,
+        attack_path.is_step_eligible,
+        lambda e: not attack_path.is_broad_reference(e),
+    )
     yield
+    set_codescan_kb(None, None, None, None)
     STATE.entries = []
     STATE.by_id = {}
     STATE.by_category = {}
@@ -310,6 +323,11 @@ app.include_router(ad_router)
 # see for a command/step/run — ATT&CK tag, telemetry, the Sigma rule that would fire, loudness.
 # It executes nothing and changes no gate; it only describes.
 app.include_router(detection_router)
+# :code scan (see codescan/). STATIC application-security analysis: it READS a codebase with
+# Semgrep/Bandit and reports what they find. It never executes the scanned code, takes no
+# target, and shares nothing with the engagement/executor/target-lock/scope/isolation model —
+# a self-contained analysis utility that happens to live in the same backend.
+app.include_router(codescan_router)
 
 
 # --------------------------------------------------------------------------- #

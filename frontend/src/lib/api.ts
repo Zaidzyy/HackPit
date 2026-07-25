@@ -1403,3 +1403,82 @@ export async function streamSession(
     }
   }
 }
+
+// ---- :code scan (STATIC AppSec analysis) ---------------------------------- //
+//
+// Read-only static analysis: the backend runs Semgrep/Bandit over a codebase path
+// and returns what they found. Nothing here executes the scanned code, and none of
+// it touches the engagement / executor / target-lock model.
+
+export type CodeScanTool = {
+  name: string;
+  installed: boolean;
+  path: string | null;
+  /** Exact command to install a missing scanner. */
+  install_hint: string;
+};
+
+export type CodeScanTools = {
+  tools: CodeScanTool[];
+  /** True when at least Semgrep is available. */
+  ready: boolean;
+  /** Path of the bundled offline ruleset. */
+  ruleset: string;
+};
+
+export type CodeScanSeverity = "critical" | "high" | "medium" | "low" | "info";
+
+export type CodeScanFinding = {
+  rule_id: string;
+  /** "semgrep" | "bandit" | "bandit+semgrep" when both tools agree. */
+  tool: string;
+  severity: CodeScanSeverity;
+  file: string;
+  line: number;
+  message: string;
+  category: string;
+  cwe: string | null;
+  owasp: string | null;
+  confidence: string | null;
+  /** The scanner's own severity word, before it was mapped. */
+  tool_severity: string | null;
+  tools: string[];
+  /** KB technique behind this defect — null when nothing matched confidently. */
+  kb_entry_id: string | null;
+  kb_title: string | null;
+};
+
+export type CodeScanSummary = {
+  total: number;
+  by_severity: Record<string, number>;
+  by_category: Record<string, number>;
+  by_tool: Record<string, number>;
+  files_affected: number;
+};
+
+export type CodeScanResult = {
+  path: string;
+  files_scanned: number;
+  duration_s: number;
+  tools_run: string[];
+  ruleset: string;
+  summary: CodeScanSummary;
+  findings: CodeScanFinding[];
+  /** Non-fatal notes: a scanner skipped, rule errors, partial results. */
+  warnings: string[];
+  /** Always true — the scanned code is parsed, never executed. */
+  static_only: boolean;
+};
+
+export const getCodeScanTools = (signal?: AbortSignal) =>
+  getJSON<CodeScanTools>("/codescan/tools", signal);
+
+export const runCodeScan = (
+  payload: {
+    path: string;
+    timeout_s?: number;
+    semgrep_config?: string | null;
+    use_bandit?: boolean;
+  },
+  signal?: AbortSignal
+) => postJSON<CodeScanResult>("/codescan/scan", payload, signal);

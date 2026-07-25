@@ -105,6 +105,23 @@ export function CategoryGrid({
       {/* Scripts arsenal — the copy-ready operator view of the whole KB */}
       <ScriptsCard shown={shownCount > 2} />
 
+      {/* Code scan — the DEFENSIVE side: read a codebase, report its bugs. No target,
+          no execution; entirely separate from the cockpit's attack surface. */}
+      <Link
+        href="/code-scan"
+        className={`hp-card${shownCount > 2 ? " hp-in" : ""}`}
+        style={{ "--cc": "#7ec8a0" } as CSSProperties}
+      >
+        <div className="hp-ic">{"◈"}</div>
+        <h3>
+          Code scan <span className="hp-badge">static</span>
+        </h3>
+        <p>
+          Point Semgrep + Bandit at a codebase and read the findings — severity, CWE,
+          and the KB technique behind each one. Reads code, runs nothing.
+        </p>
+      </Link>
+
       {visibleCategories?.map((cat, i) => (
         <CategoryCard
           key={cat.slug}

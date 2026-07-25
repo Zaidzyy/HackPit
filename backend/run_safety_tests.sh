@@ -44,6 +44,15 @@ echo "== program-SCOPE model tests (parse / fail-closed / wildcard+CIDR matching
 echo "== engagement SCOPE tests (in-scope passes / out-of-scope refused / expansion never widens) =="
 "$PY" test_engagement_scope.py
 
+echo "== AD graph parser + path tests (BloodHound -> graph -> route to Domain Admin) =="
+"$PY" test_adgraph.py
+
+echo "== AD collector tests (argv-only / unapproved / scope-locked DC / failure / no exec) =="
+"$PY" test_adgraph_collector.py
+
+echo "== AD graph SAFETY invariants (no exec in adgraph / zero :kali / collector+abuse gated / lab unchanged) =="
+"$PY" test_adgraph_safety.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

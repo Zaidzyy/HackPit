@@ -13,6 +13,10 @@ runbooks). Populated as the project grows.
   authorized target: the program-scope model (hosts, `*.wildcards`, CIDRs, `!exclusions`), the
   scope-aware proposer + target-lock, recon-driven expansion, the network posture (Wall A DOWN),
   the never-auto-run proof, and the honest UI.
+- [`AD-GRAPH.md`](AD-GRAPH.md) — the AD attack-path graph: BloodHound collection → typed graph →
+  route to Domain Admin → animated cockpit UI with KB-grounded, gated abuse steps. Collector +
+  parser + path engine + walk-the-path wiring; every AD command routes through the gated executor.
+  Built against synthetic data; live collection/execution deferred to an AD lab.
 
 Safety invariants that hold across all Cockpit work: four independent gates (allowlist → target
 lock → approval → isolation), recon-only allowlist, lab-only target, no autonomy. M3 only *records*

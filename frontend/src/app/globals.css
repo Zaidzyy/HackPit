@@ -6713,6 +6713,30 @@ a.hp-card {
   gap: 8px;
   margin-top: 12px;
 }
+/* SCOPE toggle — "medium+" (the default) vs "all". Sits before the per-severity chips and
+ * is deliberately neutral-coloured so it reads as a view control, not as a severity. */
+.hp-cs-scope {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-2);
+  background: transparent;
+  color: var(--grey);
+  font-size: 11.5px;
+  letter-spacing: 0.4px;
+  cursor: pointer;
+}
+.hp-cs-scope:hover { border-color: var(--grey); color: var(--white); }
+.hp-cs-scope.hp-on {
+  border-color: var(--accent-line);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+.hp-cs-sevsep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 4px;
+  background: var(--border-2);
+}
 .hp-cs-sevchip {
   padding: 5px 12px;
   border-radius: 999px;

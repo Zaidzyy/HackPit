@@ -66,6 +66,11 @@ from codescan.router import (  # noqa: E402  (backend/codescan — STATIC AppSec
     router as codescan_router,
     set_kb as set_codescan_kb,
 )
+from arsenal import loader as arsenal_loader  # noqa: E402  (backend/arsenal — tool catalog)
+from arsenal.router import (  # noqa: E402
+    router as arsenal_router,
+    set_arsenal as set_arsenal_catalog,
+)
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
 CAPTIONS_PATH = REPO_ROOT / "data" / "images" / "captions.json"
@@ -291,6 +296,16 @@ async def lifespan(app: FastAPI):
         attack_path.is_step_eligible,
         lambda e: not attack_path.is_broad_reference(e),
     )
+    # Tool arsenal — load the catalog once and resolve its KB links against the live KB, so
+    # a step's arsenal tag can point at the entry that documents that tool. Best-effort: a
+    # catalog problem leaves an empty arsenal and composition behaves as it did before.
+    try:
+        loaded = arsenal_loader.load()
+        arsenal_loader.link_kb(loaded, STATE.by_id, attack_path.is_step_eligible)
+        attack_path.set_arsenal(loaded)
+        set_arsenal_catalog(loaded)
+    except Exception:  # noqa: BLE001 - never fail startup over the catalog
+        pass
     yield
     set_codescan_kb(None, None, None, None)
     STATE.entries = []
@@ -328,6 +343,10 @@ app.include_router(detection_router)
 # target, and shares nothing with the engagement/executor/target-lock/scope/isolation model —
 # a self-contained analysis utility that happens to live in the same backend.
 app.include_router(codescan_router)
+# Tool arsenal (see arsenal/). READ-ONLY catalog: tool descriptions + invocation TEMPLATES the
+# planner draws on. It executes nothing and restricts nothing — a rendered invocation is a
+# string, and it runs only through the gated cockpit executor with an explicit human approval.
+app.include_router(arsenal_router)
 
 
 # --------------------------------------------------------------------------- #
@@ -601,6 +620,25 @@ class AttackStep(BaseModel):
         "rating — i.e. what a DEFENDER would see if this step ran. Derived deterministically "
         "from the curated ATT&CK/SigmaHQ map (no LLM); null when the command is not in that "
         "map. Describes detection only — it is never guidance on avoiding it.",
+    )
+    arsenal: dict[str, Any] | None = Field(
+        default=None,
+        description="TOOL ARSENAL PROVENANCE. Which catalogued tool this step actually runs "
+        "({tool, category, purpose, kb_entry_id, docs}), read deterministically from the "
+        "command's own program name — never from anything the model claimed. Null when the "
+        "step runs no catalogued tool. Informational: it does NOT mean the command was "
+        "verified, and it changes nothing about how the step runs — every command still "
+        "clears the same executor gates.",
+    )
+    foreign_refs: list[str] | None = Field(
+        default=None,
+        description="HONESTY MARKER. Hosts / AD domains still named in this step's commands "
+        "that are NOT this engagement's target and could not be confidently rewritten — a "
+        "KB command written for another environment (MARVEL.local, 192.168.1.10). The step "
+        "needs adjusting before it is run against your target. Nothing is ever guessed in "
+        "their place: a fabricated domain would be worse than a visible gap. Null when the "
+        "step's commands reference nothing foreign. Plan quality only — the executor's "
+        "target/scope lock is what actually refuses a foreign host.",
     )
 
 

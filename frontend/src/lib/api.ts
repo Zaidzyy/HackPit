@@ -165,6 +165,14 @@ export type AttackStep = {
    */
   target_adaptation?: string;
   /**
+   * HONESTY MARKER — hosts / AD domains still named in this step's commands that are
+   * NOT the engagement's target and could not be confidently rewritten (a KB command
+   * written for another environment: `MARVEL.local`, `192.168.1.10`). The step needs
+   * adjusting before it runs. Nothing is guessed in their place — a fabricated domain
+   * would be worse than a visible gap. Absent when nothing foreign is referenced.
+   */
+  foreign_refs?: string[];
+  /**
    * Optional branch hints (static, pre-execution). on_success = what this finding
    * unlocks / the next action; on_blocked = the pivot if it 403s or fails. Present
    * only where the model saw a real decision point.
@@ -178,6 +186,26 @@ export type AttackStep = {
    * command (the drawer can still fetch an ai_suggested reading on demand).
    */
   attck?: DetectionTag | null;
+  /**
+   * TOOL ARSENAL PROVENANCE — which catalogued tool this step actually runs, read from
+   * the command's own program name (never from anything the model claimed). Null when
+   * the step runs no catalogued tool. Informational only: it is not a claim that the
+   * command was verified, and it changes nothing about how the step runs.
+   */
+  arsenal?: ArsenalTag | null;
+};
+
+/** The catalogued tool a step runs — see /arsenal. */
+export type ArsenalTag = {
+  /** The step's primary catalogued tool — the first one it runs. */
+  tool: string;
+  /** Every catalogued tool the step runs, in command order. */
+  tools?: string[];
+  category: string;
+  purpose: string;
+  /** KB entry documenting this tool, when one exists. */
+  kb_entry_id: string | null;
+  docs: string;
 };
 
 export type AttackPhase = {
@@ -1488,3 +1516,44 @@ export type CodeScanReport = { markdown: string; filename: string };
 /** Render the scan you are looking at as a Markdown report (no re-scan). */
 export const renderCodeScanReport = (result: CodeScanResult, signal?: AbortSignal) =>
   postJSON<CodeScanReport>("/codescan/report", result, signal);
+
+// ---- tool arsenal (curated catalog + invocation templates) ---------------- //
+//
+// Read-only catalog. A template is a STRING to copy; it becomes a command only by
+// going through the gated cockpit executor with an explicit human approval.
+
+export type ArsenalTemplate = {
+  label: string;
+  /** Invocation with <placeholders> — copy and fill. */
+  template: string;
+  note: string;
+  placeholders: string[];
+};
+
+export type ArsenalTool = {
+  name: string;
+  aliases: string[];
+  category: string;
+  purpose: string;
+  phases: string[];
+  techniques: string[];
+  docs: string;
+  templates: ArsenalTemplate[];
+  /** Common flags — informational only; the executor has no allowlist. */
+  flags: { flag: string; what: string }[];
+  /** KB entry documenting this tool; null when the KB doesn't (never fabricated). */
+  kb_entry_id: string | null;
+  kb_title: string | null;
+};
+
+export type ArsenalResponse = {
+  total: number;
+  categories: string[];
+  placeholders: Record<string, string>;
+  tools: ArsenalTool[];
+  /** Always true — this is a catalog, not an engine. */
+  executes_nothing: boolean;
+};
+
+export const getArsenal = (signal?: AbortSignal) =>
+  getJSON<ArsenalResponse>("/arsenal", signal);

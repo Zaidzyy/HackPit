@@ -25,6 +25,7 @@ from typing import Any, Callable
 
 import context_channel  # Channel 2 — CONTEXT background for the prompt, never steps
 import llm
+from arsenal import planner as arsenal_planner  # tool catalog: prompt reference + step tags
 from detection import tagging as detection_tagging  # ATT&CK tags on steps (read-only, no LLM)
 
 # --------------------------------------------------------------------------- #
@@ -442,8 +443,47 @@ _HOST_AS_TOOL_ARG_RE = re.compile(
 )
 
 
+# An example/lab NETWORK RANGE baked into a note (10.0.0.0/24, 192.168.1.0/24,
+# 172.16.5.0/16). Same private/lab prefixes the example-IP rule already trusts, plus a
+# prefix length. Deliberately NOT matched, because each is a legitimate literal rather
+# than somebody else's network:
+#   0.0.0.0/0        bind-all / default route
+#   127.0.0.0/8      loopback
+#   169.254.0.0/16   link-local
+#   255.255.255.0    a netmask (no prefix length, so it cannot match anyway)
+# and a bare /24 with no address in front is a netmask width, never a target.
+_EXAMPLE_CIDR_RE = re.compile(
+    r"(?<![\d.])(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+    r"|192\.168\.\d{1,3}\.\d{1,3}"
+    r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})"
+    r"/(?:3[0-2]|[12]?\d)(?!\d)"
+)
+# any IPv4 network in CIDR form — used to read a range out of pasted scope text
+_ANY_CIDR_RE = re.compile(r"(?<![\d.])" + _IPV4 + r"/(?:3[0-2]|[12]?\d)(?!\d)")
+# Parks a rewritten range while the remaining address rules run. Control characters, so
+# it cannot appear in a real command and no later pattern can match it.
+_CIDR_SENTINEL = "\x00scope-range\x00"
+
+
 def _is_ipv4(value: str) -> bool:
     return bool(re.fullmatch(_IPV4, value))
+
+
+def scope_cidr(scope_text: str | None) -> str | None:
+    """The engagement's network RANGE, if the pasted scope names one.
+
+    Returns the first syntactically valid IPv4 CIDR in the scope text, or None. This is
+    what an example range in a KB command is rewritten TO; with no range in scope the
+    caller falls back to the target host, which is the only other thing we actually know.
+    """
+    if not scope_text:
+        return None
+    for m in _ANY_CIDR_RE.finditer(scope_text):
+        candidate = m.group(0)
+        addr, _, prefix = candidate.partition("/")
+        if all(o.isdigit() and int(o) <= 255 for o in addr.split(".")) and int(prefix) <= 32:
+            return candidate
+    return None
 
 
 def extract_target(goal: str) -> str | None:
@@ -502,12 +542,19 @@ def _target_host(target: str) -> str:
     return t.split("/", 1)[0]
 
 
-def substitute_target(cmd: str, target: str | None) -> str:
-    """Rewrite a command's placeholders + obvious example IPs/hosts to `target`.
+def substitute_target(cmd: str, target: str | None, scope: str | None = None) -> str:
+    """Rewrite a command's placeholders + obvious example IPs/hosts/RANGES to `target`.
 
     Conservative: only touches recognised placeholder tokens and lab/private
     example addresses, so unrelated literals (loopback, bind-all, netmasks,
     version numbers) are left untouched.
+
+    ``scope`` is the engagement's network range (see :func:`scope_cidr`). An example
+    RANGE in a note — ``10.0.0.0/24`` — is rewritten to that scope range if the
+    engagement has one, and to the target host if it does not. Without this a grounded
+    step kept the note author's network verbatim, so a plan for one target displayed a
+    sweep of somebody else's /24. Plan quality only: the executor's target/scope lock is
+    what actually refuses a foreign host, whatever the plan happens to show.
     """
     if not target:
         return cmd
@@ -534,6 +581,16 @@ def substitute_target(cmd: str, target: str | None) -> str:
     # 2) explicit placeholder tokens → full target for URL-ish, host for the rest
     out = _PLACEHOLDER_RE.sub(_ph, out)
 
+    # 2.5) example NETWORK RANGES → the engagement's scope range, else the target host.
+    #      Parked behind a SENTINEL rather than written in directly. This rule has to run
+    #      before the example-IP rule below (which would otherwise rewrite the address half
+    #      of 10.0.0.0/24 and leave a nonsensical "<host>/24"), but the scope range we are
+    #      writing IS itself a private range, so that same rule would then eat it. The
+    #      sentinel matches nothing, and is swapped for the real value once all the address
+    #      rules have run.
+    replacement = scope or host
+    out = _EXAMPLE_CIDR_RE.sub(_CIDR_SENTINEL, out)
+
     # 3) obvious example IPs → target host (only when our host is an IP)
     host_is_ip = _is_ipv4(host.split(":", 1)[0])
     if host_is_ip:
@@ -556,7 +613,94 @@ def substitute_target(cmd: str, target: str | None) -> str:
         for rx in (_HOST_AFTER_SCHEME_RE, _HOST_AFTER_AT_RE,
                    _HOST_IN_HEADER_RE, _HOST_AS_TOOL_ARG_RE):
             out = rx.sub(_swap_host, out)
+
+    # 5) the parked example range becomes the real scope range / target host, now that
+    #    no address rule is left to re-match it.
+    return out.replace(_CIDR_SENTINEL, replacement)
+
+
+# A foreign host / AD domain left in a command AFTER substitution has run. Unlike the
+# substitution patterns this one is NOT host-position-gated: an AD domain shows up as
+# `MARVEL.local/user:password`, which is nobody's idea of a host position, and the whole
+# point here is to notice it rather than to rewrite it.
+_FOREIGN_HOST_RE = re.compile(
+    r"(?<![\w.-])(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+" + _LAB_TLD + r""
+    r"|(?:[a-z0-9-]+\.)?example\.(?:com|org|net))(?![A-Za-z0-9.-])",
+    re.I,
+)
+
+
+def foreign_refs(cmd: str, target: str | None, scope: str | None = None) -> list[str]:
+    """Hosts, AD domains and addresses in a command that are NOT this engagement's.
+
+    Runs AFTER :func:`substitute_target`, so what it finds is precisely what could not be
+    rewritten: an AD domain we have no confident replacement for (we may simply not know
+    the target's domain), or an example address the substitution rules deliberately left
+    alone. We do NOT guess a value for these — a fabricated domain is worse than a visible
+    gap — and we do not silently leave them either. They are reported so the plan says
+    plainly that the step needs adjusting.
+
+    Deliberately errs toward reporting: a spurious flag costs one line of text, a missed
+    foreign host reads as though the step were ready to run.
+    """
+    if not cmd:
+        return []
+    host = _target_host(target).lower() if target else ""
+    bare = host.split(":", 1)[0]
+    net = None
+    if scope:
+        try:
+            import ipaddress
+
+            net = ipaddress.ip_network(scope, strict=False)
+        except ValueError:
+            net = None
+
+    out: list[str] = []
+
+    def _add(ref: str) -> None:
+        if ref.lower() in (host, bare) or ref in out:
+            return
+        out.append(ref)
+
+    for m in _FOREIGN_HOST_RE.finditer(cmd):
+        _add(m.group(0))
+    for m in _EXAMPLE_IP_RE.finditer(cmd):
+        addr = m.group(0).split(":", 1)[0]
+        if net is not None:
+            try:
+                import ipaddress
+
+                if ipaddress.ip_address(addr) in net:
+                    continue  # inside the engagement's own range — not foreign
+            except ValueError:
+                pass
+        _add(m.group(0))
     return out
+
+
+def flag_foreign_refs(
+    phases: list[dict[str, Any]], target: str | None, scope: str | None = None
+) -> list[dict[str, Any]]:
+    """Annotate every step whose commands still name a foreign host/domain.
+
+    Additive: attaches ``foreign_refs`` and touches nothing else. Steps lifted from the
+    user's OWN writeup are skipped, for the same reason the Channel-2 leakage guard skips
+    them — that writeup is for THIS box, so its hostname is the target under another name,
+    not a foreign reference.
+    """
+    for phase in phases or []:
+        for step in phase.get("steps") or []:
+            if step.get("from_writeup"):
+                continue
+            refs: list[str] = []
+            for c in step.get("commands") or []:
+                for ref in foreign_refs(c.get("cmd") or "", target, scope):
+                    if ref not in refs:
+                        refs.append(ref)
+            if refs:
+                step["foreign_refs"] = refs[:4]
+    return phases
 
 
 def canonical_phase(entry: dict) -> str:
@@ -765,13 +909,17 @@ def build_user_prompt(
     profile: dict[str, Any] | None = None,
     scope_text: str | None = None,
     context_block: str | None = None,
+    arsenal_block: str | None = None,
 ) -> str:
     """Build the composer prompt.
 
     ``context_block`` is CHANNEL 2 (see ``context_channel``): bounded background
     the model reasons FROM — a matched writeup's approach, the methodology to
-    follow. It is appended as background only; when it is empty the prompt is
-    byte-for-byte the pre-Channel-2 prompt.
+    follow. ``arsenal_block`` is the TOOL CATALOG's invocations for these phases,
+    a reference that makes proposed commands well-formed and consistent.
+
+    Both are appended as reference only; when both are empty the prompt is
+    byte-for-byte what it was before either existed.
     """
     ctx = ctx or {}
     lines: list[str] = []
@@ -835,6 +983,8 @@ def build_user_prompt(
         )
     if context_block:
         lines.append(context_block)
+    if arsenal_block:
+        lines.append(arsenal_block)
     lines.append("")
     gap = f" relevant to a {box_type} target" if box_type else ""
     lines.append(
@@ -873,7 +1023,9 @@ def _resolve_entry_id(cited: str, by_id: dict[str, dict], norm_map: dict[str, st
     return hit if hit and hit in by_id else None
 
 
-def _ai_commands(raw: Any, target: str | None) -> list[dict[str, Any]]:
+def _ai_commands(
+    raw: Any, target: str | None, scope: str | None = None
+) -> list[dict[str, Any]]:
     """Normalise the model's OWN commands for an AI-suggested step: dedupe, cap
     count/length, substitute the target. Marked ``unverified`` (the step itself
     carries ``ai_suggested`` — these are general-knowledge, not the user's KB)."""
@@ -888,7 +1040,7 @@ def _ai_commands(raw: Any, target: str | None) -> list[dict[str, Any]]:
             cmd, lang = str(c.get("cmd") or ""), (c.get("lang") or "bash")
         else:
             continue
-        cmd = substitute_target(cmd.strip(), target)
+        cmd = substitute_target(cmd.strip(), target, scope)
         if not cmd or cmd in seen:
             continue
         seen.add(cmd)
@@ -945,6 +1097,7 @@ def _ground(
     by_id: dict[str, dict],
     target: str | None,
     adapt_facts: str | None = None,
+    scope: str | None = None,
 ) -> list[dict[str, Any]]:
     """Turn the model's JSON into validated phases: KB-grounded steps FIRST, then
     clearly-marked AI-suggested gap steps.
@@ -987,7 +1140,7 @@ def _ground(
             if eid is not None and eid not in used and is_step_eligible(by_id[eid]):
                 e = by_id[eid]
                 cmds = [
-                    {**c, "cmd": substitute_target(c["cmd"], target)}
+                    {**c, "cmd": substitute_target(c["cmd"], target, scope)}
                     for c in entry_commands(e, cap=_STEP_CMD_CAP)
                 ]
                 if not cmds:
@@ -1022,7 +1175,7 @@ def _ground(
                         "title": title,
                         "entry_id": "",
                         "why": str(st.get("why") or "").strip(),
-                        "commands": _ai_commands(st.get("commands"), target),
+                        "commands": _ai_commands(st.get("commands"), target, scope),
                         "ai_suggested": True,
                         "from_writeup": False,
                         **_branch_hints(st),
@@ -1330,7 +1483,9 @@ def _wu_phase_index(text: str) -> int | None:
     return None
 
 
-def build_writeup_path(entry: dict, target: str | None) -> list[dict[str, Any]]:
+def build_writeup_path(
+    entry: dict, target: str | None, scope: str | None = None
+) -> list[dict[str, Any]]:
     """Build attack-path phases directly from a per-box WRITEUP's ordered steps.
 
     The writeup is the real walkthrough for THIS box and the user's own work, so
@@ -1356,7 +1511,7 @@ def build_writeup_path(entry: dict, target: str | None) -> list[dict[str, Any]]:
             if not cmd or cmd in seen:
                 continue
             seen.add(cmd)
-            capped, truncated = _cap_command(substitute_target(cmd, target))
+            capped, truncated = _cap_command(substitute_target(cmd, target, scope))
             item: dict[str, Any] = {
                 "lang": c.get("lang") or "bash",
                 "cmd": capped,
@@ -1537,6 +1692,7 @@ def _augment_writeup(
     profile: dict[str, Any] | None = None,
     adapt_facts: str | None = None,
     context_block: str | None = None,
+    scope: str | None = None,
 ) -> list[dict[str, Any]]:
     """Best-effort, CONSERVATIVE supplement of the writeup path: only phases the
     writeup genuinely lacks or is very thin on (empty, or no runnable commands) may
@@ -1553,11 +1709,44 @@ def _augment_writeup(
     user = build_augment_prompt(goal, ctx, covered, grouped, thin, context_block)
     raw = llm.chat(_AUGMENT_SYSTEM, user, cfg)
     parsed = llm.extract_json(raw)
-    supp = _ground(parsed, by_id, target, adapt_facts)
+    supp = _ground(parsed, by_id, target, adapt_facts, scope)
     # deterministic backstop: keep supplements ONLY for genuinely thin phases, so a
     # substantively-covered phase gets nothing even if the model tried to add there.
     supp = [ph for ph in supp if ph["phase"] in thin]
     return _merge_phases(phases, supp)
+
+
+# --------------------------------------------------------------------------- #
+# TOOL ARSENAL — the catalog, loaded once (see backend/arsenal)
+# --------------------------------------------------------------------------- #
+_ARSENAL: Any = None
+
+
+def _arsenal() -> Any:
+    """The tool catalog, loaded lazily and cached.
+
+    Best-effort: if the catalog is missing or malformed, composition proceeds with an EMPTY
+    arsenal — the prompt block is "" and tagging is a no-op, so a broken catalog degrades to
+    exactly the pre-arsenal behaviour instead of failing a compose.
+    """
+    global _ARSENAL
+    if _ARSENAL is None:
+        try:
+            from arsenal import loader as arsenal_loader
+
+            _ARSENAL = arsenal_loader.load()
+        except Exception:  # noqa: BLE001 - a catalog problem must never fail a composition
+            from arsenal.loader import Arsenal
+
+            _ARSENAL = Arsenal()
+    return _ARSENAL
+
+
+def set_arsenal(value: Any) -> None:
+    """Inject a loaded (and KB-linked) catalog — main.py does this at startup so the tags
+    carry KB entry ids. Tests use it to install an empty catalog."""
+    global _ARSENAL
+    _ARSENAL = value
 
 
 # --------------------------------------------------------------------------- #
@@ -1634,6 +1823,9 @@ def compose(
     """
     cfg = llm.load_config()
     target = extract_target(goal)
+    # The engagement's network RANGE, if the pasted scope names one. An example range in
+    # a KB command is rewritten to this; with no range we fall back to the target host.
+    scope = scope_cidr(scope_text)
     ctx = parse_goal_context(goal)
     # Profile the target FIRST (safe empty profile on any LLM failure) — it steers
     # both retrieval and composition, and supplies out-of-scope paths to drop.
@@ -1660,7 +1852,7 @@ def compose(
     # (1) WRITEUP-FIRST (+ augmentation)
     if box_writeup and box_writeup["id"] in by_id:
         wu = by_id[box_writeup["id"]]
-        phases = build_writeup_path(wu, target)
+        phases = build_writeup_path(wu, target, scope)
         if phases:
             augmented = False
             # CHANNEL 2 here is METHODOLOGY only — the writeup already IS the path.
@@ -1673,6 +1865,7 @@ def compose(
                     phases, by_id, goal, target_type, ctx, target, search_fn, cfg,
                     profile, adapt_facts,
                     context_channel.build_context_block(ctx_sources),
+                    scope,
                 )
                 augmented = any(
                     s.get("from_writeup") is False
@@ -1696,6 +1889,10 @@ def compose(
             # ATT&CK-tag every step (deterministic, catalog-only) so the plan carries the
             # defender's view alongside the operator's. Purely additive annotation.
             phases = detection_tagging.tag_phases(phases)
+            arsenal_planner.tag_steps(_arsenal(), phases)  # which tool each step runs
+            # HONESTY MARKER: a foreign host/AD domain we could not confidently rewrite
+            # is reported on the step rather than guessed at or left silent.
+            phases = flag_foreign_refs(phases, target, scope)
             damaged = bool((wu.get("meta") or {}).get("source_damaged"))
             return {
                 "goal": goal,
@@ -1732,12 +1929,19 @@ def compose(
         writeup_id=box_writeup["id"] if box_writeup else None,
     )
     context_block = context_channel.build_context_block(ctx_sources)
+    # TOOL ARSENAL — the catalog's invocations as prompt REFERENCE, so proposed
+    # commands are well-formed and consistent across a broad toolset. It grants
+    # nothing: the executor has no allowlist, so any tool was always proposable.
+    arsenal_block = arsenal_planner.prompt_block(
+        _arsenal(), needle=" ".join(priority) or goal
+    )
     user = build_user_prompt(
-        goal, target_type, grouped, ctx, profile, scope_text, context_block
+        goal, target_type, grouped, ctx, profile, scope_text, context_block,
+        arsenal_block,
     )
     raw = llm.chat(_SYSTEM, user, cfg)
     parsed = llm.extract_json(raw)
-    phases = _ground(parsed, by_id, target, adapt_facts)
+    phases = _ground(parsed, by_id, target, adapt_facts, scope)
 
     if not phases:
         raise llm.LLMError("the model did not produce any usable steps")
@@ -1759,6 +1963,11 @@ def compose(
     if not phases:
         raise llm.LLMError("all composed steps were out of scope")
     phases = detection_tagging.tag_phases(phases)   # ATT&CK tag each step (see above)
+    # ARSENAL PROVENANCE — record which catalogued tool each step actually runs, read
+    # from the command's own program name. Additive annotation: it changes no command
+    # and no grounded/ai_suggested label, and it is not a claim that the step is verified.
+    arsenal_planner.tag_steps(_arsenal(), phases)
+    phases = flag_foreign_refs(phases, target, scope)
 
     return {
         "goal": goal,

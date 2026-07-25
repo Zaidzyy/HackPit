@@ -479,6 +479,21 @@ function StepCard({ step }: { step: AttackStep }) {
         </p>
       )}
 
+      {step.foreign_refs && step.foreign_refs.length > 0 && (
+        <p className="hp-ap-foreign">
+          <span className="hp-ap-foreign-lead">⚠ not your target</span>
+          references{" "}
+          {step.foreign_refs.map((ref, i) => (
+            <span key={ref}>
+              {i > 0 && ", "}
+              <code className="hp-ap-foreign-ref">«{ref}»</code>
+            </span>
+          ))}{" "}
+          — this command was written for another environment; verify or replace it for your
+          target before running it.
+        </p>
+      )}
+
       {step.commands.length > 0 ? (
         step.commands.map((c, i) => (
           <div className="hp-code" key={i}>

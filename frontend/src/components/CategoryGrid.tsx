@@ -105,6 +105,23 @@ export function CategoryGrid({
       {/* Scripts arsenal — the copy-ready operator view of the whole KB */}
       <ScriptsCard shown={shownCount > 2} />
 
+      {/* Tool arsenal — the standard toolbox as a catalog: purpose + copy-ready
+          invocations. Data, not an engine; the planner draws on the same templates. */}
+      <Link
+        href="/arsenal"
+        className={`hp-card${shownCount > 2 ? " hp-in" : ""}`}
+        style={{ "--cc": "#e0c15a" } as CSSProperties}
+      >
+        <div className="hp-ic">{"⚒"}</div>
+        <h3>
+          Tool arsenal <span className="hp-badge">catalog</span>
+        </h3>
+        <p>
+          The standard toolbox — recon, web, AD, creds, cloud, RE — each with what it
+          is for and copy-ready invocations the planner writes from.
+        </p>
+      </Link>
+
       {/* Code scan — the DEFENSIVE side: read a codebase, report its bugs. No target,
           no execution; entirely separate from the cockpit's attack surface. */}
       <Link

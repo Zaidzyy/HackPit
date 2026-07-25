@@ -1,0 +1,1518 @@
+{
+  "schema_version": "1.0",
+  "note": "Curated catalog of the standard offensive toolbox. DATA ONLY — this file executes nothing. Every invocation here is a TEMPLATE the planner draws on so proposed commands are well-formed and consistent; each one still goes through the same gated executor (approve-each, heuristic red-confirm, target/scope lock, argv-only). Templates are written from each tool's own documentation and standard usage. Placeholders use <angle-brackets>; <target> is filled by the composer's substitute_target so a rendered command points at the real engagement target and nothing else.",
+  "placeholders": {
+    "<target>": "Host, IP or URL under test — filled from the engagement target.",
+    "<domain>": "DNS domain / AD domain name.",
+    "<url>": "Full URL including scheme.",
+    "<wordlist>": "Path to a wordlist.",
+    "<ports>": "Port or port range.",
+    "<user>": "A single username.",
+    "<userlist>": "Path to a username list.",
+    "<passlist>": "Path to a password list.",
+    "<password>": "A single password.",
+    "<hashfile>": "Path to a file of captured hashes.",
+    "<dc-ip>": "Domain controller IP.",
+    "<output>": "Output file/directory path.",
+    "<binary>": "Path to a local binary under analysis.",
+    "<file>": "Path to a local file.",
+    "<size>": "A response size in bytes, used to filter baseline/404 noise.",
+    "<technique>": "A technique/tag name the tool understands (e.g. a nuclei tag).",
+    "<database>": "Database name on the target DBMS.",
+    "<hash-mode>": "Numeric hash type/mode (hashcat -m).",
+    "<base-dn>": "LDAP base DN, e.g. DC=corp,DC=local.",
+    "<project>": "Local analysis project name.",
+    "<pattern>": "A literal string or regex to search for."
+  },
+  "tools": [
+    {
+      "name": "nmap",
+      "category": "recon",
+      "purpose": "Port, service and version discovery, plus a large scripting engine for protocol-level enumeration. The default first look at a host.",
+      "phases": [
+        "recon",
+        "enumeration"
+      ],
+      "techniques": [
+        "port scanning",
+        "service/version detection",
+        "OS fingerprinting",
+        "NSE script enumeration"
+      ],
+      "docs": "https://nmap.org/book/man.html",
+      "templates": [
+        {
+          "label": "Full TCP port sweep",
+          "template": "nmap -p- --min-rate 2000 -T4 -oA <output> <target>",
+          "note": "Find every open TCP port first; enumerate them in a second pass."
+        },
+        {
+          "label": "Service + default scripts on known ports",
+          "template": "nmap -sCV -p <ports> -oA <output> <target>",
+          "note": "Run after the sweep, against only the ports it found."
+        },
+        {
+          "label": "Top UDP ports",
+          "template": "nmap -sU --top-ports 100 -oA <output> <target>",
+          "note": "UDP is slow; the top ports catch SNMP/DNS/NTP/TFTP."
+        },
+        {
+          "label": "Vulnerability-ish NSE sweep",
+          "template": "nmap --script vuln -p <ports> <target>",
+          "note": "Noisy and prone to false positives — treat output as leads."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-p-",
+          "what": "all 65535 TCP ports"
+        },
+        {
+          "flag": "-sC",
+          "what": "default NSE scripts"
+        },
+        {
+          "flag": "-sV",
+          "what": "service/version detection"
+        },
+        {
+          "flag": "-oA",
+          "what": "write all three output formats"
+        },
+        {
+          "flag": "--min-rate",
+          "what": "packets/sec floor (speed vs stealth)"
+        }
+      ]
+    },
+    {
+      "name": "masscan",
+      "category": "recon",
+      "purpose": "Asynchronous port scanner built for very large ranges — sweeps a whole network far faster than nmap, at the cost of detail.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "mass port scanning",
+        "network sweep"
+      ],
+      "docs": "https://github.com/robertdavidgraham/masscan",
+      "templates": [
+        {
+          "label": "Fast sweep of a range",
+          "template": "masscan <target> -p<ports> --rate 1000 -oL <output>",
+          "note": "Keep --rate conservative on networks you do not own; it is a flood by design."
+        },
+        {
+          "label": "Top ports across a CIDR",
+          "template": "masscan <target> --top-ports 100 --rate 1000 -oJ <output>",
+          "note": "Feed the open ports into nmap -sCV for detail."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--rate",
+          "what": "packets per second (the whole point — and the risk)"
+        },
+        {
+          "flag": "-oL / -oJ",
+          "what": "list / JSON output"
+        },
+        {
+          "flag": "--exclude",
+          "what": "addresses to skip"
+        }
+      ]
+    },
+    {
+      "name": "amass",
+      "category": "recon",
+      "purpose": "In-depth subdomain enumeration and attack-surface mapping, combining passive sources with active resolution.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "subdomain enumeration",
+        "OSINT",
+        "DNS mapping"
+      ],
+      "docs": "https://github.com/owasp-amass/amass",
+      "templates": [
+        {
+          "label": "Passive enumeration",
+          "template": "amass enum -passive -d <domain> -o <output>",
+          "note": "No traffic to the target — safe first pass and usually in scope."
+        },
+        {
+          "label": "Active enumeration",
+          "template": "amass enum -active -d <domain> -o <output>",
+          "note": "Resolves and probes; confirm it is in scope first."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-passive",
+          "what": "OSINT sources only, no target traffic"
+        },
+        {
+          "flag": "-d",
+          "what": "target domain"
+        },
+        {
+          "flag": "-brute",
+          "what": "add brute-force subdomain guessing"
+        }
+      ]
+    },
+    {
+      "name": "subfinder",
+      "category": "recon",
+      "purpose": "Fast passive subdomain discovery from many public sources. The usual first step of a bug-bounty recon chain.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "subdomain enumeration",
+        "OSINT"
+      ],
+      "docs": "https://github.com/projectdiscovery/subfinder",
+      "templates": [
+        {
+          "label": "Passive subdomains",
+          "template": "subfinder -d <domain> -all -silent -o <output>",
+          "note": "Pipe into dnsx/httpx to keep only what resolves and answers."
+        },
+        {
+          "label": "Subdomains, then live hosts",
+          "template": "subfinder -d <domain> -silent | httpx -silent -status-code -title",
+          "note": "The standard recon one-liner: discover, then probe."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-d",
+          "what": "target domain"
+        },
+        {
+          "flag": "-all",
+          "what": "use every configured source"
+        },
+        {
+          "flag": "-silent",
+          "what": "results only — pipeline friendly"
+        }
+      ]
+    },
+    {
+      "name": "assetfinder",
+      "category": "recon",
+      "purpose": "Small, fast passive subdomain finder — useful alongside subfinder/amass because the source sets differ.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "subdomain enumeration",
+        "OSINT"
+      ],
+      "docs": "https://github.com/tomnomnom/assetfinder",
+      "templates": [
+        {
+          "label": "Subdomains for a domain",
+          "template": "assetfinder --subs-only <domain> | sort -u | tee <output>",
+          "note": "Union its output with subfinder's; neither is a superset."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--subs-only",
+          "what": "print subdomains only"
+        }
+      ]
+    },
+    {
+      "name": "theHarvester",
+      "category": "recon",
+      "purpose": "OSINT collection of emails, names, subdomains and hosts from public search engines and data sources.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "OSINT",
+        "email harvesting",
+        "employee enumeration"
+      ],
+      "docs": "https://github.com/laramies/theHarvester",
+      "templates": [
+        {
+          "label": "Multi-source OSINT sweep",
+          "template": "theHarvester -d <domain> -b all -f <output>",
+          "note": "Passive; feeds username lists for later credential testing."
+        },
+        {
+          "label": "One source, quick pass",
+          "template": "theHarvester -d <domain> -b crtsh -l 500",
+          "note": "crt.sh is certificate transparency — cheap and reliable."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-d",
+          "what": "target domain"
+        },
+        {
+          "flag": "-b",
+          "what": "source (or 'all')"
+        },
+        {
+          "flag": "-f",
+          "what": "write HTML/JSON report"
+        }
+      ]
+    },
+    {
+      "name": "dnsx",
+      "category": "recon",
+      "purpose": "Fast DNS resolution and probing toolkit — filters a candidate subdomain list down to what actually resolves.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "DNS resolution",
+        "subdomain validation",
+        "DNS record enumeration"
+      ],
+      "docs": "https://github.com/projectdiscovery/dnsx",
+      "templates": [
+        {
+          "label": "Resolve a candidate list",
+          "template": "dnsx -l <file> -silent -a -resp -o <output>",
+          "note": "Turns a guess list into confirmed hosts before you touch them."
+        },
+        {
+          "label": "Record types for a domain",
+          "template": "dnsx -d <domain> -silent -a -aaaa -cname -mx -ns -txt",
+          "note": "CNAMEs matter — a dangling one is a takeover candidate."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-l",
+          "what": "input list of hosts"
+        },
+        {
+          "flag": "-resp",
+          "what": "show the resolved value"
+        },
+        {
+          "flag": "-cname",
+          "what": "CNAME records (subdomain-takeover leads)"
+        }
+      ]
+    },
+    {
+      "name": "httpx",
+      "category": "recon",
+      "purpose": "Probes a host list for live HTTP services and reports status, title, tech and TLS detail. The bridge from recon to web testing.",
+      "phases": [
+        "recon",
+        "enumeration"
+      ],
+      "techniques": [
+        "HTTP probing",
+        "technology fingerprinting",
+        "live-host filtering"
+      ],
+      "docs": "https://github.com/projectdiscovery/httpx",
+      "templates": [
+        {
+          "label": "Probe a host list",
+          "template": "httpx -l <file> -silent -status-code -title -tech-detect -o <output>",
+          "note": "The output is the real attack surface; everything else was a guess."
+        },
+        {
+          "label": "Probe one target",
+          "template": "httpx -u <target> -status-code -title -tech-detect -follow-redirects",
+          "note": "Redirects often reveal the real application host."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-tech-detect",
+          "what": "Wappalyzer-style technology fingerprint"
+        },
+        {
+          "flag": "-status-code",
+          "what": "report the HTTP status"
+        },
+        {
+          "flag": "-follow-redirects",
+          "what": "chase 30x to the real endpoint"
+        }
+      ]
+    },
+    {
+      "name": "ffuf",
+      "category": "web",
+      "purpose": "Very fast HTTP fuzzer — content discovery, parameter and vhost fuzzing, and form/login brute force via the FUZZ keyword.",
+      "phases": [
+        "enumeration",
+        "exploitation"
+      ],
+      "techniques": [
+        "content discovery",
+        "parameter fuzzing",
+        "vhost fuzzing",
+        "login brute force"
+      ],
+      "docs": "https://github.com/ffuf/ffuf/wiki",
+      "templates": [
+        {
+          "label": "Directory discovery",
+          "template": "ffuf -u <target>/FUZZ -w <wordlist> -mc 200,204,301,302,307,401,403 -o <output>",
+          "note": "Match on status; filter noise with -fs once you see the 404 size."
+        },
+        {
+          "label": "Virtual-host discovery",
+          "template": "ffuf -u <target> -H 'Host: FUZZ.<domain>' -w <wordlist> -fs <size>",
+          "note": "-fs must filter the default response size or everything matches."
+        },
+        {
+          "label": "Parameter discovery",
+          "template": "ffuf -u '<target>/endpoint?FUZZ=test' -w <wordlist> -fs <size>",
+          "note": "Hidden parameters are a common IDOR/injection entry point."
+        },
+        {
+          "label": "POST login brute force",
+          "template": "ffuf -u <target>/login -X POST -d 'username=<user>&password=FUZZ' -H 'Content-Type: application/x-www-form-urlencoded' -w <passlist> -fc 401",
+          "note": "Authorized testing only — check lockout policy before running."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-w",
+          "what": "wordlist (FUZZ is the injection point)"
+        },
+        {
+          "flag": "-mc / -fc",
+          "what": "match / filter by status code"
+        },
+        {
+          "flag": "-fs",
+          "what": "filter by response size — the noise killer"
+        },
+        {
+          "flag": "-recursion",
+          "what": "recurse into discovered directories"
+        }
+      ]
+    },
+    {
+      "name": "feroxbuster",
+      "category": "web",
+      "purpose": "Recursive content discovery in Rust — fast, and recursion-first, so it maps a tree rather than one level.",
+      "phases": [
+        "enumeration"
+      ],
+      "techniques": [
+        "content discovery",
+        "recursive directory brute force"
+      ],
+      "docs": "https://github.com/epi052/feroxbuster",
+      "templates": [
+        {
+          "label": "Recursive discovery",
+          "template": "feroxbuster -u <target> -w <wordlist> -d 3 -o <output>",
+          "note": "-d bounds the recursion depth; unbounded recursion is very loud."
+        },
+        {
+          "label": "With extensions",
+          "template": "feroxbuster -u <target> -w <wordlist> -x php,txt,bak,old -o <output>",
+          "note": ".bak/.old often expose source or config."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-d",
+          "what": "recursion depth"
+        },
+        {
+          "flag": "-x",
+          "what": "file extensions to append"
+        },
+        {
+          "flag": "-C",
+          "what": "filter out status codes"
+        }
+      ]
+    },
+    {
+      "name": "gobuster",
+      "category": "web",
+      "purpose": "Directory, DNS, vhost and S3-bucket brute forcing. Simple and dependable for a first content sweep.",
+      "phases": [
+        "enumeration"
+      ],
+      "techniques": [
+        "content discovery",
+        "DNS brute force",
+        "vhost brute force"
+      ],
+      "docs": "https://github.com/OJ/gobuster",
+      "templates": [
+        {
+          "label": "Directory brute force",
+          "template": "gobuster dir -u <target> -w <wordlist> -t 40 -o <output>",
+          "note": "Add -x for extensions once you know the stack."
+        },
+        {
+          "label": "DNS subdomain brute force",
+          "template": "gobuster dns -d <domain> -w <wordlist> -t 40 -o <output>",
+          "note": "Complements passive enumeration with guessable names."
+        },
+        {
+          "label": "Virtual-host brute force",
+          "template": "gobuster vhost -u <target> -w <wordlist> --append-domain -o <output>",
+          "note": "Finds sites that only answer to the right Host header."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "dir / dns / vhost",
+          "what": "the mode — they take different arguments"
+        },
+        {
+          "flag": "-t",
+          "what": "concurrent threads"
+        },
+        {
+          "flag": "-x",
+          "what": "extensions to try"
+        }
+      ]
+    },
+    {
+      "name": "nuclei",
+      "category": "web",
+      "purpose": "Template-driven vulnerability and misconfiguration scanner with a large community ruleset. Breadth-first triage of a known surface.",
+      "phases": [
+        "enumeration",
+        "exploitation"
+      ],
+      "techniques": [
+        "template-based scanning",
+        "CVE detection",
+        "misconfiguration detection",
+        "exposure detection"
+      ],
+      "docs": "https://docs.projectdiscovery.io/tools/nuclei",
+      "templates": [
+        {
+          "label": "Full template run",
+          "template": "nuclei -u <target> -severity low,medium,high,critical -o <output>",
+          "note": "Update templates first; results are leads to verify, not findings."
+        },
+        {
+          "label": "Against a host list",
+          "template": "nuclei -l <file> -severity high,critical -silent -o <output>",
+          "note": "The standard post-httpx pass across a whole surface."
+        },
+        {
+          "label": "One tag only",
+          "template": "nuclei -u <target> -tags <technique> -o <output>",
+          "note": "Narrow by tag (cve, exposure, takeover, misconfig) to cut noise."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-severity",
+          "what": "filter by severity"
+        },
+        {
+          "flag": "-tags",
+          "what": "run only templates with a tag"
+        },
+        {
+          "flag": "-rl",
+          "what": "rate limit — respect the target"
+        }
+      ]
+    },
+    {
+      "name": "nikto",
+      "category": "web",
+      "purpose": "Classic web-server scanner for known-dangerous files, outdated versions and server misconfiguration.",
+      "phases": [
+        "enumeration"
+      ],
+      "techniques": [
+        "web server scanning",
+        "misconfiguration detection"
+      ],
+      "docs": "https://github.com/sullo/nikto",
+      "templates": [
+        {
+          "label": "Standard scan",
+          "template": "nikto -h <target> -o <output>",
+          "note": "Very loud and signature-heavy; expect it in every WAF log."
+        },
+        {
+          "label": "HTTPS with tuning",
+          "template": "nikto -h <target> -ssl -Tuning 123bde -o <output>",
+          "note": "-Tuning limits the test classes and the runtime."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-h",
+          "what": "target host"
+        },
+        {
+          "flag": "-ssl",
+          "what": "force TLS"
+        },
+        {
+          "flag": "-Tuning",
+          "what": "restrict which test classes run"
+        }
+      ]
+    },
+    {
+      "name": "sqlmap",
+      "category": "web",
+      "purpose": "Automated SQL injection detection and exploitation across many DBMS and injection techniques.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "SQL injection",
+        "database enumeration",
+        "data extraction"
+      ],
+      "docs": "https://github.com/sqlmapproject/sqlmap/wiki/Usage",
+      "templates": [
+        {
+          "label": "Test a parameter",
+          "template": "sqlmap -u '<url>' --batch --level 2 --risk 1",
+          "note": "Start low; raising level/risk sends far more, far noisier payloads."
+        },
+        {
+          "label": "From a saved request",
+          "template": "sqlmap -r <file> --batch --dbs",
+          "note": "A saved request keeps auth headers/cookies intact — usually the reliable route."
+        },
+        {
+          "label": "Enumerate a database",
+          "template": "sqlmap -u '<url>' --batch -D <database> --tables",
+          "note": "Enumerate before dumping; dumping data may exceed your authorization."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--batch",
+          "what": "accept defaults, no prompts"
+        },
+        {
+          "flag": "--level / --risk",
+          "what": "test breadth / payload aggressiveness"
+        },
+        {
+          "flag": "-r",
+          "what": "read the request from a file"
+        },
+        {
+          "flag": "--technique",
+          "what": "restrict injection techniques (BEUSTQ)"
+        }
+      ]
+    },
+    {
+      "name": "wpscan",
+      "category": "web",
+      "purpose": "WordPress-specific scanner: core/plugin/theme versions, known vulnerabilities, and user enumeration.",
+      "phases": [
+        "enumeration",
+        "exploitation"
+      ],
+      "techniques": [
+        "CMS enumeration",
+        "plugin vulnerability detection",
+        "user enumeration"
+      ],
+      "docs": "https://github.com/wpscanteam/wpscan",
+      "templates": [
+        {
+          "label": "Enumerate plugins, themes, users",
+          "template": "wpscan --url <target> --enumerate vp,vt,u --output <output>",
+          "note": "vp/vt are the VULNERABLE plugins/themes only — much less noise."
+        },
+        {
+          "label": "With the vulnerability API",
+          "template": "wpscan --url <target> --enumerate vp --api-token <password>",
+          "note": "The token unlocks the vulnerability database; without it you get versions only."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--enumerate",
+          "what": "what to enumerate (vp, vt, u, ap, at)"
+        },
+        {
+          "flag": "--api-token",
+          "what": "WPScan vulnerability database token"
+        },
+        {
+          "flag": "--passwords",
+          "what": "password list for login brute force"
+        }
+      ]
+    },
+    {
+      "name": "dalfox",
+      "category": "web",
+      "purpose": "XSS scanner and parameter analyser — finds reflection points and verifies which are actually exploitable.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "XSS detection",
+        "parameter analysis",
+        "DOM verification"
+      ],
+      "docs": "https://github.com/hahwul/dalfox",
+      "templates": [
+        {
+          "label": "Scan a URL",
+          "template": "dalfox url '<url>' -o <output>",
+          "note": "Verifies reflection in a headless browser, so fewer false positives."
+        },
+        {
+          "label": "Scan a URL list",
+          "template": "dalfox file <file> --silence -o <output>",
+          "note": "Pair with gau/waybackurls output for breadth."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "url / file / pipe",
+          "what": "input mode"
+        },
+        {
+          "flag": "--custom-payload",
+          "what": "supply your own payload list"
+        },
+        {
+          "flag": "--blind",
+          "what": "blind-XSS callback endpoint"
+        }
+      ]
+    },
+    {
+      "name": "whatweb",
+      "category": "web",
+      "purpose": "Web technology fingerprinting — server, framework, CMS, analytics and version hints from responses.",
+      "phases": [
+        "recon",
+        "enumeration"
+      ],
+      "techniques": [
+        "technology fingerprinting",
+        "CMS identification"
+      ],
+      "docs": "https://github.com/urbanadventurer/WhatWeb",
+      "templates": [
+        {
+          "label": "Fingerprint a target",
+          "template": "whatweb -a 3 <target> --log-json=<output>",
+          "note": "-a 3 is aggressive; -a 1 is passive and quieter."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-a",
+          "what": "aggression level 1-4"
+        },
+        {
+          "flag": "--log-json",
+          "what": "machine-readable output"
+        }
+      ]
+    },
+    {
+      "name": "netexec",
+      "aliases": [
+        "nxc",
+        "crackmapexec",
+        "cme"
+      ],
+      "category": "network-ad",
+      "purpose": "Swiss-army knife for SMB/WinRM/LDAP/MSSQL across a network — auth checks, share and user enumeration, and post-auth actions. The maintained successor to CrackMapExec.",
+      "phases": [
+        "enumeration",
+        "exploitation",
+        "post-exploitation"
+      ],
+      "techniques": [
+        "SMB enumeration",
+        "credential validation",
+        "password spraying",
+        "share enumeration",
+        "lateral movement"
+      ],
+      "docs": "https://www.netexec.wiki/",
+      "templates": [
+        {
+          "label": "Unauthenticated SMB fingerprint",
+          "template": "netexec smb <target>",
+          "note": "Names the host, domain, OS and signing state before you have creds."
+        },
+        {
+          "label": "Validate credentials",
+          "template": "netexec smb <target> -u <user> -p <password>",
+          "note": "[+] means valid; (Pwn3d!) means local admin."
+        },
+        {
+          "label": "Password spray a user list",
+          "template": "netexec smb <target> -u <userlist> -p <password> --continue-on-success",
+          "note": "ONE password across many users. Check lockout thresholds first."
+        },
+        {
+          "label": "Enumerate shares",
+          "template": "netexec smb <target> -u <user> -p <password> --shares",
+          "note": "READ on an unexpected share is a common foothold."
+        },
+        {
+          "label": "Enumerate domain users",
+          "template": "netexec smb <target> -u <user> -p <password> --users",
+          "note": "Feeds kerbrute/hashcat later in the chain."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "smb / winrm / ldap / mssql",
+          "what": "the protocol module"
+        },
+        {
+          "flag": "--continue-on-success",
+          "what": "keep going after the first hit (spraying)"
+        },
+        {
+          "flag": "--shares / --users / --groups",
+          "what": "enumeration modules"
+        },
+        {
+          "flag": "-H",
+          "what": "authenticate with an NTLM hash instead of a password"
+        }
+      ]
+    },
+    {
+      "name": "enum4linux-ng",
+      "aliases": [
+        "enum4linux"
+      ],
+      "category": "network-ad",
+      "purpose": "Rewritten SMB/NetBIOS enumeration — users, groups, shares, password policy and OS detail, with structured output.",
+      "phases": [
+        "enumeration"
+      ],
+      "techniques": [
+        "SMB enumeration",
+        "user enumeration",
+        "password policy discovery",
+        "RID cycling"
+      ],
+      "docs": "https://github.com/cddmp/enum4linux-ng",
+      "templates": [
+        {
+          "label": "Full enumeration",
+          "template": "enum4linux-ng -A <target> -oJ <output>",
+          "note": "-A is everything; the password policy tells you if spraying is safe."
+        },
+        {
+          "label": "Authenticated enumeration",
+          "template": "enum4linux-ng -A -u <user> -p <password> <target>",
+          "note": "Credentials usually turn a thin null-session result into a full one."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-A",
+          "what": "all simple enumeration"
+        },
+        {
+          "flag": "-oJ / -oY",
+          "what": "JSON / YAML output"
+        },
+        {
+          "flag": "-R",
+          "what": "RID cycling for user discovery"
+        }
+      ]
+    },
+    {
+      "name": "smbmap",
+      "category": "network-ad",
+      "purpose": "Enumerates SMB shares and, critically, the permissions on them — read/write access per share at a glance.",
+      "phases": [
+        "enumeration"
+      ],
+      "techniques": [
+        "SMB share enumeration",
+        "permission discovery",
+        "file search"
+      ],
+      "docs": "https://github.com/ShawnDEvans/smbmap",
+      "templates": [
+        {
+          "label": "Null-session share list",
+          "template": "smbmap -H <target>",
+          "note": "Anonymous read on a share is a frequent initial foothold."
+        },
+        {
+          "label": "Authenticated share list",
+          "template": "smbmap -H <target> -u <user> -p <password>",
+          "note": "Shows READ/WRITE per share for that identity."
+        },
+        {
+          "label": "Recursive listing of a share",
+          "template": "smbmap -H <target> -u <user> -p <password> -r <file>",
+          "note": "Look for config files and backups before anything else."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-H",
+          "what": "target host"
+        },
+        {
+          "flag": "-r",
+          "what": "recursive directory listing"
+        },
+        {
+          "flag": "-A",
+          "what": "download files matching a pattern"
+        }
+      ]
+    },
+    {
+      "name": "kerbrute",
+      "category": "network-ad",
+      "purpose": "Kerberos pre-auth abuse: username enumeration and password spraying that do not generate normal logon failure events.",
+      "phases": [
+        "enumeration",
+        "exploitation"
+      ],
+      "techniques": [
+        "Kerberos user enumeration",
+        "password spraying",
+        "AS-REP discovery"
+      ],
+      "docs": "https://github.com/ropnop/kerbrute",
+      "templates": [
+        {
+          "label": "Enumerate valid usernames",
+          "template": "kerbrute userenum -d <domain> --dc <dc-ip> <userlist>",
+          "note": "Valid names come back without a failed-logon event on most configs."
+        },
+        {
+          "label": "Password spray",
+          "template": "kerbrute passwordspray -d <domain> --dc <dc-ip> <userlist> <password>",
+          "note": "One password, many users. Read the lockout policy first — this locks accounts."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "userenum / passwordspray / bruteuser",
+          "what": "the mode"
+        },
+        {
+          "flag": "-d",
+          "what": "AD domain"
+        },
+        {
+          "flag": "--dc",
+          "what": "domain controller to query"
+        }
+      ]
+    },
+    {
+      "name": "hydra",
+      "category": "network-ad",
+      "purpose": "Online credential brute force across many protocols (SSH, FTP, SMB, RDP, HTTP forms, and more).",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "credential brute force",
+        "password spraying",
+        "login form attack"
+      ],
+      "docs": "https://github.com/vanhauser-thc/thc-hydra",
+      "templates": [
+        {
+          "label": "SSH",
+          "template": "hydra -L <userlist> -P <passlist> -t 4 ssh://<target>",
+          "note": "Keep -t low: SSH rate-limits and high concurrency just gets you dropped."
+        },
+        {
+          "label": "HTTP POST form",
+          "template": "hydra -l <user> -P <passlist> <target> http-post-form '/login:username=^USER^&password=^PASS^:F=incorrect'",
+          "note": "The F= string must match the real failure text or every attempt reads as success."
+        },
+        {
+          "label": "SMB",
+          "template": "hydra -L <userlist> -p <password> smb://<target>",
+          "note": "One password across users is spraying — mind the lockout policy."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-l / -L",
+          "what": "single user / user list"
+        },
+        {
+          "flag": "-p / -P",
+          "what": "single password / password list"
+        },
+        {
+          "flag": "-t",
+          "what": "parallel tasks — lower is safer"
+        },
+        {
+          "flag": "-f",
+          "what": "stop at the first valid pair"
+        }
+      ]
+    },
+    {
+      "name": "ldapsearch",
+      "category": "network-ad",
+      "purpose": "Raw LDAP querying of a directory — the ground truth for AD objects, attributes and ACLs.",
+      "phases": [
+        "enumeration"
+      ],
+      "techniques": [
+        "LDAP enumeration",
+        "AD object discovery",
+        "attribute harvesting"
+      ],
+      "docs": "https://linux.die.net/man/1/ldapsearch",
+      "templates": [
+        {
+          "label": "Anonymous naming contexts",
+          "template": "ldapsearch -x -H ldap://<target> -s base namingcontexts",
+          "note": "The cheapest way to confirm LDAP and learn the base DN."
+        },
+        {
+          "label": "Authenticated user dump",
+          "template": "ldapsearch -x -H ldap://<target> -D '<user>@<domain>' -w <password> -b '<base-dn>' '(objectClass=user)'",
+          "note": "-b takes the base DN, e.g. DC=corp,DC=local."
+        },
+        {
+          "label": "Find Kerberoastable accounts",
+          "template": "ldapsearch -x -H ldap://<target> -D '<user>@<domain>' -w <password> -b '<base-dn>' '(&(objectClass=user)(servicePrincipalName=*))' sAMAccountName servicePrincipalName",
+          "note": "Service accounts with an SPN are the Kerberoasting candidates."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-x",
+          "what": "simple authentication"
+        },
+        {
+          "flag": "-D / -w",
+          "what": "bind DN / password"
+        },
+        {
+          "flag": "-b",
+          "what": "search base DN"
+        }
+      ]
+    },
+    {
+      "name": "bloodhound-python",
+      "aliases": [
+        "bloodhound"
+      ],
+      "category": "network-ad",
+      "purpose": "Remote AD collector producing the graph BloodHound analyses — sessions, ACLs, group nesting and delegation paths.",
+      "phases": [
+        "enumeration"
+      ],
+      "techniques": [
+        "AD graph collection",
+        "ACL enumeration",
+        "attack path discovery"
+      ],
+      "docs": "https://github.com/dirkjanm/BloodHound.py",
+      "templates": [
+        {
+          "label": "Full collection",
+          "template": "bloodhound-python -d <domain> -u <user> -p <password> -dc <dc-ip> -c All --zip",
+          "note": "-c All includes session data; DCOnly is far quieter if that matters."
+        },
+        {
+          "label": "DC-only collection",
+          "template": "bloodhound-python -d <domain> -u <user> -p <password> -dc <dc-ip> -c DCOnly --zip",
+          "note": "Reads only from the DC — no host-by-host touching."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-c",
+          "what": "collection method (All, DCOnly, Session, ACL…)"
+        },
+        {
+          "flag": "-dc",
+          "what": "domain controller"
+        },
+        {
+          "flag": "--zip",
+          "what": "bundle the JSON for import"
+        }
+      ]
+    },
+    {
+      "name": "hashcat",
+      "category": "credentials",
+      "purpose": "GPU-accelerated password recovery across hundreds of hash types, with rule, mask and hybrid attack modes.",
+      "phases": [
+        "exploitation",
+        "post-exploitation"
+      ],
+      "techniques": [
+        "hash cracking",
+        "rule-based attack",
+        "mask attack"
+      ],
+      "docs": "https://hashcat.net/wiki/",
+      "templates": [
+        {
+          "label": "Wordlist attack",
+          "template": "hashcat -m <hash-mode> -a 0 <hashfile> <wordlist>",
+          "note": "-m is the hash MODE (1000 NTLM, 13100 Kerberoast, 22000 WPA)."
+        },
+        {
+          "label": "Wordlist + rules",
+          "template": "hashcat -m <hash-mode> -a 0 <hashfile> <wordlist> -r /usr/share/hashcat/rules/best64.rule",
+          "note": "Rules are usually worth more than a bigger wordlist."
+        },
+        {
+          "label": "Mask attack",
+          "template": "hashcat -m <hash-mode> -a 3 <hashfile> '?u?l?l?l?l?d?d?d'",
+          "note": "For a known password pattern — much faster than brute force."
+        },
+        {
+          "label": "Show cracked",
+          "template": "hashcat -m <hash-mode> <hashfile> --show",
+          "note": "Reads the potfile; no cracking work is done."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-m",
+          "what": "hash type/mode number"
+        },
+        {
+          "flag": "-a",
+          "what": "attack mode (0 wordlist, 3 mask, 6/7 hybrid)"
+        },
+        {
+          "flag": "-r",
+          "what": "rule file"
+        },
+        {
+          "flag": "--show",
+          "what": "print already-cracked hashes"
+        }
+      ]
+    },
+    {
+      "name": "john",
+      "aliases": [
+        "john the ripper",
+        "jtr"
+      ],
+      "category": "credentials",
+      "purpose": "Password cracker with a large family of *2john converters that turn files (SSH keys, ZIP, KeePass, PDF) into crackable hashes.",
+      "phases": [
+        "exploitation",
+        "post-exploitation"
+      ],
+      "techniques": [
+        "hash cracking",
+        "format conversion",
+        "wordlist attack"
+      ],
+      "docs": "https://www.openwall.com/john/doc/",
+      "templates": [
+        {
+          "label": "Wordlist attack",
+          "template": "john --wordlist=<wordlist> <hashfile>",
+          "note": "Add --rules to mutate the wordlist."
+        },
+        {
+          "label": "Convert an SSH key, then crack",
+          "template": "ssh2john <file> > <output> && john --wordlist=<wordlist> <output>",
+          "note": "The *2john family covers zip2john, keepass2john, pdf2john and more."
+        },
+        {
+          "label": "Show cracked",
+          "template": "john --show <hashfile>",
+          "note": "Reads the pot file; no work is done."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--wordlist",
+          "what": "wordlist to use"
+        },
+        {
+          "flag": "--rules",
+          "what": "apply mangling rules"
+        },
+        {
+          "flag": "--format",
+          "what": "force the hash format"
+        }
+      ]
+    },
+    {
+      "name": "prowler",
+      "category": "cloud",
+      "purpose": "Cloud security posture assessment for AWS/Azure/GCP against CIS and many other compliance frameworks.",
+      "phases": [
+        "enumeration"
+      ],
+      "techniques": [
+        "cloud posture assessment",
+        "IAM review",
+        "compliance checks"
+      ],
+      "docs": "https://docs.prowler.com/",
+      "templates": [
+        {
+          "label": "Full AWS assessment",
+          "template": "prowler aws --output-directory <output>",
+          "note": "Read-only against the account the credentials belong to."
+        },
+        {
+          "label": "CIS benchmark only",
+          "template": "prowler aws --compliance cis_2.0_aws --output-directory <output>",
+          "note": "Narrower and much faster than the full check set."
+        },
+        {
+          "label": "Azure assessment",
+          "template": "prowler azure --az-cli-auth --output-directory <output>",
+          "note": "Uses your existing az CLI session."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "aws / azure / gcp / kubernetes",
+          "what": "the provider"
+        },
+        {
+          "flag": "--compliance",
+          "what": "run one compliance framework"
+        },
+        {
+          "flag": "--services",
+          "what": "limit to named services"
+        }
+      ]
+    },
+    {
+      "name": "scoutsuite",
+      "category": "cloud",
+      "purpose": "Multi-cloud auditing that collects configuration and renders a browsable HTML risk report.",
+      "phases": [
+        "enumeration"
+      ],
+      "techniques": [
+        "cloud configuration audit",
+        "attack surface review"
+      ],
+      "docs": "https://github.com/nccgroup/ScoutSuite/wiki",
+      "templates": [
+        {
+          "label": "AWS audit",
+          "template": "scout aws --report-dir <output>",
+          "note": "Read-only collection; the report is a static HTML tree."
+        },
+        {
+          "label": "Azure audit",
+          "template": "scout azure --cli --report-dir <output>",
+          "note": "Uses the logged-in az CLI identity."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "aws / azure / gcp",
+          "what": "the provider"
+        },
+        {
+          "flag": "--report-dir",
+          "what": "where the HTML report is written"
+        },
+        {
+          "flag": "--services",
+          "what": "limit which services are collected"
+        }
+      ]
+    },
+    {
+      "name": "trivy",
+      "category": "cloud",
+      "purpose": "Scanner for container images, filesystems and IaC — known CVEs, misconfiguration and exposed secrets.",
+      "phases": [
+        "enumeration"
+      ],
+      "techniques": [
+        "container CVE scanning",
+        "IaC misconfiguration",
+        "secret detection"
+      ],
+      "docs": "https://aquasecurity.github.io/trivy/",
+      "templates": [
+        {
+          "label": "Scan a container image",
+          "template": "trivy image <target> --severity HIGH,CRITICAL",
+          "note": "Pulls the image and reads it — nothing is run from inside it."
+        },
+        {
+          "label": "Scan a filesystem",
+          "template": "trivy fs <file> --scanners vuln,secret,misconfig",
+          "note": "Static: dependency CVEs, hardcoded secrets and IaC issues in one pass."
+        },
+        {
+          "label": "Scan IaC",
+          "template": "trivy config <file> --severity HIGH,CRITICAL",
+          "note": "Terraform/CloudFormation/Kubernetes manifests."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "image / fs / config / repo",
+          "what": "the target kind"
+        },
+        {
+          "flag": "--severity",
+          "what": "filter by severity"
+        },
+        {
+          "flag": "--scanners",
+          "what": "vuln, secret, misconfig, license"
+        }
+      ]
+    },
+    {
+      "name": "kube-hunter",
+      "category": "cloud",
+      "purpose": "Kubernetes cluster weakness hunter — probes for exposed components and known cluster attack paths.",
+      "phases": [
+        "recon",
+        "enumeration"
+      ],
+      "techniques": [
+        "Kubernetes enumeration",
+        "exposed component discovery"
+      ],
+      "docs": "https://github.com/aquasecurity/kube-hunter",
+      "templates": [
+        {
+          "label": "Remote scan",
+          "template": "kube-hunter --remote <target>",
+          "note": "Probes from outside the cluster."
+        },
+        {
+          "label": "Scan a CIDR",
+          "template": "kube-hunter --cidr <target>",
+          "note": "Confirm the range is in scope — this sweeps a network."
+        },
+        {
+          "label": "From inside a pod",
+          "template": "kube-hunter --pod",
+          "note": "Shows what a compromised pod can reach — the lateral view."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--remote",
+          "what": "scan a remote host"
+        },
+        {
+          "flag": "--cidr",
+          "what": "scan a network range"
+        },
+        {
+          "flag": "--active",
+          "what": "include active (intrusive) tests"
+        }
+      ]
+    },
+    {
+      "name": "ghidra",
+      "category": "binary",
+      "purpose": "Full reverse-engineering suite with a decompiler — static analysis of binaries across many architectures.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "static binary analysis",
+        "decompilation",
+        "vulnerability discovery"
+      ],
+      "docs": "https://ghidra-sre.org/",
+      "templates": [
+        {
+          "label": "Headless analysis",
+          "template": "analyzeHeadless <output> <project> -import <binary> -scriptPath <file>",
+          "note": "Static: the binary is disassembled and decompiled, never executed."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-import",
+          "what": "binary to import into the project"
+        },
+        {
+          "flag": "-postScript",
+          "what": "script to run after analysis"
+        },
+        {
+          "flag": "-scriptPath",
+          "what": "where to find scripts"
+        }
+      ]
+    },
+    {
+      "name": "radare2",
+      "aliases": [
+        "r2"
+      ],
+      "category": "binary",
+      "purpose": "Command-line reverse-engineering framework — disassembly, analysis, patching and debugging.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "static binary analysis",
+        "disassembly",
+        "binary patching"
+      ],
+      "docs": "https://book.rada.re/",
+      "templates": [
+        {
+          "label": "Analyse and list functions",
+          "template": "r2 -A -qc 'afl' <binary>",
+          "note": "Static analysis; -q exits after the command."
+        },
+        {
+          "label": "Disassemble main",
+          "template": "r2 -A -qc 'pdf @ main' <binary>",
+          "note": "pdf = print disassembly of a function."
+        },
+        {
+          "label": "List strings",
+          "template": "r2 -qc 'izz' <binary>",
+          "note": "izz covers the whole binary, not just the data section."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-A",
+          "what": "run full analysis on load"
+        },
+        {
+          "flag": "-qc",
+          "what": "run a command then quit"
+        },
+        {
+          "flag": "-d",
+          "what": "debug mode (this one DOES run the binary)"
+        }
+      ]
+    },
+    {
+      "name": "gdb",
+      "category": "binary",
+      "purpose": "The GNU debugger — dynamic analysis, crash triage and exploit development, usually with a plugin like pwndbg or GEF.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "dynamic analysis",
+        "crash triage",
+        "exploit development"
+      ],
+      "docs": "https://sourceware.org/gdb/current/onlinedocs/gdb/",
+      "templates": [
+        {
+          "label": "Inspect functions without running",
+          "template": "gdb -batch -ex 'info functions' <binary>",
+          "note": "-batch with info commands inspects the file; it does not run it."
+        },
+        {
+          "label": "Check binary protections",
+          "template": "gdb -batch -ex 'checksec' <binary>",
+          "note": "Needs pwndbg/GEF. NX/PIE/canary decide the exploitation route."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-batch",
+          "what": "run commands then exit, non-interactive"
+        },
+        {
+          "flag": "-ex",
+          "what": "a command to execute"
+        },
+        {
+          "flag": "-p",
+          "what": "attach to a running process"
+        }
+      ]
+    },
+    {
+      "name": "strings",
+      "category": "binary",
+      "purpose": "Extracts printable strings from a binary — the cheapest first look for URLs, paths, keys and version markers.",
+      "phases": [
+        "recon",
+        "exploitation"
+      ],
+      "techniques": [
+        "static string extraction",
+        "secret discovery"
+      ],
+      "docs": "https://linux.die.net/man/1/strings",
+      "templates": [
+        {
+          "label": "All strings",
+          "template": "strings -n 8 <binary>",
+          "note": "-n 8 cuts most of the noise; purely static."
+        },
+        {
+          "label": "Search for a marker",
+          "template": "strings <binary> | grep -i <pattern>",
+          "note": "Hardcoded hosts, keys and flags surface here first."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-n",
+          "what": "minimum string length"
+        },
+        {
+          "flag": "-e",
+          "what": "encoding (s, l, b, L, B)"
+        },
+        {
+          "flag": "-t",
+          "what": "print the file offset"
+        }
+      ]
+    }
+  ]
+}

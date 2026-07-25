@@ -109,6 +109,29 @@ What the scan does **not** touch:
 
 So the guard is structurally incapable of altering Channel-1 behaviour.
 
+### The other half: a grounded step's OWN foreign literals
+
+The leakage guard covers **model output**. It deliberately leaves a grounded step's
+commands alone — but those commands came from a KB entry written against somebody else's
+environment, so they carry foreign literals of their own. `substitute_target` handles
+what it can, and the rest is **flagged rather than guessed**:
+
+* **An example RANGE is rewritten.** `10.0.0.0/24` becomes the engagement's scope range
+  (`scope_cidr` reads the first valid CIDR out of the pasted scope), or the target host
+  when scope names no range. Only the private/lab prefixes the example-IP rule already
+  trusts, and only with a prefix length attached — `0.0.0.0/0`, `127.0.0.0/8`,
+  `169.254.0.0/16`, netmasks and version literals are left alone.
+* **A foreign host or AD domain is FLAGGED.** `MARVEL.local` has nothing to be rewritten
+  *to* — we may not know the target's domain at all. Guessing one is the worst available
+  option: a fabricated domain reads as though the step were ready. So it is reported on
+  the step as `foreign_refs`, and the UI renders *"⚠ not your target — references
+  «MARVEL.local» … verify or replace it for your target before running it."*
+
+Same posture as the leakage guard, and the same limit: this is **plan quality**. The
+executor's target/scope lock is what actually refuses a foreign host, whatever the
+displayed plan says — asserted directly in `test_target_substitution.py`, which also pins
+13 should-not-touch literals byte-for-byte so the rewrite cannot over-reach.
+
 Two things are deliberately *not* leaks: anything the operator named in the goal
 or the pasted scope (it is this engagement's own identifier), and public
 infrastructure — github, pypi, loopback, `0.0.0.0`, matched by parent domain too

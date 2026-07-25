@@ -165,6 +165,14 @@ export type AttackStep = {
    */
   target_adaptation?: string;
   /**
+   * HONESTY MARKER — hosts / AD domains still named in this step's commands that are
+   * NOT the engagement's target and could not be confidently rewritten (a KB command
+   * written for another environment: `MARVEL.local`, `192.168.1.10`). The step needs
+   * adjusting before it runs. Nothing is guessed in their place — a fabricated domain
+   * would be worse than a visible gap. Absent when nothing foreign is referenced.
+   */
+  foreign_refs?: string[];
+  /**
    * Optional branch hints (static, pre-execution). on_success = what this finding
    * unlocks / the next action; on_blocked = the pivot if it 403s or fails. Present
    * only where the model saw a real decision point.

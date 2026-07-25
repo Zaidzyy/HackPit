@@ -2088,6 +2088,34 @@ a.hp-card {
   letter-spacing: 0.02em;
 }
 
+/* "⚠ not your target" — a host/AD domain in this step's commands that belongs to some
+ * other environment and could NOT be confidently rewritten. Amber-warning tinted so it
+ * reads as a caution about the command, distinct from the accent-tinted adaptation note
+ * directly above. Never a substitution — the value stays visible exactly as it is. */
+.hp-ap-foreign {
+  margin: 4px 0 6px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--white);
+  background: color-mix(in srgb, #ff7a59 9%, transparent);
+  border-left: 2px solid color-mix(in srgb, #ff7a59 55%, transparent);
+  border-radius: 0 4px 4px 0;
+}
+.hp-ap-foreign-lead {
+  font-weight: 600;
+  margin-right: 6px;
+  color: #ff7a59;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.hp-ap-foreign-ref {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: #ff7a59;
+  word-break: break-all;
+}
+
 /* Static branch hints under a step: green "if it works →", amber "if blocked →".
  * Pre-execution decision-tree cues — small, quiet sub-lines. */
 .hp-ap-branches {

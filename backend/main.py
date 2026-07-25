@@ -630,6 +630,16 @@ class AttackStep(BaseModel):
         "verified, and it changes nothing about how the step runs — every command still "
         "clears the same executor gates.",
     )
+    foreign_refs: list[str] | None = Field(
+        default=None,
+        description="HONESTY MARKER. Hosts / AD domains still named in this step's commands "
+        "that are NOT this engagement's target and could not be confidently rewritten — a "
+        "KB command written for another environment (MARVEL.local, 192.168.1.10). The step "
+        "needs adjusting before it is run against your target. Nothing is ever guessed in "
+        "their place: a fabricated domain would be worse than a visible gap. Null when the "
+        "step's commands reference nothing foreign. Plan quality only — the executor's "
+        "target/scope lock is what actually refuses a foreign host.",
+    )
 
 
 class AttackPhase(BaseModel):

@@ -619,6 +619,90 @@ def substitute_target(cmd: str, target: str | None, scope: str | None = None) ->
     return out.replace(_CIDR_SENTINEL, replacement)
 
 
+# A foreign host / AD domain left in a command AFTER substitution has run. Unlike the
+# substitution patterns this one is NOT host-position-gated: an AD domain shows up as
+# `MARVEL.local/user:password`, which is nobody's idea of a host position, and the whole
+# point here is to notice it rather than to rewrite it.
+_FOREIGN_HOST_RE = re.compile(
+    r"(?<![\w.-])(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+" + _LAB_TLD + r""
+    r"|(?:[a-z0-9-]+\.)?example\.(?:com|org|net))(?![A-Za-z0-9.-])",
+    re.I,
+)
+
+
+def foreign_refs(cmd: str, target: str | None, scope: str | None = None) -> list[str]:
+    """Hosts, AD domains and addresses in a command that are NOT this engagement's.
+
+    Runs AFTER :func:`substitute_target`, so what it finds is precisely what could not be
+    rewritten: an AD domain we have no confident replacement for (we may simply not know
+    the target's domain), or an example address the substitution rules deliberately left
+    alone. We do NOT guess a value for these — a fabricated domain is worse than a visible
+    gap — and we do not silently leave them either. They are reported so the plan says
+    plainly that the step needs adjusting.
+
+    Deliberately errs toward reporting: a spurious flag costs one line of text, a missed
+    foreign host reads as though the step were ready to run.
+    """
+    if not cmd:
+        return []
+    host = _target_host(target).lower() if target else ""
+    bare = host.split(":", 1)[0]
+    net = None
+    if scope:
+        try:
+            import ipaddress
+
+            net = ipaddress.ip_network(scope, strict=False)
+        except ValueError:
+            net = None
+
+    out: list[str] = []
+
+    def _add(ref: str) -> None:
+        if ref.lower() in (host, bare) or ref in out:
+            return
+        out.append(ref)
+
+    for m in _FOREIGN_HOST_RE.finditer(cmd):
+        _add(m.group(0))
+    for m in _EXAMPLE_IP_RE.finditer(cmd):
+        addr = m.group(0).split(":", 1)[0]
+        if net is not None:
+            try:
+                import ipaddress
+
+                if ipaddress.ip_address(addr) in net:
+                    continue  # inside the engagement's own range — not foreign
+            except ValueError:
+                pass
+        _add(m.group(0))
+    return out
+
+
+def flag_foreign_refs(
+    phases: list[dict[str, Any]], target: str | None, scope: str | None = None
+) -> list[dict[str, Any]]:
+    """Annotate every step whose commands still name a foreign host/domain.
+
+    Additive: attaches ``foreign_refs`` and touches nothing else. Steps lifted from the
+    user's OWN writeup are skipped, for the same reason the Channel-2 leakage guard skips
+    them — that writeup is for THIS box, so its hostname is the target under another name,
+    not a foreign reference.
+    """
+    for phase in phases or []:
+        for step in phase.get("steps") or []:
+            if step.get("from_writeup"):
+                continue
+            refs: list[str] = []
+            for c in step.get("commands") or []:
+                for ref in foreign_refs(c.get("cmd") or "", target, scope):
+                    if ref not in refs:
+                        refs.append(ref)
+            if refs:
+                step["foreign_refs"] = refs[:4]
+    return phases
+
+
 def canonical_phase(entry: dict) -> str:
     """Map a KB entry to one of the five canonical phases."""
     meta = entry.get("meta") or {}
@@ -1806,6 +1890,9 @@ def compose(
             # defender's view alongside the operator's. Purely additive annotation.
             phases = detection_tagging.tag_phases(phases)
             arsenal_planner.tag_steps(_arsenal(), phases)  # which tool each step runs
+            # HONESTY MARKER: a foreign host/AD domain we could not confidently rewrite
+            # is reported on the step rather than guessed at or left silent.
+            phases = flag_foreign_refs(phases, target, scope)
             damaged = bool((wu.get("meta") or {}).get("source_damaged"))
             return {
                 "goal": goal,
@@ -1880,6 +1967,7 @@ def compose(
     # from the command's own program name. Additive annotation: it changes no command
     # and no grounded/ai_suggested label, and it is not a claim that the step is verified.
     arsenal_planner.tag_steps(_arsenal(), phases)
+    phases = flag_foreign_refs(phases, target, scope)
 
     return {
         "goal": goal,

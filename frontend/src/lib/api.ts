@@ -189,7 +189,10 @@ export type AttackStep = {
 
 /** The catalogued tool a step runs — see /arsenal. */
 export type ArsenalTag = {
+  /** The step's primary catalogued tool — the first one it runs. */
   tool: string;
+  /** Every catalogued tool the step runs, in command order. */
+  tools?: string[];
   category: string;
   purpose: string;
   /** KB entry documenting this tool, when one exists. */

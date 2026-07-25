@@ -129,17 +129,26 @@ def tag_steps(arsenal: Arsenal, phases: list[dict[str, Any]]) -> int:
     tagged = 0
     for phase in phases or []:
         for step in phase.get("steps") or []:
+            # EVERY catalogued tool the step runs, in command order. A step whose first
+            # command is uncatalogued (impacket-GetUserSPNs) and whose second is not
+            # (hashcat) would otherwise be described by the second alone, which reads as
+            # wrong next to the headline command. `tool` stays the first match — the
+            # primary — and `tools` says what else it runs.
+            found: list[Tool] = []
             for cmd in step.get("commands") or []:
                 tool = match_tool(arsenal, cmd.get("cmd") or "")
-                if tool is None:
-                    continue
-                step["arsenal"] = {
-                    "tool": tool.name,
-                    "category": tool.category,
-                    "purpose": tool.purpose,
-                    "kb_entry_id": tool.kb_entry_id,
-                    "docs": tool.docs,
-                }
-                tagged += 1
-                break
+                if tool is not None and tool.name not in [t.name for t in found]:
+                    found.append(tool)
+            if not found:
+                continue
+            primary = found[0]
+            step["arsenal"] = {
+                "tool": primary.name,
+                "tools": [t.name for t in found],
+                "category": primary.category,
+                "purpose": primary.purpose,
+                "kb_entry_id": primary.kb_entry_id,
+                "docs": primary.docs,
+            }
+            tagged += 1
     return tagged

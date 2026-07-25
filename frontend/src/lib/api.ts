@@ -912,3 +912,139 @@ export async function runKali(
   }
   return (await res.json()) as KaliResult;
 }
+
+// --- AD attack-path graph (see backend/adgraph) ---------------------------------
+// Read-only graph/parse/path/technique endpoints. Every abuse command a technique
+// returns is run ONLY through execCockpitStream (the gated executor) — approve-each,
+// engagement-scoped. Nothing here executes anything.
+
+export type ADNode = {
+  id: string;
+  type: "user" | "group" | "computer" | "domain" | "ou" | "gpo" | "container";
+  label: string;
+  high_value: boolean;
+  owned: boolean;
+  props: Record<string, unknown>;
+};
+
+export type ADCommand = { lang: string; cmd: string; truncated?: boolean };
+
+/** The KB-grounded abuse technique for one edge (same grounded/ai_suggested shape as the
+ *  kill-chain map). `commands[0]` is what the operator would send to the gated executor. */
+export type ADTechnique = {
+  kind: string;
+  effective_kind?: string;
+  title: string;
+  summary: string;
+  tool: string;
+  destructive: boolean;
+  grounded: boolean;
+  ai_suggested: boolean;
+  entry_id: string | null;
+  entry_title: string | null;
+  commands: ADCommand[];
+  why: string;
+};
+
+export type ADPathEdge = {
+  source: string;
+  target: string;
+  kind: string;
+  source_label: string;
+  target_label: string;
+  props: Record<string, unknown>;
+  technique?: ADTechnique;
+};
+
+export type ADPath = {
+  node_ids: string[];
+  edges: ADPathEdge[];
+  length: number;
+  cost: number;
+};
+
+export type ADPathResult = {
+  found: boolean;
+  path: ADPath | null;
+  alternatives: ADPath[];
+  reason: string | null;
+  target: string;
+  target_label: string;
+};
+
+export type ADGraph = {
+  domain: string | null;
+  nodes: ADNode[];
+  edges: {
+    source: string;
+    target: string;
+    kind: string;
+    abusable: boolean;
+    props: Record<string, unknown>;
+  }[];
+  stats: Record<string, number>;
+  warnings: string[];
+};
+
+export type ADIngestResult = {
+  graph_id: string;
+  domain: string | null;
+  stats: Record<string, number>;
+  warnings: string[];
+};
+
+/** Ingest a captured BloodHound collection (or the built-in GOAD-style sample) into a graph. */
+export const adIngest = (
+  body: {
+    session_id?: string | null;
+    engagement_id?: string | null;
+    collection?: unknown;
+    use_sample?: boolean;
+  },
+  signal?: AbortSignal
+) => postJSON<ADIngestResult>("/cockpit/ad/ingest", body, signal);
+
+export const adGetGraph = (graphId: string, signal?: AbortSignal) =>
+  getJSON<ADGraph>(`/cockpit/ad/graph/${encodeURIComponent(graphId)}`, signal);
+
+export const adLatest = (sessionId: string, signal?: AbortSignal) =>
+  getJSON<ADGraph & { graph_id: string }>(
+    `/cockpit/ad/latest?session_id=${encodeURIComponent(sessionId)}`,
+    signal
+  );
+
+/** Compute the route(s) to a high-value target (auto-picks Domain Admins when omitted),
+ *  with the KB-grounded abuse technique attached to each hop. */
+export const adComputePath = (
+  body: { graph_id: string; start: string; target?: string | null; with_techniques?: boolean },
+  signal?: AbortSignal
+) => postJSON<ADPathResult>("/cockpit/ad/path", body, signal);
+
+export const adTechnique = (
+  body: { graph_id: string; source: string; target: string; kind: string },
+  signal?: AbortSignal
+) => postJSON<ADTechnique>("/cockpit/ad/technique", body, signal);
+
+/** Build (do NOT run) the collector ExecRequest. The returned `request` is sent to
+ *  execCockpitStream to run through the gated executor (approve-each, scope-locked DC). */
+export type ADCollectPreview = {
+  request: ExecPayload & { engagement_id: string | null };
+  preview_argv: string[];
+  params: Record<string, unknown>;
+  note: string;
+};
+export const adCollectPreview = (
+  body: {
+    engagement_id: string;
+    session_id?: string | null;
+    domain: string;
+    username: string;
+    dc: string;
+    password?: string | null;
+    nthash?: string | null;
+    nameserver?: string | null;
+    collection_methods?: string;
+    dns_tcp?: boolean;
+  },
+  signal?: AbortSignal
+) => postJSON<ADCollectPreview>("/cockpit/ad/collect/preview", body, signal);

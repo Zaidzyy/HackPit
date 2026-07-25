@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { PageShell } from "./PageShell";
@@ -126,6 +127,9 @@ export function CockpitView() {
             Plot an attack path, then run it — approved, one command at a time,
             against the isolated lab.
           </p>
+          <Link href="/cockpit/ad" className="hp-cv-adlink">
+            🌐 AD attack-path graph — BloodHound → route to Domain Admin →
+          </Link>
         </header>
 
         <section className="hp-cv-map-section">

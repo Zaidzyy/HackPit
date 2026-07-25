@@ -58,6 +58,14 @@ _SYSTEM = (
     "- METHODOLOGY: describe ONLY the phases listed in the engagement data "
     "below, using their exact names and order. Do NOT add, rename, or invent "
     "phases (e.g. do not add a 'Post-Exploitation' phase if it is not listed).\n"
+    "- DETECTION FOOTPRINT: the system appends an authoritative, purple-team "
+    "'Detection footprint' block under each recorded run — the MITRE ATT&CK "
+    "technique, the telemetry it generated and the public detection rule that "
+    "would fire. Do NOT write that yourself, and do NOT contradict it. It "
+    "DESCRIBES what a defender would have seen; it is not evasion guidance, so "
+    "never suggest how the tester could have been quieter, avoided detection, or "
+    "evaded a rule. If you reference detectability at all, frame it for the "
+    "DEFENDER: what they should have seen, and whether they would have.\n"
     "Write the report with these sections as Markdown headings, in order:\n"
     "1. Executive Summary\n"
     "2. Scope & Target\n"
@@ -197,6 +205,124 @@ def _fence_for(content: str) -> str:
     return "`" * max(3, longest + 1)
 
 
+def _detection_block(run: dict) -> list[str]:
+    """The purple-team 'Detection footprint' block for one recorded run.
+
+    What a DEFENDER would have observed while this ran: the ATT&CK technique + tactic, the
+    telemetry it generated, the public SigmaHQ rule that would fire, and the loud-vs-quiet
+    rating. Written programmatically from the curated ATT&CK/SigmaHQ map — like the evidence
+    itself, it never passes through the model, so it cannot be mistranscribed or embellished.
+
+    GROUNDED ONLY (``allow_llm=False``). A report is an authoritative artefact: if the curated
+    map does not cover the command, this says so plainly rather than asserting a model's guess.
+
+    THE LINE: this block describes the footprint. It never says how to leave a smaller one.
+    """
+    try:
+        from detection.resolver import footprint_for_run
+        fp = footprint_for_run(run, allow_llm=False)
+    except Exception:
+        return []
+
+    out: list[str] = ["**Detection footprint** — what a defender would have observed:", ""]
+
+    if not fp.get("grounded"):
+        out.append(
+            "- Not in the curated ATT&CK/SigmaHQ map, so no footprint is asserted for this "
+            "command. Unmapped is not the same as untraceable — treat the footprint as unknown."
+        )
+        out.append("")
+        return out
+
+    techs = fp.get("techniques") or []
+    if techs:
+        parts = []
+        for t in techs:
+            tacs = ", ".join(tac["name"] for tac in t.get("tactics", []))
+            parts.append(f"[{t['id']}]({t['url']}) {t['name']}" + (f" ({tacs})" if tacs else ""))
+        out.append("- **ATT&CK:** " + "; ".join(parts))
+
+    loud = fp.get("loudness") or {}
+    if loud.get("level"):
+        why = (loud.get("why") or "").strip()
+        out.append(f"- **Signal:** {loud['level']}" + (f" — {why}" if why else ""))
+
+    if fp.get("blue_view"):
+        out.append(f"- **What blue sees:** {fp['blue_view']}")
+
+    for line in (fp.get("telemetry") or [])[:6]:
+        out.append(f"  - {line}")
+
+    sigma = fp.get("sigma") or []
+    if sigma:
+        out.append("- **Detections that would fire (SigmaHQ):**")
+        for r in sigma:
+            out.append(f"  - [{r['title']}]({r['url']}) — {r['level']} · `{r['id']}`")
+
+    if (fp.get("stealth") or {}).get("present"):
+        out.append(f"- **Note:** {fp['stealth']['note']}")
+
+    for sig in fp.get("signals") or []:
+        out.append(f"- **{sig['label']}:** {sig['note']}")
+
+    out.append("")
+    return out
+
+
+def build_detection_summary(session: dict) -> str:
+    """The engagement-level ATT&CK coverage roll-up — the report's purple-team header.
+
+    Turns the report into an artefact a blue team can act on: which techniques and tactics this
+    engagement exercised, how loud the loudest action was, and how much of it the curated map
+    could speak to. Grounded-only and model-free, like every other authoritative block.
+    """
+    try:
+        from detection import tagging
+    except Exception:
+        return ""
+
+    runs = _execution_runs(session)
+    if not runs:
+        return ""
+    tags = [tagging.tag_run(r) for r in runs]
+    summary = tagging.summarize(tags)
+    if not summary["techniques"]:
+        return ""
+
+    out: list[str] = [
+        "## Detection footprint (purple team)",
+        "",
+        "_What this engagement would have looked like from the defender's side. Every technique "
+        "below is mapped to MITRE ATT&CK and, where a public detection exists, to the SigmaHQ "
+        "rule that would fire; the per-run detail sits with each run in Evidence. This section "
+        "describes the footprint the testing left — it is not, and must not be read as, guidance "
+        "on avoiding detection._",
+        "",
+        f"- **Runs ATT&CK-tagged:** {summary['tagged']} of {summary['tagged'] + summary['untagged']}"
+        + (f" ({summary['untagged']} not in the curated map)" if summary["untagged"] else ""),
+        "- **Tactics exercised:** "
+        + ", ".join(
+            t["name"] + (f" ({t['also_known_as']})" if t.get("also_known_as") else "")
+            for t in summary["tactics"]
+        ),
+        f"- **Loudest action:** {summary['loudest']}" if summary["loudest"] else "",
+        "",
+        "| ATT&CK | Technique | Tactic(s) |",
+        "| --- | --- | --- |",
+    ]
+    for t in summary["techniques"]:
+        out.append(
+            f"| [{t['id']}]({t['url']}) | {t['name']} | {', '.join(t['tactic_names'])} |"
+        )
+    out.append("")
+    out.append(
+        "_A defender who sees none of the above for this window has a monitoring gap worth "
+        "closing; the telemetry named per run is where to start._"
+    )
+    out.append("")
+    return "\n".join(x for x in out if x is not None)
+
+
 def build_evidence_section(session: dict) -> str:
     """Construct the Evidence section programmatically — the source of truth.
 
@@ -272,6 +398,8 @@ def build_evidence_section(session: dict) -> str:
         out.append("")
         out.append(f"{of}\n{raw}\n{of}")
         out.append("")
+        # the purple-team flip on this run: what a defender would have seen while it ran
+        out.extend(_detection_block(run))
 
     if not any_ev:
         out.append("_No command output was captured for the completed steps._")
@@ -294,7 +422,11 @@ def _insert_evidence(md: str, session: dict) -> str:
     the model may have put right before it); otherwise inserts before the
     Remediation section; otherwise appends. Any stray markers are removed.
     """
-    section = build_evidence_section(session)
+    # The purple-team roll-up rides immediately ahead of Evidence: the ATT&CK coverage for the
+    # whole engagement, then the per-run detail inside each Evidence block. Both are built
+    # programmatically, so neither can be embellished by the model.
+    detection = build_detection_summary(session)
+    section = (detection + "\n" if detection else "") + build_evidence_section(session)
 
     if _EVIDENCE_MARKER in md:
         md = _MARKER_RE.sub(lambda _m: section, md, count=1)

@@ -1429,7 +1429,12 @@ def build_augment_prompt(
     covered: dict[str, list[str]],
     grouped: dict[str, list[dict]],
     thin: set[str],
+    context_block: str | None = None,
 ) -> str:
+    """Prompt for supplementing a writeup path. ``context_block`` is CHANNEL 2 —
+    here it is the METHODOLOGY background only (the writeup itself is already the
+    primary path, so re-injecting it would just invite duplicate steps). Empty
+    block → byte-for-byte the pre-Channel-2 prompt."""
     lines: list[str] = [f"GOAL: {goal}"]
     box_type = ctx.get("box_type")
     if box_type:
@@ -1464,6 +1469,8 @@ def build_augment_prompt(
             lines.append(f"- entry_id: {t['entry_id']}  ({t['title']})")
     if not any_lib:
         lines.append("(no close library matches — only add ai_suggested steps for real gaps.)")
+    if context_block:
+        lines.append(context_block)
     lines.append("")
     lines.append(
         "Return ONLY supplements that fill genuine gaps in the missing/thin phases "
@@ -1529,6 +1536,7 @@ def _augment_writeup(
     cfg: dict,
     profile: dict[str, Any] | None = None,
     adapt_facts: str | None = None,
+    context_block: str | None = None,
 ) -> list[dict[str, Any]]:
     """Best-effort, CONSERVATIVE supplement of the writeup path: only phases the
     writeup genuinely lacks or is very thin on (empty, or no runnable commands) may
@@ -1542,7 +1550,7 @@ def _augment_writeup(
     grouped = retrieve(by_id, goal, target_type, search_fn, ctx, profile)
     grouped = {p: t for p, t in grouped.items() if p in thin}  # offer library only for thin phases
     covered = {p["phase"]: [s["title"] for s in p["steps"]] for p in phases}
-    user = build_augment_prompt(goal, ctx, covered, grouped, thin)
+    user = build_augment_prompt(goal, ctx, covered, grouped, thin, context_block)
     raw = llm.chat(_AUGMENT_SYSTEM, user, cfg)
     parsed = llm.extract_json(raw)
     supp = _ground(parsed, by_id, target, adapt_facts)
@@ -1550,6 +1558,53 @@ def _augment_writeup(
     # substantively-covered phase gets nothing even if the model tried to add there.
     supp = [ph for ph in supp if ph["phase"] in thin]
     return _merge_phases(phases, supp)
+
+
+# --------------------------------------------------------------------------- #
+# CHANNEL 2 — CONTEXT sources for the prompt (never steps; see context_channel)
+# --------------------------------------------------------------------------- #
+def _channel2_sources(
+    by_id: dict[str, dict],
+    goal: str,
+    target_type: str | None,
+    search_fn: SearchFn,
+    profile: dict[str, Any] | None,
+    writeup_id: str | None = None,
+    include_writeup: bool = True,
+) -> list[dict[str, Any]]:
+    """Gather the background the composer reasons FROM: the matched writeup's
+    approach (when one is named and isn't already the path) + the methodology /
+    workflow docs for this goal.
+
+    ``include_writeup=False`` yields METHODOLOGY only — used in writeup mode,
+    where the writeup is already the primary path and re-injecting it would just
+    invite duplicate steps. Its id is still excluded from the methodology search
+    so it can't sneak back in on a title match.
+
+    Best-effort and bounded — a search failure or an empty KB yields [], which
+    makes Channel 2 a pure no-op. Nothing here affects step eligibility: the
+    writeup stays excluded from the step pool and a methodology doc is only ever
+    read, never emitted.
+    """
+    sources: list[dict[str, Any]] = []
+    if include_writeup and writeup_id and writeup_id in by_id:
+        wu_ctx = context_channel.writeup_context(by_id[writeup_id], goal)
+        if wu_ctx:
+            sources.append(wu_ctx)
+    try:
+        sources.extend(
+            context_channel.methodology_context(
+                by_id,
+                goal,
+                search_fn,
+                profile,
+                target_context=_TARGET_CONTEXT.get((target_type or "").lower(), ""),
+                exclude={writeup_id} if writeup_id else set(),
+            )
+        )
+    except Exception:  # noqa: BLE001 — background is optional; never fail a compose for it
+        pass
+    return sources
 
 
 # --------------------------------------------------------------------------- #
@@ -1608,10 +1663,16 @@ def compose(
         phases = build_writeup_path(wu, target)
         if phases:
             augmented = False
+            # CHANNEL 2 here is METHODOLOGY only — the writeup already IS the path.
+            ctx_sources = _channel2_sources(
+                by_id, goal, target_type, search_fn, profile,
+                writeup_id=wu["id"], include_writeup=False,
+            )
             try:  # best-effort supplements; the writeup stands alone on failure
                 merged = _augment_writeup(
                     phases, by_id, goal, target_type, ctx, target, search_fn, cfg,
                     profile, adapt_facts,
+                    context_channel.build_context_block(ctx_sources),
                 )
                 augmented = any(
                     s.get("from_writeup") is False
@@ -1654,11 +1715,10 @@ def compose(
     # background here (in mode 1 the writeup already IS the path, so injecting it
     # would be redundant). Channel 1's step pool is untouched: the writeup is
     # still excluded from grounding and can never become a step.
-    ctx_sources: list[dict[str, Any]] = []
-    if box_writeup and box_writeup["id"] in by_id:
-        wu_ctx = context_channel.writeup_context(by_id[box_writeup["id"]], goal)
-        if wu_ctx:
-            ctx_sources.append(wu_ctx)
+    ctx_sources = _channel2_sources(
+        by_id, goal, target_type, search_fn, profile,
+        writeup_id=box_writeup["id"] if box_writeup else None,
+    )
     context_block = context_channel.build_context_block(ctx_sources)
     user = build_user_prompt(
         goal, target_type, grouped, ctx, profile, scope_text, context_block

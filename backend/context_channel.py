@@ -23,12 +23,14 @@ the prompt is byte-for-byte what it was before Channel 2 existed.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Callable
 
 # --------------------------------------------------------------------------- #
 # token budget — the hard ceiling on injected background
 # --------------------------------------------------------------------------- #
 WRITEUP_CHARS = 2800        # one writeup excerpt
+METHODOLOGY_CHARS = 1200    # one methodology/workflow doc excerpt
+METHODOLOGY_DOCS = 2        # how many methodology docs are ever injected
 TOTAL_CONTEXT_CHARS = 6000  # whole Channel-2 block, all sources together
 
 _SECTION_CHARS = 900        # one excerpted section
@@ -155,6 +157,93 @@ def writeup_context(entry: dict, goal: str, cap: int = WRITEUP_CHARS) -> dict[st
 
 
 # --------------------------------------------------------------------------- #
+# CH2 — methodology / workflow CONTEXT (the flow, never a step)
+# --------------------------------------------------------------------------- #
+# The meta-docs Channel 1 keeps OUT of the step pool (or hard-deprioritizes as
+# broad references) because they are un-runnable process guidance: recon
+# methodology, pentest / bug-bounty workflow, threat modeling, the "how to
+# approach a machine" notes. Un-runnable is exactly why they make good CONTEXT —
+# they describe the flow and the bug-class prioritisation a plan should follow.
+# NB: "pentesting <something>" is deliberately NOT here — it would match every
+# HackTricks per-service page ("500/udp - Pentesting IPsec/IKE VPN"), which is a
+# technique, not a methodology. Only the explicit process words qualify.
+_METHODOLOGY_TITLE_RE = re.compile(
+    r"\b(?:methodolog(?:y|ies)|workflow|mindset|playbook|"
+    r"(?:machine|general|overall)\s+approach|attack\s?paths?|"
+    r"threat\s+model(?:ing)?|testing\s+checklist)\b",
+    re.I,
+)
+_METHODOLOGY_QUERY = "methodology workflow approach process phases prioritisation"
+
+
+def is_methodology_doc(entry: dict) -> bool:
+    """True when the entry is a METHODOLOGY / workflow / process doc.
+
+    This is a Channel-2 SELECTION predicate only. It decides what may be read as
+    background; it does not (and must not) feed step-eligibility — that stays
+    entirely with ``attack_path.is_step_eligible``.
+    """
+    if entry.get("category") == "methodology":
+        return True
+    return bool(_METHODOLOGY_TITLE_RE.search(entry.get("title") or ""))
+
+
+def methodology_context(
+    by_id: dict[str, dict],
+    goal: str,
+    search_fn: Callable[[str, int, str], list[dict]],
+    profile: dict[str, Any] | None = None,
+    target_context: str = "",
+    exclude: set[str] | None = None,
+    limit: int = METHODOLOGY_DOCS,
+    cap: int = METHODOLOGY_CHARS,
+) -> list[dict[str, Any]]:
+    """Retrieve the methodology/workflow docs that match this goal, as background.
+
+    Reuses the KB's existing hybrid search (same callable Channel 1 uses), then
+    keeps only methodology docs — so a technique can never arrive here, and a
+    methodology doc can never leave here as a step. Empty list when nothing
+    matches, which makes Channel 2 a no-op.
+    """
+    prof = profile or {}
+    bias = " ".join(prof.get("priority_bug_classes") or []) or target_context
+    query = " ".join(
+        x for x in (goal, bias, prof.get("target_class") or "", _METHODOLOGY_QUERY) if x
+    ).strip()
+    skip = exclude or set()
+
+    seen: dict[str, float] = {}
+    for hit in search_fn(query, 24, "hybrid"):
+        eid = hit.get("id")
+        if not eid or eid in skip or eid not in by_id:
+            continue
+        if not is_methodology_doc(by_id[eid]):
+            continue
+        score = float(hit.get("score") or 0.0)
+        if eid not in seen or score > seen[eid]:
+            seen[eid] = score
+
+    out: list[dict[str, Any]] = []
+    for eid, _score in sorted(seen.items(), key=lambda kv: -kv[1]):
+        e = by_id[eid]
+        text = excerpt(e.get("body_md") or "", goal, cap)
+        if not text:
+            continue
+        out.append(
+            {
+                "kind": "methodology",
+                "id": eid,
+                "title": e.get("title") or "",
+                "excerpt": text,
+                "chars": len(text),
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # the injected block
 # --------------------------------------------------------------------------- #
 _WRITEUP_HEADER = (
@@ -170,24 +259,44 @@ _WRITEUP_HEADER = (
 )
 
 
+_METHODOLOGY_HEADER = (
+    "METHODOLOGY — follow this flow and bug-class prioritisation when you "
+    "structure the plan. It shapes the ORDER and SHAPE of the path (recon → "
+    "enumeration → exploitation → privesc → post-exploitation, and which classes "
+    "to probe first for this kind of target). It is BACKGROUND, not content:\n"
+    "- Do NOT emit any of it as a step — it is process guidance, not something "
+    "the operator can run.\n"
+    "- Every step still comes from the technique library (cite entry_id) or is a "
+    "clearly-marked ai_suggested gap step."
+)
+
+
 def build_context_block(sources: list[dict[str, Any]]) -> str:
     """Render the Channel-2 sources as prompt background, under the total cap.
 
     Returns "" when there are no sources — the caller then appends nothing and
-    the prompt is unchanged (the no-op guarantee).
+    the prompt is unchanged (the no-op guarantee). Each KIND gets its header
+    once, and the shared ``TOTAL_CONTEXT_CHARS`` budget is spent in order, so a
+    long writeup can never crowd the window: it just leaves less for the rest.
     """
     if not sources:
         return ""
     lines: list[str] = []
     budget = TOTAL_CONTEXT_CHARS
+    headed: set[str] = set()
     for src in sources:
         if budget <= 0:
             break
         body = src["excerpt"][:budget]
-        if src["kind"] == "writeup":
+        if not body:
+            continue
+        if src["kind"] not in headed:
+            headed.add(src["kind"])
             lines.append("")
-            lines.append(_WRITEUP_HEADER)
-            lines.append(f"### writeup: {src['title']}")
+            lines.append(
+                _WRITEUP_HEADER if src["kind"] == "writeup" else _METHODOLOGY_HEADER
+            )
+        lines.append(f"### {src['kind']}: {src['title']}")
         lines.append(body)
         budget -= len(body)
     return "\n".join(lines)

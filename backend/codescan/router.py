@@ -172,7 +172,13 @@ def codescan_scan(req: ScanIn = Body(...)) -> dict[str, Any]:
     all_findings: list[fmod.Finding] = []
     ruleset = runner.resolve_ruleset(req.semgrep_config)
 
-    # --- Semgrep (required: it is the multi-language half) --------------------
+    # --- Semgrep (the multi-language half) ------------------------------------
+    # A crash on ONE unscannable file must NOT sink the whole scan. Semgrep is all-or-nothing
+    # on `--json` (a fatal parse/IO error yields empty stdout → ScanError), and some
+    # environments crash on a specific language (e.g. semgrep hitting an OSError on a .php file
+    # on Windows). So a ScanError degrades to a WARNING and the scan continues with whatever
+    # else ran — exactly like bandit. Only a truly ABSENT scanner (setup error) or a TIMEOUT
+    # (actionable: scan smaller) stays hard, because those are operational states, not a crash.
     try:
         raw = runner.run_semgrep(target, req.timeout_s, req.semgrep_config)
         all_findings.extend(fmod.from_semgrep(raw, target))
@@ -187,7 +193,10 @@ def codescan_scan(req: ScanIn = Body(...)) -> dict[str, Any]:
     except runner.ScanTimeout as exc:
         raise HTTPException(status_code=504, detail=str(exc)) from exc
     except runner.ScanError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        warnings.append(
+            f"semgrep did not complete: {exc} — findings may be missing (e.g. semgrep can "
+            "crash on a specific file/language on some platforms). Other scanners still ran."
+        )
 
     # --- Bandit (Python only, and never fatal) --------------------------------
     if req.use_bandit and runner.has_python(target):

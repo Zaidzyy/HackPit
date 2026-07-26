@@ -62,7 +62,9 @@ def test_ruleset_resolver() -> None:
 
 
 def test_semgrep_validates_the_bundle_when_present() -> None:
-    exe = shutil.which("semgrep")
+    # Resolve semgrep the SAME way the runner does — the venv Scripts dir first, then PATH —
+    # so this validates in the suite instead of skipping just because the venv isn't activated.
+    exe = runner.tool_path("semgrep") or shutil.which("semgrep")
     if not exe:
         print("  semgrep --validate: SKIPPED (semgrep not installed)")
         return

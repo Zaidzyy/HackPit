@@ -240,6 +240,30 @@ def test_live_scan_if_installed() -> None:
     print(f"  live semgrep scan flags a real defect with the bundled ruleset: PASS")
 
 
+def test_semgrep_crash_degrades_not_502() -> None:
+    """A semgrep CRASH (ScanError — e.g. it hits an OSError on a .php file on some Windows
+    builds) must NOT sink the whole scan. It degrades to a warning and the scan still returns,
+    exactly like a bandit failure. Regression for 'one unscannable file 502s everything'."""
+    import tempfile
+
+    from codescan import router as CR
+
+    def _boom(*a, **k):
+        raise runner.ScanError("boom: OSError [Errno 22] on v.php")
+
+    orig = runner.run_semgrep
+    runner.run_semgrep = _boom
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "note.txt").write_text("nothing to scan", encoding="utf-8")
+            out = CR.codescan_scan(CR.ScanIn(path=tmp, use_bandit=False))
+        assert "semgrep" not in out["tools_run"], "a crashed semgrep must not be listed as run"
+        assert any("semgrep did not complete" in w for w in out["warnings"]), out["warnings"]
+        print("  a semgrep crash degrades to a warning; the scan still returns (no 502): PASS")
+    finally:
+        runner.run_semgrep = orig
+
+
 if __name__ == "__main__":
     test_semgrep_normalisation()
     test_bandit_normalisation()
@@ -250,4 +274,5 @@ if __name__ == "__main__":
     test_kb_link_never_fabricates()
     test_report_is_faithful_and_caveated()
     test_live_scan_if_installed()
+    test_semgrep_crash_degrades_not_502()
     print("ALL :code scan tests pass")

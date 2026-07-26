@@ -367,8 +367,13 @@ query-time / config / ranking changes — **no KB re-ingest, no 15 MB rewrite, n
   (`rules/hackpit-languages.yaml`) — plus a **ruleset picker** (bundled / per-language, or a
   registry pack for the full online catalogue). Default scan loads the whole offline directory.
   Locked by `test_codescan_rules.py` (rules well-formed + 8-language coverage + `semgrep
-  --validate` where semgrep is present). *(Engagement export/import was considered and dropped
-  — the existing report generator already covers a shareable engagement dump.)*
+  --validate`, resolved from the venv the runner uses so it validates rather than skips). The
+  new rules were confirmed **valid** (semgrep `--validate`: 0 errors, 34 rules) and to **fire**
+  on real vulnerable samples (Java/Go/Ruby/C#). One robustness fix fell out of that check: on
+  some Windows builds semgrep itself *crashes* on a `.php` file, and the scan treated semgrep
+  as fatal — so a crash now **degrades to a warning** (the scan still returns with whatever
+  else ran, like bandit), instead of 502-ing the whole scan. *(Engagement export/import was
+  considered and dropped — the existing report generator already covers a shareable dump.)*
 
 ## Verification
 

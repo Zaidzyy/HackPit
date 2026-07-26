@@ -28,11 +28,15 @@ service, not in the image:
 |---|---|---|---|
 | `hackpit-kali-sandbox` (lab) | `sandbox` | `cap_drop: ALL` | none |
 | `hackpit-kali-open` (`:kali`) | `sandbox` | `cap_drop: ALL` | none |
-| `hackpit-engage-sandbox` | **root** | `ALL` dropped, `NET_RAW` + `NET_ADMIN` added | `/dev/net/tun` |
+| `hackpit-engage-sandbox` | **root** | `ALL` dropped, then Docker's default set + `NET_ADMIN` added | `/dev/net/tun` |
 
 Only the engagement sandbox is elevated, and it is the one that never runs unattended —
-every command on it is human-approved. `CAP_NET_BIND_SERVICE` is **not** granted, so tools
-that bind privileged ports (responder, ntlmrelayx on :53/:137/:445) still fail there.
+every command on it is human-approved. The `cap_add` list is written out in full in
+`docker-compose.yml` rather than achieved by deleting `cap_drop: ALL`: same result, but the
+privilege boundary is stated in the file instead of inherited from a Docker default. It
+covers raw sockets (`-sS`/`-sU`/`-O`, masscan, tcpdump), privileged-port binds (responder,
+ntlmrelayx, low-port listeners), VPN, and ordinary root file work including `apt-get`.
+`SYS_ADMIN`, `SYS_PTRACE`, `SYS_MODULE` and `SYS_TIME` are still withheld.
 
 ## Isolation model
 The shared network is declared `internal: true`, so Docker attaches **no gateway** —

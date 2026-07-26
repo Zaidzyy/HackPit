@@ -28,9 +28,11 @@ KALI_OPEN_CONTAINER = os.environ.get("HACKPIT_KALI_OPEN_CONTAINER", "hackpit-kal
 # NAT bridge it has FULL network reach — internet + LAN + host + cloud metadata. Nothing
 # bounds WHERE it can reach; the ONLY guard on a real-target run is HUMAN APPROVAL OF EVERY
 # COMMAND (explicit entry + approve-each + heuristic red-confirm; never hands-off). It also runs
-# PRIVILEGED (D3): root + NET_RAW + NET_ADMIN + /dev/net/tun, so SYN scans, tcpdump, raw sockets
-# and VPN work — it keeps cap_drop:ALL as the floor and adds back only those two capabilities,
-# plus no-new-privileges. It is NOT isolated, so it does NOT run assert_isolation_proven and
+# PRIVILEGED (D3): root + Docker's default capability set + NET_ADMIN + /dev/net/tun, so SYN
+# scans, tcpdump, raw sockets, privileged-port binds (responder/ntlmrelayx) and VPN all work.
+# cap_drop:ALL is still the floor and every granted capability is listed explicitly in
+# docker-compose.yml; SYS_ADMIN/SYS_PTRACE/SYS_MODULE/SYS_TIME are withheld, and
+# no-new-privileges stays on. It is NOT isolated, so it does NOT run assert_isolation_proven and
 # there is NO Wall-A gate to assert. Hardcoded (never a request field) so a request can't
 # redirect the exec elsewhere.
 ENGAGE_SANDBOX_CONTAINER = os.environ.get("HACKPIT_ENGAGE_CONTAINER", "hackpit-engage-sandbox")

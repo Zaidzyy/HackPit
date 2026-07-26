@@ -121,24 +121,48 @@ services:
     # Same image as the other two sandboxes; the elevation lives here in the runtime posture.
     #   user: root       — write access to root-owned files (appending /etc/hosts to point at a
     #                      DC is the day-one AD case). The image default is `sandbox`, uid 1000.
-    #   NET_RAW          — nmap -sS/-sU/-O, masscan, arp-scan, tcpdump, any raw socket. Without
-    #                      it nmap silently degrades to a -sT connect scan: slower AND louder.
-    #   NET_ADMIN        — bringing up the VPN tun interface and setting routes.
+    #   NET_ADMIN        — bringing up the VPN tun interface and setting routes. The ONLY
+    #                      capability here that Docker does not grant a root container already.
     #   /dev/net/tun     — the device openvpn needs for an HTB/PG/client VPN.
     #
-    # cap_drop: ALL still runs FIRST, so this is an explicit two-capability grant, not "root
-    # with the Docker default set" — verified: CapEff is exactly cap_net_admin,cap_net_raw.
-    # Two consequences worth knowing before you debug them at 2am:
-    #   * NO CAP_NET_BIND_SERVICE — responder / ntlmrelayx still cannot bind :53/:137/:445,
-    #     and no reverse shell can listen below port 1024. Add it deliberately if wanted.
-    #   * NO CAP_CHOWN/SETUID/DAC_OVERRIDE — so `apt-get install` inside a running engagement
-    #     sandbox will not work. Tools belong in Dockerfile.sandbox, which is the intent.
+    # The cap_add list below is Docker's DEFAULT root capability set plus NET_ADMIN, written out
+    # in full rather than achieved by deleting `cap_drop: ALL`. Same result, but the privilege
+    # boundary stays greppable: what this container can do is stated here, not inherited from a
+    # Docker default that could change. What each one buys that the two-capability version did not:
+    #   NET_RAW           nmap -sS/-sU/-O, masscan, arp-scan, tcpdump — any raw socket. Without
+    #                     it nmap silently degrades to a -sT connect scan: slower AND louder.
+    #   NET_BIND_SERVICE  responder / ntlmrelayx binding :53/:137/:445, and reverse shells
+    #                     listening below port 1024. Both were dead without it.
+    #   CHOWN, DAC_OVERRIDE, FOWNER, FSETID, SETUID, SETGID, SYS_CHROOT, MKNOD, SETFCAP,
+    #   SETPCAP, KILL, AUDIT_WRITE
+    #                     what `apt-get install` and ordinary root file work need. Without them
+    #                     root could not even traverse a directory it did not own.
+    #
+    # STILL NOT GRANTED, on purpose: SYS_ADMIN, SYS_PTRACE, SYS_MODULE, SYS_TIME. Nothing in the
+    # arsenal needs them, and they are the ones that turn a container escape into a host compromise.
+    #
+    # TRAP if you apt-install a tool at runtime here: Kali ships some binaries with FILE
+    # capabilities, and `no-new-privileges` makes the kernel refuse to exec them ("Operation not
+    # permitted"). Strip them the same way the image does — `setcap -r /path/to/binary`.
     user: root
     cap_drop:
       - ALL
     cap_add:
-      - NET_RAW
-      - NET_ADMIN
+      - NET_ADMIN          # the actual addition — VPN tun interface + routes
+      - NET_RAW            # raw sockets: -sS/-sU/-O, masscan, arp-scan, tcpdump
+      - NET_BIND_SERVICE   # responder/ntlmrelayx on :53/:137/:445; low-port listeners
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - FSETID
+      - SETUID
+      - SETGID
+      - SETFCAP
+      - SETPCAP
+      - SYS_CHROOT
+      - MKNOD
+      - KILL
+      - AUDIT_WRITE
     devices:
       - /dev/net/tun:/dev/net/tun
     security_opt:

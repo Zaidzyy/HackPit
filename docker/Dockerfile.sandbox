@@ -61,6 +61,7 @@ RUN apt-get update \
         subfinder httpx-toolkit amass \
         dnsrecon dnsenum fierce \
         sslscan testssl.sh \
+        assetfinder dnsx naabu hakrawler arjun paramspider \
     && rm -rf /var/lib/apt/lists/*
 
 # --- 4. Network / Active Directory (from Linux) ------------------------------
@@ -82,6 +83,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         metasploit-framework exploitdb \
         hydra john hashcat \
+        gdb trivy \
     && rm -rf /var/lib/apt/lists/*
 
 # --- 6. Pivoting / tunnelling / VPN ------------------------------------------
@@ -169,6 +171,26 @@ RUN git clone --depth 1 --branch "${NUCLEI_TEMPLATES_REF}" \
 # Suppress nuclei's startup update check — it has no egress at runtime and the warning
 # only adds noise to every transcript.
 ENV DISABLE_UPDATE_CHECK=true
+
+# --- 9b. Catalog-name aliases -------------------------------------------------
+# Three tools install under a binary name that differs from the name
+# backend/arsenal/tools.json calls them by. Without these, the startup reconciliation
+# check (D7) reports installed tools as missing and the planner's prompt block silently
+# loses them — the exact failure mode this whole image rebuild exists to end.
+#   arsenal name  ->  Kali binary
+#   testssl.sh        testssl
+#   certipy           certipy-ad
+#   bloodyAD          bloodyad
+# The `test -x` guards mean a future Kali rename breaks the BUILD rather than quietly
+# reintroducing a dangling alias.
+RUN set -e; \
+    for pair in "testssl.sh:testssl" "certipy:certipy-ad" "bloodyAD:bloodyad"; do \
+        alias_name="${pair%%:*}"; real="${pair#*:}"; \
+        target="$(command -v "$real")"; \
+        test -x "$target"; \
+        ln -sfn "$target" "/usr/local/bin/${alias_name}"; \
+    done; \
+    for n in testssl.sh certipy bloodyAD; do command -v "$n" >/dev/null; done
 
 # --- 10. Strip file capabilities (REQUIRED — do not remove) -------------------
 # Kali ships a few binaries with FILE capabilities so unprivileged desktop users get raw

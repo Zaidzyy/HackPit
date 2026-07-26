@@ -21,7 +21,7 @@ export type AccentSwatch = {
 // privesc/tools/…) lives inside the library, driven by the live /categories
 // counts — it does not belong in the top bar.
 export const NAV: NavItem[] = [
-  { key: "library", label: ":library", href: "/" },
+  // (:library is the home view — reached via the wordmark, so it is not a nav tile.)
   { key: "attack-paths", label: ":attack-paths", href: "/attack-path" },
   { key: "cockpit", label: ":cockpit", href: "/cockpit" },
   // ONE shell tile. `:kali` opens the real PTY (vim/top/msfconsole render). The sentinel

@@ -55,28 +55,30 @@ export function TopBar() {
         })}
       </nav>
 
-      <button
-        type="button"
-        className="hp-cmdk"
-        onClick={openPalette}
-        aria-label="Open search"
-      >
-        search {entryCount} entries <kbd>⌘</kbd>
-        <kbd>K</kbd>
-      </button>
+      <div className="hp-topbar-right">
+        <button
+          type="button"
+          className="hp-cmdk"
+          onClick={openPalette}
+          aria-label="Open search"
+        >
+          search {entryCount} entries <kbd>⌘</kbd>
+          <kbd>K</kbd>
+        </button>
 
-      <div className="hp-swatches">
-        {ACCENTS.map((sw) => (
-          <button
-            key={sw.hex}
-            type="button"
-            className="hp-sw"
-            title={sw.title}
-            aria-label={`accent: ${sw.title}`}
-            style={{ background: sw.hex }}
-            onClick={() => setAccent(sw.hex)}
-          />
-        ))}
+        <div className="hp-swatches">
+          {ACCENTS.map((sw) => (
+            <button
+              key={sw.hex}
+              type="button"
+              className="hp-sw"
+              title={sw.title}
+              aria-label={`accent: ${sw.title}`}
+              style={{ background: sw.hex }}
+              onClick={() => setAccent(sw.hex)}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );

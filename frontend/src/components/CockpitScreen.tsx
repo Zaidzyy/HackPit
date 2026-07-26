@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageShell } from "./PageShell";
 import { CockpitEngagement } from "./CockpitEngagement";
+import { CockpitState } from "./CockpitState";
 import {
   ApiError,
   attachCockpitStream,
@@ -144,6 +145,15 @@ export function CockpitScreen({
           case "rejected":
             push({ kind: "err", text: `✕ rejected [${ev.gate}] — ${ev.reason}` });
             break;
+          case "state": {
+            // What this run taught the engagement. The panel below re-pulls on engToken;
+            // this line makes the enrichment visible in the transcript itself.
+            const parts = Object.entries(ev.added)
+              .filter(([, n]) => n > 0)
+              .map(([kind, n]) => `${n} ${kind}`);
+            if (parts.length) push({ kind: "meta", text: `+ state: ${parts.join(", ")}` });
+            break;
+          }
           case "error":
             push({ kind: "err", text: `✕ ${ev.reason}` });
             break;
@@ -359,13 +369,20 @@ export function CockpitScreen({
           </div>
         </section>
 
-        {/* engagement — recorded runs + report (only for a composed path) */}
+        {/* engagement state (what we know) then the recorded runs + report */}
         {sessionId && (
-          <CockpitEngagement
-            key={sessionId}
-            sessionId={sessionId}
-            refreshToken={engToken}
-          />
+          <>
+            <CockpitState
+              key={`state-${sessionId}`}
+              sessionId={sessionId}
+              refreshToken={engToken}
+            />
+            <CockpitEngagement
+              key={sessionId}
+              sessionId={sessionId}
+              refreshToken={engToken}
+            />
+          </>
         )}
       </div>
   );

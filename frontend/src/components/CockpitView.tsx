@@ -8,6 +8,7 @@ import { CockpitAttackMap } from "./CockpitAttackMap";
 import { CockpitScreen } from "./CockpitScreen";
 import { CockpitLoop } from "./CockpitLoop";
 import { CockpitEngagement } from "./CockpitEngagement";
+import { CockpitState } from "./CockpitState";
 import { CockpitEngagementMode } from "./CockpitEngagementMode";
 import { ComposingLoader } from "./ComposingLoader";
 import { LLMSettingsModal } from "./LLMSettingsModal";
@@ -279,11 +280,18 @@ export function CockpitView() {
                   onRunRecorded={() => setEngToken((t) => t + 1)}
                 />
                 {sessionId && (
-                  <CockpitEngagement
-                    key={`eng-${sessionId}`}
-                    sessionId={sessionId}
-                    refreshToken={engToken}
-                  />
+                  <>
+                    <CockpitState
+                      key={`state-${sessionId}`}
+                      sessionId={sessionId}
+                      refreshToken={engToken}
+                    />
+                    <CockpitEngagement
+                      key={`eng-${sessionId}`}
+                      sessionId={sessionId}
+                      refreshToken={engToken}
+                    />
+                  </>
                 )}
               </>
             ) : (
@@ -320,6 +328,11 @@ export function CockpitView() {
                           setActiveStep(null);
                         }}
                         onRunRecorded={() => setEngToken((t) => t + 1)}
+                      />
+                      <CockpitState
+                        key={`state-${sessionId}`}
+                        sessionId={sessionId}
+                        refreshToken={engToken}
                       />
                       <CockpitEngagement
                         key={sessionId}

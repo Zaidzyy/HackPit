@@ -680,6 +680,20 @@ export type ExecEvent =
   | { type: "stderr"; line: string }
   | { type: "exit"; run_id: string; code: number | null; finished_at: string }
   | { type: "rejected"; gate: string; reason: string }
+  /** Emitted when a run's output was parsed into structured state — how many hosts /
+   *  services / endpoints / credentials / findings it added. Purely informational; the
+   *  panel uses it to know a refresh is worth doing. */
+  | {
+      type: "state";
+      run_id: string;
+      added: {
+        hosts: number;
+        services: number;
+        endpoints: number;
+        credentials: number;
+        findings: number;
+      };
+    }
   /** ENGAGEMENT only — recon-driven expansion. Hosts this run's output revealed, split by the
    *  authorized scope: `in_scope` joined the live allowed set, `out_of_scope` is surfaced
    *  read-only and never targetable. Adding a host approves nothing: every command against one
@@ -1781,6 +1795,116 @@ export type ToolReconciliation = {
 
 export const getToolReconciliation = (signal?: AbortSignal) =>
   getJSON<ToolReconciliation>("/tools", signal);
+
+// --- structured engagement state (Phase 2) --------------------------------------- //
+
+/** Something addressable. */
+export type StateHost = {
+  address: string;
+  hostname: string;
+  os: string;
+  status: string;
+  source_run_id: string | null;
+  first_seen: string;
+  last_seen: string;
+};
+
+/** Something listening on a host. */
+export type StateService = {
+  address: string;
+  port: number;
+  proto: string;
+  name: string;
+  product: string;
+  version: string;
+  state: string;
+  banner: string;
+  source_run_id: string | null;
+};
+
+/** Something reachable over HTTP. */
+export type StateEndpoint = {
+  url: string;
+  method: string;
+  status: number | null;
+  title: string;
+  length: number | null;
+  tech: string;
+  params: string[];
+  source_run_id: string | null;
+};
+
+/** Something you can authenticate with. `secret` is the real value — see the panel's
+ *  reveal control; it is masked until the operator asks for it. */
+export type StateCredential = {
+  kind: string;
+  principal: string;
+  domain: string;
+  secret: string;
+  validated: boolean | null;
+  note: string;
+  source_run_id: string | null;
+};
+
+/** Something that is wrong. */
+export type StateFinding = {
+  title: string;
+  severity: string;
+  target: string;
+  evidence: string;
+  tool: string;
+  reference: string;
+  fingerprint: string;
+  source_run_id: string | null;
+};
+
+/** One node of the Pentest Task Tree. `task_id` is a dotted path: "1", "1.2", "1.2.3". */
+export type StateTask = {
+  task_id: string;
+  title: string;
+  status: "todo" | "done" | "n/a";
+  why: string;
+  evidence_run_id: string | null;
+  depth: number;
+  parent_id: string | null;
+};
+
+export type SessionState = {
+  counts: {
+    hosts: number;
+    services: number;
+    endpoints: number;
+    credentials: number;
+    findings: number;
+  };
+  hosts: StateHost[];
+  services: StateService[];
+  endpoints: StateEndpoint[];
+  credentials: StateCredential[];
+  findings: StateFinding[];
+  tasks: StateTask[];
+  task_progress: { total: number; todo: number; done: number; na: number };
+};
+
+export const getSessionState = (sessionId: string, signal?: AbortSignal) =>
+  getJSON<SessionState>(
+    `/sessions/${encodeURIComponent(sessionId)}/state`,
+    signal
+  );
+
+/** Seed the task tree from the composed plan's phases. Idempotent server-side: a session
+ *  that already has tasks is left alone, so this can never wipe recorded progress. */
+export async function seedSessionTasks(
+  sessionId: string,
+  signal?: AbortSignal
+): Promise<{ tasks: StateTask[] }> {
+  const res = await fetch(
+    `${API_URL}/sessions/${encodeURIComponent(sessionId)}/state/tasks/seed`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, signal }
+  );
+  if (!res.ok) throw new ApiError(res.status, `Could not seed the task tree (${res.status}).`);
+  return (await res.json()) as { tasks: StateTask[] };
+}
 
 export type ArsenalResponse = {
   total: number;

@@ -374,6 +374,14 @@ query-time / config / ranking changes — **no KB re-ingest, no 15 MB rewrite, n
   as fatal — so a crash now **degrades to a warning** (the scan still returns with whatever
   else ran, like bandit), instead of 502-ing the whole scan. *(Engagement export/import was
   considered and dropped — the existing report generator already covers a shareable dump.)*
+- **UI cleanup (Frontend).** Small polish from a working session: the two shell tiles were
+  merged to **one `:kali` tile that opens the real PTY** (`/terminal`) — full-screen tools
+  render from the everyday shell, while the sentinel "transcript shell" (clean per-command
+  records) is preserved off-nav at `/kali`; both backends and their containment tests stay
+  intact. The **phishing** category is now surfaced on the front-page grid (its KB entries
+  already existed; forensics/ics/supply-chain stay hidden). The **top nav** dropped the
+  redundant `:library` tile (home is the wordmark), the search field was widened to a proper
+  one-line field, and the nav is centered in the bar. All display-only; no backend touched.
 
 ## Verification
 

@@ -1503,6 +1503,25 @@ export type DetectionSignal = {
   techniques: string[];
 };
 
+/**
+ * The OFFENSIVE half (D10) — the operator-side counterpart to the detection footprint.
+ * Present only when the footprint was requested with `include_opsec`, and only for a
+ * command the curated map covers (or, ai_suggested, one the model could read). Its
+ * `still_recorded` is always populated — the note is honest about its own limits.
+ */
+export type DetectionOpsec = {
+  grounded: boolean;
+  ai_suggested: boolean;
+  /** What specifically generates the signal. */
+  loud_because: string;
+  /** Quieter tradecraft / knobs. */
+  quieter: string[];
+  /** What logs it anyway, even done the quieter way. Never empty. */
+  still_recorded: string;
+  /** What the quieter path costs — time, reliability, coverage. */
+  tradeoff: string;
+};
+
 /** The full defender's-eye view of one command. */
 export type DetectionFootprint = {
   command: string;
@@ -1528,6 +1547,8 @@ export type DetectionFootprint = {
   sources: Record<string, string>;
   run_id?: string;
   mode?: string;
+  /** The offensive half — only when requested and available; null otherwise. */
+  opsec?: DetectionOpsec | null;
 };
 
 export type DetectionSources = {
@@ -1569,7 +1590,8 @@ export type DetectionRunsOut = {
   };
 };
 
-/** The footprint for one command. `allow_llm: false` gives a purely grounded answer. */
+/** The footprint for one command. `allow_llm: false` gives a purely grounded answer.
+ *  `include_opsec` (D10) additionally attaches the offensive `opsec` block. */
 export const detectionFootprint = (
   body: {
     command?: string;
@@ -1577,6 +1599,7 @@ export const detectionFootprint = (
     argv?: string;
     context?: string;
     allow_llm?: boolean;
+    include_opsec?: boolean;
   },
   signal?: AbortSignal
 ) => postJSON<DetectionFootprint>("/detection/footprint", body, signal);
@@ -1585,11 +1608,12 @@ export const detectionFootprint = (
 export const detectionFootprintStep = (
   step: AttackStep,
   allowLlm = true,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  includeOpsec = false
 ) =>
   postJSON<DetectionFootprint>(
     "/detection/footprint/step",
-    { step, allow_llm: allowLlm },
+    { step, allow_llm: allowLlm, include_opsec: includeOpsec },
     signal
   );
 

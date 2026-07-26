@@ -20,13 +20,14 @@ import {
  * tactic, the telemetry the action generates, the public SigmaHQ rule that would fire on it,
  * and how loud it is.
  *
- * THE LINE — hold it when editing this file. The panel DESCRIBES detection. It does not, and
- * must never, teach evasion. "This is loud / here is the event it throws / here is the rule that
- * catches it" is the whole point. "Here is how to make it quieter / evade that rule / blind that
- * sensor" is out of scope and does not exist here. The loud-vs-quiet rating is an AWARENESS
- * indicator, and on the blue side a COVERAGE one: "quiet" means the defender probably cannot see
- * it yet — a gap for them to close, never a lane for the operator. The backend enforces the same
- * rule in code (detection/resolver.py) and refuses copy that drifts.
+ * TWO CHANNELS (D10). The BLUE channel — everything above the foot — DESCRIBES detection and
+ * nothing else: "this is loud / here is the event it throws / here is the rule that catches it".
+ * That copy is guarded in the backend (detection/resolver.py) and cannot drift into evasion. The
+ * separate, opt-in OPSEC channel is the operator-side counterpart CRTP examines: the quieter
+ * tradecraft and — always — what STILL records it. It is a distinct section with its own accent,
+ * never mixed into the blue copy, and it never advises disabling or tampering with a sensor
+ * (its own backend guard rejects that). The loud-vs-quiet rating is an AWARENESS indicator, and
+ * on the blue side a COVERAGE one: "quiet" means the defender probably cannot see it yet.
  *
  * Read-only throughout: nothing here executes, approves, or changes a gate.
  */
@@ -208,6 +209,10 @@ export function DetectionDrawer({
 }) {
   const [fp, setFp] = useState<DetectionFootprint | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The OPSEC channel (D10) is opt-in and fetched separately so the blue view above is
+  // never blocked on it: click "red-team view" and only then does the offensive half load.
+  const [opsec, setOpsec] = useState<DetectionFootprint["opsec"] | null>(null);
+  const [opsecState, setOpsecState] = useState<"idle" | "loading" | "empty" | "done">("idle");
 
   const key =
     source.kind === "run"
@@ -237,6 +242,28 @@ export function DetectionDrawer({
     // `key` fingerprints the source; re-fetch when it changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
+
+  // Reset the OPSEC channel whenever the source changes — it belongs to this command only.
+  useEffect(() => {
+    setOpsec(null);
+    setOpsecState("idle");
+  }, [key]);
+
+  function loadOpsec() {
+    if (!fp?.argv || opsecState === "loading") return;
+    setOpsecState("loading");
+    const ctrl = new AbortController();
+    detectionFootprint({ argv: fp.argv, include_opsec: true }, ctrl.signal)
+      .then((v) => {
+        if (v.opsec) {
+          setOpsec(v.opsec);
+          setOpsecState("done");
+        } else {
+          setOpsecState("empty");
+        }
+      })
+      .catch(() => setOpsecState("empty"));
+  }
 
   return (
     <motion.section
@@ -398,9 +425,8 @@ export function DetectionDrawer({
           {fp.why && <p className="hp-det-why">{fp.why}</p>}
 
           <p className="hp-det-foot">
-            This describes the footprint from the defender’s side — the technique, the telemetry
-            and the rule that catches it. It is not evasion guidance, and there is no “make this
-            quieter” here by design.
+            The section above describes the footprint from the defender’s side — the technique, the
+            telemetry and the rule that catches it.
             {fp.sources?.attack && (
               <span className="hp-det-attr">
                 {" "}
@@ -408,6 +434,76 @@ export function DetectionDrawer({
               </span>
             )}
           </p>
+
+          {/* ---- OPSEC (D10): the offensive half, opt-in, visually distinct ---- */}
+          {opsecState === "idle" && (
+            <button type="button" className="hp-det-opsec-toggle" onClick={loadOpsec}>
+              <span className="hp-det-opsec-ic" aria-hidden>
+                ⚑
+              </span>
+              show the red-team OPSEC view
+            </button>
+          )}
+          {opsecState === "loading" && (
+            <p className="hp-det-loading">reading the operator’s view…</p>
+          )}
+          {opsecState === "empty" && (
+            <p className="hp-det-nosigma">
+              No curated OPSEC note for this command — the offensive half is written for the
+              command families in the map.
+            </p>
+          )}
+          {opsecState === "done" && opsec && (
+            <section className="hp-det-opsec" aria-label="OPSEC — red-team view">
+              <div className="hp-det-opsec-head">
+                <span className="hp-det-opsec-kicker">
+                  <span className="hp-det-opsec-ic" aria-hidden>
+                    ⚑
+                  </span>
+                  OPSEC · the operator’s view
+                </span>
+                <span
+                  className={opsec.grounded ? "hp-det-badge is-grounded" : "hp-det-badge is-ai"}
+                >
+                  {opsec.grounded ? "curated" : "ai-suggested · verify"}
+                </span>
+              </div>
+
+              {opsec.loud_because && (
+                <p className="hp-det-opsec-loud">
+                  <strong>Loud because:</strong> {opsec.loud_because}
+                </p>
+              )}
+
+              {opsec.quieter.length > 0 && (
+                <div className="hp-det-block">
+                  <h4 className="hp-det-h">quieter approach</h4>
+                  <ul className="hp-det-opsec-list">
+                    {opsec.quieter.map((q, i) => (
+                      <li key={i}>{q}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* The honesty invariant — always present, given emphasis. */}
+              <p className="hp-det-opsec-recorded">
+                <strong>Still recorded:</strong> {opsec.still_recorded}
+              </p>
+
+              {opsec.tradeoff && (
+                <p className="hp-det-opsec-tradeoff">
+                  <strong>Tradeoff:</strong> {opsec.tradeoff}
+                </p>
+              )}
+
+              <p className="hp-det-foot">
+                This is the authorized red-team counterpart to the footprint above — the quieter
+                tradecraft and what still catches it. It never disables or tampers with a sensor;
+                HackPit describes, and you still approve and run every command.
+              </p>
+            </section>
+          )}
         </>
       )}
     </motion.section>

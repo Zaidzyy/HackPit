@@ -59,6 +59,12 @@ class FootprintIn(BaseModel):
         "defender's view and mark the result ai_suggested. Set false for a purely grounded "
         "answer (an uncatalogued command then returns an explicit 'unknown' footprint).",
     )
+    include_opsec: bool = Field(
+        False,
+        description="Also attach the OFFENSIVE half (D10): an `opsec` block with quieter "
+        "tradecraft and — mandatorily — what still records the activity. Off by default; the "
+        "blue-team fields are identical whether or not this is set.",
+    )
 
 
 class StepFootprintIn(BaseModel):
@@ -66,6 +72,7 @@ class StepFootprintIn(BaseModel):
 
     step: dict[str, Any] = Field(description="An AttackStep-shaped object (id/title/commands).")
     allow_llm: bool = True
+    include_opsec: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -81,6 +88,7 @@ def detection_sources() -> dict[str, Any]:
         "specs": len(catalog.SPECS),
         "sigma_rules": len(catalog.SIGMA),
         "arg_signals": len(catalog.ARG_SIGNALS),
+        "opsec_notes": len(catalog.OPSEC),
         "loudness_scale": [
             {"level": lvl, "score": score, "meaning": catalog.LOUDNESS_MEANING.get(lvl, "")}
             for lvl, score in sorted(catalog.LOUDNESS_SCALE.items(), key=lambda kv: kv[1])
@@ -88,10 +96,16 @@ def detection_sources() -> dict[str, Any]:
         "tactic_aliases": attck.TACTIC_ALIASES,
         "the_line": (
             "This panel DESCRIBES detection from the defender's side: the technique, the "
-            "telemetry it generates, the rule that would fire and how loud it is. It does not "
-            "perform, recommend or teach evasion — there is no 'make this quieter' path here, "
-            "by design. A 'quiet' rating marks a gap in the defender's coverage, not a lane for "
-            "the operator."
+            "telemetry it generates, the rule that would fire and how loud it is. The OPSEC "
+            "channel adds the authorized red-team counterpart — the quieter approach and, "
+            "always, what still records it. Neither performs evasion or attacks the defender's "
+            "sensors; HackPit describes, and a human still approves and runs every command."
+        ),
+        "opsec_line": (
+            "The OPSEC channel is the offensive half (D10): for a command already in the map, "
+            "what makes it loud, the quieter tradecraft, and — mandatorily — the telemetry that "
+            "still records it. It never advises disabling, clearing or tampering with a sensor; "
+            "that is a different, louder act, not operating quietly."
         ),
         "read_only": True,
     }
@@ -101,16 +115,18 @@ def detection_sources() -> dict[str, Any]:
 def detection_footprint(req: FootprintIn) -> dict[str, Any]:
     """The detection footprint for one command. Read-only annotation; runs nothing."""
     if req.argv:
-        return footprint_for_argv(req.argv, context=req.context, allow_llm=req.allow_llm)
+        return footprint_for_argv(req.argv, context=req.context, allow_llm=req.allow_llm,
+                                  include_opsec=req.include_opsec)
     if not req.command.strip():
         raise HTTPException(status_code=422, detail="provide `command` or `argv`")
-    return footprint(req.command, req.args, context=req.context, allow_llm=req.allow_llm)
+    return footprint(req.command, req.args, context=req.context, allow_llm=req.allow_llm,
+                     include_opsec=req.include_opsec)
 
 
 @router.post("/footprint/step")
 def detection_footprint_step(req: StepFootprintIn) -> dict[str, Any]:
     """The detection footprint for an attack-path step (annotates its first command)."""
-    return footprint_for_step(req.step, allow_llm=req.allow_llm)
+    return footprint_for_step(req.step, allow_llm=req.allow_llm, include_opsec=req.include_opsec)
 
 
 @router.get("/footprint/run/{run_id}")
@@ -207,6 +223,16 @@ def detection_catalog() -> dict[str, Any]:
                     {"id": r.id, "title": r.title, "url": r.url, "level": r.level}
                     for r in catalog.sigma_rules(s.sigma)
                 ],
+                # The offensive half (D10), when this family has a curated OPSEC note.
+                "opsec": (
+                    {
+                        "loud_because": n.loud_because,
+                        "quieter": list(n.quieter),
+                        "still_recorded": n.still_recorded,
+                        "tradeoff": n.tradeoff,
+                    }
+                    if (n := catalog.opsec_for(s.key)) else None
+                ),
             }
             for s in catalog.SPECS.values()
         ],

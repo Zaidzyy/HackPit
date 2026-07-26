@@ -362,6 +362,155 @@ def _from_llm(command: str, args: list[str], parsed: dict) -> dict[str, Any] | N
 
 
 # --------------------------------------------------------------------------- #
+# THE OFFENSIVE HALF (D10) — the OPSEC channel, kept strictly separate
+# --------------------------------------------------------------------------- #
+# This is the ONLY place in the package that is allowed to speak about being quieter,
+# and it is a SEPARATE channel from the detection footprint. Two rules keep the blue
+# view uncontaminated:
+#
+#   1. `_evasion_prescription` / `assert_describes_not_prescribes` still run over the
+#      DETECTION fields, unchanged. Nothing here relaxes that. The blue view is
+#      guaranteed identical to before this feature.
+#   2. OPSEC content lives only under the `opsec` key. It never merges into
+#      blue_view / telemetry / why / signals. `assert_opsec_is_separate` asserts an
+#      opsec block carries the honesty invariant and does not leak into detection.
+#
+# The honesty invariant, mirrored from the blue side: every OPSEC block MUST carry a
+# non-empty `still_recorded`. There is no "and now it's invisible" — a quieter path
+# that named nothing that still logs it would be an evasion how-to, which this is not.
+_OPSEC_LLM_SYSTEM = """\
+You are a red-team OPSEC advisor writing the operator-facing half of a purple-team report, for
+a security test the operator is AUTHORIZED to run. You are given one command. The blue-team
+detection footprint is written separately; your job is the honest tradecraft counterpart.
+
+Answer with JSON and nothing else:
+{
+  "loud_because": "<the specific thing about this command that generates the signal, one sentence>",
+  "quieter": ["<a concrete quieter approach or knob, e.g. 'rate-limit and add jitter'>"],
+  "still_recorded": "<what logs this ANYWAY even done the quieter way — REQUIRED, one-two sentences>",
+  "tradeoff": "<what the quieter path costs: time, reliability, coverage>"
+}
+
+RULES — absolute:
+* `still_recorded` is MANDATORY and must be substantive. The honest point of this note is that
+  against logging that is actually enabled there is no free lunch. If a quieter approach truly
+  escapes ALL telemetry you must still name what a defender could turn on to catch it.
+* Advise on tradecraft, not on disabling, tampering with or destroying the defender's telemetry.
+  "Turn off Sysmon / clear the log / kill the EDR" is out of scope — that is attacking the
+  sensor, not operating quietly, and the answer will be rejected.
+* No detection rule names or IDs. No invented ATT&CK IDs.
+* Concrete and specific to THIS command. No generic "be careful" filler.
+"""
+
+# Attacking the sensor itself is not OPSEC tradecraft — it is a different, louder act with its
+# own detections. The OPSEC channel describes operating quietly, never blinding the defender.
+_SENSOR_TAMPER = re.compile(
+    r"""(?ix)
+    \b(?:
+        (?:disable|turn\s+off|stop|kill|uninstall|blind|silence|bypass|unhook|tamper\s+with)\s+
+            (?:the\s+)?(?:edr|av|antivirus|defender|sysmon|etw|amsi|auditing|audit\s+log\w*|
+                          logging|sensor|siem|agent)
+      | (?:clear|wipe|delete|flush|purge)\s+(?:the\s+)?(?:event\s+)?log\w*
+      | wevtutil\s+cl | Clear-EventLog | Remove-EventLog
+      | amsi(?:utils)?\s*\.?\s*bypass | patch\s+amsi
+    )\b
+    """
+)
+
+
+def _opsec_has_tamper(*texts: str) -> str | None:
+    for t in texts:
+        m = _SENSOR_TAMPER.search(t or "")
+        if m:
+            return m.group(0).strip()
+    return None
+
+
+def assert_opsec_is_separate(opsec: dict[str, Any], where: str) -> None:
+    """The OPSEC channel's own guard — the counterpart to the never-prescribe guard on blue.
+
+    Asserts the two invariants that let this coexist with the blue view: the honesty marker is
+    present, and the note is tradecraft rather than an attack on the defender's sensors.
+    """
+    if not opsec:
+        return
+    if not str(opsec.get("still_recorded") or "").strip():
+        raise ValueError(f"{where}: an OPSEC note must name what still records the activity")
+    hit = _opsec_has_tamper(
+        opsec.get("loud_because", ""), opsec.get("still_recorded", ""),
+        opsec.get("tradeoff", ""), *(opsec.get("quieter") or []),
+    )
+    if hit:
+        raise ValueError(
+            f"{where}: OPSEC is operating quietly, not blinding the defender — found "
+            f"sensor-tampering phrasing {hit!r}"
+        )
+
+
+def _opsec_grounded(spec_key: str) -> dict[str, Any] | None:
+    note = catalog.opsec_for(spec_key)
+    if note is None:
+        return None
+    out = {
+        "grounded": True,
+        "ai_suggested": False,
+        "loud_because": note.loud_because,
+        "quieter": list(note.quieter),
+        "still_recorded": note.still_recorded,
+        "tradeoff": note.tradeoff,
+    }
+    # A curated OPSEC note that violated the channel's own rules is a data bug — raise.
+    assert_opsec_is_separate(out, f"OPSEC note {spec_key!r}")
+    return out
+
+
+def _opsec_from_llm(command: str, args: list[str], cfg: dict | None) -> dict[str, Any] | None:
+    """The ai_suggested OPSEC reading for an uncatalogued command. None on any failure."""
+    import llm
+
+    argv = " ".join([command, *args]).strip()
+    try:
+        raw = llm.chat(_OPSEC_LLM_SYSTEM, f"Command: {argv}", cfg or llm.load_config(),
+                       max_tokens=_MAX_TOKENS)
+        parsed = llm.extract_json(raw)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    quieter = _dedupe(str(q)[:300] for q in (parsed.get("quieter") or [])
+                      if isinstance(q, (str, int)))[:6]
+    out = {
+        "grounded": False,
+        "ai_suggested": True,
+        "loud_because": str(parsed.get("loud_because") or "").strip()[:400],
+        "quieter": quieter,
+        "still_recorded": str(parsed.get("still_recorded") or "").strip()[:400],
+        "tradeoff": str(parsed.get("tradeoff") or "").strip()[:400],
+    }
+    if not (out["quieter"] or out["loud_because"]):
+        return None
+    # Model output must satisfy the channel's guard or it is discarded (not raised).
+    try:
+        assert_opsec_is_separate(out, "ai_suggested OPSEC")
+    except ValueError:
+        return None
+    return out
+
+
+def _attach_opsec(fp: dict[str, Any], command: str, args: list[str],
+                  allow_llm: bool, cfg: dict | None) -> dict[str, Any]:
+    """Add the `opsec` block to a footprint without touching any detection field."""
+    opsec = None
+    key = fp.get("spec_key")
+    if key:
+        opsec = _opsec_grounded(key)
+    if opsec is None and allow_llm and fp.get("activity"):
+        opsec = _opsec_from_llm(command, args, cfg)
+    fp["opsec"] = opsec  # None is a valid, explicit "no OPSEC note for this command"
+    return fp
+
+
+# --------------------------------------------------------------------------- #
 # the entry points
 # --------------------------------------------------------------------------- #
 def footprint(
@@ -371,12 +520,18 @@ def footprint(
     context: str = "",
     allow_llm: bool = True,
     cfg: dict | None = None,
+    include_opsec: bool = False,
 ) -> dict[str, Any]:
     """The detection footprint for one command.
 
     Grounded from the curated map when it covers the command; otherwise (``allow_llm``) the LLM
     is asked and the answer is marked ``ai_suggested`` after being re-grounded and checked
     against the describe-not-prescribe rule. Never executes anything.
+
+    ``include_opsec`` (D10) additionally attaches the OFFENSIVE half — an ``opsec`` block with
+    the quieter tradecraft and, mandatorily, what still records the activity. It is OFF by
+    default so every existing caller (tagging, reports, run annotation) is byte-for-byte
+    unchanged; the purple-team panel opts in. The blue-team fields are identical either way.
     """
     cmd = str(command or "").strip()
     argv = [str(a) for a in (args or [])]
@@ -385,23 +540,28 @@ def footprint(
 
     match = catalog.lookup(cmd, argv)
     if match.spec is not None:
-        return _grounded(cmd, argv, match)
+        fp = _grounded(cmd, argv, match)
+    else:
+        fp = None
+        if allow_llm:
+            parsed = _llm_footprint(cmd, argv, context, cfg)
+            if parsed:
+                shaped = _from_llm(cmd, argv, parsed)
+                if shaped:
+                    # Argument signals still apply to an uncatalogued command.
+                    if match.signals:
+                        shaped = _apply_signals_to_ai(shaped, match.signals)
+                    fp = shaped
+        if fp is None:
+            fp = _empty(
+                cmd, argv,
+                "Not in the curated ATT&CK/SigmaHQ map, and no model reading was available. "
+                "Treat the footprint as unknown rather than absent.",
+            )
 
-    if allow_llm:
-        parsed = _llm_footprint(cmd, argv, context, cfg)
-        if parsed:
-            shaped = _from_llm(cmd, argv, parsed)
-            if shaped:
-                # Argument signals still apply to an uncatalogued command.
-                if match.signals:
-                    shaped = _apply_signals_to_ai(shaped, match.signals)
-                return shaped
-
-    return _empty(
-        cmd, argv,
-        "Not in the curated ATT&CK/SigmaHQ map, and no model reading was available. "
-        "Treat the footprint as unknown rather than absent.",
-    )
+    if include_opsec:
+        fp = _attach_opsec(fp, cmd, argv, allow_llm, cfg)
+    return fp
 
 
 def _apply_signals_to_ai(shaped: dict[str, Any], signals: tuple[catalog.ArgSignal, ...]) -> dict:

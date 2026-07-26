@@ -6677,6 +6677,67 @@ a.hp-card {
 }
 .hp-det-attr { opacity: 0.75; }
 
+/* ---- OPSEC channel (D10): the offensive half, amber = "what you can do" vs the
+   blue "what they see". Deliberately a different accent from the whole blue panel. ---- */
+.hp-det-opsec-toggle {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 5px 11px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.hp-det-opsec-toggle:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.hp-det-opsec-ic { color: var(--accent); }
+.hp-det-opsec {
+  margin-top: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent-line);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, var(--accent-soft), rgba(10, 12, 14, 0.6));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.hp-det-opsec-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hp-det-opsec-kicker {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.hp-det-opsec-loud { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text); }
+.hp-det-opsec-list { margin: 4px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.hp-det-opsec-list li { font-size: 12px; line-height: 1.5; color: var(--text); }
+/* The honesty invariant — always shown, given weight so it can't read as an afterthought. */
+.hp-det-opsec-recorded {
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--det);
+  background: var(--det-soft);
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.hp-det-opsec-recorded strong { color: var(--det); }
+.hp-det-opsec-tradeoff { margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--dim); }
+
 /* ---- the engagement-panel roll-up ---- */
 .hp-det-summary {
   display: flex;

@@ -250,6 +250,173 @@ def _f(key, label, techniques, sigma, telemetry, loudness, blue_view, why_rating
     )
 
 
+# --------------------------------------------------------------------------- #
+# THE OFFENSIVE HALF (D10) — OPSEC notes, the mirror of the blue-team view above
+# --------------------------------------------------------------------------- #
+# The blue-team view above answers "what does the defender see?". This answers the
+# authorized red-team question CRTP examines: "given that this is loud, what is the
+# quieter way, and what STILL records it?" It is a SECOND, SEPARATE channel:
+#
+#   * The detection copy above is never touched, and still passes the never-prescribe
+#     guard in resolver.py — the blue view cannot be diluted by adding this.
+#   * These notes are keyed by the same spec key, so an OPSEC note only ever exists
+#     alongside a grounded footprint, never on its own.
+#   * `still_recorded` is load-bearing and mandatory. Every quieter approach names
+#     the telemetry it does NOT escape. That is what keeps this honest rather than a
+#     how-to-disappear guide: there is no "and now you're invisible" here, because
+#     against logging that is actually on, there isn't one.
+#
+# Legitimate inside authorized testing (an engagement scoped to test detection, a
+# CRTP-style assessment). HackPit only ever describes; a human still approves and
+# runs every command through the four gates.
+@dataclass(frozen=True)
+class OpsecNote:
+    """The operator-side counterpart to a FootprintSpec: quieter tradecraft + its limits."""
+
+    key: str                          # same key as the FootprintSpec it annotates
+    loud_because: str                 # the specific thing that generates the signal
+    quieter: tuple[str, ...]          # concrete quieter approaches / knobs
+    still_recorded: str               # what logs it anyway — mandatory, keeps it honest
+    tradeoff: str                     # what the quieter path costs (time, reliability, coverage)
+
+
+def _o(key, loud_because, quieter, still_recorded, tradeoff):
+    return OpsecNote(
+        key=key, loud_because=loud_because,
+        quieter=tuple(x.strip() for x in quieter.split(";") if x.strip()),
+        still_recorded=still_recorded, tradeoff=tradeoff,
+    )
+
+
+OPSEC: dict[str, OpsecNote] = {n.key: n for n in [
+    _o("portscan",
+       "The scan SHAPE — one source touching many ports/hosts fast — is what NSM and IDS are "
+       "built to alert on, and it survives payload encryption.",
+       "Scan far fewer ports (a top-20 / known-service list, not -p-); "
+       "slow the rate hard (nmap -T2/-T1, --max-rate, --scan-delay) so it falls under burst "
+       "thresholds; "
+       "space work across time rather than one sweep; "
+       "prefer a -sT connect scan from a host that is expected to talk to the target over a raw "
+       "-sS from an unexpected source",
+       "Every port that answers still logs the connection at the service, and NetFlow/Zeek still "
+       "records the flows — slowing down changes WHEN it is noticed, not WHETHER the artefacts "
+       "exist. A patient defender reviewing conn.log still sees it.",
+       "A slow, narrow scan can take hours instead of seconds and will miss services on ports you "
+       "chose not to probe."),
+    _o("web_vuln_scan",
+       "Default scanner user-agents (Nikto/Nuclei/WPScan announce themselves) and request VOLUME "
+       "matched directly by rules like SigmaHQ's recon user-agent rule.",
+       "Set a browser-realistic User-Agent instead of the tool default; "
+       "throttle concurrency and add jitter (nuclei -rate-limit / -c low); "
+       "scope templates to the stack you fingerprinted rather than firing everything; "
+       "run authenticated so requests look like a session, not a crawl",
+       "The request COUNT is the primary signal and no user-agent change removes it — a WAF and "
+       "the access log still see one IP make far more requests than a human would. The 404 wall "
+       "from probing paths that do not exist is still there.",
+       "Rate-limiting a scan multiplies its wall-clock time; a tightly-scoped template set trades "
+       "coverage for quiet and can miss a finding outside the guessed stack."),
+    _o("dir_brute",
+       "High request volume by construction, plus requests for paths (.git, .env, backups) no real "
+       "user asks for, in a wordlist's ordered shape.",
+       "Use a small, targeted wordlist over a mega-list; "
+       "rate-limit and add delay (ffuf -rate / -p, feroxbuster --rate-limit); "
+       "filter to interesting responses so you can stop early rather than exhaust the list; "
+       "seed guesses from crawled/observed paths so the traffic looks like navigation",
+       "The request count is the signal and it is irreducible below the number of guesses — the "
+       "access log and any rate-limit/bot-score control still register the run.",
+       "A smaller wordlist and a rate cap directly trade discovery odds and speed for a smaller "
+       "footprint."),
+    _o("sqli",
+       "Injection strings sit in URIs/bodies in the clear, matched by WAF signatures and rules "
+       "like SigmaHQ's 'SQL Injection Strings In URI', and sqlmap fires hundreds of requests.",
+       "Hand-craft a few targeted payloads over an automated tool sweep; "
+       "reduce sqlmap's noise (--technique to one class, --level/--risk low, --delay, "
+       "--threads 1) once you know the vector; "
+       "prefer a single confirming request per hypothesis over blind enumeration",
+       "A WAF inspects request bodies regardless of volume, and the DB/app error and query logs "
+       "still record the injected input — a quieter payload is still the same anomalous input in "
+       "the log.",
+       "Manual, low-and-slow SQLi is far slower and needs you to already understand the injection "
+       "point; automated tooling is loud precisely because it is exhaustive."),
+    _o("brute_force",
+       "A burst of failed logons from one source — the most-alerted-on auth pattern; public-IP "
+       "failed-logon and account-lockout rules fire, and lockouts announce the attack outright.",
+       "Password-SPRAY (one/few passwords across many accounts) instead of many passwords per "
+       "account, staying under the lockout threshold; "
+       "add long delays between attempts and spread across the observation window; "
+       "target one well-chosen credential from OSINT/breach data over blind volume",
+       "Every attempt is still an auth event on the identity provider; spraying trades a per-"
+       "account spike for a broad low rate that volume-over-many-accounts detections and impossible-"
+       "travel logic still surface. Lockout policy still counts.",
+       "Spraying with delays turns minutes into hours or days and a single spray round tests only "
+       "one password guess across the org."),
+    _o("ad_collect",
+       "Domain-wide collection is a huge fan-out of LDAP/SAMR/RPC queries in a short window; "
+       "SharpHound/BloodHound have named collection artefacts and dedicated rules.",
+       "Collect in targeted passes (one collection method at a time, specific OUs) rather than "
+       "an --all sweep; "
+       "throttle (SharpHound --Throttle/--Jitter, LoopDelay); "
+       "run from a host that already makes directory queries, using existing credentials over a "
+       "fresh tool drop; "
+       "gather offline from a single replicated copy where possible",
+       "LDAP query logging (if on) and ADWS/RPC connection telemetry still record the queries; "
+       "collection touches thousands of objects and that read pattern is inherently anomalous — "
+       "throttling changes its timing, not its existence.",
+       "Targeted, throttled collection is slower and can miss edges an --all run would have mapped, "
+       "which is exactly the completeness BloodHound is used for."),
+    _o("kerberoast",
+       "Requesting many service tickets at once, often with RC4 (etype 0x17) downgrade, is the "
+       "classic roast shape — TGS 4769 events cluster and encryption-downgrade rules fire.",
+       "Request tickets for ONE targeted SPN you already know is worth cracking, not every SPN; "
+       "let the ticket use the account's default (AES) encryption rather than forcing RC4; "
+       "space requests out instead of enumerating and roasting in one pass",
+       "Each ticket request is still a Kerberos TGS event (4769) on the DC; a single request is "
+       "quieter than a sweep but is still logged, and crack success depends on a weak password "
+       "regardless of how the ticket was obtained.",
+       "Roasting one SPN at a time needs prior target selection and forgoes the broad harvest; "
+       "AES tickets are slower to crack than RC4."),
+    _o("secretsdump",
+       "Remote SAM/LSA/NTDS dumping touches high-signal surfaces — service creation, remote "
+       "registry, DRSUAPI replication — that mature stacks alert on directly.",
+       "Prefer the least-privileged path that works (targeted SAM/LSA over a full NTDS pull when "
+       "you only need one host's creds); "
+       "reuse an existing admin session/protocol the host expects over dropping a new service; "
+       "pull a single account rather than the whole store",
+       "The replication/registry access and any service creation are still logged server-side; "
+       "reading secrets is an inherently privileged, audited operation — a smaller pull is quieter "
+       "but not invisible.",
+       "The quieter, least-privilege paths gather far less; a full secretsdump is loud because it "
+       "takes everything in one shot."),
+    _o("psexec",
+       "Service creation over SMB (7045 / 4697) plus a named-pipe pattern is the textbook PsExec "
+       "signature that endpoint and Windows-log rules match immediately.",
+       "Prefer an execution method that does not create a service (WMI, WinRM, DCOM) when it fits; "
+       "use a non-default service/pipe name over the tool default; "
+       "run in a maintenance window when admin tooling is expected",
+       "SMB session setup, the 4624 type-3 logon and any service/pipe creation are still recorded; "
+       "changing the method moves WHICH events fire, not whether remote-exec telemetry exists.",
+       "The service-based path is the most reliable; the quieter methods each have their own "
+       "prerequisites and their own (different) detections."),
+    _o("reverse_shell",
+       "A well-known shell command line (bash -i, nc -e, /dev/tcp) plus an outbound connection to "
+       "an unusual host/port — matched by process-creation and network rules, some rated critical.",
+       "Use an interpreter/protocol the host already uses for egress (HTTPS C2 over raw TCP, DNS "
+       "where HTTP is filtered); "
+       "avoid the literal signature strings where a live-off-the-land binary works; "
+       "beacon on a jittered interval rather than holding an interactive socket open",
+       "The outbound connection to attacker infrastructure is still a network flow that NSM and "
+       "egress logging record, and process-creation telemetry still captures the launching "
+       "process — encryption hides content, not the existence of the channel.",
+       "Protocol-matched, jittered C2 is far more work to set up than a one-line reverse shell and "
+       "trades interactivity for stealth."),
+]}
+
+
+def opsec_for(key: str) -> OpsecNote | None:
+    """The OPSEC note for a spec key, or None when the family has no curated note."""
+    return OPSEC.get(key)
+
+
 SPECS: dict[str, FootprintSpec] = {s.key: s for s in [
     # --- scanning ---------------------------------------------------------------------- #
     _f("portscan", "Port / service scan", "T1046 T1018", "nmap_pua netscan_auditd portscan_syn",

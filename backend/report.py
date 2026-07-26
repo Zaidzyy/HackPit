@@ -323,6 +323,69 @@ def build_detection_summary(session: dict) -> str:
     return "\n".join(x for x in out if x is not None)
 
 
+def build_opsec_summary(session: dict) -> str:
+    """The OFFENSIVE-half roll-up (D10) — the red-team OPSEC counterpart to the blue summary.
+
+    OFF unless a report explicitly opts in (``include_opsec`` in :func:`compose_report`), because
+    a normal client deliverable does not carry evasion tradecraft. When a report IS scoped to
+    assess detection (a purple-team / CRTP-style engagement), this section states, per loud action
+    the engagement ran: what made it loud, the quieter approach, and — mandatorily — what still
+    records it. Built programmatically and grounded-only, like the blue summary; the OPSEC copy
+    comes from the curated table, never the model, so it cannot drift into an evasion how-to.
+    """
+    try:
+        from detection import catalog, tagging
+    except Exception:
+        return ""
+
+    runs = _execution_runs(session)
+    if not runs:
+        return ""
+
+    # One OPSEC note per distinct command family the engagement exercised, loudest first.
+    seen: dict[str, Any] = {}
+    for run in runs:
+        tag = tagging.tag_run(run)
+        key = tag.get("spec_key") if tag else None
+        if not key or key in seen:
+            continue
+        note = catalog.opsec_for(key)
+        if note is None:
+            continue
+        spec = catalog.SPECS.get(key)
+        seen[key] = (spec, note)
+    if not seen:
+        return ""
+
+    ordered = sorted(
+        seen.values(),
+        key=lambda sn: -catalog.loudness_score(sn[0].loudness if sn[0] else "quiet"),
+    )
+
+    out: list[str] = [
+        "## OPSEC assessment (red team)",
+        "",
+        "_The offensive counterpart to the detection footprint above: for each loud action this "
+        "engagement ran, the quieter tradecraft a real adversary would use — and, in every case, "
+        "what STILL records it. This is included because this engagement was scoped to assess "
+        "detection; it is honest about its own limits, not a guide to evading monitoring. No "
+        "action here disables, clears or tampers with a defender's telemetry._",
+        "",
+    ]
+    for spec, note in ordered:
+        label = spec.label if spec else note.key
+        loud = spec.loudness if spec else ""
+        out.append(f"### {label}" + (f" — {loud}" if loud else ""))
+        out.append(f"- **Loud because:** {note.loud_because}")
+        out.append("- **Quieter approach:**")
+        for q in note.quieter:
+            out.append(f"  - {q}")
+        out.append(f"- **Still recorded:** {note.still_recorded}")
+        out.append(f"- **Tradeoff:** {note.tradeoff}")
+        out.append("")
+    return "\n".join(out)
+
+
 def build_evidence_section(session: dict) -> str:
     """Construct the Evidence section programmatically — the source of truth.
 
@@ -415,7 +478,7 @@ _MARKER_RE = re.compile(
 )
 
 
-def _insert_evidence(md: str, session: dict) -> str:
+def _insert_evidence(md: str, session: dict, include_opsec: bool = False) -> str:
     """Splice the authoritative Evidence section into the model's report.
 
     Prefers the ``{{EVIDENCE}}`` placeholder (also absorbing an Evidence heading
@@ -426,7 +489,13 @@ def _insert_evidence(md: str, session: dict) -> str:
     # whole engagement, then the per-run detail inside each Evidence block. Both are built
     # programmatically, so neither can be embellished by the model.
     detection = build_detection_summary(session)
-    section = (detection + "\n" if detection else "") + build_evidence_section(session)
+    # The offensive OPSEC roll-up (D10) only when the caller opted in — off for a normal report.
+    opsec = build_opsec_summary(session) if include_opsec else ""
+    section = (
+        (detection + "\n" if detection else "")
+        + (opsec + "\n" if opsec else "")
+        + build_evidence_section(session)
+    )
 
     if _EVIDENCE_MARKER in md:
         md = _MARKER_RE.sub(lambda _m: section, md, count=1)
@@ -548,12 +617,15 @@ def build_prompt(session: dict) -> str:
     return "\n".join(lines)
 
 
-def compose_report(session: dict) -> tuple[str, str]:
+def compose_report(session: dict, *, include_opsec: bool = False) -> tuple[str, str]:
     """Draft the report for a session. Returns (markdown, model_used).
 
     The LLM writes the prose; the Evidence section is inserted programmatically
     so captured output is reproduced verbatim. Raises ``llm.LLMError`` if the
     provider is unreachable or returns nothing.
+
+    ``include_opsec`` (D10) adds the red-team OPSEC assessment — off by default so a normal
+    client report is unchanged; turned on for a purple-team / detection-scoped engagement.
     """
     cfg = llm.load_config()
     user = build_prompt(session)
@@ -562,5 +634,5 @@ def compose_report(session: dict) -> tuple[str, str]:
     if not md:
         raise llm.LLMError("the model returned an empty report")
     md = _strip_status_tags(md)
-    md = _insert_evidence(md, session)
+    md = _insert_evidence(md, session, include_opsec=include_opsec)
     return md, cfg["model"]

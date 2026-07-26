@@ -269,6 +269,44 @@ def test_report_detection_sections() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 6b. the OPSEC channel (D10)
+# --------------------------------------------------------------------------- #
+def test_grounded_opsec_channel() -> None:
+    """A grounded footprint gains an `opsec` block only on request, with the honesty marker."""
+    # Off by default: no key.
+    plain = R.footprint("nmap", ["-sS", "-p-", "10.0.0.1"], allow_llm=False)
+    assert "opsec" not in plain
+
+    fp = R.footprint("nmap", ["-sS", "-p-", "10.0.0.1"], allow_llm=False, include_opsec=True)
+    op = fp["opsec"]
+    assert op and op["grounded"] is True
+    assert op["quieter"], "a grounded port-scan OPSEC note must offer quieter tradecraft"
+    assert op["still_recorded"].strip(), "the honesty marker is mandatory"
+
+    # An uncatalogued command, grounded-only: opsec is explicitly None (not fabricated).
+    unknown = R.footprint("totally-unknown-binary", ["-x"], allow_llm=False, include_opsec=True)
+    assert unknown["opsec"] is None
+    print("  the OPSEC channel is opt-in, grounded, and honest about what still records it: PASS")
+
+
+def test_report_opsec_summary_is_opt_in() -> None:
+    runs = [
+        {"run_id": "aa11", "command": "nmap", "args": ["-sS", "-p-", "h"], "target": "h",
+         "mode": "engagement", "exit_code": 0, "stdout": "open", "stderr": "", "started_at": "t"},
+    ]
+    # Off by default (build_detection_summary carries no offensive content).
+    assert "OPSEC assessment" not in report_gen.build_detection_summary(_session(runs))
+    # The opt-in summary renders the red-team half with the honesty marker per family.
+    op = report_gen.build_opsec_summary(_session(runs))
+    assert op.startswith("## OPSEC assessment (red team)")
+    assert "**Loud because:**" in op and "**Still recorded:**" in op
+    # No sensor-tampering copy anywhere in the rendered section (uses the real guard).
+    assert R._opsec_has_tamper(op) is None, "the OPSEC summary must carry no sensor-tampering copy"
+    assert report_gen.build_opsec_summary(_session([])) == "", "no runs -> no OPSEC section"
+    print("  the report OPSEC summary is opt-in and carries the still-recorded marker: PASS")
+
+
+# --------------------------------------------------------------------------- #
 # 7. knowledge consistency (offline half of pipeline/detection_sources.py)
 # --------------------------------------------------------------------------- #
 def test_knowledge_is_internally_consistent() -> None:
@@ -297,5 +335,7 @@ if __name__ == "__main__":
     test_first_command_line()
     test_step_and_run_tagging()
     test_report_detection_sections()
+    test_grounded_opsec_channel()
+    test_report_opsec_summary_is_opt_in()
     test_knowledge_is_internally_consistent()
     print("ALL detection-footprint tests pass")

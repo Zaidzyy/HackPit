@@ -260,6 +260,108 @@ def test_annotation_returns_data_not_execution() -> None:
     print("  a footprint is pure description — it carries no runnable command: PASS")
 
 
+# --------------------------------------------------------------------------- #
+# THE OFFENSIVE HALF (D10) — the OPSEC channel must not weaken the blue view
+# --------------------------------------------------------------------------- #
+def test_blue_view_is_byte_identical_with_and_without_opsec() -> None:
+    """Adding the offensive half must not change a single blue-team field.
+
+    This is the load-bearing D10 invariant: 'keep the blue-team view, add the other half'.
+    Every detection field must be identical whether or not include_opsec is set.
+    """
+    for spec in C.SPECS.values():
+        argv = spec.label  # any argv; we compare the two calls to each other
+        blue = R.footprint("nmap" if spec.key == "portscan" else "x", [], allow_llm=False)
+        both = R.footprint("nmap" if spec.key == "portscan" else "x", [],
+                           allow_llm=False, include_opsec=True)
+        blue_no_opsec = {k: v for k, v in both.items() if k != "opsec"}
+        assert blue == blue_no_opsec, "include_opsec changed a blue-team field"
+        break  # one representative pair is enough; the assert is exact
+    # And the default call carries no opsec key at all — existing callers are unchanged.
+    fp = R.footprint("impacket-secretsdump", ["-just-dc"], allow_llm=False)
+    assert "opsec" not in fp, "include_opsec defaults off; the key must be absent by default"
+    print("  blue-team fields are byte-identical with/without opsec; default omits it: PASS")
+
+
+def test_every_curated_opsec_note_carries_the_honesty_marker() -> None:
+    """Each OPSEC note must name what still records the activity (no 'now invisible')."""
+    assert C.OPSEC, "expected curated OPSEC notes"
+    for key, note in C.OPSEC.items():
+        assert key in C.SPECS, f"OPSEC note {key!r} has no matching footprint spec"
+        assert note.still_recorded.strip(), f"{key}: still_recorded is mandatory"
+        assert note.quieter, f"{key}: a note with no quieter approach is pointless"
+        # Its own guard must pass on curated data (a failure here is a data bug).
+        R.assert_opsec_is_separate(
+            {"loud_because": note.loud_because, "quieter": list(note.quieter),
+             "still_recorded": note.still_recorded, "tradeoff": note.tradeoff},
+            f"OPSEC {key!r}",
+        )
+    print(f"  all {len(C.OPSEC)} curated OPSEC notes carry still_recorded + pass the guard: PASS")
+
+
+def test_opsec_guard_catches_sensor_tampering() -> None:
+    """OPSEC is operating quietly, never blinding the defender. The guard proves the line."""
+    must_reject = [
+        "Disable Sysmon before running this.",
+        "Clear the event log afterwards with wevtutil cl Security.",
+        "Patch AMSI so the script does not get scanned.",
+        "Turn off the EDR agent first.",
+        "Kill the SIEM forwarder to stop the events reaching the console.",
+    ]
+    for text in must_reject:
+        assert R._opsec_has_tamper(text), f"OPSEC guard MISSED sensor-tampering: {text!r}"
+    # ...and allows legitimate tradecraft that operates quietly without touching the sensor
+    must_allow = [
+        "Rate-limit the scan and add jitter so it falls under burst thresholds.",
+        "Password-spray one password across many accounts to stay under lockout.",
+        "Use an execution method that does not create a service.",
+        "The DC still logs every Kerberos TGS request regardless.",
+    ]
+    for text in must_allow:
+        assert not R._opsec_has_tamper(text), f"OPSEC guard FALSE-POSITIVED: {text!r}"
+    print(f"  OPSEC guard rejects all {len(must_reject)} sensor-tampering phrasings, "
+          f"allows {len(must_allow)} quiet-tradecraft ones: PASS")
+
+
+def test_model_opsec_tampering_is_discarded() -> None:
+    """An ai_suggested OPSEC note that tells you to blind the sensor is thrown away."""
+    import llm
+
+    bad = json.dumps({
+        "loud_because": "Loud process creation.",
+        "quieter": ["Disable Defender real-time protection first."],
+        "still_recorded": "Nothing if the sensor is off.",
+        "tradeoff": "None.",
+    })
+    orig = llm.chat
+    try:
+        llm.chat = lambda system, user, cfg, max_tokens=0: bad
+        fp = R.footprint("some-unknown-tool", ["-x"], include_opsec=True)
+    finally:
+        llm.chat = orig
+    assert fp.get("opsec") is None, "a tampering OPSEC note must NOT be rendered"
+    print("  a model OPSEC note advising sensor-tampering is DISCARDED: PASS")
+
+
+def test_opsec_never_leaks_into_the_blue_fields() -> None:
+    """OPSEC text lives only under the `opsec` key — never in blue_view/telemetry/why."""
+    fp = R.footprint("nmap", ["-sS", "-p-", "10.0.0.1"], allow_llm=False, include_opsec=True)
+    assert fp.get("opsec"), "expected a grounded OPSEC note for a port scan"
+    quieter_text = " ".join(fp["opsec"]["quieter"]).lower()
+    blue_blob = " ".join([
+        fp["blue_view"], fp["loudness"]["why"], fp["why"], *fp["telemetry"],
+        *[s["note"] for s in fp["signals"]],
+    ]).lower()
+    # The distinctive quieter phrasing must not have bled into the blue copy.
+    assert "quieter" not in blue_blob and "--scan-delay" not in blue_blob
+    # And the blue copy still passes the never-prescribe guard even with opsec attached.
+    R.assert_describes_not_prescribes(
+        [fp["blue_view"], fp["loudness"]["why"], fp["why"], *fp["telemetry"]],
+        "blue fields with opsec attached",
+    )
+    print("  OPSEC content stays in its own channel; blue copy still passes the guard: PASS")
+
+
 if __name__ == "__main__":
     test_no_execution_in_detection()
     test_zero_kali_path()
@@ -272,4 +374,9 @@ if __name__ == "__main__":
     test_lab_mode_unchanged()
     test_engagement_never_auto_run_unchanged()
     test_annotation_returns_data_not_execution()
+    test_blue_view_is_byte_identical_with_and_without_opsec()
+    test_every_curated_opsec_note_carries_the_honesty_marker()
+    test_opsec_guard_catches_sensor_tampering()
+    test_model_opsec_tampering_is_discarded()
+    test_opsec_never_leaks_into_the_blue_fields()
     print("ALL detection safety-invariant tests pass")

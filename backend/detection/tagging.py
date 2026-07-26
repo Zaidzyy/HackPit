@@ -71,6 +71,8 @@ def _tag_from_match(match: catalog.Match) -> dict[str, Any] | None:
 
     return {
         "activity": spec.label if spec else "",
+        # The curated family key — lets a caller map a tagged run to its OPSEC note (D10).
+        "spec_key": spec.key if spec else None,
         "grounded": spec is not None,
         "techniques": techniques,
         "tactics": tactics,

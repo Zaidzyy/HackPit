@@ -34,6 +34,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
 DEFAULT_OUT = REPO_ROOT / "data" / "kb" / "scripts.json"
+DEFAULT_TOOLFILES = REPO_ROOT / "data" / "kb" / "toolfiles.json"  # pipeline/ingest_corpora.py
 
 # --------------------------------------------------------------------------- #
 # type registry — display label + on-theme icon/colour for the /scripts view
@@ -312,22 +313,84 @@ def _label_for(t: str, code: str) -> str:
     return f"{head} · {label}"
 
 
+# --------------------------------------------------------------------------- #
+# tool FILES (Phase 4 / D12) — `oscp_tools`, folded in from ingest_corpora.py
+# --------------------------------------------------------------------------- #
+# The arsenal above is extracted from KB *text*. `oscp_tools` is different in kind:
+# standalone tool files on disk (PowerView.ps1, LinEnum.sh, the PEASS binaries, the
+# potatoes). They belong in the operator view — that is D12 — but not as copy-ready
+# code, because a 20,000-line PowerView.ps1 is not something you paste. They carry a
+# `file` block instead: where it is, how big, its sha256, and which platform it runs
+# on. A row with `file` set has a path to copy, not a payload to copy.
+def merge_tool_files(result: dict, rows: list[dict]) -> dict:
+    """Fold tool-file rows into the matching arsenal groups (in place)."""
+    by_group: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        by_group[r["group"]].append(r)
+
+    for g in result["groups"]:
+        extra = by_group.get(g["type"], [])
+        if not extra:
+            continue
+        # Deterministic order: runnable-here first, then by name.
+        extra.sort(key=lambda r: (not r["runs_here"], r["name"].lower()))
+        g["scripts"].extend({
+            "id": r["id"],
+            "label": f"{r['name']} · {r['folder'].lower()}" if r["folder"] else r["name"],
+            "lang": r["lang"],
+            # Preview only, never the whole file. Binaries carry none.
+            "code": r["preview"],
+            "type": g["type"],
+            "reuse": 1,
+            "sources": [],
+            "source_total": 0,
+            "file": {
+                "name": r["name"],
+                "rel_path": r["rel_path"],
+                "host_path": r["host_path"],
+                "bytes": r["bytes"],
+                "sha256": r["sha256"],
+                # D9: Windows-only tooling is kept and MARKED, never presented as
+                # runnable in the Linux sandbox.
+                "platform": r["platform"],
+                "runs_here": r["runs_here"],
+                "source": r["source"],
+            },
+        } for r in extra)
+        g["count"] += len(extra)
+        g["shown"] += len(extra)
+
+    result["total"] = sum(g["count"] for g in result["groups"])
+    result["tool_files"] = len(rows)
+    return result
+
+
+def load_tool_files(path: Path) -> list[dict]:
+    """Rows written by ``ingest_corpora.py``; absent file is not an error."""
+    if not path.is_file():
+        return []
+    return json.loads(path.read_text(encoding="utf-8")).get("files", [])
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Build the Scripts Arsenal index.")
     ap.add_argument("--kb", default=str(DEFAULT_KB))
     ap.add_argument("--out", default=str(DEFAULT_OUT))
+    ap.add_argument("--tool-files", default=str(DEFAULT_TOOLFILES))
     args = ap.parse_args()
 
     kb = Path(args.kb)
     entries = [json.loads(l) for l in kb.open(encoding="utf-8") if l.strip()]
     result = build(entries)
+    result = merge_tool_files(result, load_tool_files(Path(args.tool_files)))
 
     Path(args.out).write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n",
                               encoding="utf-8")
     print(f"Scripts arsenal -> {args.out}")
     print(f"  scanned {result['kb_entries']} entries, "
           f"{result['code_blocks_matched']} script blocks matched")
-    print(f"  total deduped scripts: {result['total']}")
+    print(f"  total deduped scripts: {result['total']} "
+          f"(incl. {result.get('tool_files', 0)} tool files)")
     for g in result["groups"]:
         print(f"    {g['label']:22s} {g['count']:4d}  (shown {g['shown']})")
     if result["review"]["dropped_over_cap"]:

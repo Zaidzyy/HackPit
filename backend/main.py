@@ -460,6 +460,23 @@ class ScriptSource(BaseModel):
     category: str = ""
 
 
+class ScriptFile(BaseModel):
+    """A tool FILE on disk rather than a copyable snippet (D12 — `oscp_tools`).
+
+    Present only on rows the corpus ingester contributed. The row's `code` is a short
+    preview, never the whole file, so the UI shows a path to copy instead of a payload.
+    """
+
+    name: str
+    rel_path: str = Field(description="Path within the source tool tree.")
+    host_path: str = Field(description="Absolute path on this machine.")
+    bytes: int
+    sha256: str
+    platform: str = Field(description="windows | linux | any.")
+    runs_here: bool = Field(description="False for Windows-only tooling (D9) — kept, marked.")
+    source: str
+
+
 class ScriptItem(BaseModel):
     id: str = Field(description="Stable per-group id ({type}-{n}).")
     label: str = Field(description="Short human label ('bash · reverse shell').")
@@ -469,6 +486,9 @@ class ScriptItem(BaseModel):
     reuse: int = Field(description="How many entries this script appears in.")
     sources: list[ScriptSource] = Field(description="Entries it was lifted from (capped).")
     source_total: int = Field(description="Total distinct source entries (>= len(sources)).")
+    file: ScriptFile | None = Field(
+        default=None, description="Set when this row is a tool file, not a snippet."
+    )
 
 
 class ScriptGroup(BaseModel):
@@ -484,6 +504,7 @@ class ScriptGroup(BaseModel):
 class ScriptsResponse(BaseModel):
     total: int
     kb_entries: int = Field(default=0, description="Entries scanned to build the arsenal.")
+    tool_files: int = Field(default=0, description="Rows backed by a file on disk (D12).")
     groups: list[ScriptGroup] = Field(default_factory=list)
 
 

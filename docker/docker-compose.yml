@@ -69,6 +69,12 @@ services:
     networks:
       - hackpit-isolated
     restart: unless-stopped
+    # PAYLOADS: the Phase-4 corpus sidecars (pipeline/ingest_corpora.py) — PayloadsAllTheThings'
+    # payload lists and the dork sets, so ffuf/wfuzz can point straight at them. READ-ONLY, and
+    # it does NOT weaken this sandbox's isolation: it is inbound data with no write path and no
+    # network component, unlike the /loot mount the lab deliberately does not get.
+    volumes:
+      - ../data/kb/payloads:/payloads:ro
     # Defense in depth beyond network isolation. UNCHANGED by the D3 privilege work: this is
     # the sandbox that hosts unattended agent runs, so it keeps the image's unprivileged
     # `sandbox` user, no added capabilities and no devices. Only engage-sandbox is elevated.
@@ -97,6 +103,7 @@ services:
     # container. Same parent mount as the engagement sandbox; :kali works in /loot/kali.
     volumes:
       - ../backend/data/engagements:/loot
+      - ../data/kb/payloads:/payloads:ro   # Phase-4 payload corpora (read-only)
     # Defense in depth is KEPT even though the network is open — non-root, no capabilities,
     # no devices. `:kali` gets the full new toolset (D4) but not the engage sandbox's privileges.
     cap_drop:
@@ -132,6 +139,7 @@ services:
     # host directory. Lab output lives in the run record, which is enough for a practice app.
     volumes:
       - ../backend/data/engagements:/loot
+      - ../data/kb/payloads:/payloads:ro   # Phase-4 payload corpora (read-only)
     # --- PRIVILEGE: this service, and ONLY this service, is elevated (D3) ------------------
     # Same image as the other two sandboxes; the elevation lives here in the runtime posture.
     #   user: root       — write access to root-owned files (appending /etc/hosts to point at a

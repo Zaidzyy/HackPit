@@ -98,6 +98,9 @@ echo "== Phase-3 scope host-check (no false-reject of files/versions; real hosts
 echo "== Phase-3 credential vault (fills user/pass/hash/domain; wrong-kind + non-cred left alone) =="
 "$PY" test_credvault.py
 
+echo "== Phase-4 corpus ingest (additive/byte-preserving/idempotent; no_merge; windows marked) =="
+"$PY" test_corpora.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

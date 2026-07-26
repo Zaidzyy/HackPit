@@ -411,6 +411,24 @@ export const imageUrl = (path: string) =>
 /** One entry a script was lifted from (links to /entry/{id}). */
 export type ScriptSource = { id: string; title: string; category: string };
 
+/**
+ * A tool FILE on disk rather than a copyable snippet (`oscp_tools`, D12).
+ * Present only on rows the corpus ingester contributed — the row's `code` is a
+ * short preview, so the UI offers a path to copy, not a payload.
+ */
+export type ScriptFile = {
+  name: string;
+  rel_path: string;
+  host_path: string;
+  bytes: number;
+  sha256: string;
+  /** windows | linux | any */
+  platform: string;
+  /** false for Windows-only tooling — kept for planning/write-ups, never runnable here. */
+  runs_here: boolean;
+  source: string;
+};
+
 /** One deduped, copy-ready script/payload in the arsenal. */
 export type ScriptItem = {
   id: string;
@@ -422,6 +440,8 @@ export type ScriptItem = {
   reuse: number;
   sources: ScriptSource[];
   source_total: number;
+  /** Set when this row is a tool file rather than an extracted snippet. */
+  file?: ScriptFile | null;
 };
 
 export type ScriptGroup = {
@@ -437,6 +457,8 @@ export type ScriptGroup = {
 export type ScriptsResponse = {
   total: number;
   kb_entries: number;
+  /** Rows backed by a file on disk rather than extracted from KB text. */
+  tool_files?: number;
   groups: ScriptGroup[];
 };
 

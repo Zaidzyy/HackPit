@@ -3866,6 +3866,50 @@ a.hp-card {
   letter-spacing: 0.5px;
   color: var(--dim);
 }
+/* tool FILE rows (D12 — oscp_tools): a path to copy, not a payload to copy.
+   Dashed rule distinguishes "this is a file on disk" from an extracted snippet. */
+.hp-toolfile {
+  border-left-style: dashed;
+}
+.hp-toolfile-plat {
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--grey) 30%, transparent);
+  color: var(--grey);
+}
+.hp-toolfile-plat--linux,
+.hp-toolfile-plat--any {
+  color: var(--cc, var(--accent));
+  border-color: color-mix(in srgb, var(--cc, var(--accent)) 35%, transparent);
+  background: color-mix(in srgb, var(--cc, var(--accent)) 10%, transparent);
+}
+/* Windows-only reads as unavailable-here, not as an error — it is kept on purpose. */
+.hp-toolfile-plat--windows {
+  color: var(--dim);
+  border-style: dashed;
+}
+.hp-toolfile-size {
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: var(--dim);
+  font-family: var(--font-jetbrains-mono), "JetBrains Mono", monospace;
+}
+.hp-toolfile-pre {
+  max-height: 150px;
+  overflow: hidden;
+  position: relative;
+  opacity: 0.75;
+}
+.hp-toolfile-nobody {
+  padding: 10px 12px;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: var(--dim);
+  font-family: var(--font-jetbrains-mono), "JetBrains Mono", monospace;
+}
 /* home bento card */
 .hp-scriptscard .hp-ic {
   color: var(--cc);

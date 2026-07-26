@@ -133,7 +133,15 @@ function ScriptTypeSection({ group }: { group: ScriptGroup }) {
   );
 }
 
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function ScriptCard({ script }: { script: ScriptItem }) {
+  if (script.file) return <ToolFileCard script={script} file={script.file} />;
+
   const extra = script.source_total - script.sources.length;
   return (
     <div className="hp-scriptcard">
@@ -165,6 +173,60 @@ function ScriptCard({ script }: { script: ScriptItem }) {
           </Link>
         ))}
         {extra > 0 && <span className="hp-script-srcmore">+{extra} more</span>}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A tool FILE row (D12). Deliberately NOT shaped like a snippet card: what you
+ * want from PowerView.ps1 is its path, not its 20,000 lines. The copy button
+ * copies the path; the preview is the file's head and is clearly labelled as
+ * such. Windows-only tooling is badged, per D9 — it is kept for planning and
+ * write-ups and cannot run in the Linux sandbox.
+ */
+function ToolFileCard({
+  script,
+  file,
+}: {
+  script: ScriptItem;
+  file: NonNullable<ScriptItem["file"]>;
+}) {
+  return (
+    <div className="hp-scriptcard hp-toolfile">
+      <div className="hp-code hp-scriptcode">
+        <div className="hp-code-bar">
+          <span className="hp-code-lang">file</span>
+          <span className="hp-script-label">{file.name}</span>
+          <span
+            className={`hp-toolfile-plat hp-toolfile-plat--${file.platform}`}
+            title={
+              file.runs_here
+                ? "Runs in the Linux sandbox"
+                : "Windows-only — kept for planning and write-ups, not runnable here"
+            }
+          >
+            {file.runs_here ? file.platform : "windows only"}
+          </span>
+          <span className="hp-toolfile-size">{fmtBytes(file.bytes)}</span>
+          <CopyButton text={file.host_path} />
+        </div>
+        {script.code ? (
+          <pre className="hp-code-pre hp-toolfile-pre">
+            <code>{script.code}</code>
+          </pre>
+        ) : (
+          <div className="hp-toolfile-nobody">binary — no preview</div>
+        )}
+      </div>
+      <div className="hp-script-srcs">
+        <span className="hp-script-srcs-label">file</span>
+        <span className="hp-chip hp-script-srcchip" title={file.host_path}>
+          {file.source}/{file.rel_path}
+        </span>
+        <span className="hp-script-srcmore" title={`sha256 ${file.sha256}`}>
+          {file.sha256.slice(0, 12)}
+        </span>
       </div>
     </div>
   );

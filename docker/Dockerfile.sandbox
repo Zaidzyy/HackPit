@@ -1,31 +1,121 @@
-# HackPit Cockpit — Kali/Debian sandbox image.
+# HackPit Cockpit — Kali sandbox image.
 #
-# Tools are baked in at BUILD time (the build has internet). At RUNTIME the cockpit
+# ONE image, three containers (see docker-compose.yml). The image is identical for the
+# lab, `:kali` and engagement sandboxes — what differs is the RUNTIME posture each
+# compose service applies (network, user, capabilities). Do not fork this file per
+# sandbox; change the compose service instead.
+#
+# Tools are baked in at BUILD time (the build has internet). At RUNTIME the *lab*
 # sandbox joins only the `internal: true` network, so it has no egress — it can never
-# apt-install or phone home once running. That is the point.
+# apt-install or phone home once running. That is the point, and it is why every tool
+# and every wordlist has to be present in the image rather than fetched on demand.
 #
-# Debian-slim base (not full kali-rolling) keeps the image small and reproducible.
-#   RECON (strict allowlist):  nmap, curl, whatweb
-#   ACTIVE (all-flags + red-confirm): sqlmap (apt), ffuf + nuclei (pinned release binaries)
-# ca-certificates is installed so an HTTPS-to-internet test fails ONLY for lack of a
-# route (a fair isolation proof), never for missing trust roots.
-FROM debian:stable-slim
+# Base: kali-rolling + `kali-linux-headless`. The previous debian:stable-slim base shipped
+# 7 tools while backend/arsenal/tools.json catalogued 73 — the planner routinely proposed
+# commands (gobuster, nikto, impacket, netexec, …) that did not exist in the sandbox.
+# Everything below exists to close that gap:
+#   * kali-linux-headless      — the standard Kali CLI toolset
+#   * explicit tool layers     — the specific tools the capability assessment found missing,
+#                                grouped by theme so a bad package name fails in an obvious
+#                                layer and the expensive layers above it stay cached
+#   * seclists + wordlists     — real content discovery (the old image had a 15-word list)
+#   * nuclei-templates         — baked; the lab sandbox has no egress so it can NEVER
+#                                `-update-templates` at runtime
+#
+# NOT here, on purpose: PowerShell/.NET tooling (PowerView, Rubeus, Mimikatz, SharpHound,
+# winPEAS). They cannot run on a Linux container. See D9 in docs/ASSESSMENT-2026-07-26.md.
+#
+# Size/time: this is a ~8-10 GB image and a cold build takes a while (kali-linux-headless
+# and seclists are most of it). That is the agreed trade for a sandbox that can actually
+# run what the arsenal advertises.
+FROM kalilinux/kali-rolling
 
-# Recon tools + sqlmap (apt) + fetch/extract helpers for the Go binaries.
+# Kali's apt prompts on a few packages (wireshark, kismet, sslh); never let a build block.
+ENV DEBIAN_FRONTEND=noninteractive
+
+# --- 1. The Kali toolset ------------------------------------------------------
+# Slowest and most stable layer, so it goes first and stays cached across edits below.
+# Recommends are deliberately NOT disabled here: several kali-tools-* metapackages pull
+# their tools via Recommends, and stripping them would silently shrink the toolset.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        nmap \
-        curl \
-        whatweb \
-        sqlmap \
-        ca-certificates \
-        iputils-ping \
-        dnsutils \
-        curl \
-        unzip \
+    && apt-get install -y kali-linux-headless \
     && rm -rf /var/lib/apt/lists/*
 
-# ffuf (web fuzzer) — pinned static Go binary from the official release.
+# --- 2. Shell + fetch + build basics -----------------------------------------
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl wget git \
+        unzip p7zip-full \
+        jq less vim tmux screen rlwrap \
+        iproute2 iptables iputils-ping dnsutils \
+        openssh-client \
+        python3-pip python3-venv pipx \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- 3. Web / recon ----------------------------------------------------------
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        nmap sqlmap nikto whatweb wafw00f wpscan \
+        gobuster feroxbuster dirsearch wfuzz \
+        subfinder httpx-toolkit amass \
+        dnsrecon dnsenum fierce \
+        sslscan testssl.sh \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- 4. Network / Active Directory (from Linux) ------------------------------
+# The AD graph + AD orchestration modules generate commands from exactly this set;
+# without these packages every proposed AD step failed "executable not found".
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        smbclient smbmap enum4linux enum4linux-ng \
+        python3-impacket impacket-scripts \
+        netexec evil-winrm \
+        bloodhound.py certipy-ad bloodyad \
+        krb5-user ldap-utils \
+        responder mitm6 \
+        masscan arp-scan nbtscan onesixtyone snmp tcpdump \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- 5. Exploitation / cracking ----------------------------------------------
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        metasploit-framework exploitdb \
+        hydra john hashcat \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- 6. Pivoting / tunnelling / VPN ------------------------------------------
+# openvpn is here for HTB/PG/client VPNs. It also needs NET_ADMIN + /dev/net/tun, which
+# only the ENGAGEMENT sandbox gets (docker-compose.yml). The lab sandbox has neither and
+# must not — its whole value is that it cannot reach anything but the lab target.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        chisel ligolo-ng proxychains4 sshuttle \
+        socat ncat netcat-traditional \
+        openvpn \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- 7. Wordlists -------------------------------------------------------------
+# seclists lands in /usr/share/seclists; `wordlists` provides /usr/share/wordlists
+# (including rockyou, which it ships gzipped — decompress it at build so the no-egress
+# sandbox can use it directly).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends seclists wordlists \
+    && rm -rf /var/lib/apt/lists/* \
+    && if [ -f /usr/share/wordlists/rockyou.txt.gz ]; then \
+           gunzip -f /usr/share/wordlists/rockyou.txt.gz; \
+       fi \
+    && test -d /usr/share/seclists
+
+# --- 8. Pinned binaries -------------------------------------------------------
+# Two reasons a tool lands here rather than in an apt layer above:
+#   1. ffuf / nuclei — pinned deliberately rather than tracking kali-rolling; nuclei in
+#      particular has to stay version-matched to the template set baked in layer 9.
+#   2. katana / kerbrute / waybackurls — kali-rolling has NO package for these (verified
+#      against the repo, not assumed), so upstream release binaries are the only option.
+# /usr/local/bin precedes /usr/bin on PATH, so these win over any apt-installed copy.
+# Every fetch ends in a `-version`/`-h` smoke test so a bad URL fails the build loudly
+# instead of shipping an image that is missing a tool the arsenal advertises.
 ARG FFUF_VERSION=2.1.0
 RUN curl -fsSL "https://github.com/ffuf/ffuf/releases/download/v${FFUF_VERSION}/ffuf_${FFUF_VERSION}_linux_amd64.tar.gz" \
         -o /tmp/ffuf.tgz \
@@ -33,10 +123,6 @@ RUN curl -fsSL "https://github.com/ffuf/ffuf/releases/download/v${FFUF_VERSION}/
     && rm /tmp/ffuf.tgz \
     && /usr/local/bin/ffuf -V
 
-# nuclei (template scanner) — pinned static Go binary from the official release.
-# NOTE: nuclei templates need a build-time `nuclei -update-templates` (egress) to scan
-# live; the binary is baked here so the tool exists for the allowlist. Templates can be
-# added to the image later without touching the safety layer.
 ARG NUCLEI_VERSION=3.3.9
 RUN curl -fsSL "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip" \
         -o /tmp/nuclei.zip \
@@ -44,15 +130,90 @@ RUN curl -fsSL "https://github.com/projectdiscovery/nuclei/releases/download/v${
     && rm /tmp/nuclei.zip \
     && /usr/local/bin/nuclei -version
 
-# A small baked wordlist for ffuf (the sandbox has no egress to fetch one at runtime).
+# katana — crawler. Not in kali-rolling.
+ARG KATANA_VERSION=1.1.0
+RUN curl -fsSL "https://github.com/projectdiscovery/katana/releases/download/v${KATANA_VERSION}/katana_${KATANA_VERSION}_linux_amd64.zip" \
+        -o /tmp/katana.zip \
+    && unzip -o /tmp/katana.zip katana -d /usr/local/bin \
+    && rm /tmp/katana.zip \
+    && /usr/local/bin/katana -version
+
+# kerbrute — Kerberos user/password enumeration. Not in kali-rolling.
+ARG KERBRUTE_VERSION=1.0.3
+RUN curl -fsSL "https://github.com/ropnop/kerbrute/releases/download/v${KERBRUTE_VERSION}/kerbrute_linux_amd64" \
+        -o /usr/local/bin/kerbrute \
+    && chmod +x /usr/local/bin/kerbrute \
+    && /usr/local/bin/kerbrute --help > /dev/null
+
+# waybackurls — archived-URL discovery for bug bounty. Not in kali-rolling.
+ARG WAYBACKURLS_VERSION=0.1.0
+RUN curl -fsSL "https://github.com/tomnomnom/waybackurls/releases/download/v${WAYBACKURLS_VERSION}/waybackurls-linux-amd64-${WAYBACKURLS_VERSION}.tgz" \
+        -o /tmp/waybackurls.tgz \
+    && tar -xzf /tmp/waybackurls.tgz -C /usr/local/bin waybackurls \
+    && rm /tmp/waybackurls.tgz \
+    && test -x /usr/local/bin/waybackurls
+
+# --- 9. nuclei templates (baked — the sandbox can never fetch them) ----------
+# Cloned to a shared path, then symlinked into BOTH possible home directories, because
+# nuclei looks in $HOME/.local/nuclei-templates and the engagement sandbox runs as root
+# while the lab/:kali sandboxes run as `sandbox`. Symlinks rather than config files so
+# this does not depend on nuclei's config-key naming staying stable.
+# Pin NUCLEI_TEMPLATES_REF to a tag for a fully reproducible build.
+ARG NUCLEI_TEMPLATES_REF=main
+RUN git clone --depth 1 --branch "${NUCLEI_TEMPLATES_REF}" \
+        https://github.com/projectdiscovery/nuclei-templates.git \
+        /usr/share/nuclei-templates \
+    && rm -rf /usr/share/nuclei-templates/.git \
+    && test "$(find /usr/share/nuclei-templates -name '*.yaml' | head -1001 | wc -l)" -gt 1000
+
+# Suppress nuclei's startup update check — it has no egress at runtime and the warning
+# only adds noise to every transcript.
+ENV DISABLE_UPDATE_CHECK=true
+
+# --- 10. Strip file capabilities (REQUIRED — do not remove) -------------------
+# Kali ships a few binaries with FILE capabilities so unprivileged desktop users get raw
+# sockets: /usr/lib/nmap/nmap (cap_net_raw,cap_net_admin,cap_net_bind_service) and
+# /usr/bin/fping (cap_net_raw). Every HackPit sandbox runs with
+# `security_opt: no-new-privileges:true`, and no_new_privs makes the kernel REFUSE to exec
+# any file that would grant privileges — so those binaries fail outright with
+# "Operation not permitted". That breaks nmap in ALL THREE containers, not just the
+# unprivileged ones.
+#
+# Stripping the file caps is the fix that costs nothing:
+#   * engagement sandbox — runs as root WITH NET_RAW/NET_ADMIN as process capabilities, so
+#     `nmap -sS` works from the process's own caps; it never needed the file caps.
+#   * lab / :kali sandboxes — cap_drop: ALL means the bounding set would have masked the
+#     file caps to nothing anyway. They degrade to `-sT`, exactly as on the old image.
+# The alternative (dropping no-new-privileges) would weaken every sandbox to fix one tool.
+# (-n1: `setcap` takes caps/file PAIRS, so it must be one file per invocation.)
+RUN getcap -r /usr /bin /sbin /opt 2>/dev/null | awk '{print $1}' | xargs -r -n1 setcap -r \
+    && test -z "$(getcap -r /usr /bin /sbin /opt 2>/dev/null)"
+
+# --- 11. Users ----------------------------------------------------------------
+# The image's DEFAULT user is unprivileged. The lab and `:kali` sandboxes run as this
+# user with cap_drop: ALL. The ENGAGEMENT sandbox overrides it with `user: root` plus
+# NET_RAW/NET_ADMIN in docker-compose.yml — that override is the one place root is
+# granted, and it is granted only there.
+# (Note: Debian/Kali ship a built-in `operator` system user, so we use our own name.)
+#
+# WORKDIR is /home/sandbox, and useradd creates it mode 700. On the engagement sandbox the
+# process is root but holds ONLY NET_RAW/NET_ADMIN — no CAP_DAC_OVERRIDE — so a 700 directory
+# owned by someone else is genuinely unreadable to it and tools that chdir (find, git, msf)
+# fail there. 0755 makes the shared working directory usable by both users.
+RUN useradd -m -s /bin/bash sandbox \
+    && chmod 0755 /home/sandbox \
+    && mkdir -p /root/.local /home/sandbox/.local /home/sandbox/.config \
+    && ln -s /usr/share/nuclei-templates /root/.local/nuclei-templates \
+    && ln -s /usr/share/nuclei-templates /home/sandbox/.local/nuclei-templates \
+    && chown -R sandbox:sandbox /home/sandbox/.local /home/sandbox/.config
+
+# A tiny baked wordlist kept from the pre-Kali image so any command still referencing it
+# keeps working. For real work use /usr/share/seclists.
 RUN printf '%s\n' \
         admin login rest api ftp backup users user products search \
         administration metrics robots.txt .git .env assets public \
         > /usr/share/hackpit-wordlist.txt
 
-# Run as an unprivileged user — the sandbox never needs root.
-# (Note: Debian ships a built-in `operator` system user, so we use our own name.)
-RUN useradd -m -s /bin/bash sandbox
 USER sandbox
 WORKDIR /home/sandbox
 

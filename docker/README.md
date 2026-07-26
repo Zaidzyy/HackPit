@@ -12,6 +12,28 @@ It is created in **M1.2** and is the hard safety gate for everything after it.
   - sandbox **CANNOT** reach the internet.
   - sandbox **CANNOT** reach the host.
 
+## Sandbox image
+`Dockerfile.sandbox` builds **one** image (`hackpit/kali-sandbox:m1`) used by all three
+sandbox containers. It is based on `kalilinux/kali-rolling` + `kali-linux-headless`, with
+SecLists, the Kali `wordlists` set and the nuclei template repo baked in (the lab sandbox has
+no egress, so nothing can be fetched at runtime). Expect a ~8–10 GB image and a long cold
+build. PowerShell/.NET tooling (PowerView, Rubeus, Mimikatz, SharpHound) is deliberately
+absent — it cannot run on Linux.
+
+## Privilege model
+The image's default user is the unprivileged `sandbox`. Elevation lives in the compose
+service, not in the image:
+
+| Container | User | Capabilities | Devices |
+|---|---|---|---|
+| `hackpit-kali-sandbox` (lab) | `sandbox` | `cap_drop: ALL` | none |
+| `hackpit-kali-open` (`:kali`) | `sandbox` | `cap_drop: ALL` | none |
+| `hackpit-engage-sandbox` | **root** | `ALL` dropped, `NET_RAW` + `NET_ADMIN` added | `/dev/net/tun` |
+
+Only the engagement sandbox is elevated, and it is the one that never runs unattended —
+every command on it is human-approved. `CAP_NET_BIND_SERVICE` is **not** granted, so tools
+that bind privileged ports (responder, ntlmrelayx on :53/:137/:445) still fail there.
+
 ## Isolation model
 The shared network is declared `internal: true`, so Docker attaches **no gateway** —
 there is no NAT and no route off the bridge. The sandbox reaches the lab only because

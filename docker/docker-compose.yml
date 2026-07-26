@@ -15,12 +15,14 @@
 #    and is still disposable via `down`. An exposed :kali now reaches your host/LAN — localhost only,
 #    auth required before any exposure.
 #
-# 3. hackpit-engage-sandbox  (FULLY OPEN — the REAL-TARGET engagement sandbox; SUPERVISED, HIGHEST RISK)
+# 3. hackpit-engage-sandbox  (FULLY OPEN + PRIVILEGED — the REAL-TARGET engagement sandbox;
+#                             SUPERVISED, HIGHEST RISK)
 #    The cockpit execs here ONLY in explicit engagement mode (real authorized targets). It has NO
 #    isolation floor and NO Wall A (Zaid's informed decision): on a normal NAT bridge it reaches the
-#    internet + LAN + host + cloud metadata — nothing bounds WHERE it can reach. The ONLY guard is
-#    HUMAN APPROVAL OF EVERY COMMAND (explicit entry + approve-each + heuristic red-confirm; never
-#    hands-off). Keeps cap_drop ALL + no-new-privileges. Proof: engage_open_proof.sh (full reach).
+#    internet + LAN + host + cloud metadata — nothing bounds WHERE it can reach. It ALSO runs as
+#    root with NET_RAW + NET_ADMIN and /dev/net/tun, so SYN scans, tcpdump, raw sockets and VPN
+#    all work. The ONLY guard is HUMAN APPROVAL OF EVERY COMMAND (explicit entry + approve-each +
+#    heuristic red-confirm; never hands-off). Proof: engage_open_proof.sh (full reach).
 #
 # All sandbox images bake their tools in at build time. The lab image is pulled at `up` time.
 #
@@ -67,7 +69,9 @@ services:
     networks:
       - hackpit-isolated
     restart: unless-stopped
-    # Defense in depth beyond network isolation:
+    # Defense in depth beyond network isolation. UNCHANGED by the D3 privilege work: this is
+    # the sandbox that hosts unattended agent runs, so it keeps the image's unprivileged
+    # `sandbox` user, no added capabilities and no devices. Only engage-sandbox is elevated.
     cap_drop:
       - ALL
     security_opt:
@@ -89,7 +93,8 @@ services:
     networks:
       - hackpit-open
     restart: unless-stopped
-    # Defense in depth is KEPT even though the network is open:
+    # Defense in depth is KEPT even though the network is open — non-root, no capabilities,
+    # no devices. `:kali` gets the full new toolset (D4) but not the engage sandbox's privileges.
     cap_drop:
       - ALL
     security_opt:
@@ -101,9 +106,9 @@ services:
     # On a normal NAT bridge (`hackpit-engage`) with FULL network reach: internet + LAN + host
     # + cloud metadata. There is NO isolation floor and NO Wall-A firewall — nothing bounds
     # WHERE it can reach. The ONLY guard on a real-target run is HUMAN APPROVAL OF EVERY COMMAND
-    # (explicit engagement entry + approve-each + heuristic red-confirm; never hands-off). Keeps
-    # cap_drop: ALL + no-new-privileges. The cockpit execs here ONLY in explicit, human-entered
-    # engagement mode. NOT for lab runs (the lab keeps its egress-less isolated sandbox).
+    # (explicit engagement entry + approve-each + heuristic red-confirm; never hands-off).
+    # The cockpit execs here ONLY in explicit, human-entered engagement mode. NOT for lab runs
+    # (the lab keeps its egress-less, unprivileged, isolated sandbox).
     build:
       context: .
       dockerfile: Dockerfile.sandbox
@@ -112,8 +117,30 @@ services:
     hostname: hackpit-engage-sandbox
     networks:
       - hackpit-engage
+    # --- PRIVILEGE: this service, and ONLY this service, is elevated (D3) ------------------
+    # Same image as the other two sandboxes; the elevation lives here in the runtime posture.
+    #   user: root       — write access to root-owned files (appending /etc/hosts to point at a
+    #                      DC is the day-one AD case). The image default is `sandbox`, uid 1000.
+    #   NET_RAW          — nmap -sS/-sU/-O, masscan, arp-scan, tcpdump, any raw socket. Without
+    #                      it nmap silently degrades to a -sT connect scan: slower AND louder.
+    #   NET_ADMIN        — bringing up the VPN tun interface and setting routes.
+    #   /dev/net/tun     — the device openvpn needs for an HTB/PG/client VPN.
+    #
+    # cap_drop: ALL still runs FIRST, so this is an explicit two-capability grant, not "root
+    # with the Docker default set" — verified: CapEff is exactly cap_net_admin,cap_net_raw.
+    # Two consequences worth knowing before you debug them at 2am:
+    #   * NO CAP_NET_BIND_SERVICE — responder / ntlmrelayx still cannot bind :53/:137/:445,
+    #     and no reverse shell can listen below port 1024. Add it deliberately if wanted.
+    #   * NO CAP_CHOWN/SETUID/DAC_OVERRIDE — so `apt-get install` inside a running engagement
+    #     sandbox will not work. Tools belong in Dockerfile.sandbox, which is the intent.
+    user: root
     cap_drop:
       - ALL
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     security_opt:
       - no-new-privileges:true
     read_only: false

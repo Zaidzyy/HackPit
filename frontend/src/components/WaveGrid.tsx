@@ -46,9 +46,10 @@ export function WaveGrid() {
     // so a page sitting idle did ~120 forced recalcs a second for a value that changes only
     // when the operator picks a new accent.
     //
-    // The picker sets --accent as an inline style on <html> (see TopBar.setAccent), so a
-    // MutationObserver on that attribute catches the change exactly, and synchronously —
-    // the reskin is still instant. Steady-state cost drops to zero.
+    // --accent is the CSS default (amber) now that the runtime accent picker is gone, so it
+    // does not change in normal use. The MutationObserver is kept as a cheap safety net: if
+    // anything ever sets --accent as an inline style on <html>, the reskin is still instant.
+    // Steady-state cost is zero.
     let accent = accentRGB();
     const accentObserver = new MutationObserver(() => {
       accent = accentRGB();

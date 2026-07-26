@@ -196,28 +196,28 @@ export function KaliShell() {
   );
 
   return (
-    <PageShell crumbs={[{ label: "kali" }]}>
+    <PageShell crumbs={[{ label: "kali · transcript" }]}>
       <div className="hp-kali">
         <header className="hp-kali-head">
           <div className="hp-ap-kicker">human-only · full network reach · NOT isolated</div>
-          <h1 className="hp-kali-title">:kali</h1>
+          <h1 className="hp-kali-title">:kali · transcript</h1>
           <p className="hp-kali-sub">
-            A full interactive shell in a sandbox with <b>full network reach</b> — it
-            reaches the internet, this host, and your LAN. Whatever you type runs there:
-            pipes, redirects, your whole toolkit. There is no allowlist and{" "}
-            <b>no isolation</b> here — <b>you</b> are the operator. The container is
+            The <b>transcript variant</b> of <code>:kali</code> — a full interactive shell in
+            a sandbox with <b>full network reach</b> (the internet, this host, and your LAN).
+            Whatever you type runs there: pipes, redirects, your whole toolkit. There is no
+            allowlist and <b>no isolation</b> — <b>you</b> are the operator. The container is
             fixed and disposable, and this is a human-only terminal.
           </p>
           <p className="hp-kali-sub hp-kali-xref">
             Every command here is delimited server-side, so you get a clean, escape-free
-            transcript per command — that is what the reports are built from, and why
+            transcript per command — the record a report or audit is built from, and why
             full-screen tools can&apos;t render in this view. For <code>vim</code>,{" "}
             <code>top</code>, an interactive <code>msfconsole</code> or a raw{" "}
-            <code>evil-winrm</code> shell, use{" "}
+            <code>evil-winrm</code> shell, use the main{" "}
             <Link href="/terminal" className="hp-pty-xlink">
-              :terminal
+              :kali
             </Link>{" "}
-            — a real PTY into this same sandbox.
+            shell — a real PTY into this same sandbox.
           </p>
         </header>
 

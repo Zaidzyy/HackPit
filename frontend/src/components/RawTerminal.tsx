@@ -193,25 +193,25 @@ export function RawTerminal() {
   const ready = !!status?.ready;
 
   return (
-    <PageShell crumbs={[{ label: "terminal" }]}>
+    <PageShell crumbs={[{ label: "kali" }]}>
       <div className="hp-kali hp-pty">
         <header className="hp-kali-head">
           <div className="hp-ap-kicker">
             human-only · full network reach · NOT isolated · real PTY
           </div>
-          <h1 className="hp-kali-title">:terminal</h1>
+          <h1 className="hp-kali-title">:kali</h1>
           <p className="hp-kali-sub">
-            A <b>real terminal</b> in the same sandbox <code>:kali</code> uses — a true
+            A <b>real terminal</b> in a sandbox with <b>full network reach</b> — a true
             PTY, so full-screen tools work: <code>vim</code>, <code>top</code>, an
             interactive <code>msfconsole</code>, a raw <code>evil-winrm</code> shell, a{" "}
             <code>pty.spawn</code> upgrade. Same box, same reach: the internet, this host
-            and your LAN, with <b>no isolation</b>.{" "}
+            and your LAN, with <b>no isolation</b>. Human-only; the container is fixed and
+            disposable. Need a clean, escape-free per-command transcript for a report or
+            audit? use the{" "}
             <Link href="/kali" className="hp-pty-xlink">
-              :kali
+              transcript shell →
             </Link>{" "}
-            is unchanged and still the right surface for one-shot commands — it keeps the
-            clean per-command transcripts that reports are built from. This one streams
-            raw bytes, and its whole session is recorded as one transcript.
+            (sentinel-delimited, one record per command).
           </p>
         </header>
 

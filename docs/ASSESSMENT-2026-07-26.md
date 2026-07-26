@@ -4,7 +4,7 @@
 **Scope:** every backend module, the frontend, the pipeline, the docker stack, the docs, and the live KB
 **Targets this is measured against:** OSCP · PNPT · eCPPT · HTB CPTS · CRTP · HTB boxes/CTF · bug bounty · real-world client pentests.
 
-**Status note (updated).** This began as an assessment (Part I) and an agreed plan (Part II). **All four phases of that plan have since been built** — the execution substrate (Phase 1), the state model (Phase 2), the drive-speed gaps (Phase 3), and the content-and-goal-specific work (Phase 4: KB Route-B ingest, the evasion/OPSEC channel, the HTTP repeater, pivot/tunnel routing, and exam-mode report templates). Part I has been trimmed to the handful of gaps that remain *deliberately deferred*; the completed blockers, decisions and phases now live in **Part III — Build Log**. The build is complete.
+**Status note (updated).** This began as an assessment (Part I) and an agreed plan (Part II). **All four phases of that plan have since been built**, and a fifth followed — the execution substrate (Phase 1), the state model (Phase 2), the drive-speed gaps (Phase 3), the content-and-goal-specific work (Phase 4: KB Route-B ingest, the evasion/OPSEC channel, the HTTP repeater, pivot/tunnel routing, exam-mode report templates), and **Phase 5**, which closed the two things Part I had left standing: a real PTY (added as a *second* surface, so the auditable one survives) and the recommended KB enrichment (PortSwigger Academy, HackTricks Cloud, the HTB slice, and a CVE→exploit index). Part I has been trimmed to what genuinely remains; the completed blockers, decisions and phases live in **Part III — Build Log**.
 
 ---
 
@@ -12,34 +12,29 @@
 
 The **architecture is genuinely strong** — the safety engineering and the LLM-grounding discipline are better than most commercial tooling.
 
-The original problem this assessment found was *reach*: nothing in HackPit was fake or stubbed, but the container it executed into contained seven programs, so it could not finish a real HTB box, touch a real AD domain, run a bug-bounty recon sweep, or complete an OSCP-style engagement. **That execution substrate has now been rebuilt (Phase 1), the loop reasons over structured state instead of stdout tails (Phase 2), the drive-speed gaps are closed (Phase 3), and the content/goal work is done (Phase 4).** See Part III.
+The original problem this assessment found was *reach*: nothing in HackPit was fake or stubbed, but the container it executed into contained seven programs, so it could not finish a real HTB box, touch a real AD domain, run a bug-bounty recon sweep, or complete an OSCP-style engagement. **That execution substrate has now been rebuilt (Phase 1), the loop reasons over structured state instead of stdout tails (Phase 2), the drive-speed gaps are closed (Phase 3), the content/goal work is done (Phase 4), and the interaction and knowledge gaps Part I left standing are closed (Phase 5).** See Part III.
 
-What remains is a short list of *deliberately deferred* items — a true PTY, risk-tiered approval, a Windows execution target for CRTP, and a VPS for blind callbacks — each deferred for a stated reason, not left undone. See §1 and Part II's "Explicitly deferred".
+Since then **Phase 5** has closed the PTY gap (a real terminal as a *second* surface, keeping the auditable one) and finished the KB enrichment the assessment recommended. What remains is a short list of *deliberately deferred* items — a Windows execution target for CRTP, a VPS for blind callbacks, and the last few thin KB categories — each deferred for a stated reason, not left undone. Risk-tiered approval is no longer among them: it has been **decided against** (see D5). See §1 and Part II's "Explicitly deferred".
 
 ---
 
-## 1. Remaining gaps (deliberately deferred)
+## 1. Remaining gaps
 
-The blocker sections for everything the four phases fixed have been removed (see Part III). These two are deferred by decision, not left undone.
+The blocker sections for everything the five phases fixed have been removed (see Part III). What is left is genuinely small.
 
-### 1.1 No true PTY — deliberate partial
+### 1.1 The PTY gap — now closed, without losing the transcript
 
-`session.py` uses `docker exec -i`, without `-t`. Phase 3 added a **persistent line-session** to `:kali` (state now carries across commands — `cd`, environment and background jobs persist), which was the load-bearing half of the old "`:kali` is a command runner, not a shell" gap. A **true PTY** was deliberately *not* added: full-screen tooling (`vim`, `top`, an interactive `msfconsole`, a raw `evil-winrm` shell, `python -c 'pty.spawn'` upgrades) still needs a real terminal and xterm.js. This is a conscious trade — readable, logged transcripts over terminal-escape handling — not an oversight. Revisit only if a real engagement demands full-screen interaction.
+This section previously read "no true PTY — deliberate partial", and framed it as a trade: readable logged transcripts *or* full-screen tooling. **Phase 5 rejected that trade.** The premise was wrong — the two are not alternatives if they are separate surfaces.
 
-### 1.2 The human-approval model — tiering still open
+`:kali` is unchanged: still a persistent shell delimiting each command with a sentinel over a plain pipe, still producing the clean, escape-free, per-command transcripts reports are built from. Alongside it, `:terminal` allocates a **real PTY** in the same open sandbox, so `vim`, `top`, an interactive `msfconsole`, a raw `evil-winrm` shell and `python -c 'pty.spawn'` upgrades all render. Both are audited; both carry identical containment. See Part III, Phase 5.
 
-**Current state:** every command needs individual `approved=true`; anything the danger heuristic flags additionally needs `dangerous_ack`; `:kali` is human-driven (typing *is* the approval). Phase 3 added **one-keystroke approve** (`Enter` = approve · `S` = skip · `Esc` = stop; a dangerous command never fires on `Enter` alone) — the cheapest win, done.
+### 1.2 The human-approval model — settled, not open
 
-**Still open — risk-tiered approval.** Keying the requirement to a deterministically computed risk class rather than to who is asking:
+**Current state:** every command needs individual `approved=true`; anything the danger heuristic flags additionally needs `dangerous_ack`; `:kali` and `:terminal` are human-driven (typing *is* the approval). Phase 3 added **one-keystroke approve** (`Enter` = approve · `S` = skip · `Esc` = stop; a dangerous command never fires on `Enter` alone).
 
-| Class | Examples | Gate |
-|---|---|---|
-| **0 · Passive / OSINT** | subfinder, amass -passive, waybackurls, gau, whois, dig, crt.sh, shodan | **Auto-run in scope.** Logged, no prompt. |
-| **1 · Active read-only** | nmap, httpx, whatweb, nuclei (info/low), ffuf/gobuster at a rate limit | **Batch-approve a plan** of N commands. Live feed + kill switch. |
-| **2 · Active testing** | sqlmap, nuclei high/crit, dalfox, hydra, password spraying | **Per-command** (unchanged). |
-| **3 · Destructive / state-changing** | AD writes, DCSync, password reset, exploits with payloads, reverse shells, msfvenom | **Per-command + red confirm** (unchanged). |
+This section previously proposed **risk-tiered approval** — auto-running "passive" commands, batch-approving a plan of read-only ones — as open work. **That is now decided against** (D5). Per-command approval is the project's single load-bearing safety property in engagement mode: Wall A is down, the sandbox reaches the internet, the host and the LAN, and nothing else bounds *where* a command can go. A tier that auto-runs anything would remove the only gate on the one mode that needs it most, and it would do so by trusting a classifier — a new component, on the wrong side of the safety boundary, to decide when the human can be skipped. The convenience it buys is a keystroke that has already been optimised away.
 
-Most of the machinery already exists (`allowlist.dangerous_command_heuristic()` is the Class-3 detector; `arsenal` categories + `detection.loudness` give a 0/1/2 split; `scope.py` bounds *where*). Missing: the classifier itself and a "run plan" object approved once. The prerequisite — fixing `_looks_like_host()` so the scope check is trustworthy when it becomes load-bearing — **is now done** (Phase 3, step 12). Deferred until bug bounty becomes the primary activity (a time-boxed autonomy window would layer on top, later). **Regardless of what else changes: never remove the gate for anything the danger heuristic flags.**
+Per-command approval is therefore **standing policy, not a deferred item**, and does not appear in the deferred list. The prerequisite work that would have enabled tiering (`_looks_like_host()`, Phase 3 step 12) was worth doing on its own merits — the scope check is trustworthy now regardless. **Unchanged and non-negotiable: never remove the gate for anything the danger heuristic flags.**
 
 ---
 
@@ -72,7 +67,9 @@ Most of the machinery already exists (`allowlist.dangerous_command_heuristic()` 
 | Recon-driven expansion | **Good** | Mines run output for hosts, sorts by scope, in-scope join the live allowed set, out-of-scope surfaced read-only. Cannot widen the scope. Capped and never silently truncating. |
 | Orchestrator loop | **Now state-grounded** | Proposes one command, never executes. Feeds on the structured state model + live task tree (Phase 2) instead of stdout tails. |
 | Engagement state model | **New (Phase 2)** | hosts/services/endpoints/credentials/findings, upsert-only, fed by output parsers + loot-file ingest; drives the planner and a UI panel. Executes nothing (AST-asserted). |
-| `:kali` | **Now a persistent shell (Phase 3)** | One long-lived `docker exec -i sh`; `cd`/env/background jobs persist. Same containment (hardcoded open container, human-only, audited, no isolation gate). No PTY by design (§1.1). |
+| `:kali` | **Now a persistent shell (Phase 3)** | One long-lived `docker exec -i sh`; `cd`/env/background jobs persist. Same containment (hardcoded open container, human-only, audited, no isolation gate). Deliberately no PTY — that is what keeps its transcripts clean (§1.1). |
+| `:terminal` | **Real PTY, second surface (Phase 5)** | `pty.fork()` inside the same open box, driven over a framed WebSocket to xterm.js; full-screen tools render and resize. Containment mirrors `:kali` point for point; the raw stream is audited. Does not replace `:kali` (§1.1). |
+| `:exploits` | **New (Phase 5)** | Version-keyed CVE → exploit lookup over the sandbox's local exploit-db catalogue — 47k exploits, 25k distinct CVEs. Read-only; executes nothing. |
 | Live sessions | **Well-designed, now tooled** | Start is a gated command; stdin is human-only and source-scan locked. |
 | HTTP repeater | **New (Phase 4)** | Compose/send/replay/diff. Argv-only curl inside the hardcoded open box (no shell parses a request field; body on stdin), human-only + source-scan locked like `:kali`, scope-checked against a named engagement, every send run-recorded. |
 | Pivot / tunnels | **New (Phase 4)** | chisel/ligolo-ng lifecycle (human-only start/stop) + pure route resolution and a **visible** proxychains rewrite applied *before* the approval screen. A tunnel's subnet enters scope only via an explicit, audited amendment; recon expansion still cannot widen. |
@@ -106,7 +103,7 @@ Most of the machinery already exists (`allowlist.dangerous_command_heuristic()` 
 
 ## 3. Knowledge base assessment
 
-**1,601 entries · 1,395 with commands · median body 3,000 chars.**
+**2,617 entries** (1,601 at the time of the assessment; +66 in Phase 4, +950 in Phase 5) **· median body 3,000 chars.**
 
 **Source distribution:**
 
@@ -130,26 +127,28 @@ Most of the machinery already exists (`allowlist.dangerous_command_heuristic()` 
 | htb-my-resources | 5 |
 | shodan-dorks | 1 |
 
-**Tiers:** 1,249 tier-3 · 241 tier-2 · **111 tier-1** (your own).
+*Phase 5 added:* hacktricks-cloud **578** · portswigger **372**.
+
+**Tiers:** 2,265 tier-3 · 241 tier-2 · **111 tier-1** (your own) — see finding 2.
 
 ### Findings
 
 1. **PayloadsAllTheThings payload depth — now recovered (Phase 4, D11/D12).** PATT's 66 `.txt` payload lists + the shodan dork list are ingested at **payload-level granularity** (64 `payload-set` + 2 `dork-list` entries, `no_merge`-guarded so consolidation can never collapse them again), each a searchable entry over a full sidecar corpus mounted read-only at `/payloads`; 56 `oscp_tools` files went to the Scripts Arsenal. KB 1,601 → 1,667. See Part III, Phase 4.
-2. **"Grounded in your own notes" is mostly "grounded in HackTricks."** Search boosts tier-1 (`search.py:58`), but with 111 tier-1 entries that lever has little to pull on. **Growing tier-1 is the highest-leverage KB work still available** — still open.
-3. **Empty categories** (still open): cloud 2 · mobile 2 · iot 2 · forensics 1 · ics 1 · phishing 1 · supply-chain 1. Cloud and API bug bounty have effectively no coverage.
-4. **HTB Academy = 13 entries** (still open). The CPTS syllabus, for a cert on the target list, essentially not ingested.
-5. **Missing as retrievable topics** (still open): API security (GraphQL/REST), OAuth/SSO flows, race conditions, business logic, HTTP request smuggling, prototype pollution, per-language deserialization, SSRF→cloud-metadata chains.
-6. **No CVE/exploit index** (still open). "Find the public exploit for this version" is the OSCP core loop and nothing serves it.
+2. **"Grounded in your own notes" is mostly "grounded in HackTricks."** Search boosts tier-1 (`search.py:58`), but with 111 tier-1 entries that lever has little to pull on. **Growing tier-1 is the highest-leverage KB work still available** — **still open**, and now the *only* open KB item. Phase 5 grew the KB by 950 entries, all tier-3, so the ratio moved the wrong way: the fix is writing, not ingesting.
+3. **Empty categories — mostly fixed (Phase 5).** Was: cloud 2 · mobile 2 · iot 2 · forensics 1 · ics 1 · phishing 1 · supply-chain 1. Now **cloud 535** and **supply-chain 47** (HackTricks Cloud), and web/API coverage is deep (PortSwigger). **Still thin:** mobile · iot · forensics · ics · phishing — none of which is on the target list, so they stay unfilled by choice rather than oversight.
+4. **HTB Academy — narrowed, not closed (Phase 5).** The local folder is an 18-module *slice*, not the CPTS syllabus, and HTB content is proprietary so nothing is scraped. Auditing the slice against what had been ingested found two files silently lost — one tracked in git but absent from disk, one lost purely for having a `.txt` extension — both now recovered. Closing this properly needs the course itself.
+5. **Missing as retrievable topics — fixed (Phase 5).** API security (GraphQL/REST), OAuth/SSO, race conditions, business logic, request smuggling, prototype pollution, deserialization and SSRF→cloud-metadata chains all now resolve, most to PortSwigger Academy material with the lab that drills each one alongside.
+6. **No CVE/exploit index — fixed (Phase 5).** `:exploits` answers service+version → CVE → public exploit over the sandbox's own exploit-db catalogue, version-compared rather than substring-matched.
 
-Items 2–6 are the recommended *next* KB batches (PortSwigger Academy, HTB Academy proper, HackTricks Cloud, a CVE index); they were never in scope for the four phases and remain open for a future enrichment pass.
+Item 2 is the only KB item still open. Items 3–6 were the recommended next batches; they were never in scope for the first four phases and were built in Phase 5.
 
-### Recommended ingestion, in priority order
+### Recommended ingestion, in priority order — status
 
-1. **PortSwigger Web Security Academy** — the single best web-security source, and structured
-2. **HTB Academy modules** properly (CPTS syllabus)
-3. **HackTricks Cloud**
-4. **PayloadsAllTheThings re-ingested at payload-level granularity** (see §4)
-5. **An exploit-db / CVE mapping** keyed on service+version
+1. **PortSwigger Web Security Academy** — the single best web-security source, and structured. **Done (Phase 5, +372).**
+2. **HTB Academy modules** properly (CPTS syllabus). **Partially — the local slice is fully ingested; the syllabus needs the course.**
+3. **HackTricks Cloud.** **Done (Phase 5, +578).**
+4. **PayloadsAllTheThings re-ingested at payload-level granularity** (see §4). **Done (Phase 4).**
+5. **An exploit-db / CVE mapping** keyed on service+version. **Done (Phase 5) — and deliberately not as KB prose; see Part III.**
 
 ---
 
@@ -231,36 +230,37 @@ The assessment's single highest-value reasoning-layer recommendation was Pentest
 
 # PART II — WHAT REMAINS
 
-*Decided with Zaid, 2026-07-26. All four phases and every decision that drove them are in Part III. The build is complete; this section is only the handful of things intentionally left for later.*
+*Decided with Zaid, 2026-07-26. All five phases and every decision that drove them are in Part III. The build is complete; this section is only what is intentionally left — some of it deferred, some of it rejected outright.*
 
 ## Standing policy (unchanged, still governs the project)
 
 These are not open work — they are the rules the project runs by, and building is finished, so they no longer need a decision table. Kept here as the active policy:
 
 - **D2 — Windows + Docker Desktop; a VPS is added later, only for bug-bounty callbacks.** Docker Desktop is a real Linux VM (WSL2); the one thing it can't give is a publicly reachable listener for blind SSRF/XXE/RCE. The repeater (Phase 4) sends and reads the *direct* response; the VPS piece is still deferred until bounty work needs it.
-- **D5 — Per-command approval stays.** One-keystroke approve shipped (Phase 3); risk-tiering is deferred (§1.2). Every new Phase-4 execution surface (repeater, tunnels) preserves this: nothing autonomous, human-only where it matters, and the tunnel rewrite is *visible before* approval.
+- **D5 — Per-command approval stays. Risk-tiering is rejected, not deferred.** One-keystroke approve shipped (Phase 3). Tiering — auto-running "passive" commands, batch-approving read-only plans — was reconsidered and **decided against** (§1.2): in engagement mode per-command approval is the *only* thing bounding where a command may go, and a classifier deciding when to skip the human is a new component on the wrong side of that boundary. Every execution surface since preserves this — repeater, tunnels (rewrite *visible before* approval), and Phase 5's `:terminal` (human-only, no agent path).
 - **D8 — HexStrike is a reference, never an execution backend.** Its tools bypass all four gates, the target-lock, the scope model and the audit trail. Rejected, not deferred.
 - **D9 — Accept the CRTP Windows-execution gap; no Windows VM.** CRTP's PowerShell/.NET tooling can't run on a Linux container; HackPit plans and writes up CRTP work, the lab work happens elsewhere. Windows-only tools are kept and *marked*, never listed as runnable.
 
 ## Explicitly deferred (with the reason)
 
-- **A true PTY** — deliberate partial (§1.1); readable logged transcripts over terminal-escape handling. Revisit only if a real engagement demands full-screen interaction.
-- **Risk-tiered / batch approval** and **time-boxed autonomy** — until bug bounty is the primary activity (§1.2). The prerequisite (`_looks_like_host()`) is already fixed.
 - **A VPS for blind out-of-band callbacks** (D2) — a NAT'd laptop has no public listener; deferred until bounty work needs it.
-- **Kali VM as an execution target; HexStrike as an execution backend** — rejected, not deferred.
-- **Next KB enrichment batches** — PortSwigger Academy, HTB Academy proper, HackTricks Cloud, a CVE/exploit index (§3, items 2–6). Recommended, never in the four-phase scope; a future pass.
-- **Authentication before any non-localhost deployment** (§6) — no decision needed until a VPS enters the picture, but a hard blocker the moment it does.
+- **A Windows execution target for CRTP** (D9) — accepted gap; HackPit plans and writes up CRTP work, the lab work happens elsewhere.
+- **Growing tier-1** (§3, finding 2) — the only KB item still open, and the one that cannot be solved by ingesting: it needs Zaid's own writing.
+- **The HTB Academy syllabus proper** (§3, finding 4) — the local slice is fully ingested; the rest is proprietary and needs the course.
+- **Thin categories with no target on the list** — mobile · iot · forensics · ics · phishing (§3, finding 3). Unfilled by choice.
+- **Kali VM as an execution target; HexStrike as an execution backend; risk-tiered / batch approval** — **rejected, not deferred** (D8, D5, §1.2).
+- **Authentication before any non-localhost deployment** (§6) — no decision needed until a VPS enters the picture, but a hard blocker the moment it does. `:terminal` makes this sharper: an unauthenticated *interactive terminal* onto a box that reaches the host and LAN.
 - Screenshot capture, recon diffing/monitoring, checklist-driven runs.
 
 ---
 
-# PART III — BUILD LOG (Phases 1–4, shipped 2026-07-26)
+# PART III — BUILD LOG (Phases 1–5, shipped 2026-07-26)
 
-Branch `sandbox-kali-image`, committed locally, **not pushed**. Full hermetic safety suite green throughout (29 test files); both Docker proofs 4/4 (lab still egress-less; engage fully open); browser-verified with Ollama (`qwen3:8b`).
+Branch `sandbox-kali-image`. Full hermetic safety suite green throughout (31 test files); both Docker proofs 4/4 (lab still egress-less; engage fully open); browser-verified with Ollama (`qwen3:8b`).
 
-## Decisions taken (D1–D13)
+## Decisions taken (D1–D15)
 
-Every decision that drove the build. D1/D3/D4/D6/D7 were the Phase-1 build; D9 is a standing accepted gap (Part II); D2/D5/D8 are standing policy (Part II); D10/D11/D12 were Phase-4 work, now built; D13 is this document.
+Every decision that drove the build. D1/D3/D4/D6/D7 were the Phase-1 build; D9 is a standing accepted gap (Part II); D2/D5/D8 are standing policy (Part II); D10/D11/D12 were Phase-4 work, now built; D13 is this document; D14/D15 shaped Phase 5.
 
 - **D1 — Fix the sandbox image; HackPit *is* the attack box.** A Kali VM's advantages (root, raw sockets, VPN, `/etc/hosts`) are all reachable in Docker via capabilities + `/dev/net/tun`. *Built (Phase 1).*
 - **D3 — Capabilities + root on the ENGAGE sandbox only.** Lab keeps `cap_drop: ALL` + non-root. *Built.*
@@ -272,6 +272,8 @@ Every decision that drove the build. D1/D3/D4/D6/D7 were the Phase-1 build; D9 i
 - **D11 — Fix the KB gap via Route B (additive merge), not a rebuild.** *Built (Phase 4).*
 - **D12 — Ingest PATT payloads + shodan dorks into the KB; `oscp_tools` into the Scripts Arsenal.** *Built (Phase 4).*
 - **D13 — Plan lives in this document.** *Done.*
+- **D14 — The PTY is a SECOND surface, never a replacement.** The old framing treated auditable transcripts and full-screen tooling as alternatives. They are only alternatives on one surface. `:kali` keeps its sentinel; `:terminal` gets the pty; both are audited and identically contained, and a test asserts `kali.py` never grows a pty. *Built (Phase 5).*
+- **D15 — The CVE index is a lookup table, not a KB batch.** "Find the exploit for this version" wants an exact, deterministic table; embedding it as prose would make the one query it exists to answer fuzzy. Its own data shape, search path and surface — and it executes nothing. *Built (Phase 5).*
 
 ## Phase 1 — reach a real target
 
@@ -314,13 +316,25 @@ Every decision that drove the build. D1/D3/D4/D6/D7 were the Phase-1 build; D9 i
 - **Item 4 — pivot/tunnel routing.** `cockpit/tunnels.py` — chisel/ligolo-ng lifecycle (start the listener in the engage sandbox, hand back the agent one-liner to paste on the compromised host; human-only start/stop, source-scan locked). `route_for`/`wrap_command` are **pure** — they compute a **visible** `proxychains -q` prefix (chisel/SOCKS) or leave the command unwrapped with a route note (ligolo/interface), applied *before* the approval screen so the human approves the exact argv (silent routing was rejected for exactly this reason). A tunnel's subnet enters scope only via `engagement.add_pivot_subnet` — the one deliberate, audited widening path; recon expansion still cannot widen. Frontend `/tunnels`: start form, live tunnels with the copy-ready one-liner + per-subnet "add to scope (by hand)", and a pure route preview.
 - **Item 5 — exam-mode report templates + proof.txt as per-host state.** `state` `Host` gains `local_txt`/`proof_txt` + `ownership()`; captured automatically when a command reads a flag file (`proof.txt`/`root.txt` → proof; `local.txt`/`user.txt` → local — a stray 32-hex hash is never mistaken for a flag) or pasted via `POST /sessions/{id}/state/proof`; the state panel badges foothold vs owned. `report.py` gains four templates — standard, **OSCP** (per-host walkthrough + a proof.txt table spliced from state at `{{PROOF_TABLE}}`, computed not model-written), **CPTS** (exec-summary + findings register), **H1/Bugcrowd** (impact-first + a **CVSS 3.1** base score computed by `cvss31_base`, matching the official calculator). Every template keeps the shared grounding rules + the `{{EVIDENCE}}` splice. Frontend: a template picker on the report screen.
 
+## Phase 5 — the PTY gap, and finishing the KB
+
+*Commits `e8eeeef`, `8f0b91b` (terminal), `84e31bf` (CVE index), `f6fb6a4` (KB batches).*
+
+- **Item 1 — a real PTY, as a SECOND surface.** §1.1 used to call this a trade: readable transcripts *or* full-screen tooling. It is not, if they are separate surfaces. `:kali` is untouched — still sentinel-delimited over a plain pipe, still the clean per-command transcripts reports are built from — and `cockpit/terminal.py` adds `:terminal` beside it. `docker exec -t` refuses without a client TTY and a WebSocket handler has none, so the pty is allocated **inside** the container by a constant driver that `pty.fork()`s bash and multiplexes it over the pipes. Its stdin is **framed** (`0x00` = keystrokes, `0x01` = `COLSxROWS` → `ioctl TIOCSWINSZ`), which is what makes resize possible without an in-band escape a keystroke could forge; its stdout is the raw pty stream, straight to xterm.js. Containment mirrors `:kali` point for point: hardcoded container (the request carries `session_id`/`cols`/`rows` and nothing else), driver a raw-string constant passed as one argv element, no isolation gate, **human-only and source-scan locked** like `run_kali`, and the raw stream audited to the run store — capped, and checkpointed every 30s so a crash still leaves a transcript. The WS route pins `Origin` by hand, because CORS middleware does not cover WebSockets. `test_terminal.py` (16 checks) locks all of it *plus the additive property itself*: `kali.py` must still carry its sentinel and must never grow a pty, so the clean transcript cannot quietly die. Verified live — `tty` reports `/dev/pts/0`, `top` and `vim` render, resize propagates 30×100 → 43×132 → 60×200.
+- **Item 2 — CVE → exploit index (§3, finding 6).** The OSCP inner loop, built as a **keyed lookup rather than another KB batch**: "find the exploit for *this* version" wants an exact table, not prose retrieval, so it gets its own data shape, search path and surface. `pipeline/ingest_exploitdb.py` reads `/usr/share/exploitdb/files_exploits.csv` out of the sandbox image — 47,108 exploits, 27,384 with a CVE, 25,041 distinct — nothing fetched from the internet. exploit-db titles follow `<Product> <Version> - <Vuln>` on ~100% of rows, so parsing the left side turns a flat catalogue into `(product, version) → exploits` with the constraint typed (exact / lte / range / wildcard / none); 32,807 rows yield a version. `backend/exploits/` then does what `searchsploit`'s substring match cannot: `2.4.49` satisfies `< 2.4.50`, sits inside a range, and matches the `2.4.x` line — each with a *different stated verdict*, and the verdict is the ranking's primary key, with token similarity only breaking ties inside a tier. (Blending them let `Apache 2.4.x` outrank the entry naming 2.4.49 exactly — caught on real data, now regression-locked.) Surfaces: `/exploits`, plus a per-service `exploits →` link in the state panel, so a fingerprinted service reaches its exploits in one click. Every hit names the file **already inside the sandbox**. It executes nothing, and `test_exploits.py` asserts the package contains no subprocess path and never reaches the execution layer — finding is not running.
+- **Item 3 — PortSwigger Web Security Academy (+372).** `pipeline/fetch_portswigger.py` turns the site into the same shape every other source has, so nothing downstream is special-cased. URLs come from the publisher's own `sitemap.xml` rather than from crawling — it is complete (the all-topics page renders client-side, so scraping it yields 19 of ~140) and nothing is ever guessed; `robots.txt` restricts only `/bappstore/bapps/download/`. 398 pages, 273 of them labs, whose *Solution* steps survive. Two rules written by what dry runs actually did: **labs and sub-topic pages are `no_merge`** (the first run folded ten Academy pages — Reflected/Stored/DOM XSS, contexts, CSP, dangling markup — into one pre-existing grab-bag called "xss resource", so "Reflected XSS" stopped being retrievable as itself; only a topic *root* may consolidate, which the Academy expresses as URL depth, taking 90 merges down to 26); and the two cheat sheets use `<section>` not `<main>`, so without a fallback they were 2 of 18 pages silently extracting zero bytes.
+- **Item 4 — HackTricks Cloud (+578), and the cloud gap closed.** Same GitBook layout and adapter as the HackTricks book already ingested. Two corrections, both from dry runs: it is **not class-grouped** (grouping collapsed 44 distinct CI/CD pages — Jenkins RCE, GH Actions cache poisoning, Okta, Cloudflare — into one candidate), and `CANON` gains only **technique-level** cloud classes. "kubernetes", "ci-cd" and "supply-chain" name a *platform*, not a technique, and `CANON` is the authority on what consolidates; including them collapsed every "Kubernetes X" page into one entry. Their absence is now documented in `CANON` so they are not re-added. **cloud 2 → 535, supply-chain 1 → 47.**
+- **Item 5 — the HTB Academy slice, audited (§3, finding 4).** Auditing what the local folder holds against what had been ingested found two files silently lost, both to one root cause — bare `rglob` over `*.md`. `File_Inclusion/README.md` (4.5 KB of LFI module content) is tracked in git but **gone from disk**, the dehydration/quarantine pattern this repo has hit before — and that module is full of web-shell examples, which is exactly what trips the signature. `File_Upload_Attacks/1.txt` (8 KB of module answers and webshell walkthroughs) was lost purely for its extension: §4.1's headline finding in miniature. Now `_all_md` (rglob ∪ `git ls-files`, with git recovery) plus `.txt`.
+
+**KB 1,667 → 2,617**, 0 malformed rows, embeddings rebuilt incrementally, scripts index rebuilt, `entries.jsonl` verified present and counted after every pass (the Defender-quarantine trap).
+
 ## Verification
 
-- **Hermetic safety suite** (`sh backend/run_safety_tests.sh`) — green after every phase, expanded across all four with `test_phase1_runtime`, `test_state`, `test_scope_hostcheck`, `test_credvault`, `test_corpora`, `test_detection`/`test_detection_safety` (OPSEC channel + blue-view-unchanged), `test_repeater`, `test_tunnels`, `test_report_templates`, and persistent-shell containment tests in `test_kali`. **29 test files.**
+- **Hermetic safety suite** (`sh backend/run_safety_tests.sh`) — green after every phase, expanded across all five with `test_phase1_runtime`, `test_state`, `test_scope_hostcheck`, `test_credvault`, `test_corpora`, `test_detection`/`test_detection_safety` (OPSEC channel + blue-view-unchanged), `test_repeater`, `test_tunnels`, `test_report_templates`, persistent-shell containment tests in `test_kali`, and Phase 5's `test_terminal` (PTY containment + the sentinel shell provably untouched) and `test_exploits` (version comparison, tiered ranking, executes-nothing). **31 test files.**
 - **Docker proofs** — `isolation_proof.sh` 4/4 (lab still cannot reach internet or host), `engage_open_proof.sh` 4/4 (engage has full reach).
-- **Browser** — every UI surface exercised against a live Ollama backend per the testing rule, including the Phase-4 surfaces: the payload-set arsenal rows, the OPSEC red-team channel, the repeater send/replay/diff, the tunnels route preview, and the exam report templates with the proof table.
-- **Frontend** — `tsc` clean, lint at the documented baseline (10 errors + 1 warning, unchanged), `next build` exit 0 (routes include `/repeater`, `/tunnels`).
+- **Browser** — every UI surface exercised against a live Ollama backend per the testing rule: the Phase-4 surfaces (payload-set arsenal rows, the OPSEC red-team channel, repeater send/replay/diff, tunnels route preview, exam report templates with the proof table) and the Phase-5 ones — `:terminal` running `top` and `vim` with live resize, `:exploits` resolving `vsftpd 2.3.4` to the backdoor exploit and its CVE, the state panel's per-service jump into it, and `/category/cloud` at 535 entries.
+- **Frontend** — `tsc` clean, lint at the pre-existing baseline (11 errors + 1 warning, unchanged — verified by stashing the changes and re-running), `next build` exit 0 (routes include `/terminal`, `/exploits`).
 
 ## Status
 
-Everything is local on branch `sandbox-kali-image`, **unpushed**, awaiting review. **All four phases are complete.** The only remaining work is the deliberately deferred list in Part II.
+Everything is local on branch `sandbox-kali-image`. **All five phases are complete.** The only remaining work is the deliberately deferred list in Part II — where the largest item, growing tier-1, is writing rather than building.

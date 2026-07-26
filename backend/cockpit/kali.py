@@ -41,8 +41,12 @@ WHAT STILL HOLDS FOR :kali (the containment that remains):
 
 from __future__ import annotations
 
+import os
 import subprocess
+import threading
+import time
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
@@ -241,3 +245,373 @@ def kali_status() -> dict:
         "ready": up,
         "detail": "" if up else "open sandbox container is not running",
     }
+
+
+# =========================================================================== #
+# Persistent :kali shell (step 13) — ONE long-lived shell you drive over time
+# =========================================================================== #
+#
+# The one-shot `run_kali` above is a fresh `docker exec` per command, so `cd`, exported
+# variables and backgrounded jobs vanish between commands — it is a command runner, not a
+# shell. This is the persistent version: a single long-lived `docker exec -i
+# <KALI_OPEN_CONTAINER> sh` whose stdin stays open, so state carries across commands (cd
+# holds, a `nc -lvnp 4444 &` keeps listening, `export` sticks).
+#
+# It preserves EVERY :kali containment invariant that run_kali has, because the same
+# invariants apply — this is still the one arbitrary-shell feature:
+#   * the container is the hardcoded constant, NEVER a request field (containment rule #1);
+#   * human-only — driven only from the HTTP route, never the agent/executor (test_kali
+#     scans the tree for exactly this);
+#   * no isolation gate (there is none to assert on the open box), only an availability check;
+#   * every command + its output is recorded to the run store (audit);
+#   * output is capped per command and the shell is reaped on idle / max lifetime.
+#
+# NO PTY. Commands are delimited over the pipe with a per-command SENTINEL: each command is
+# written to the shell's stdin followed by an echo of a unique marker plus `$?`, and output
+# is collected up to that marker. That gives clean per-command blocks and a real exit code
+# over a plain pipe — no terminal-escape handling, so the transcript stays readable. The
+# cost (accepted in the design decision) is that full-screen TUIs — vim, top — do not work;
+# they need a real terminal.
+
+# Bounds — a persistent open shell must not accumulate forever or flood the audit log.
+KALI_SHELL_IDLE_SECONDS = int(os.environ.get("HACKPIT_KALI_SHELL_IDLE", "1800"))  # 30m
+KALI_SHELL_MAX_LIFETIME_SECONDS = int(os.environ.get("HACKPIT_KALI_SHELL_MAX", "14400"))  # 4h
+KALI_SHELL_MAX_LIVE = int(os.environ.get("HACKPIT_KALI_SHELL_MAX_LIVE", "3"))
+# Per-command output cap (chars, each stream). A runaway `yes` is truncated, not fatal.
+KALI_SHELL_CMD_CAP = 200_000
+
+
+class KaliShellRefused(RuntimeError):
+    """The persistent shell could not start / accept input (nothing ran)."""
+
+
+class KaliShellStartRequest(BaseModel):
+    """Start a persistent :kali shell. NO container/target field — same containment rule as
+    KaliRequest: the box is a constant, nothing in the request can redirect it."""
+
+    session_id: str | None = Field(
+        None, description="Optional engagement to record this shell's commands against."
+    )
+
+
+class KaliShellInputRequest(BaseModel):
+    """Run one command line in an existing persistent shell. Human-typed = approved."""
+
+    command: str = Field(..., min_length=1, description="Shell command line to run.")
+    timeout_seconds: int | None = Field(
+        None, ge=1,
+        description="How long to wait for this command before giving up on its output. "
+        "Omit for the 180s default; clamped to the same ceiling as every other run.",
+    )
+
+
+class KaliShellInfo(BaseModel):
+    """The state of a persistent shell (no output — that comes from the command result)."""
+
+    sid: str
+    container: str
+    state: str  # "active" | "closed"
+    started_at: str
+    last_active: str
+    command_count: int
+    session_id: str | None = None
+
+
+class KaliCommandResult(BaseModel):
+    """The captured result of ONE command run in a persistent shell."""
+
+    sid: str
+    run_id: str
+    command: str
+    exit_code: int | None
+    stdout: str
+    stderr: str
+    started_at: str
+    finished_at: str
+    timed_out: bool = False
+    truncated: bool = False
+    shell_closed: bool = False
+
+
+@dataclass
+class _LiveShell:
+    sid: str
+    proc: "subprocess.Popen[str]"
+    started_at: str
+    session_id: str | None
+    last_io: float
+    started_mono: float
+    command_count: int = 0
+    closed: bool = False
+    # stdout/stderr are pumped here by reader threads; a command reads its slice out.
+    out_buf: list[str] = field(default_factory=list)
+    err_buf: list[str] = field(default_factory=list)
+    cond: "threading.Condition" = field(default_factory=threading.Condition)
+    # Serialises commands: a persistent shell is one FIFO, one command at a time.
+    run_lock: "threading.Lock" = field(default_factory=threading.Lock)
+
+
+_shells: dict[str, _LiveShell] = {}
+_shells_lock = threading.Lock()
+_shell_reaper: "threading.Thread | None" = None
+
+
+def _mono() -> float:
+    return time.monotonic()
+
+
+def _pump(shell: _LiveShell, stream, buf: list[str]) -> None:
+    """Reader thread: append each line to the shell's buffer and wake any waiter."""
+    try:
+        for line in iter(stream.readline, ""):
+            with shell.cond:
+                buf.append(line)
+                shell.cond.notify_all()
+    except (ValueError, OSError):
+        pass
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+        with shell.cond:
+            shell.cond.notify_all()
+
+
+def start_shell(req: KaliShellStartRequest) -> KaliShellInfo:
+    """Launch a persistent shell in the OPEN sandbox. Refuses if it isn't up or the cap is hit.
+
+    Same availability check as run_kali (NOT an isolation gate — there is none for the open
+    box). The container is the hardcoded constant; the request cannot name one.
+    """
+    if not _container_running(config.KALI_OPEN_CONTAINER):
+        raise KaliShellRefused(
+            f"open sandbox '{config.KALI_OPEN_CONTAINER}' is not running — bring the "
+            "stack up (docker compose -f docker/docker-compose.yml up -d)"
+        )
+
+    with _shells_lock:
+        live = sum(1 for s in _shells.values() if not s.closed)
+        if live >= KALI_SHELL_MAX_LIVE:
+            raise KaliShellRefused(
+                f"too many live :kali shells ({live}/{KALI_SHELL_MAX_LIVE}) — close one first"
+            )
+
+    sid = uuid.uuid4().hex[:12]
+    started_at = _now()
+    # The working directory is :kali's loot dir so downloads persist (same as run_kali).
+    # `sh` with stdin kept open IS the persistence: one process for the whole session.
+    workdir = loot.kali_workdir()
+    argv = [
+        "docker", "exec", "-i", *loot.exec_flags(workdir),
+        config.KALI_OPEN_CONTAINER, "sh",
+    ]
+    try:
+        proc = subprocess.Popen(
+            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1,
+        )
+    except FileNotFoundError:
+        raise KaliShellRefused("docker CLI not found on PATH")
+
+    # CRITICAL (Windows): text-mode stdin translates '\n' -> '\r\n', so the Linux shell would
+    # receive `pwd\r` (command not found) and `printf …\r` (bad format). Disable translation
+    # on stdin so a written '\n' stays a bare LF on the wire. Same class of bug as the
+    # reconcile probe. stdout/stderr keep universal-newline reading, which is harmless.
+    try:
+        if proc.stdin is not None:
+            proc.stdin.reconfigure(newline="")
+    except (AttributeError, ValueError):  # pragma: no cover - non-Windows / already-detached
+        pass
+
+    shell = _LiveShell(
+        sid=sid, proc=proc, started_at=started_at,
+        session_id=req.session_id, last_io=_mono(), started_mono=_mono(),
+    )
+    threading.Thread(target=_pump, args=(shell, proc.stdout, shell.out_buf),
+                     name=f"kali-shell-{sid}-out", daemon=True).start()
+    threading.Thread(target=_pump, args=(shell, proc.stderr, shell.err_buf),
+                     name=f"kali-shell-{sid}-err", daemon=True).start()
+    with _shells_lock:
+        _shells[sid] = shell
+    _ensure_shell_reaper()
+    return _info(shell)
+
+
+def _info(shell: _LiveShell) -> KaliShellInfo:
+    return KaliShellInfo(
+        sid=shell.sid,
+        container=config.KALI_OPEN_CONTAINER,
+        state="closed" if shell.closed else "active",
+        started_at=shell.started_at,
+        last_active=_now(),
+        command_count=shell.command_count,
+        session_id=shell.session_id,
+    )
+
+
+def run_in_shell(sid: str, req: KaliShellInputRequest) -> KaliCommandResult:
+    """Run ONE command line in a persistent shell and return its output + exit code.
+
+    HUMAN-ONLY, like the whole module: this is called only from the HTTP route. The command
+    is written to the shell's stdin (state persists across calls) and delimited with a
+    per-command sentinel so its output and exit code can be read back over a plain pipe.
+    """
+    with _shells_lock:
+        shell = _shells.get(sid)
+    if shell is None or shell.closed:
+        raise KaliShellRefused(f"no live :kali shell {sid} (unknown or already closed)")
+    if shell.proc.poll() is not None:
+        _finalize(shell)
+        raise KaliShellRefused(f":kali shell {sid} has exited")
+
+    timeout = config.clamp_timeout(req.timeout_seconds)
+    run_id = uuid.uuid4().hex[:12]
+    started_at = _now()
+    sentinel = f"__HACKPIT_KALI_{uuid.uuid4().hex}__"
+
+    # One command at a time per shell — the pipe is a single FIFO.
+    with shell.run_lock:
+        with shell.cond:
+            out_start, err_start = len(shell.out_buf), len(shell.err_buf)
+        # Write the command, then echo the sentinel + the command's exit code. A bare
+        # newline is a no-op that does not touch $?, so $? here is the command's own exit.
+        payload = f"{req.command}\nprintf '%s %d\\n' '{sentinel}' \"$?\"\n"
+        try:
+            assert shell.proc.stdin is not None
+            shell.proc.stdin.write(payload)
+            shell.proc.stdin.flush()
+        except (BrokenPipeError, ValueError, OSError):
+            _finalize(shell)
+            raise KaliShellRefused(f":kali shell {sid} stdin is closed")
+
+        shell.last_io = _mono()
+        exit_code, timed_out, closed = _await_sentinel(shell, out_start, sentinel, timeout)
+
+        with shell.cond:
+            out_lines = shell.out_buf[out_start:]
+            err_lines = shell.err_buf[err_start:]
+
+    # Drop the sentinel line from the visible stdout.
+    stdout = "".join(ln for ln in out_lines if sentinel not in ln)
+    stderr = "".join(err_lines)
+    if timed_out:
+        stderr += f"\n[no sentinel within {timeout}s — output may be partial; shell still live]"
+    stdout, t1 = _cap(stdout)
+    stderr, t2 = _cap(stderr)
+    finished_at = _now()
+
+    shell.command_count += 1
+
+    # Audit — every command recorded, exactly like run_kali, honestly logged as sh -c.
+    try:
+        runstore.save_run(RunRecord(
+            run_id=run_id, command="sh -c", args=[req.command],
+            target=config.KALI_OPEN_CONTAINER, approved=True, exit_code=exit_code,
+            stdout=stdout, stderr=stderr, started_at=started_at, finished_at=finished_at,
+            session_id=shell.session_id, step_id=None,
+        ))
+    except Exception:
+        pass
+
+    return KaliCommandResult(
+        sid=sid, run_id=run_id, command=req.command, exit_code=exit_code,
+        stdout=stdout, stderr=stderr, started_at=started_at, finished_at=finished_at,
+        timed_out=timed_out, truncated=t1 or t2, shell_closed=closed,
+    )
+
+
+def _await_sentinel(
+    shell: _LiveShell, out_start: int, sentinel: str, timeout: float
+) -> tuple[int | None, bool, bool]:
+    """Wait until the sentinel line appears in stdout. Returns (exit_code, timed_out, closed)."""
+    deadline = _mono() + timeout
+    while True:
+        with shell.cond:
+            for ln in shell.out_buf[out_start:]:
+                if sentinel in ln:
+                    # "<sentinel> <code>" — parse the trailing exit code.
+                    try:
+                        return int(ln.rsplit(" ", 1)[-1].strip()), False, False
+                    except (ValueError, IndexError):
+                        return None, False, False
+            if shell.proc.poll() is not None:
+                return None, False, True  # shell exited (e.g. the human typed `exit`)
+            remaining = deadline - _mono()
+            if remaining <= 0:
+                return None, True, False
+            shell.cond.wait(timeout=min(remaining, 1.0))
+
+
+def close_shell(sid: str) -> KaliShellInfo:
+    """Close one persistent shell (EOF its stdin, then kill). Never raises."""
+    with _shells_lock:
+        shell = _shells.get(sid)
+    if shell is None:
+        raise KaliShellRefused(f"no :kali shell {sid}")
+    _finalize(shell)
+    return _info(shell)
+
+
+def _finalize(shell: _LiveShell) -> None:
+    """Close stdin and kill the process. Idempotent."""
+    if shell.closed:
+        return
+    shell.closed = True
+    try:
+        if shell.proc.stdin and not shell.proc.stdin.closed:
+            shell.proc.stdin.close()
+    except Exception:
+        pass
+    try:
+        shell.proc.kill()
+    except Exception:
+        pass
+    with shell.cond:
+        shell.cond.notify_all()
+
+
+def shell_info(sid: str) -> KaliShellInfo | None:
+    with _shells_lock:
+        shell = _shells.get(sid)
+    return _info(shell) if shell is not None else None
+
+
+def list_shells() -> list[KaliShellInfo]:
+    with _shells_lock:
+        shells = list(_shells.values())
+    return [_info(s) for s in shells if not s.closed]
+
+
+def _ensure_shell_reaper() -> None:
+    global _shell_reaper
+    with _shells_lock:
+        if _shell_reaper is not None and _shell_reaper.is_alive():
+            return
+        t = threading.Thread(target=_shell_reaper_loop, name="kali-shell-reaper", daemon=True)
+        _shell_reaper = t
+    t.start()
+
+
+def _shell_reaper_loop() -> None:  # pragma: no cover - background timing
+    while True:
+        time.sleep(30)
+        now = _mono()
+        with _shells_lock:
+            shells = list(_shells.items())
+        for _sid, shell in shells:
+            try:
+                if (
+                    shell.closed
+                    or shell.proc.poll() is not None
+                    or now - shell.last_io > KALI_SHELL_IDLE_SECONDS
+                    or now - shell.started_mono > KALI_SHELL_MAX_LIFETIME_SECONDS
+                ):
+                    _finalize(shell)
+            except Exception:
+                pass
+        # Drop long-closed shells from the registry so it does not grow unbounded.
+        with _shells_lock:
+            for sid, shell in list(_shells.items()):
+                if shell.closed:
+                    _shells.pop(sid, None)

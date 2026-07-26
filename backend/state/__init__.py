@@ -19,9 +19,9 @@ the approval gate. A safety test enforces this.
 
 from __future__ import annotations
 
-from . import ingest, models, parsers, render, store, tasks
+from . import credvault, ingest, models, parsers, render, store, tasks
 
-__all__ = ["ingest", "models", "parsers", "render", "store", "tasks"]
+__all__ = ["credvault", "ingest", "models", "parsers", "render", "store", "tasks"]
 
 
 def init_db() -> None:

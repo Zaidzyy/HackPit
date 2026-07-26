@@ -92,6 +92,12 @@ echo "== Phase-1 runtime (timeout clamp / background jobs / loot / tool reconcil
 echo "== Phase-2 state (parsers / upserts / task tree / prompt grounding / executes-nothing) =="
 "$PY" test_state.py
 
+echo "== Phase-3 scope host-check (no false-reject of files/versions; real hosts still caught) =="
+"$PY" test_scope_hostcheck.py
+
+echo "== Phase-3 credential vault (fills user/pass/hash/domain; wrong-kind + non-cred left alone) =="
+"$PY" test_credvault.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

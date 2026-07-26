@@ -33,6 +33,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from . import allowlist, config, engagement, executor, jobs, loot, runstore
 from . import session as live_session
+from . import kali as kali_mod
 from .kali import KaliRefused, KaliRequest, KaliResult, kali_status, run_kali
 from .models import (
     AllowlistItem,
@@ -238,6 +239,47 @@ def kali_shell(request: KaliRequest) -> KaliResult:
     except KaliRefused as exc:
         # Open sandbox unavailable (not running) — nothing was executed.
         raise HTTPException(status_code=409, detail={"gate": "unavailable", "reason": str(exc)})
+
+
+# --- Persistent :kali shell (step 13 — cd/env/jobs persist across commands) --------- #
+#
+# SAME containment as POST /cockpit/kali: hardcoded open container, human-only, no isolation
+# gate (there is none for the open box), every command audited. The difference is ONE
+# long-lived `docker exec -i sh` instead of a fresh exec per command, so state carries
+# across commands. Still a LOCALHOST DEV TOOL with no auth — see the warning on /kali.
+
+
+@router.post("/kali/shell", response_model=kali_mod.KaliShellInfo)
+def start_kali_shell(req: kali_mod.KaliShellStartRequest) -> kali_mod.KaliShellInfo:
+    """Open a persistent :kali shell. 409 if the open sandbox isn't running."""
+    try:
+        return kali_mod.start_shell(req)
+    except kali_mod.KaliShellRefused as exc:
+        raise HTTPException(status_code=409, detail={"gate": "unavailable", "reason": str(exc)})
+
+
+@router.post("/kali/shell/{sid}/run", response_model=kali_mod.KaliCommandResult)
+def run_in_kali_shell(sid: str, req: kali_mod.KaliShellInputRequest) -> kali_mod.KaliCommandResult:
+    """Run one command in a persistent shell — state persists to the next call. Human-typed."""
+    try:
+        return kali_mod.run_in_shell(sid, req)
+    except kali_mod.KaliShellRefused as exc:
+        raise HTTPException(status_code=409, detail={"gate": "unavailable", "reason": str(exc)})
+
+
+@router.get("/kali/shell", response_model=list[kali_mod.KaliShellInfo])
+def list_kali_shells() -> list[kali_mod.KaliShellInfo]:
+    """Every live persistent :kali shell. Read-only."""
+    return kali_mod.list_shells()
+
+
+@router.delete("/kali/shell/{sid}", response_model=kali_mod.KaliShellInfo)
+def close_kali_shell(sid: str) -> kali_mod.KaliShellInfo:
+    """Close a persistent shell (EOF stdin, then kill)."""
+    try:
+        return kali_mod.close_shell(sid)
+    except kali_mod.KaliShellRefused as exc:
+        raise HTTPException(status_code=404, detail={"reason": str(exc)})
 
 
 # --- Live sessions (catch + drive ONE shell by hand — see cockpit/session.py) ------ #

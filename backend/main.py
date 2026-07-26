@@ -59,6 +59,7 @@ from cockpit import loot as cockpit_loot  # noqa: E402
 import state as engagement_state  # noqa: E402
 from state import store as state_store  # noqa: E402
 from state import tasks as state_tasks  # noqa: E402
+from state import credvault  # noqa: E402
 from cockpit.router import router as cockpit_router  # noqa: E402
 from adgraph import store as ad_store  # noqa: E402  (backend/adgraph — AD attack-path graph)
 from adgraph.router import (  # noqa: E402
@@ -920,6 +921,42 @@ def session_state(session_id: str) -> dict[str, Any]:
         "tasks": [t.to_dict() for t in state_tasks.load(session_id)],
         "task_progress": state_tasks.progress(session_id),
     }
+
+
+class CredFillIn(BaseModel):
+    """Fill a command's credential placeholders from one captured credential."""
+
+    command: str = Field(..., description="The command draft, with <user>/<password>/… placeholders.")
+    kind: str = Field(..., description="Credential kind (password / ntlm / …).")
+    principal: str = Field(..., description="Account name.")
+    domain: str = Field("", description="Domain / realm, if any.")
+
+
+@app.post("/sessions/{session_id}/credentials/fill")
+def fill_credential(session_id: str, req: CredFillIn = Body(...)) -> dict[str, Any]:
+    """Substitute a captured credential's values into a command's placeholders (step 14).
+
+    The operator picks a credential and a command; this returns the command with
+    <user>/<password>/<hash>/<domain> filled from that credential — one click instead of
+    retyping a hash. The placeholder→field mapping lives server-side (state/credvault.py) so
+    it cannot drift from what the loop/planner would use. Fills credential placeholders only;
+    <target> and operational placeholders are left untouched. Nothing runs — this returns a
+    string; the filled command still goes through the executor's gates like any other.
+    """
+    cred = next(
+        (
+            c
+            for c in state_store.load(session_id).credentials
+            if c.kind.lower() == req.kind.strip().lower()
+            and c.principal.lower() == req.principal.strip().lower()
+            and c.domain.lower() == req.domain.strip().lower()
+        ),
+        None,
+    )
+    if cred is None:
+        raise HTTPException(status_code=404, detail="no such credential in this engagement")
+    filled, used = credvault.fill(req.command, cred)
+    return {"command": filled, "filled": used}
 
 
 @app.post("/sessions/{session_id}/state/tasks/seed")

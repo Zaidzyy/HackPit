@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ApiError,
+  fillCredential,
   getSessionState,
   seedSessionTasks,
   type SessionState,
@@ -53,15 +54,50 @@ function mask(secret: string): string {
 export function CockpitState({
   sessionId,
   refreshToken,
+  // Credential vault (step 14). When the parent hosts an editable command box it passes the
+  // current args draft and a setter; each credential then shows a "use" action that fills
+  // the <user>/<password>/<hash>/<domain> placeholders in that draft from the captured
+  // credential. Omitted (e.g. a read-only panel) → credentials just display, no "use".
+  argsDraft,
+  onFillArgs,
 }: {
   sessionId: string;
   refreshToken: number;
+  argsDraft?: string;
+  onFillArgs?: (filled: string) => void;
 }) {
   const [state, setState] = useState<SessionState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Which credential secrets the operator has explicitly revealed, by row index.
   const [revealed, setRevealed] = useState<Set<number>>(new Set());
+  // A one-shot note under the credentials after a fill, e.g. "filled <user>, <password>".
+  const [fillNote, setFillNote] = useState<string | null>(null);
+
+  const canFill = typeof onFillArgs === "function" && typeof argsDraft === "string";
+
+  const applyCredential = useCallback(
+    (cred: StateCredential) => {
+      if (!canFill || !onFillArgs) return;
+      fillCredential(sessionId, argsDraft ?? "", {
+        kind: cred.kind,
+        principal: cred.principal,
+        domain: cred.domain,
+      })
+        .then((r) => {
+          onFillArgs(r.command);
+          setFillNote(
+            r.filled.length
+              ? `filled ${r.filled.join(", ")} from ${cred.principal}`
+              : `${cred.principal} filled nothing — no matching placeholder in the command`
+          );
+        })
+        .catch((err: unknown) =>
+          setFillNote(err instanceof ApiError ? err.message : "Could not fill the credential.")
+        );
+    },
+    [canFill, onFillArgs, sessionId, argsDraft]
+  );
 
   const load = useCallback(
     (signal?: AbortSignal) => {
@@ -311,9 +347,20 @@ export function CockpitState({
                       ? "failed"
                       : "untested"}
                 </span>
+                {canFill && (
+                  <button
+                    type="button"
+                    className="hp-cs-use"
+                    onClick={() => applyCredential(c)}
+                    title="Fill this credential's values into the command box's placeholders (<user>, <password>, <hash>, <domain>)"
+                  >
+                    use →
+                  </button>
+                )}
               </li>
             ))}
           </ul>
+          {fillNote && <p className="hp-cs-fillnote">{fillNote}</p>}
         </div>
       )}
 

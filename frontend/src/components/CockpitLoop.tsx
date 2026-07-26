@@ -200,6 +200,38 @@ export function CockpitLoop({
 
   const active = phase === "proposing" || phase === "awaiting" || phase === "running";
 
+  // ONE-KEYSTROKE APPROVE (step 11). Per-command approval is unchanged — every command
+  // still needs an explicit human act — this just lets that act be a keystroke on
+  // single-target work where the volume is low:
+  //   Enter → approve & run the shown proposal
+  //   S     → skip it
+  //   Esc   → stop the loop
+  // A DANGEROUS proposal never fires on Enter: approve() itself returns early until the
+  // explicit danger confirm is checked, so you cannot approve a reverse shell by reflex.
+  // Shortcuts are ignored while focus is in a text field (you are editing the command),
+  // so typing an argument never triggers a run.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      if (e.key === "Enter" && phase === "awaiting" && proposal?.gate_ok) {
+        e.preventDefault();
+        approve();
+      } else if ((e.key === "s" || e.key === "S") && phase === "awaiting") {
+        e.preventDefault();
+        skip();
+      } else if (e.key === "Escape" && active) {
+        e.preventDefault();
+        stop();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [phase, proposal, approve, skip, stop, active]);
+
   return (
     <div className="hp-loop">
       <header className="hp-loop-head">
@@ -352,12 +384,13 @@ export function CockpitLoop({
                 }
               >
                 {isDanger ? "APPROVE (DANGEROUS) & RUN" : "APPROVE & RUN"}
+                {!isDanger && <kbd className="hp-loop-kbd">⏎</kbd>}
               </button>
               <button type="button" className="hp-loop-skip" onClick={skip}>
-                skip
+                skip <kbd className="hp-loop-kbd">S</kbd>
               </button>
               <button type="button" className="hp-loop-skip" onClick={stop}>
-                stop
+                stop <kbd className="hp-loop-kbd">Esc</kbd>
               </button>
             </div>
           )}

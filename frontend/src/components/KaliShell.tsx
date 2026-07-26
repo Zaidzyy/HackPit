@@ -5,9 +5,11 @@ import { PageShell } from "./PageShell";
 import {
   ApiError,
   getKaliStatus,
-  runKali,
+  startKaliShell,
+  runInKaliShell,
+  closeKaliShell,
   type KaliStatus,
-  type KaliResult,
+  type KaliCommandResult,
 } from "@/lib/api";
 
 /**
@@ -25,7 +27,7 @@ type Block = {
   id: number;
   command: string;
   running: boolean;
-  result?: KaliResult;
+  result?: KaliCommandResult;
   error?: string;
 };
 
@@ -53,6 +55,10 @@ export function KaliShell() {
   const ctrlRef = useRef<AbortController | null>(null);
   const outRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // The ONE persistent shell this panel drives. State (cd/env/jobs) lives in it across
+  // commands; it is lazily started on the first command and reset on demand / disconnect.
+  const shellRef = useRef<string | null>(null);
+  const [shellSid, setShellSid] = useState<string | null>(null);
 
   const refreshStatus = useCallback((signal?: AbortSignal) => {
     getKaliStatus(signal)
@@ -90,17 +96,41 @@ export function KaliShell() {
     const ctrl = new AbortController();
     ctrlRef.current = ctrl;
 
-    runKali({ command: cmd, timeout_seconds: KALI_TIMEOUT_CHOICES[timeoutIdx].seconds }, ctrl.signal)
+    // Persistent shell: reuse the existing one so cd/env/jobs carry across commands; start
+    // one lazily on the first command. If the shell was reaped or exited (the human typed
+    // `exit`), start a fresh one transparently.
+    const ensureShell = async (): Promise<string> => {
+      if (shellRef.current) return shellRef.current;
+      const info = await startKaliShell(null, ctrl.signal);
+      shellRef.current = info.sid;
+      setShellSid(info.sid);
+      return info.sid;
+    };
+
+    ensureShell()
+      .then((sid) =>
+        runInKaliShell(sid, cmd, KALI_TIMEOUT_CHOICES[timeoutIdx].seconds, ctrl.signal)
+      )
       .then((result) => {
         if (ctrl.signal.aborted) return;
         setBlocks((prev) =>
           prev.map((b) => (b.id === id ? { ...b, running: false, result } : b))
         );
+        // The shell exited (e.g. `exit`) — drop the sid so the next command opens a new one.
+        if (result.shell_closed) {
+          shellRef.current = null;
+          setShellSid(null);
+        }
       })
       .catch((err: unknown) => {
         if (ctrl.signal.aborted) return;
-        const msg =
-          err instanceof ApiError ? err.message : "Command failed to run.";
+        // A 409 usually means the shell is gone (reaped / sandbox restarted) — clear it so
+        // the next command starts fresh, and surface the reason on this block.
+        if (err instanceof ApiError && err.status === 409) {
+          shellRef.current = null;
+          setShellSid(null);
+        }
+        const msg = err instanceof ApiError ? err.message : "Command failed to run.";
         setBlocks((prev) =>
           prev.map((b) => (b.id === id ? { ...b, running: false, error: msg } : b))
         );
@@ -113,6 +143,26 @@ export function KaliShell() {
         inputRef.current?.focus();
       });
   }, [command, running, refreshStatus, timeoutIdx]);
+
+  // Reset the shell: close the live one and clear the scrollback, so the next command opens
+  // a clean shell (fresh cwd/env). Used when the operator wants a blank slate.
+  const resetShell = useCallback(() => {
+    const sid = shellRef.current;
+    shellRef.current = null;
+    setShellSid(null);
+    setBlocks([]);
+    if (sid) closeKaliShell(sid).catch(() => {});
+    inputRef.current?.focus();
+  }, []);
+
+  // Close the persistent shell when the panel unmounts — don't leak a container process.
+  useEffect(
+    () => () => {
+      const sid = shellRef.current;
+      if (sid) closeKaliShell(sid).catch(() => {});
+    },
+    []
+  );
 
   // Up/Down walk the command history (a terminal affordance).
   const onKeyDown = useCallback(
@@ -193,6 +243,25 @@ export function KaliShell() {
             <span className="hp-ck-out-title">
               {running ? "sandbox · running" : "sandbox · :kali shell"}
             </span>
+            {shellSid && (
+              <span
+                className="hp-kali-persist"
+                title="One long-lived shell — cd, environment and background jobs persist across commands."
+              >
+                ● persistent
+              </span>
+            )}
+            {shellSid && (
+              <button
+                type="button"
+                className="hp-kali-clear"
+                onClick={resetShell}
+                disabled={running}
+                title="Close this shell and start fresh — resets cwd, environment and jobs"
+              >
+                reset shell
+              </button>
+            )}
             {blocks.length > 0 && (
               <button
                 type="button"
@@ -311,12 +380,15 @@ export function KaliShell() {
         </section>
 
         <p className="hp-kali-note">
-          Runs as <code>sh -c</code> inside <b>{status?.container ?? "the open sandbox"}</b>,
-          which has <b>full network reach</b> — the internet, this host, and your LAN are
-          all reachable (that is the intent, not a bug). Every command is recorded to the
-          engagement session. This is a <b>localhost-only</b> dev tool with no auth: because
-          the shell now reaches your host and LAN, it <b>must not</b> be exposed off
-          localhost without authentication.
+          One <b>persistent shell</b> inside <b>{status?.container ?? "the open sandbox"}</b>:{" "}
+          <code>cd</code>, exported variables and background jobs carry across commands (a{" "}
+          <code>nc -lvnp 4444 &amp;</code> keeps listening, <code>cd /loot</code> holds). It has{" "}
+          <b>full network reach</b> — the internet, this host, and your LAN are all reachable
+          (that is the intent, not a bug). Every command is recorded to the engagement
+          session. This is a <b>localhost-only</b> dev tool with no auth: because the shell
+          reaches your host and LAN, it <b>must not</b> be exposed off localhost without
+          authentication. (No full-screen apps like <code>vim</code>/<code>top</code> — this
+          is a line shell, not a terminal.)
         </p>
       </div>
     </PageShell>

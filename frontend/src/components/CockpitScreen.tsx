@@ -376,6 +376,8 @@ export function CockpitScreen({
               key={`state-${sessionId}`}
               sessionId={sessionId}
               refreshToken={engToken}
+              argsDraft={argsText}
+              onFillArgs={setArgsText}
             />
             <CockpitEngagement
               key={sessionId}

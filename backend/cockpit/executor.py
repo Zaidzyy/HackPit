@@ -29,9 +29,19 @@ from .sandbox import SandboxError, assert_isolation_proven
 
 _IPV4 = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 
-# Best-effort: a dotted token ending in one of these is a FILE operand (wordlist, output,
-# config…), not a host — so the target-lock doesn't false-reject e.g. `ffuf -w words.txt`.
-# Non-load-bearing (isolation is the real bound), so an imperfect list is fine.
+# A plausible TLD: letters only, 2-24 chars. This is the POSITIVE test for "the last label
+# of a dotted token looks like a real domain suffix" (com, org, io, local, internal). It is
+# what separates a host from the two things that used to false-trip the target-lock:
+#   * versions / list names — `directory-list-2.3-medium`, `scan.1.2`, `raft-2.3` — whose
+#     last label has a digit or hyphen, so it is NOT an alphabetic TLD, so NOT a host;
+#   * filenames — `words.txt`, `config.yaml` — whose last label IS alphabetic, handled by
+#     the file-extension exclusion below.
+_TLD_RE = re.compile(r"^[a-z]{2,24}$")
+
+# File extensions that are alphabetic (so they pass _TLD_RE) but name a FILE operand, not a
+# host — a wordlist, output file, config. Only the ALPHABETIC entries are load-bearing now
+# (a `.7z` or `.mp3` already fails _TLD_RE), but the fuller list is kept for clarity.
+# Non-load-bearing overall (isolation / human-approval is the real bound), so imperfect is fine.
 _FILE_EXTS = frozenset({
     "txt", "json", "xml", "csv", "html", "htm", "js", "py", "conf", "cfg", "ini", "list",
     "lst", "dic", "gz", "zip", "tar", "log", "md", "yaml", "yml", "php", "asp", "aspx",
@@ -46,9 +56,15 @@ def _now() -> str:
 def _looks_like_host(token: str) -> bool:
     """True if a token is addressing *something* (URL, dotted host, IP, host:port).
 
-    Bare words with none of these (e.g. curl's ``GET``) are NOT hosts. A dotted token that
-    is really a filename (``words.txt``) is also not a host — best-effort, since the
-    target-lock is cheap DiD, not the real bound (isolation is). A scheme'd URL always wins.
+    Recognises a host POSITIVELY rather than assuming every dotted token is one. A dotted
+    token is a host only if its last label is a plausible alphabetic TLD (``evil.com``,
+    ``dc01.corp.local``) and is not a file extension (``words.txt``). This stops the whole
+    class of false rejections the old assume-host-unless-known-extension logic produced —
+    ``directory-list-2.3-medium``, ``--user-agent Mozilla/5.0``, ``-oA scan.1.2``, version
+    strings — which read as out-of-scope hosts and blocked legitimate, human-approved
+    commands. Best-effort DiD, not the real bound (isolation / human-approval is); a scheme'd
+    URL always wins, and under-detecting an exotic host (punycode) fails toward allowing a
+    command the human already approved, which is the safe direction here.
     """
     if "://" in token:
         return True
@@ -57,10 +73,12 @@ def _looks_like_host(token: str) -> bool:
         return False
     if _IPV4.match(host):
         return True
-    if "." in host:
-        ext = host.rsplit(".", 1)[-1].lower()
-        return ext not in _FILE_EXTS  # a filename operand is not a host
-    return False
+    if "." not in host:
+        return False
+    last = host.rsplit(".", 1)[-1].lower()
+    if not _TLD_RE.match(last):
+        return False                    # 2.3, 3-medium, scan.1.2 — a version/list, not a host
+    return last not in _FILE_EXTS       # words.txt / config.yaml — a file operand, not a host
 
 
 def _host_of(token: str) -> str | None:

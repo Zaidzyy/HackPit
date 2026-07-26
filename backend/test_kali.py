@@ -222,6 +222,150 @@ def test_output_is_capped() -> None:
     print("  output is capped (no flood): PASS")
 
 
+# --------------------------------------------------------------------------- #
+# Persistent :kali shell (step 13) — same containment, state persists
+# --------------------------------------------------------------------------- #
+class _ShellSpy:
+    """Fake for the persistent shell: patches the availability check and the Popen so no
+    real container is touched, capturing the argv the shell WOULD have launched."""
+
+    def __init__(self, *, up=True):
+        self.up = up
+        self.argv = None
+        self.stdin_writes: list[str] = []
+        self._orig = (K._container_running, K.subprocess.Popen, K.runstore.save_run)
+        self.saved: list = []
+
+    def __enter__(self):
+        outer = self
+
+        class _FakeStdin:
+            closed = False
+            def write(self, data): outer.stdin_writes.append(data)
+            def flush(self): pass
+            def reconfigure(self, **kw): pass
+            def close(self): self.closed = True
+
+        class _FakeStream:
+            def readline(self): return ""
+            def close(self): pass
+
+        class _FakeProc:
+            def __init__(self):
+                self.stdin = _FakeStdin()
+                self.stdout = _FakeStream()
+                self.stderr = _FakeStream()
+            def poll(self): return None
+            def kill(self): pass
+
+        def fake_popen(argv, **kwargs):
+            outer.argv = argv
+            return _FakeProc()
+
+        K._container_running = lambda name: self.up
+        K.subprocess.Popen = fake_popen
+        K.runstore.save_run = lambda rec: self.saved.append(rec)
+        return self
+
+    def __exit__(self, *exc):
+        K._container_running, K.subprocess.Popen, K.runstore.save_run = self._orig
+        return False
+
+
+def test_persistent_shell_refuses_when_sandbox_down() -> None:
+    with _ShellSpy(up=False) as spy:
+        raised = False
+        try:
+            K.start_shell(K.KaliShellStartRequest())
+        except K.KaliShellRefused:
+            raised = True
+        assert raised, "starting a shell MUST refuse when the open sandbox is down"
+        assert spy.argv is None, "nothing may launch when refused"
+    print("  persistent shell refuses when the open sandbox is down: PASS")
+
+
+def test_persistent_shell_container_is_hardcoded_to_open() -> None:
+    """The persistent shell execs the OPEN container constant, never the isolated lab, and
+    the start request exposes no field that could redirect it."""
+    with _ShellSpy() as spy:
+        info = K.start_shell(K.KaliShellStartRequest(session_id="eng-x"))
+        assert spy.argv[:3] == ["docker", "exec", "-i"], spy.argv
+        assert config.KALI_OPEN_CONTAINER in spy.argv, "must exec the OPEN container"
+        assert config.SANDBOX_CONTAINER not in spy.argv, "must NOT reach the isolated lab box"
+        assert config.ENGAGE_SANDBOX_CONTAINER not in spy.argv, "must NOT reach the engage box"
+        assert spy.argv[-1] == "sh", "a persistent shell is a bare `sh`, no -c"
+        assert info.container == config.KALI_OPEN_CONTAINER
+        K.close_shell(info.sid)
+
+    start_fields = set(K.KaliShellStartRequest.model_fields)
+    assert start_fields == {"session_id"}, (
+        f"KaliShellStartRequest must expose only session_id, got {start_fields} — a "
+        "container/target field would break containment"
+    )
+    input_fields = set(K.KaliShellInputRequest.model_fields)
+    assert input_fields == {"command", "timeout_seconds"}, (
+        f"KaliShellInputRequest must expose only command + timeout, got {input_fields}"
+    )
+    print("  persistent shell container hardcoded to OPEN; requests carry no target: PASS")
+
+
+def test_persistent_shell_is_human_only_and_no_isolation_gate() -> None:
+    """The persistent shell shares :kali's model — the human-only source scan and the
+    no-isolation-gate invariant already cover kali.py as a whole, so this just asserts the
+    new entry points did not import the isolation gate or an agent hook."""
+    src = (Path(__file__).parent / "cockpit" / "kali.py").read_text(encoding="utf-8")
+    # Match the existing no-isolation test's specificity: forbid the IMPORT/CALL, not any
+    # docstring that merely names the gate to explain why :kali does not use one.
+    assert "import assert_isolation_proven" not in src, "must not import the isolation gate"
+    assert "from .sandbox" not in src and "from cockpit.sandbox" not in src, (
+        "the persistent shell must not import the isolation module"
+    )
+    from cockpit import executor as EX
+    for hook in ("start_shell", "run_in_shell", "kali"):
+        assert not hasattr(EX, hook), f"the executor must not expose {hook} — human-only"
+    print("  persistent shell is human-only and adds no isolation gate: PASS")
+
+
+def test_persistent_shell_records_every_command() -> None:
+    """Audit is preserved: each command run in the shell is recorded, honestly as sh -c."""
+    with _ShellSpy() as spy:
+        info = K.start_shell(K.KaliShellStartRequest(session_id="eng-audit"))
+        # Drive run_in_shell but short-circuit the sentinel wait to a clean exit.
+        orig = K._await_sentinel
+        K._await_sentinel = lambda shell, out_start, sentinel, timeout: (0, False, False)
+        try:
+            K.run_in_shell(info.sid, K.KaliShellInputRequest(command="whoami"))
+        finally:
+            K._await_sentinel = orig
+        recs = [r for r in spy.saved if r.command == "sh -c" and r.args == ["whoami"]]
+        assert recs, "the command must be recorded as an sh -c invocation"
+        assert recs[0].session_id == "eng-audit", "record must attach to the engagement"
+        assert recs[0].target == config.KALI_OPEN_CONTAINER, "target = the OPEN sandbox"
+        assert recs[0].approved is True, "a human-typed command counts as approved"
+        K.close_shell(info.sid)
+    print("  every persistent-shell command is recorded (audit): PASS")
+
+
+def test_persistent_shell_stdin_stays_bare_lf() -> None:
+    """Regression: the payload written to the shell's stdin must use bare LF, never CRLF.
+    On Windows a text-mode stdin translates \\n -> \\r\\n, and the Linux shell then reads
+    `pwd\\r` (command not found) — the exact bug this shell hit in development."""
+    with _ShellSpy() as spy:
+        info = K.start_shell(K.KaliShellStartRequest())
+        orig = K._await_sentinel
+        K._await_sentinel = lambda shell, out_start, sentinel, timeout: (0, False, False)
+        try:
+            K.run_in_shell(info.sid, K.KaliShellInputRequest(command="pwd"))
+        finally:
+            K._await_sentinel = orig
+        written = "".join(spy.stdin_writes)
+        assert written, "a command must have been written to stdin"
+        assert "\r" not in written, "stdin payload must contain NO carriage returns (CRLF breaks sh)"
+        assert written.startswith("pwd\n"), "the command must be a bare-LF-terminated line"
+        K.close_shell(info.sid)
+    print("  persistent shell writes bare-LF stdin (no CRLF corruption): PASS")
+
+
 if __name__ == "__main__":
     test_refuses_when_open_sandbox_down()
     test_target_container_is_hardcoded_to_open()
@@ -229,5 +373,10 @@ if __name__ == "__main__":
     test_kali_is_human_only()
     test_run_is_recorded_to_session()
     test_timeout_is_contained()
+    test_persistent_shell_refuses_when_sandbox_down()
+    test_persistent_shell_container_is_hardcoded_to_open()
+    test_persistent_shell_is_human_only_and_no_isolation_gate()
+    test_persistent_shell_records_every_command()
+    test_persistent_shell_stdin_stays_bare_lf()
     test_output_is_capped()
     print("ALL :kali containment tests pass")

@@ -176,13 +176,20 @@ def test_start_trips_the_danger_heuristic() -> None:
             f"{cmd} must start once explicitly acked"
         )
 
-    # A dotted payload (`pty.spawn(...)`) is host-shaped to the best-effort target-lock,
-    # so it is refused EARLIER, at the target gate. That is pre-existing executor
-    # behaviour shared with one-shot commands (gate order: target -> approval -> danger)
-    # and it fails CLOSED, so it is recorded here rather than worked around.
-    rejected = S.validate_start(_req(command="python3", args=["-c", "import pty; pty.spawn('/bin/sh')"]))
-    assert rejected is not None and rejected.gate == "target", (
-        f"a dotted payload must fail closed at the target-lock, got {rejected}"
+    # A `pty.spawn(...)` payload is caught by the DANGER gate (it names `pty`), which is the
+    # correct control. It used to be refused earlier at the TARGET gate, but only because the
+    # dotted token `pty.spawn(` was MISREAD as a foreign host — a false positive that the
+    # step-12 host-check fix removes (the same fix stops rejecting `directory-list-2.3-medium`
+    # and `Mozilla/5.0`). So without the ack it fails closed at `danger`, not `target`:
+    payload = ["-c", "import pty; pty.spawn('/bin/sh')"]
+    rejected = S.validate_start(_req(command="python3", args=payload, dangerous_ack=False))
+    assert rejected is not None and rejected.gate == "danger", (
+        f"a pty payload must fail closed at the danger gate, got {rejected}"
+    )
+    # And with the explicit human ack it clears — an approved dangerous command in the
+    # isolated lab, where isolation is the real bound. That is the intended model.
+    assert S.validate_start(_req(command="python3", args=payload)) is None, (
+        "an explicitly-acked pty payload must start in the isolated lab"
     )
     print("  start trips the heuristic red-confirm (nc/ncat/socat/interpreter): PASS")
 

@@ -1093,6 +1093,85 @@ export async function runKali(
   return (await res.json()) as KaliResult;
 }
 
+// --- Persistent :kali shell (step 13 — cd/env/jobs persist across commands) ------- //
+
+/** A live persistent :kali shell. Same containment as one-shot :kali; state persists. */
+export type KaliShellInfo = {
+  sid: string;
+  container: string;
+  state: "active" | "closed";
+  started_at: string;
+  last_active: string;
+  command_count: number;
+  session_id: string | null;
+};
+
+/** The result of ONE command run in a persistent shell. */
+export type KaliCommandResult = {
+  sid: string;
+  run_id: string;
+  command: string;
+  exit_code: number | null;
+  stdout: string;
+  stderr: string;
+  started_at: string;
+  finished_at: string;
+  timed_out: boolean;
+  truncated: boolean;
+  shell_closed: boolean;
+};
+
+async function kaliShellFetch<T>(path: string, init: RequestInit): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, init);
+  } catch {
+    throw new ApiError(0, `Cannot reach the API at ${API_URL}. Is it running?`);
+  }
+  if (!res.ok) {
+    let msg = `Request failed (${res.status}).`;
+    try {
+      const body = (await res.json()) as { detail?: { reason?: string } | string };
+      if (body?.detail && typeof body.detail === "object") msg = body.detail.reason ?? msg;
+      else if (typeof body?.detail === "string") msg = body.detail;
+    } catch {
+      /* keep fallback */
+    }
+    throw new ApiError(res.status, msg);
+  }
+  return (await res.json()) as T;
+}
+
+/** Open a persistent shell. 409 if the open sandbox is not running. */
+export const startKaliShell = (sessionId?: string | null, signal?: AbortSignal) =>
+  kaliShellFetch<KaliShellInfo>("/cockpit/kali/shell", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId ?? null }),
+    signal,
+  });
+
+/** Run one command in a persistent shell — state persists to the next call. */
+export const runInKaliShell = (
+  sid: string,
+  command: string,
+  timeoutSeconds?: number | null,
+  signal?: AbortSignal
+) =>
+  kaliShellFetch<KaliCommandResult>(`/cockpit/kali/shell/${encodeURIComponent(sid)}/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ command, timeout_seconds: timeoutSeconds ?? null }),
+    signal,
+  });
+
+/** Close a persistent shell (EOF stdin, then kill). */
+export const closeKaliShell = (sid: string, signal?: AbortSignal) =>
+  kaliShellFetch<KaliShellInfo>(`/cockpit/kali/shell/${encodeURIComponent(sid)}`, {
+    method: "DELETE",
+    signal,
+  });
+
 // --- AD attack-path graph (see backend/adgraph) ---------------------------------
 // Read-only graph/parse/path/technique endpoints. Every abuse command a technique
 // returns is run ONLY through execCockpitStream (the gated executor) — approve-each,
@@ -1891,6 +1970,31 @@ export const getSessionState = (sessionId: string, signal?: AbortSignal) =>
     `/sessions/${encodeURIComponent(sessionId)}/state`,
     signal
   );
+
+/**
+ * Fill a command's credential placeholders (<user>/<password>/<hash>/<domain>) from one
+ * captured credential (step 14). The placeholder→field mapping lives server-side, so the
+ * UI never re-implements it. Returns the filled command and which placeholders were filled.
+ * Fills nothing but credential placeholders; <target> and operational ones are untouched.
+ */
+export async function fillCredential(
+  sessionId: string,
+  command: string,
+  cred: { kind: string; principal: string; domain: string },
+  signal?: AbortSignal
+): Promise<{ command: string; filled: string[] }> {
+  const res = await fetch(
+    `${API_URL}/sessions/${encodeURIComponent(sessionId)}/credentials/fill`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command, ...cred }),
+      signal,
+    }
+  );
+  if (!res.ok) throw new ApiError(res.status, `Could not fill the credential (${res.status}).`);
+  return (await res.json()) as { command: string; filled: string[] };
+}
 
 /** Seed the task tree from the composed plan's phases. Idempotent server-side: a session
  *  that already has tasks is left alone, so this can never wipe recorded progress. */

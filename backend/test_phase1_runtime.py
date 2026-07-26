@@ -299,8 +299,13 @@ def test_the_ui_can_actually_reach_the_new_run_controls() -> None:
     assert "timeout_seconds" in cockpit, "the cockpit must send a per-run timeout"
     assert "execCockpitBackground" in cockpit, "the cockpit must offer a detached run"
 
+    # :kali drives the persistent shell now (Phase-3 step 13); the per-command timeout is
+    # passed to runInKaliShell, whose API wrapper sends it as timeout_seconds.
     kali = (fe / "components" / "KaliShell.tsx").read_text(encoding="utf-8")
-    assert "timeout_seconds" in kali, ":kali must send a per-command timeout (was a hard 60s)"
+    assert "KALI_TIMEOUT_CHOICES" in kali and "runInKaliShell" in kali, (
+        ":kali must send a per-command timeout through the persistent shell (was a hard 60s)"
+    )
+    assert "timeout_seconds" in api, "the api layer must send :kali's per-command timeout"
     print("  the cockpit and :kali UIs can send timeout + detach: PASS")
 
 

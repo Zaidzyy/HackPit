@@ -380,8 +380,10 @@ query-time / config / ranking changes — **no KB re-ingest, no 15 MB rewrite, n
   records) is preserved off-nav at `/kali`; both backends and their containment tests stay
   intact. The **phishing** category is now surfaced on the front-page grid (its KB entries
   already existed; forensics/ics/supply-chain stay hidden). The **top nav** dropped the
-  redundant `:library` tile (home is the wordmark), the search field was widened to a proper
-  one-line field, and the nav is centered in the bar. All display-only; no backend touched.
+  redundant `:library` tile (home is the wordmark), the search field was widened to a one-line
+  field, the unused accent-swatch picker was removed (amber is the default and only accent),
+  and with that room the nav is now **truly centered** in the bar. All display-only; no backend
+  touched.
 
 ## Verification
 

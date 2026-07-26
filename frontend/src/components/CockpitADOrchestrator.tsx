@@ -1,13 +1,15 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
   adOrchestrateAdvance,
   adOrchestratePropose,
   execCockpitStream,
+  listWindowsProfiles,
   type ADProposal,
   type ExecEvent,
+  type WindowsProfile,
 } from "@/lib/api";
 
 type Line = { kind: "meta" | "stdout" | "stderr" | "err"; text: string };
@@ -62,10 +64,22 @@ export function CockpitADOrchestrator({
   const [advanced, setAdvanced] = useState<string | null>(null);
   const [skipped, setSkipped] = useState<string[]>([]);
 
+  // Windows targets — pick one to run the abuse ON the box over WinRM (native PowerView /
+  // Rubeus / Mimikatz variant); leave unset to run the Linux (impacket/evil-winrm) command
+  // through the sandbox. Loaded once; the picker only appears when a profile exists.
+  const [winProfiles, setWinProfiles] = useState<WindowsProfile[]>([]);
+  const [winProfileId, setWinProfileId] = useState<string>("");
+
   const ctrlRef = useRef<AbortController | null>(null);
   const runIdRef = useRef<string | null>(null);
 
   const engagement = !!engagementId;
+
+  useEffect(() => {
+    listWindowsProfiles()
+      .then(setWinProfiles)
+      .catch(() => setWinProfiles([]));
+  }, []);
 
   const ask = useCallback(
     async (avoid: string[] = skipped) => {
@@ -100,24 +114,36 @@ export function CockpitADOrchestrator({
 
   /** APPROVE THIS ONE STEP. The only place `approved: true` is set in this file. */
   const approveAndRun = useCallback(() => {
-    if (!proposal || running || !proposal.runnable) return;
-    if (proposal.requires_confirm && !ack) return; // red confirm not given — refuse to send
+    if (!proposal || running) return;
+    // Run ON a Windows target (native variant over WinRM) when one is picked and the edge has
+    // a native command; otherwise run the Linux command through the sandbox. The confirm /
+    // runnable checks follow whichever command will actually run.
+    const onWindows = !!winProfileId && !!proposal.windows_command;
+    const cmd = onWindows ? proposal.windows_command : proposal.command;
+    const cmdArgs = onWindows ? proposal.windows_args : proposal.args;
+    const runnable = onWindows ? proposal.windows_runnable : proposal.runnable;
+    const needsConfirm = onWindows
+      ? proposal.windows_requires_confirm
+      : proposal.requires_confirm;
+    if (!runnable) return;
+    if (needsConfirm && !ack) return; // red confirm not given — refuse to send
 
     ctrlRef.current?.abort();
     const ctrl = new AbortController();
     ctrlRef.current = ctrl;
     runIdRef.current = null;
     setRunning(true);
-    setLines([{ kind: "meta", text: `$ ${proposal.command} ${proposal.args.join(" ")}` }]);
+    setLines([{ kind: "meta", text: `$ ${cmd} ${cmdArgs.join(" ")}` }]);
     const push = (l: Line) => setLines((prev) => [...prev, l]);
 
     execCockpitStream(
       {
-        command: proposal.command,
-        args: proposal.args,
+        command: cmd,
+        args: cmdArgs,
         approved: true, // set ONLY here, for THIS step, after the operator clicked approve
         dangerous_ack: ack,
         engagement_id: engagementId ?? undefined,
+        windows_profile_id: onWindows ? winProfileId : undefined,
         session_id: sessionId ?? undefined,
       },
       (ev: ExecEvent) => {
@@ -178,7 +204,7 @@ export function CockpitADOrchestrator({
         setRunning(false);
         setAck(false); // the confirm is per-step; it never carries to the next one
       });
-  }, [proposal, running, ack, engagementId, sessionId, graphId, owned, traversed, onAdvanced]);
+  }, [proposal, running, ack, engagementId, sessionId, graphId, owned, traversed, winProfileId, onAdvanced]);
 
   const skip = useCallback(() => {
     if (!proposal) return;
@@ -189,11 +215,19 @@ export function CockpitADOrchestrator({
   }, [proposal, skipped, ask]);
 
   const p = proposal;
-  const blocked = !!p && (!p.runnable || !p.gate_ok);
-  const needsAck = !!p && p.requires_confirm;
+  // Windows execution is chosen when a target is picked AND the edge has a native variant.
+  const onWin = !!p && !!winProfileId && !!p.windows_command;
+  const effCommand = p ? (onWin ? p.windows_command : p.command) : "";
+  const effArgs = p ? (onWin ? p.windows_args : p.args) : [];
+  const effRunnable = !!p && (onWin ? p.windows_runnable : p.runnable);
+  const effFlags = p ? (onWin ? p.windows_dangerous_flags : p.dangerous_flags) : [];
+  // For a Windows run the target-lock is structural (the profile host), so the Linux scope
+  // pre-check (gate_ok) does not apply — only runnability blocks it.
+  const blocked = !!p && (onWin ? !p.windows_runnable : !p.runnable || !p.gate_ok);
+  const needsAck = !!p && (onWin ? p.windows_requires_confirm : p.requires_confirm);
   // the card reads RED for either reason: the gate will demand a confirm, OR it is a
   // destructive abuse we could not resolve and therefore cannot gate at all.
-  const looksDestructive = !!p && (p.requires_confirm || p.destructive_unresolved);
+  const looksDestructive = !!p && (needsAck || p.destructive_unresolved);
 
   return (
     <section className="hp-ado" aria-label="AD orchestration">
@@ -245,11 +279,12 @@ export function CockpitADOrchestrator({
             )}
           </p>
 
-          {p.runnable ? (
+          {effRunnable ? (
             <pre className="hp-ado-cmd">
               <code>
-                {p.command} {p.args.join(" ")}
+                {effCommand} {effArgs.join(" ")}
               </code>
+              {onWin && <span className="hp-ado-prov"> · runs on the Windows target over WinRM</span>}
             </pre>
           ) : p.destructive_unresolved ? (
             /* A DESTRUCTIVE abuse we could not resolve a command for. There is no executor
@@ -284,9 +319,28 @@ export function CockpitADOrchestrator({
               />
               <span>
                 <b>Destructive on a real domain.</b>{" "}
-                {p.dangerous_flags.join("; ")}. I have read this command and I am authorized to
+                {effFlags.join("; ")}. I have read this command and I am authorized to
                 run it against this domain.
               </span>
+            </label>
+          )}
+
+          {winProfiles.length > 0 && p.windows_command && (
+            <label className="hp-ado-prov" style={{ display: "block", margin: "0.4rem 0" }}>
+              run on:{" "}
+              <select
+                value={winProfileId}
+                onChange={(e) => setWinProfileId(e.target.value)}
+                disabled={running}
+                aria-label="Execution target"
+              >
+                <option value="">Linux sandbox (impacket / evil-winrm)</option>
+                {winProfiles.map((w) => (
+                  <option key={w.profile_id} value={w.profile_id}>
+                    {w.name} — {w.host} (WinRM · native)
+                  </option>
+                ))}
+              </select>
             </label>
           )}
 

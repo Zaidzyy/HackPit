@@ -141,6 +141,9 @@ export function CockpitView() {
           <Link href="/tunnels" className="hp-cv-adlink">
             ⇢ pivot / tunnels — route through a compromised host (chisel · ligolo) →
           </Link>
+          <Link href="/windows" className="hp-cv-adlink">
+            ⊞ windows targets — drive a Windows/AD box over WinRM (CRTP · OSCP AD) →
+          </Link>
         </header>
 
         <section className="hp-cv-map-section">

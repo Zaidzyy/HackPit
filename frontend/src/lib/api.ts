@@ -709,8 +709,9 @@ export type CockpitRun = {
   args: string[];
   target: string;
   approved: boolean;
-  /** "lab" (isolated lab) or "engagement" (real authorized target, Wall-A sandbox). */
-  mode?: "lab" | "engagement";
+  /** "lab" (isolated lab), "engagement" (real authorized target), or "windows" (a
+   *  PowerShell command run on a Windows target over WinRM). */
+  mode?: "lab" | "engagement" | "windows";
   exit_code: number | null;
   stdout: string;
   stderr: string;
@@ -722,7 +723,7 @@ export type CockpitRun = {
 
 /** One streamed execution event (SSE `data:` payload from POST /cockpit/exec). */
 export type ExecEvent =
-  | { type: "start"; run_id: string; command: string; args: string[]; target: string; mode?: "lab" | "engagement"; started_at: string }
+  | { type: "start"; run_id: string; command: string; args: string[]; target: string; mode?: "lab" | "engagement" | "windows"; transport?: string; started_at: string }
   | { type: "stdout"; line: string }
   | { type: "stderr"; line: string }
   | { type: "exit"; run_id: string; code: number | null; finished_at: string }
@@ -766,6 +767,10 @@ export type ExecPayload = {
   /** When set to an ACTIVE engagement id, run in REAL-TARGET engagement mode (Wall-A
    *  sandbox, no isolation floor) against that engagement's named target. Omit for lab. */
   engagement_id?: string | null;
+  /** When set to a saved Windows-target profile id, run the command as PowerShell ON that
+   *  Windows box over WinRM (a new transport behind the SAME gates). The target is the
+   *  profile's host, hardcoded server-side. Omit for a Linux (docker) run. */
+  windows_profile_id?: string | null;
   /** How long this ONE command may run before it is killed. Omit for the 180s default;
    *  above the 3600s ceiling it is CLAMPED, not refused. A full port sweep, a big ffuf or
    *  a nuclei run does not finish in 180s. Not a safety control — every gate still applies. */
@@ -1624,6 +1629,14 @@ export type ADProposal = {
   requires_confirm: boolean;
   /** The technique catalog's independent "this is destructive" opinion. */
   destructive_technique: boolean;
+  /** The NATIVE WINDOWS variant (PowerView/Rubeus/Mimikatz) — runs on the box over WinRM
+   *  when a Windows target is selected. Empty command when the edge has no native variant. */
+  windows_command: string;
+  windows_args: string[];
+  windows_cmd_display: string;
+  windows_runnable: boolean;
+  windows_dangerous_flags: string[];
+  windows_requires_confirm: boolean;
 };
 
 export type ADProposeResult = {
@@ -2339,3 +2352,120 @@ export type ArsenalResponse = {
 
 export const getArsenal = (signal?: AbortSignal) =>
   getJSON<ArsenalResponse>("/arsenal", signal);
+
+// ---- Windows targets (WinRM driver — saved connection profiles) ----------- //
+
+/** A saved Windows target, MASKED — the secret is never returned (only `has_secret`). */
+export type WindowsProfile = {
+  profile_id: string;
+  name: string;
+  host: string;
+  transport: string;
+  port: number;
+  username: string;
+  auth_kind: "password" | "ntlm-hash";
+  has_secret: boolean;
+  domain: string;
+  created_at: string;
+};
+
+/** Create/update a profile. `secret` is write-only; an empty secret on update keeps the
+ *  stored one. `from_credential` fills the account + secret from a captured vault credential
+ *  SERVER-SIDE, so the secret never round-trips through the browser. */
+export type WindowsProfileInput = {
+  name: string;
+  host: string;
+  username: string;
+  transport?: string;
+  port?: number;
+  auth_kind?: "password" | "ntlm-hash";
+  secret?: string;
+  domain?: string;
+  from_credential?: {
+    session_id: string;
+    kind: string;
+    principal: string;
+    domain: string;
+  } | null;
+};
+
+export type WindowsStatus = {
+  profiles: number;
+  pywinrm_installed: boolean;
+  detail: string;
+};
+
+/** Result of the human-initiated connectivity smoke test (hardcoded `whoami`). */
+export type WindowsTestResult = {
+  ok: boolean;
+  host: string;
+  exit_code?: number | null;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+};
+
+async function putJSON<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch {
+    throw new ApiError(0, `Cannot reach the API at ${API_URL}. Is it running?`);
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, await errorMessage(res, `Request failed (${res.status}).`));
+  }
+  return (await res.json()) as T;
+}
+
+async function delJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, { method: "DELETE", signal });
+  } catch {
+    throw new ApiError(0, `Cannot reach the API at ${API_URL}. Is it running?`);
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, await errorMessage(res, `Request failed (${res.status}).`));
+  }
+  return (await res.json()) as T;
+}
+
+export const getWindowsStatus = (signal?: AbortSignal) =>
+  getJSON<WindowsStatus>("/cockpit/windows/status", signal);
+
+export const listWindowsProfiles = (signal?: AbortSignal) =>
+  getJSON<WindowsProfile[]>("/cockpit/windows/profiles", signal);
+
+export const createWindowsProfile = (input: WindowsProfileInput, signal?: AbortSignal) =>
+  postJSON<WindowsProfile>("/cockpit/windows/profiles", input, signal);
+
+export const updateWindowsProfile = (
+  profileId: string,
+  input: Partial<WindowsProfileInput>,
+  signal?: AbortSignal
+) =>
+  putJSON<WindowsProfile>(
+    `/cockpit/windows/profiles/${encodeURIComponent(profileId)}`,
+    input,
+    signal
+  );
+
+export const deleteWindowsProfile = (profileId: string, signal?: AbortSignal) =>
+  delJSON<{ profile_id: string; deleted: boolean }>(
+    `/cockpit/windows/profiles/${encodeURIComponent(profileId)}`,
+    signal
+  );
+
+/** Human-initiated connectivity smoke test — runs a hardcoded `whoami` over WinRM. */
+export const testWindowsProfile = (profileId: string, signal?: AbortSignal) =>
+  postJSON<WindowsTestResult>(
+    `/cockpit/windows/profiles/${encodeURIComponent(profileId)}/test`,
+    {},
+    signal
+  );

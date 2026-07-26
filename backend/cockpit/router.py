@@ -8,6 +8,10 @@ Endpoints:
 * ``POST /cockpit/kali``             — :kali human-only shell: run ONE arbitrary command
                                        inside the isolated sandbox. 409 (no run) if the
                                        sandbox is not provably isolated.
+* ``WS   /cockpit/terminal/ws``      — raw PTY terminal into the same open sandbox: a
+                                       SECOND surface alongside :kali, not a replacement.
+                                       Full-screen tools (vim/top/msfconsole) render; the
+                                       sentinel shell keeps producing clean transcripts.
 * ``GET  /cockpit/runs/{run_id}``    — the persisted run-record, or live status while a
                                        backgrounded run is still going.
 * ``GET  /cockpit/runs/{id}/stream`` — attach to a backgrounded run: replay its buffered
@@ -24,11 +28,12 @@ matches on a PLAIN SUBSTRING, so do not name that package anywhere in this file.
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import json
 from typing import Any, Iterator
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -36,6 +41,7 @@ from . import allowlist, config, engagement, executor, jobs, loot, runstore
 from . import session as live_session
 from . import kali as kali_mod
 from . import repeater as repeater_mod
+from . import terminal as terminal_mod
 from . import tunnels as tunnels_mod
 from .kali import KaliRefused, KaliRequest, KaliResult, kali_status, run_kali
 from .models import (
@@ -282,6 +288,125 @@ def close_kali_shell(sid: str) -> kali_mod.KaliShellInfo:
     try:
         return kali_mod.close_shell(sid)
     except kali_mod.KaliShellRefused as exc:
+        raise HTTPException(status_code=404, detail={"reason": str(exc)})
+
+
+# --- Raw PTY terminal (a SECOND :kali surface — full-screen tools) ------------------ #
+#
+# The persistent shell above stays exactly as it is: sentinel-delimited, escape-free,
+# per-command transcripts — the clean record reports are built from. This adds the OTHER
+# half rather than trading it away: a real pty, so vim / top / msfconsole / a raw
+# evil-winrm shell actually render.
+#
+# SAME containment as :kali, point for point: the container is the hardcoded constant
+# (TerminalStartRequest has no container/target/shell field), there is no isolation gate
+# (the open box is intentionally not isolated), the raw stream is audited to the run store,
+# and it is HUMAN-ONLY — terminal_mod.open_terminal / write_input are referenced by this
+# route and nothing else, source-scan locked by test_terminal_is_human_only exactly like
+# run_kali. Still a LOCALHOST DEV TOOL with no auth — see the warning on /kali; this one is
+# an interactive terminal onto a full-reach box, so the Origin pin below is the only thing
+# stopping a random page in your browser from opening one.
+
+# WebSockets are NOT covered by CORSMiddleware (the browser sends no preflight), so the
+# same origin allowlist main.py applies to HTTP has to be enforced by hand here.
+_ALLOWED_WS_ORIGINS = {"http://localhost:3000", "http://127.0.0.1:3000"}
+
+
+@router.get("/terminal/status")
+def get_terminal_status() -> dict[str, Any]:
+    """Availability of the raw-terminal surface (no isolation claim — there is none)."""
+    return terminal_mod.terminal_status()
+
+
+@router.get("/terminal", response_model=list[terminal_mod.TerminalInfo])
+def list_terminals() -> list[terminal_mod.TerminalInfo]:
+    """Every live raw terminal. Read-only."""
+    return terminal_mod.list_terminals()
+
+
+@router.websocket("/terminal/ws")
+async def terminal_ws(
+    websocket: WebSocket,
+    session_id: str | None = Query(None),
+    cols: int = Query(80, ge=1, le=1000),
+    rows: int = Query(24, ge=1, le=1000),
+) -> None:
+    """Stream one raw PTY terminal both ways. HUMAN-ONLY: a browser at the keyboard.
+
+    Binary frames are keystrokes (verbatim to the pty); text frames are JSON control
+    messages (``{"type":"resize","cols":N,"rows":N}``). Output is sent back as binary
+    frames of raw pty bytes — escape sequences intact, which is the whole point.
+    """
+    origin = websocket.headers.get("origin")
+    if origin is not None and origin not in _ALLOWED_WS_ORIGINS:
+        # A full-reach terminal must not be openable by any page that happens to load in
+        # the operator's browser. Refuse before accepting, so nothing is ever spawned.
+        await websocket.close(code=4403)
+        return
+
+    await websocket.accept()
+    try:
+        info = terminal_mod.open_terminal(
+            terminal_mod.TerminalStartRequest(session_id=session_id, cols=cols, rows=rows)
+        )
+    except terminal_mod.TerminalRefused as exc:
+        await websocket.send_text(json.dumps({"type": "refused", "reason": str(exc)}))
+        await websocket.close(code=4409)
+        return
+
+    tid = info.tid
+    await websocket.send_text(json.dumps({
+        "type": "ready",
+        "tid": tid,
+        "run_id": info.run_id,
+        "container": info.container,
+        "shell": info.shell,
+        "isolated": False,  # never claim isolation — the open sandbox has full reach
+    }))
+
+    loop = asyncio.get_running_loop()
+
+    async def pump_out() -> None:
+        """pty -> browser. The pipe read is blocking, so it runs on a worker thread."""
+        while True:
+            data = await loop.run_in_executor(None, terminal_mod.read_output, tid)
+            if not data:
+                break
+            await websocket.send_bytes(data)
+
+    pump = asyncio.create_task(pump_out())
+    try:
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+            if (payload := message.get("bytes")) is not None:
+                terminal_mod.write_input(tid, payload)
+            elif (text := message.get("text")) is not None:
+                try:
+                    control = json.loads(text)
+                except (TypeError, ValueError):
+                    continue
+                if control.get("type") == "resize":
+                    terminal_mod.resize(
+                        tid, int(control.get("cols", 80)), int(control.get("rows", 24))
+                    )
+    except (WebSocketDisconnect, terminal_mod.TerminalRefused, RuntimeError):
+        pass
+    finally:
+        pump.cancel()
+        try:
+            terminal_mod.close_terminal(tid)  # finalises the audited transcript
+        except terminal_mod.TerminalRefused:
+            pass
+
+
+@router.delete("/terminal/{tid}", response_model=terminal_mod.TerminalInfo)
+def close_terminal(tid: str) -> terminal_mod.TerminalInfo:
+    """Close a raw terminal from outside the socket (kills the pty, finalises the record)."""
+    try:
+        return terminal_mod.close_terminal(tid)
+    except terminal_mod.TerminalRefused as exc:
         raise HTTPException(status_code=404, detail={"reason": str(exc)})
 
 

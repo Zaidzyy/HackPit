@@ -980,6 +980,31 @@ def fill_credential(session_id: str, req: CredFillIn = Body(...)) -> dict[str, A
     return {"command": filled, "filled": used}
 
 
+class ProofIn(BaseModel):
+    """Set a host's local.txt / proof.txt flag by hand (the operator pastes it)."""
+
+    address: str = Field(..., description="The host the flag belongs to (IP or hostname).")
+    kind: str = Field(..., description="'local' (user foothold) or 'proof' (root/SYSTEM).")
+    value: str = Field("", description="The flag. Empty clears it.")
+
+
+@app.post("/sessions/{session_id}/state/proof")
+def set_proof(session_id: str, req: ProofIn = Body(...)) -> dict[str, Any]:
+    """Record a captured local.txt/proof.txt flag against a host (Phase 4 item 5).
+
+    Flags are also captured automatically when a command reads a flag file (state/parsers.py);
+    this is the manual paste path. The flag drives the OSCP report's per-host proof table, so it
+    never has to be retyped at report time — the transcription the project already refuses to let
+    the model do. Nothing runs.
+    """
+    try:
+        host = state_store.set_proof(session_id, req.address, req.kind, req.value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"address": host.address, "local_txt": host.local_txt,
+            "proof_txt": host.proof_txt, "ownership": host.ownership()}
+
+
 @app.post("/sessions/{session_id}/state/tasks/seed")
 def seed_session_tasks(session_id: str) -> dict[str, Any]:
     """Seed the task tree from the composed plan's phases.
@@ -1319,11 +1344,19 @@ def delete_session(session_id: str) -> None:
 
 
 @app.post("/sessions/{session_id}/report", response_model=ReportOut)
-def generate_report(session_id: str) -> dict[str, Any]:
+def generate_report(
+    session_id: str,
+    template: str = Query("standard", description="standard | oscp | cpts | bugbounty."),
+    include_opsec: bool = Query(
+        False, description="Append the red-team OPSEC assessment (D10) — for detection-scoped work."
+    ),
+) -> dict[str, Any]:
     """Draft a pentest report from the session, persist it, and return it.
 
-    Grounded in the session's completed steps + pasted evidence (see
-    ``report.py``). Long-form output, so this is slower on the local model.
+    Grounded in the session's completed steps + pasted evidence (see ``report.py``). The
+    ``template`` selects an exam/format mode: OSCP (per-host + proof.txt table), CPTS
+    (professional format), or bugbounty (H1/Bugcrowd single-vuln + CVSS). Long-form output, so
+    this is slower on the local model.
     """
     session = sessions_db.get_session(session_id)
     if session is None:
@@ -1333,10 +1366,17 @@ def generate_report(session_id: str) -> dict[str, Any]:
     runs = cockpit_runstore.list_runs_for_session(session_id)
     if runs:
         session["execution_runs"] = [r.model_dump() for r in runs]
+    # Fold in the structured engagement state so the OSCP template can render the per-host
+    # proof table straight from state — no hash retyped at report time.
+    session["state_hosts"] = state_store.load(session_id).to_dict(include_secrets=True)["hosts"]
     try:
-        report_md, model_used = report_gen.compose_report(session)
+        report_md, model_used = report_gen.compose_report(
+            session, template=template, include_opsec=include_opsec
+        )
     except llm.LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
+    except ValueError as e:  # unknown template
+        raise HTTPException(status_code=422, detail=str(e))
 
     ts = sessions_db.save_report(session_id, report_md, model_used)
     if ts is None:  # deleted between fetch and save — unlikely

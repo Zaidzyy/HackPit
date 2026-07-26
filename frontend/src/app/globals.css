@@ -3056,6 +3056,24 @@ a.hp-card {
   background: transparent;
   transition: color 0.15s, border-color 0.15s;
 }
+/* exam/format template picker in the report action bar (Phase 4 item 5) */
+.hp-rep-tmpl {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 11px;
+  color: var(--grey);
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.35);
+}
+.hp-rep-tmpl:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent-line);
+}
+.hp-rep-tmpl:disabled {
+  opacity: 0.5;
+}
 .hp-rep-btn:hover:not(:disabled) {
   color: var(--accent);
   border-color: var(--accent-line);
@@ -7204,6 +7222,17 @@ a.hp-card {
 .hp-cs-hostname, .hp-cs-os {
   font-size: 11.5px;
   color: color-mix(in srgb, var(--white) 44%, transparent);
+}
+/* OSCP ownership badge (Phase 4 item 5) */
+.hp-cs-own {
+  font-size: 10px; letter-spacing: 0.5px; text-transform: uppercase;
+  padding: 1px 7px; border-radius: 999px;
+}
+.hp-cs-own.is-owned {
+  color: #5ad18a; border: 1px solid rgba(90, 209, 138, 0.4); background: rgba(90, 209, 138, 0.1);
+}
+.hp-cs-own.is-foothold {
+  color: #e0913a; border: 1px solid rgba(224, 145, 58, 0.4); background: rgba(224, 145, 58, 0.1);
 }
 .hp-cs-svcs { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 6px; }
 .hp-cs-svc {

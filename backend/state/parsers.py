@@ -326,6 +326,47 @@ STDOUT_PARSERS = {
 }
 
 
+# --------------------------------------------------------------------------- #
+# proof / local.txt flags (Phase 4 item 5) — captured for the OSCP report
+# --------------------------------------------------------------------------- #
+# HTB/OSCP flags are 32 hex chars. We only capture one when the COMMAND read a flag file
+# (proof.txt/root.txt = proof; local.txt/user.txt = local), so a random 32-hex string in
+# other output is never mistaken for a flag. The flag is attributed to the run's target host.
+_FLAG_RE = re.compile(r"\b[0-9a-fA-F]{32}\b")
+_PROOF_FILE_RE = re.compile(r"\b(?:proof|root)\.txt\b", re.I)
+_LOCAL_FILE_RE = re.compile(r"\b(?:local|user)\.txt\b", re.I)
+
+
+def parse_proof_flags(
+    command: str, text: str, target: str, session_id: str, run_id: str | None = None
+) -> Parsed:
+    """Capture a proof/local flag when the command read a flag file. Never raises.
+
+    Conservative by design: the command must name the flag file, so an unrelated 32-hex hash
+    (an NTLM hash, a checksum) in some other output is never captured as a flag.
+    """
+    out = Parsed()
+    cmd = command or ""
+    addr = (target or "").strip()
+    if not (session_id and addr):
+        return out
+    reads_proof = bool(_PROOF_FILE_RE.search(cmd))
+    reads_local = bool(_LOCAL_FILE_RE.search(cmd))
+    if not (reads_proof or reads_local):
+        return out
+    m = _FLAG_RE.search(text or "")
+    if not m:
+        return out
+    flag = m.group(0).lower()
+    host = Host(session_id=session_id, address=addr, source_run_id=run_id)
+    if reads_proof:
+        host.proof_txt = flag
+    else:
+        host.local_txt = flag
+    out.hosts.append(host)
+    return out
+
+
 def parse_stdout(program: str, text: str, session_id: str, run_id: str | None = None) -> Parsed:
     """Parse a run's stdout using the parser for that program. Never raises."""
     fn = STDOUT_PARSERS.get((program or "").strip().lower())

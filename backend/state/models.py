@@ -48,12 +48,25 @@ class Host:
     os: str = ""
     # "up" | "down" | "" (unknown). Only ever set from evidence, never assumed.
     status: str = ""
+    # Exam proof flags (OSCP/HTB). Set when the operator pastes one, or auto-captured when a
+    # command's output contains one (state/parsers.py). local.txt = user/low-priv foothold;
+    # proof.txt = root/SYSTEM. A host with local but not proof is "half-owned".
+    local_txt: str = ""
+    proof_txt: str = ""
     source_run_id: str | None = None
     first_seen: str = ""
     last_seen: str = ""
 
     def key(self) -> tuple[str, str]:
         return (self.session_id, _norm(self.address).lower())
+
+    def ownership(self) -> str:
+        """'' (none) | 'foothold' (local only) | 'owned' (proof captured)."""
+        if self.proof_txt.strip():
+            return "owned"
+        if self.local_txt.strip():
+            return "foothold"
+        return ""
 
 
 @dataclass
@@ -206,7 +219,7 @@ class StateSummary:
     def to_dict(self, include_secrets: bool = False) -> dict[str, Any]:
         return {
             "counts": self.counts(),
-            "hosts": [vars(h) for h in self.hosts],
+            "hosts": [{**vars(h), "ownership": h.ownership()} for h in self.hosts],
             "services": [vars(s) for s in self.services],
             "endpoints": [vars(e) for e in self.endpoints],
             "credentials": [

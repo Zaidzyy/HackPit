@@ -107,6 +107,9 @@ echo "== Phase-4 HTTP repeater (hardcoded container / argv-only / human-only / s
 echo "== Phase-4 pivot/tunnels (human-only lifecycle / pure rewrite-before-approval / scope-by-hand) =="
 "$PY" test_tunnels.py
 
+echo "== Phase-4 exam report templates (proof-flag capture / per-host table / CVSS 3.1 / template select) =="
+"$PY" test_report_templates.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

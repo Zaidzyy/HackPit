@@ -11,8 +11,16 @@ import {
   generateReport,
   getLLMConfig,
   getSession,
+  type ReportTemplate,
   type Session,
 } from "@/lib/api";
+
+const TEMPLATES: { value: ReportTemplate; label: string }[] = [
+  { value: "standard", label: "Standard" },
+  { value: "oscp", label: "OSCP (per-host + proof.txt)" },
+  { value: "cpts", label: "CPTS (professional)" },
+  { value: "bugbounty", label: "Bug bounty (H1/Bugcrowd + CVSS)" },
+];
 import { useApi } from "@/lib/useApi";
 import { useReducedMotion } from "@/lib/useReducedMotion";
 
@@ -58,26 +66,31 @@ export function ReportScreen({ id }: { id: string }) {
   const [report, setReport] = useState<ReportData | null>(null);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [template, setTemplate] = useState<ReportTemplate>("standard");
   const startedRef = useRef(false);
 
-  const generate = useCallback(() => {
-    setGenerating(true);
-    setError(null);
-    generateReport(id)
-      .then((r) =>
-        setReport({
-          md: r.report_md,
-          at: r.report_generated_at,
-          model: r.model_used,
-        })
-      )
-      .catch((err: unknown) =>
-        setError(
-          err instanceof ApiError ? err.message : "Couldn’t draft the report."
+  const generate = useCallback(
+    (tmpl?: ReportTemplate) => {
+      const chosen = tmpl ?? template;
+      setGenerating(true);
+      setError(null);
+      generateReport(id, chosen)
+        .then((r) =>
+          setReport({
+            md: r.report_md,
+            at: r.report_generated_at,
+            model: r.model_used,
+          })
         )
-      )
-      .finally(() => setGenerating(false));
-  }, [id]);
+        .catch((err: unknown) =>
+          setError(
+            err instanceof ApiError ? err.message : "Couldn’t draft the report."
+          )
+        )
+        .finally(() => setGenerating(false));
+    },
+    [id, template]
+  );
 
   // Seed from the persisted report, or auto-draft once if there isn't one yet.
   useEffect(() => {
@@ -190,7 +203,7 @@ export function ReportScreen({ id }: { id: string }) {
               <button
                 type="button"
                 className="hp-ap-linklike"
-                onClick={generate}
+                onClick={() => generate()}
               >
                 try again
               </button>
@@ -213,10 +226,28 @@ export function ReportScreen({ id }: { id: string }) {
                 )}
               </span>
               <div className="hp-rep-actions">
+                <select
+                  className="hp-rep-tmpl"
+                  value={template}
+                  onChange={(e) => {
+                    const t = e.target.value as ReportTemplate;
+                    setTemplate(t);
+                    generate(t);
+                  }}
+                  disabled={generating}
+                  aria-label="Report template"
+                  title="Exam / format template"
+                >
+                  {TEMPLATES.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   className="hp-rep-btn"
-                  onClick={generate}
+                  onClick={() => generate()}
                   disabled={generating}
                 >
                   ↻ regenerate

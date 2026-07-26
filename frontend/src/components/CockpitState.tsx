@@ -263,6 +263,17 @@ export function CockpitState({
                     <span className="hp-cs-hostname">{row.host.hostname}</span>
                   )}
                   {row.host?.os && <span className="hp-cs-os">{row.host.os}</span>}
+                  {/* OSCP ownership (Phase 4 item 5) — half-owned vs fully owned, from state. */}
+                  {row.host?.ownership === "owned" && (
+                    <span className="hp-cs-own is-owned" title="proof.txt captured">
+                      owned
+                    </span>
+                  )}
+                  {row.host?.ownership === "foothold" && (
+                    <span className="hp-cs-own is-foothold" title="local.txt captured — no proof yet">
+                      foothold
+                    </span>
+                  )}
                 </div>
                 {row.services.length > 0 ? (
                   <div className="hp-cs-svcs">

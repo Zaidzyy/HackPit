@@ -87,6 +87,8 @@ def parse_run(
     run_id: str | None,
     command: str,
     stdout: str,
+    target: str = "",
+    command_line: str = "",
     loot_dir: Path | None = None,
     started_at_epoch: float | None = None,
 ) -> Parsed:
@@ -98,6 +100,18 @@ def parse_run(
     try:
         found.extend(
             parsers.parse_stdout(program_name(command), stdout or "", session_id, run_id)
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Proof/local flags (OSCP report) — captured only when the command read a flag file, and
+    # attributed to this run's target host. Uses the whole command line (the flag file is in
+    # the args, e.g. `cat proof.txt`), falling back to the program token if none was passed.
+    try:
+        found.extend(
+            parsers.parse_proof_flags(
+                command_line or command or "", stdout or "", target, session_id, run_id
+            )
         )
     except Exception:  # noqa: BLE001
         pass
@@ -121,6 +135,8 @@ def ingest_run(
     run_id: str | None,
     command: str,
     stdout: str,
+    target: str = "",
+    command_line: str = "",
     loot_dir: Path | None = None,
     started_at_epoch: float | None = None,
 ) -> dict[str, Any]:
@@ -133,6 +149,7 @@ def ingest_run(
     try:
         found = parse_run(
             session_id=session_id, run_id=run_id, command=command, stdout=stdout,
+            target=target, command_line=command_line,
             loot_dir=loot_dir, started_at_epoch=started_at_epoch,
         )
         if found.is_empty():

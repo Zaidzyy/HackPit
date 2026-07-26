@@ -84,6 +84,180 @@ _SYSTEM = (
 )
 
 
+# --------------------------------------------------------------------------- #
+# EXAM / FORMAT TEMPLATES (Phase 4 item 5)
+# --------------------------------------------------------------------------- #
+# Each template swaps the SECTION LIST + tone the model writes to. The grounding rules, the
+# programmatic Evidence splice and the detection footprint are IDENTICAL across all of them —
+# only the report SHAPE changes. The shared rules block is factored out so a template only
+# states its own sections.
+_RULES = (
+    "STRICT RULES:\n"
+    "- Base all findings and the attack narrative ONLY on the steps marked COMPLETED and the "
+    "evidence pasted by the tester, plus the recorded SANDBOX EXECUTION runs (real commands "
+    "with captured output + exit code — authoritative, cite by run id). NEVER invent findings, "
+    "output, hashes, credentials, IPs, hostnames or results not present in the data.\n"
+    "- A completed step with no pasted evidence may be described as performed; do not fabricate "
+    "its output. Steps NOT completed must not appear as findings.\n"
+    "- EVIDENCE INTEGRITY: do NOT reproduce raw command output as fenced blocks. The system "
+    "inserts an authoritative verbatim Evidence section where you put the marker. Cite evidence "
+    "in prose by step id or run id (e.g. '(see Evidence: run-ab12cd34)').\n"
+    "- METHODOLOGY: describe ONLY the phases listed in the engagement data, in their exact "
+    "names and order. Do not add or rename phases.\n"
+    "- DETECTION FOOTPRINT: the system appends an authoritative purple-team block per run. Do "
+    "not write it yourself or contradict it, and do not turn it into evasion advice.\n"
+)
+
+_OSCP_PROOF_MARKER = "{{PROOF_TABLE}}"
+
+_STANDARD_TEMPLATE = _SYSTEM
+
+_OSCP_TEMPLATE = (
+    "You are writing an OSCP-style penetration-test report for an AUTHORIZED exam/lab "
+    "engagement, in clean professional Markdown. The report is organised PER HOST/TARGET — an "
+    "OSCP report walks each machine from enumeration to a low-privilege foothold (local.txt) to "
+    "privilege escalation (proof.txt).\n"
+    + _RULES +
+    "- PROOF FLAGS: put a single line containing exactly " + _OSCP_PROOF_MARKER + " where the "
+    "proof-summary table belongs (High-Level Summary section). The system replaces it with the "
+    "authoritative per-host local.txt/proof.txt table built from state — do NOT write that table "
+    "or invent any flag value; if you mention a flag, cite it as recorded, never transcribe it.\n"
+    "Write these sections as Markdown headings, in order:\n"
+    "1. Introduction (engagement + objective)\n"
+    "2. High-Level Summary (2-3 sentences, then the " + _OSCP_PROOF_MARKER + " line for the "
+    "proof table)\n"
+    "3. Per-Target Walkthrough — one `##` subsection PER host, each covering: Service "
+    "Enumeration, Initial Access / Foothold (how local.txt was reached), Privilege Escalation "
+    "(how proof.txt was reached). Walk the COMPLETED steps + recorded runs for that host in "
+    "order, citing evidence by id.\n"
+    f"4. Evidence — a single line containing exactly {_EVIDENCE_MARKER} and nothing else.\n"
+    "5. Remediation Recommendations (per finding)\n"
+    "Output ONLY the Markdown report — no preamble."
+)
+
+_CPTS_TEMPLATE = (
+    "You are writing an HTB CPTS-style professional penetration-test report for an AUTHORIZED "
+    "engagement, in clean professional Markdown. The CPTS format separates a business-facing "
+    "Executive Summary from a detailed technical walkthrough and a findings register with "
+    "severity ratings and remediation.\n"
+    + _RULES +
+    "Write these sections as Markdown headings, in order:\n"
+    "1. Executive Summary (business language: what was tested, the risk posture, the headline "
+    "findings — no jargon)\n"
+    "2. Scope & Rules of Engagement\n"
+    "3. Assessment Methodology (the phases followed, in order)\n"
+    "4. Findings — one `##` subsection per finding: Severity, Affected Asset, Description, "
+    "Impact, Evidence (cite by id), Remediation. Order findings by severity.\n"
+    "5. Attack Narrative (the chronological path through the engagement, citing evidence)\n"
+    f"6. Evidence — a single line containing exactly {_EVIDENCE_MARKER} and nothing else.\n"
+    "7. Remediation Summary (prioritised)\n"
+    "8. Appendix / Conclusion\n"
+    "Output ONLY the Markdown report — no preamble."
+)
+
+_BUGBOUNTY_TEMPLATE = (
+    "You are writing a bug-bounty vulnerability report for a HackerOne / Bugcrowd submission, in "
+    "clean Markdown, IMPACT-FIRST and concise. One vulnerability per report (the primary finding "
+    "of this engagement). Human tone — no 'could potentially'; state what IS.\n"
+    + _RULES +
+    "- CVSS: the system appends an authoritative CVSS block if a vector is provided; do not "
+    "invent a score. You may reference the severity in words.\n"
+    "Write these sections as Markdown headings, in order:\n"
+    "1. Title (one line: the vuln + the asset)\n"
+    "2. Summary (2-3 sentences: what it is and why it matters)\n"
+    "3. Steps to Reproduce (numbered, exact — the triager must be able to follow them; cite "
+    "captured evidence by id)\n"
+    "4. Impact (concrete: what an attacker gains, in business terms)\n"
+    f"5. Evidence — a single line containing exactly {_EVIDENCE_MARKER} and nothing else.\n"
+    "6. Remediation (specific, actionable)\n"
+    "Output ONLY the Markdown report — no preamble."
+)
+
+TEMPLATES: dict[str, str] = {
+    "standard": _STANDARD_TEMPLATE,
+    "oscp": _OSCP_TEMPLATE,
+    "cpts": _CPTS_TEMPLATE,
+    "bugbounty": _BUGBOUNTY_TEMPLATE,
+}
+
+
+# --------------------------------------------------------------------------- #
+# CVSS 3.1 base score (bug-bounty template)
+# --------------------------------------------------------------------------- #
+_CVSS_METRICS = {
+    "AV": {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.2},
+    "AC": {"L": 0.77, "H": 0.44},
+    "PR": {"N": 0.85, "L": 0.62, "H": 0.27},        # unchanged-scope values; see _cvss_pr
+    "UI": {"N": 0.85, "R": 0.62},
+    "C": {"H": 0.56, "L": 0.22, "N": 0.0},
+    "I": {"H": 0.56, "L": 0.22, "N": 0.0},
+    "A": {"H": 0.56, "L": 0.22, "N": 0.0},
+}
+_CVSS_PR_CHANGED = {"N": 0.85, "L": 0.68, "H": 0.5}
+
+
+def _roundup(x: float) -> float:
+    """CVSS 3.1 roundup — smallest number to 1 decimal >= x."""
+    import math
+    return math.ceil(x * 10) / 10
+
+
+def cvss31_base(vector: str) -> dict[str, Any] | None:
+    """Compute the CVSS 3.1 BASE score from a vector string. None if it cannot be parsed.
+
+    Deterministic and offline — the score is arithmetic, so (like the evidence) it is computed,
+    never written by the model. Only the eight base metrics are read; temporal/environmental
+    metrics in the vector are ignored.
+    """
+    v = (vector or "").strip()
+    if v.upper().startswith("CVSS:3.1/") or v.upper().startswith("CVSS:3.0/"):
+        v = v.split("/", 1)[1]
+    parts = {}
+    for tok in v.split("/"):
+        if ":" in tok:
+            k, val = tok.split(":", 1)
+            parts[k.strip().upper()] = val.strip().upper()
+    required = ["AV", "AC", "PR", "UI", "S", "C", "I", "A"]
+    if not all(k in parts for k in required):
+        return None
+    try:
+        scope_changed = parts["S"] == "C"
+        pr = (_CVSS_PR_CHANGED if scope_changed else _CVSS_METRICS["PR"])[parts["PR"]]
+        av = _CVSS_METRICS["AV"][parts["AV"]]
+        ac = _CVSS_METRICS["AC"][parts["AC"]]
+        ui = _CVSS_METRICS["UI"][parts["UI"]]
+        c = _CVSS_METRICS["C"][parts["C"]]
+        i = _CVSS_METRICS["I"][parts["I"]]
+        a = _CVSS_METRICS["A"][parts["A"]]
+    except KeyError:
+        return None
+
+    iss = 1 - (1 - c) * (1 - i) * (1 - a)
+    if scope_changed:
+        impact = 7.52 * (iss - 0.029) - 3.25 * (iss - 0.02) ** 15
+    else:
+        impact = 6.42 * iss
+    exploitability = 8.22 * av * ac * pr * ui
+    if impact <= 0:
+        base = 0.0
+    elif scope_changed:
+        base = _roundup(min(1.08 * (impact + exploitability), 10))
+    else:
+        base = _roundup(min(impact + exploitability, 10))
+
+    if base == 0:
+        sev = "None"
+    elif base < 4.0:
+        sev = "Low"
+    elif base < 7.0:
+        sev = "Medium"
+    elif base < 9.0:
+        sev = "High"
+    else:
+        sev = "Critical"
+    return {"score": round(base, 1), "severity": sev, "vector": f"CVSS:3.1/{v}"}
+
+
 def _clean_markdown(text: str) -> str:
     """Strip reasoning and unwrap a whole-document ``` fence if the model added one."""
     text = llm.strip_think(text).strip()
@@ -386,6 +560,57 @@ def build_opsec_summary(session: dict) -> str:
     return "\n".join(out)
 
 
+def build_proof_table(session: dict) -> str:
+    """The OSCP per-host proof table, built from state — never retyped, never model-written.
+
+    One row per host that has a foothold (local.txt) or is owned (proof.txt), rendered straight
+    from the structured engagement state. A half-owned host (local but no proof) reads as such.
+    Empty string when no flags were captured (so the marker just disappears).
+    """
+    hosts = [h for h in (session.get("state_hosts") or [])
+             if (h.get("local_txt") or h.get("proof_txt"))]
+    if not hosts:
+        return ("_No local.txt / proof.txt captured yet — record flags as you capture them "
+                "(they populate this table automatically)._")
+    owned = sum(1 for h in hosts if h.get("proof_txt"))
+    out = [
+        f"**Proofs captured — {owned}/{len(hosts)} host(s) fully owned**",
+        "",
+        "| Host | local.txt | proof.txt | Status |",
+        "| --- | --- | --- | --- |",
+    ]
+    for h in sorted(hosts, key=lambda x: str(x.get("address", ""))):
+        addr = h.get("address", "")
+        name = h.get("hostname", "")
+        label = f"{addr}" + (f" ({name})" if name else "")
+        local = f"`{h['local_txt']}`" if h.get("local_txt") else "—"
+        proof = f"`{h['proof_txt']}`" if h.get("proof_txt") else "—"
+        status = {"owned": "**OWNED**", "foothold": "foothold", "": "—"}.get(
+            h.get("ownership", ""), "—"
+        )
+        out.append(f"| {label} | {local} | {proof} | {status} |")
+    out.append("")
+    return "\n".join(out)
+
+
+def build_cvss_block(session: dict) -> str:
+    """The authoritative CVSS block for the bug-bounty template, computed from a stored vector.
+
+    The vector lives in ``session['cvss_vector']`` (set by the operator). The SCORE is arithmetic,
+    so like the evidence it is computed here, never written by the model.
+    """
+    vector = (session.get("cvss_vector") or "").strip()
+    if not vector:
+        return ""
+    res = cvss31_base(vector)
+    if res is None:
+        return f"_CVSS vector could not be parsed: `{vector}`._"
+    return (
+        f"**CVSS 3.1:** {res['score']} ({res['severity']}) · `{res['vector']}`  \n"
+        "_Score computed from the vector, not asserted by the model._"
+    )
+
+
 def build_evidence_section(session: dict) -> str:
     """Construct the Evidence section programmatically — the source of truth.
 
@@ -476,6 +701,14 @@ _MARKER_RE = re.compile(
     r"(?:^#{1,6}[^\n]*\bevidence\b[^\n]*\n+)?" + re.escape(_EVIDENCE_MARKER),
     re.IGNORECASE | re.MULTILINE,
 )
+
+
+def _insert_proof_table(md: str, session: dict) -> str:
+    """Replace the OSCP proof-table marker with the authoritative per-host table (or drop it)."""
+    if _OSCP_PROOF_MARKER not in md:
+        return md
+    table = build_proof_table(session)
+    return md.replace(_OSCP_PROOF_MARKER, table)
 
 
 def _insert_evidence(md: str, session: dict, include_opsec: bool = False) -> str:
@@ -617,22 +850,46 @@ def build_prompt(session: dict) -> str:
     return "\n".join(lines)
 
 
-def compose_report(session: dict, *, include_opsec: bool = False) -> tuple[str, str]:
+def compose_report(
+    session: dict, *, template: str = "standard", include_opsec: bool = False
+) -> tuple[str, str]:
     """Draft the report for a session. Returns (markdown, model_used).
 
-    The LLM writes the prose; the Evidence section is inserted programmatically
-    so captured output is reproduced verbatim. Raises ``llm.LLMError`` if the
-    provider is unreachable or returns nothing.
+    The LLM writes the prose; the Evidence section (and the OSCP proof table, and the CVSS
+    block) are inserted programmatically so captured values are reproduced verbatim rather than
+    transcribed by the model. Raises ``llm.LLMError`` if the provider is unreachable / empty, and
+    ``ValueError`` for an unknown template.
 
-    ``include_opsec`` (D10) adds the red-team OPSEC assessment — off by default so a normal
-    client report is unchanged; turned on for a purple-team / detection-scoped engagement.
+    ``template`` selects the exam/format mode (standard | oscp | cpts | bugbounty).
+    ``include_opsec`` (D10) adds the red-team OPSEC assessment — off by default.
     """
+    system = TEMPLATES.get((template or "standard").strip().lower())
+    if system is None:
+        raise ValueError(
+            f"unknown report template {template!r} — one of: {', '.join(sorted(TEMPLATES))}"
+        )
     cfg = llm.load_config()
     user = build_prompt(session)
-    raw = llm.chat(_SYSTEM, user, cfg, max_tokens=_MAX_TOKENS)
+    raw = llm.chat(system, user, cfg, max_tokens=_MAX_TOKENS)
     md = _clean_markdown(raw)
     if not md:
         raise llm.LLMError("the model returned an empty report")
     md = _strip_status_tags(md)
+    # The OSCP proof table + the bug-bounty CVSS block are spliced like the evidence — computed
+    # from state / a vector, never written by the model.
+    md = _insert_proof_table(md, session)
+    cvss = build_cvss_block(session)
+    if cvss and "CVSS 3.1" not in md:
+        # Prepend the authoritative CVSS block just under the first heading (bug-bounty).
+        md = _prepend_after_title(md, cvss)
     md = _insert_evidence(md, session, include_opsec=include_opsec)
     return md, cfg["model"]
+
+
+def _prepend_after_title(md: str, block: str) -> str:
+    """Insert ``block`` right after the first Markdown heading (or at the top)."""
+    lines = md.split("\n")
+    for i, ln in enumerate(lines):
+        if ln.lstrip().startswith("#"):
+            return "\n".join(lines[: i + 1] + ["", block, ""] + lines[i + 1:])
+    return block + "\n\n" + md

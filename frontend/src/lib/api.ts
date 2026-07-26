@@ -643,9 +643,34 @@ export const renameSession = (
 export const deleteSession = (id: string, signal?: AbortSignal) =>
   sendJSON<null>("DELETE", `/sessions/${encodeURIComponent(id)}`, undefined, signal);
 
-/** Draft (or re-draft) a pentest report for the session. Slow on local models. */
-export const generateReport = (id: string, signal?: AbortSignal) =>
-  postJSON<Report>(`/sessions/${encodeURIComponent(id)}/report`, {}, signal);
+/** The exam/format template for a generated report. */
+export type ReportTemplate = "standard" | "oscp" | "cpts" | "bugbounty";
+
+/** Draft (or re-draft) a pentest report for the session. Slow on local models.
+ *  `template` selects the exam/format mode; `includeOpsec` adds the red-team OPSEC assessment. */
+export const generateReport = (
+  id: string,
+  template: ReportTemplate = "standard",
+  includeOpsec = false,
+  signal?: AbortSignal
+) =>
+  postJSON<Report>(
+    `/sessions/${encodeURIComponent(id)}/report?template=${template}&include_opsec=${includeOpsec}`,
+    {},
+    signal
+  );
+
+/** Record a captured local.txt/proof.txt flag against a host (drives the OSCP report table). */
+export const setProof = (
+  id: string,
+  body: { address: string; kind: "local" | "proof"; value: string },
+  signal?: AbortSignal
+) =>
+  postJSON<{ address: string; local_txt: string; proof_txt: string; ownership: string }>(
+    `/sessions/${encodeURIComponent(id)}/state/proof`,
+    body,
+    signal
+  );
 
 /** Ask the engagement assistant one question. Slow: the local model composes
  *  a grounded reply from the session context + KB (can take 20-60s). */
@@ -2077,6 +2102,11 @@ export type StateHost = {
   hostname: string;
   os: string;
   status: string;
+  /** OSCP exam flags (Phase 4 item 5). */
+  local_txt?: string;
+  proof_txt?: string;
+  /** "" (none) | "foothold" (local only) | "owned" (proof captured). */
+  ownership?: string;
   source_run_id: string | null;
   first_seen: string;
   last_seen: string;

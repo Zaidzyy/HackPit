@@ -509,6 +509,10 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
                 run_id=run_id,
                 command=request.command,
                 stdout=record.stdout,
+                # target + full command line let the proof/local.txt flag capture attribute a
+                # flag to the right host (the flag file sits in the args, e.g. `cat proof.txt`).
+                target=record.target or "",
+                command_line=" ".join([request.command, *request.args]),
                 loot_dir=Path(loot.host_dir(eng.engagement_id)) if eng is not None else None,
                 started_at_epoch=started_epoch,
             )

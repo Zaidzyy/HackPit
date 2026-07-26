@@ -134,6 +134,12 @@ def init_db() -> None:
             )
             """
         )
+        # MIGRATION-SAFE: proof/local flags (Phase 4 item 5) added to an existing hosts table.
+        have = {r[1] for r in conn.execute("PRAGMA table_info(state_hosts)")}
+        if "local_txt" not in have:
+            conn.execute("ALTER TABLE state_hosts ADD COLUMN local_txt TEXT NOT NULL DEFAULT ''")
+        if "proof_txt" not in have:
+            conn.execute("ALTER TABLE state_hosts ADD COLUMN proof_txt TEXT NOT NULL DEFAULT ''")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_state_services_session "
             "ON state_services(session_id, address)"
@@ -158,9 +164,9 @@ def upsert_hosts(items: Iterable[Host]) -> int:
             conn.execute(
                 """
                 INSERT INTO state_hosts
-                    (session_id, address, hostname, os, status, source_run_id,
-                     first_seen, last_seen)
-                VALUES (?,?,?,?,?,?,?,?)
+                    (session_id, address, hostname, os, status, local_txt, proof_txt,
+                     source_run_id, first_seen, last_seen)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(session_id, address) DO UPDATE SET
                     -- COALESCE-style: a later run that learned nothing new must not blank
                     -- a field an earlier run filled in.
@@ -170,10 +176,15 @@ def upsert_hosts(items: Iterable[Host]) -> int:
                                      ELSE state_hosts.os END,
                     status    = CASE WHEN excluded.status != '' THEN excluded.status
                                      ELSE state_hosts.status END,
+                    local_txt = CASE WHEN excluded.local_txt != '' THEN excluded.local_txt
+                                     ELSE state_hosts.local_txt END,
+                    proof_txt = CASE WHEN excluded.proof_txt != '' THEN excluded.proof_txt
+                                     ELSE state_hosts.proof_txt END,
                     source_run_id = COALESCE(excluded.source_run_id, state_hosts.source_run_id),
                     last_seen = excluded.last_seen
                 """,
-                (h.session_id, address, h.hostname, h.os, h.status, h.source_run_id, now, now),
+                (h.session_id, address, h.hostname, h.os, h.status, h.local_txt, h.proof_txt,
+                 h.source_run_id, now, now),
             )
     return len(rows)
 
@@ -320,7 +331,10 @@ def load(session_id: str) -> StateSummary:
         hosts = [
             Host(
                 session_id=r["session_id"], address=r["address"], hostname=r["hostname"],
-                os=r["os"], status=r["status"], source_run_id=r["source_run_id"],
+                os=r["os"], status=r["status"],
+                local_txt=(r["local_txt"] if "local_txt" in r.keys() else "") or "",
+                proof_txt=(r["proof_txt"] if "proof_txt" in r.keys() else "") or "",
+                source_run_id=r["source_run_id"],
                 first_seen=r["first_seen"], last_seen=r["last_seen"],
             )
             for r in conn.execute(
@@ -379,6 +393,28 @@ def load(session_id: str) -> StateSummary:
         hosts=hosts, services=services, endpoints=endpoints,
         credentials=creds, findings=findings,
     )
+
+
+def set_proof(session_id: str, address: str, kind: str, value: str) -> Host:
+    """Set a host's local.txt/proof.txt flag by hand (the operator pastes it). Upsert.
+
+    ``kind`` is 'local' or 'proof'. Creates the host row if the flag was captured before any
+    scan recorded it. Returns the resulting Host.
+    """
+    addr = (address or "").strip()
+    val = (value or "").strip()
+    if not (session_id and addr):
+        raise ValueError("session_id and address are required")
+    k = (kind or "").strip().lower()
+    if k not in ("local", "proof"):
+        raise ValueError("kind must be 'local' or 'proof'")
+    host = Host(session_id=session_id, address=addr)
+    if k == "proof":
+        host.proof_txt = val
+    else:
+        host.local_txt = val
+    upsert_hosts([host])
+    return next(h for h in load(session_id).hosts if h.address.strip().lower() == addr.lower())
 
 
 def services_for(session_id: str, address: str) -> list[Service]:

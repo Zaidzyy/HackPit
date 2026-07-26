@@ -25,6 +25,7 @@ it touch?".
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import sqlite3
 import threading
@@ -163,6 +164,38 @@ def enter(
         scope_ips=list(resolved.seed_ips),
         allowed_hosts=list(resolved.seed_hosts),
     )
+
+
+def add_pivot_subnet(engagement_id: str, cidr: str) -> EngagementRecord:
+    """DELIBERATELY widen an active engagement's scope to include a pivot subnet.
+
+    This is the ONE path that widens scope, and it is a distinct, explicit, audited human action
+    — NOT recon-driven expansion (which still can only add hosts the scope already covered). When
+    a pivot reaches an internal network the operator is authorized for (an OSCP/PNPT internal
+    segment), they declare it here by hand; a command routed to that subnet then passes the scope
+    gate like any other in-scope target. The CIDR is validated and appended to ``scope_spec``.
+
+    Fails closed: an unknown/inactive engagement or a malformed CIDR raises, and nothing changes.
+    """
+    net = ipaddress.ip_network(str(cidr).strip(), strict=False)  # raises on a bad CIDR
+    rec = get_active(engagement_id)
+    if rec is None:
+        raise ValueError(f"engagement {engagement_id!r} is not active — cannot amend its scope")
+    existing = (rec.scope or rec.target).strip()
+    # Idempotent: if the exact CIDR is already a scope token, do not append it twice.
+    tokens = [t.strip() for t in existing.replace("\n", ",").split(",") if t.strip()]
+    if str(net) in tokens:
+        return rec
+    new_spec = existing + ", " + str(net)
+    resolved = scope_mod.parse_scope(new_spec, resolve=False)
+    with _write_lock, _connect() as conn:
+        conn.execute(
+            "UPDATE engagement_mode SET scope_spec = ? WHERE engagement_id = ? AND active = 1",
+            (resolved.raw, engagement_id),
+        )
+    amended = get_active(engagement_id)
+    assert amended is not None  # it was active a moment ago and we only touched scope_spec
+    return amended
 
 
 def get_active(engagement_id: str) -> EngagementRecord | None:

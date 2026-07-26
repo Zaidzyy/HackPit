@@ -30,11 +30,13 @@ from typing import Any, Iterator
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
 from . import allowlist, config, engagement, executor, jobs, loot, runstore
 from . import session as live_session
 from . import kali as kali_mod
 from . import repeater as repeater_mod
+from . import tunnels as tunnels_mod
 from .kali import KaliRefused, KaliRequest, KaliResult, kali_status, run_kali
 from .models import (
     AllowlistItem,
@@ -322,6 +324,92 @@ def repeater_history(
 ) -> list[repeater_mod.RepeaterExchange]:
     """Most-recent-first send history for a session — feeds the replay / diff panel. Read-only."""
     return repeater_mod.history(session_id)
+
+
+# --- Pivot / tunnel routing (Phase 4 item 4 — chisel / ligolo-ng) ------------------- #
+#
+# HUMAN-ONLY listener lifecycle, like :kali/repeater (start/stop are source-scan locked). The
+# ROUTE + REWRITE helpers are pure (compute the proxychains-wrapped command the human approves —
+# nothing runs). A tunnel's internal subnet enters engagement scope ONLY via the explicit
+# amendment below, never automatically.
+
+
+@router.get("/tunnels/status")
+def get_tunnels_status() -> dict[str, Any]:
+    """Availability of the tunnels' (engage) sandbox + live count — drives the UI banner."""
+    return tunnels_mod.status()
+
+
+@router.post("/tunnels", response_model=tunnels_mod.Tunnel)
+def start_tunnel(req: tunnels_mod.TunnelStartRequest) -> tunnels_mod.Tunnel:
+    """Start a pivot listener (chisel server / ligolo proxy) and return the agent one-liner.
+
+    HUMAN-ONLY. 409 if the engage sandbox is down or the live-tunnel cap is hit (nothing runs).
+    Delivering the returned one-liner to the compromised host is the operator's manual step —
+    HackPit cannot reach a machine it has not compromised.
+    """
+    try:
+        return tunnels_mod.start_tunnel(req)
+    except tunnels_mod.TunnelRefused as exc:
+        raise HTTPException(status_code=409, detail={"gate": "unavailable", "reason": str(exc)})
+
+
+@router.get("/tunnels", response_model=list[tunnels_mod.Tunnel])
+def list_tunnels() -> list[tunnels_mod.Tunnel]:
+    """Every tunnel (starting/listening/down). Read-only."""
+    return tunnels_mod.list_tunnels()
+
+
+@router.delete("/tunnels/{tid}", response_model=tunnels_mod.Tunnel)
+def stop_tunnel(tid: str) -> tunnels_mod.Tunnel:
+    """Stop a listener (kill its process). HUMAN-ONLY."""
+    try:
+        return tunnels_mod.stop_tunnel(tid)
+    except tunnels_mod.TunnelRefused as exc:
+        raise HTTPException(status_code=404, detail={"reason": str(exc)})
+
+
+class RouteRequest(BaseModel):
+    """Ask which tunnel (if any) routes to a host, and get the rewritten command to approve."""
+
+    command: str = Field(..., description="The command's first token, e.g. 'nmap'.")
+    args: list[str] = Field(default_factory=list)
+    host: str = Field(..., description="The target host/IP — routing is decided on its address.")
+
+
+@router.post("/tunnels/route")
+def route_command(req: RouteRequest) -> dict[str, Any]:
+    """Resolve the tunnel for ``host`` and return the proxychains-wrapped command to APPROVE.
+
+    Pure — nothing runs. If a live tunnel covers the host, the response carries the rewritten
+    ``command``/``args`` (with the proxychains prefix VISIBLE) so the human approves the exact
+    string that will execute; otherwise ``routed`` is false and the command is unchanged.
+    """
+    tunnel = tunnels_mod.route_for(req.host)
+    if tunnel is None:
+        return {"routed": False, "command": req.command, "args": req.args, "tunnel": None, "note": ""}
+    cmd, args, note = tunnels_mod.wrap_command(req.command, req.args, tunnel)
+    return {"routed": True, "command": cmd, "args": args, "tunnel": tunnel.model_dump(), "note": note}
+
+
+class PivotSubnetRequest(BaseModel):
+    """DELIBERATELY add a pivot subnet to an active engagement's scope (a human amendment)."""
+
+    engagement_id: str = Field(..., min_length=1)
+    cidr: str = Field(..., description="The internal CIDR the pivot reaches, e.g. 172.16.0.0/24.")
+
+
+@router.post("/tunnels/scope", response_model=EngagementRecord)
+def add_pivot_subnet(req: PivotSubnetRequest) -> EngagementRecord:
+    """Widen an active engagement's scope to include a pivot subnet — an explicit human action.
+
+    This is the ONLY path that widens scope, kept separate from recon expansion (which cannot).
+    422 on a bad CIDR or an inactive engagement; nothing changes on failure.
+    """
+    try:
+        return engagement.add_pivot_subnet(req.engagement_id, req.cidr)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"reason": str(exc)})
 
 
 # --- Live sessions (catch + drive ONE shell by hand — see cockpit/session.py) ------ #

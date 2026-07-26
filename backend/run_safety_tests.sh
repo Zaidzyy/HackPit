@@ -104,6 +104,9 @@ echo "== Phase-4 corpus ingest (additive/byte-preserving/idempotent; no_merge; w
 echo "== Phase-4 HTTP repeater (hardcoded container / argv-only / human-only / scope-checked) =="
 "$PY" test_repeater.py
 
+echo "== Phase-4 pivot/tunnels (human-only lifecycle / pure rewrite-before-approval / scope-by-hand) =="
+"$PY" test_tunnels.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

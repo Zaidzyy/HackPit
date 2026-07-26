@@ -1263,6 +1263,85 @@ export const getRepeaterHistory = (
     signal
   );
 
+// --- Pivot / tunnel routing — chisel / ligolo-ng (see backend/cockpit/tunnels.py) ---
+//
+// HUMAN-ONLY listener lifecycle (start/stop). Routing + rewrite are pure — routeCommand
+// returns the proxychains-wrapped command the HUMAN approves (the prefix is VISIBLE, applied
+// BEFORE approval). A tunnel's subnet enters engagement scope ONLY via addPivotSubnet, by hand.
+
+export type Tunnel = {
+  id: string;
+  kind: string;
+  /** 'socks' (proxychains) or 'interface' (ip route via ligolo tun). */
+  routing: string;
+  lhost: string;
+  listen_port: number;
+  socks_port: number | null;
+  subnets: string[];
+  status: string;
+  /** The one-liner to paste on the compromised host. */
+  agent_command: string;
+  setup_note: string;
+  started_at: string;
+  engagement_id: string | null;
+};
+
+export type TunnelsStatus = {
+  container: string;
+  up: boolean;
+  live_tunnels: number;
+  detail: string;
+};
+
+export const getTunnelsStatus = (signal?: AbortSignal) =>
+  getJSON<TunnelsStatus>("/cockpit/tunnels/status", signal);
+
+export const listTunnels = (signal?: AbortSignal) =>
+  getJSON<Tunnel[]>("/cockpit/tunnels", signal);
+
+export const startTunnel = (
+  body: {
+    kind: string;
+    lhost: string;
+    listen_port?: number | null;
+    subnets: string[];
+    engagement_id?: string | null;
+  },
+  signal?: AbortSignal
+) => postJSON<Tunnel>("/cockpit/tunnels", body, signal);
+
+export const stopTunnel = (tid: string, signal?: AbortSignal) =>
+  fetch(`${API_URL}/cockpit/tunnels/${encodeURIComponent(tid)}`, {
+    method: "DELETE",
+    signal,
+  }).then((r) => r.json() as Promise<Tunnel>);
+
+/** Resolve the tunnel for a host and get the rewritten command to APPROVE. Pure — nothing runs. */
+export type RouteResult = {
+  routed: boolean;
+  command: string;
+  args: string[];
+  tunnel: Tunnel | null;
+  note: string;
+};
+
+export const routeCommand = (
+  body: { command: string; args: string[]; host: string },
+  signal?: AbortSignal
+) => postJSON<RouteResult>("/cockpit/tunnels/route", body, signal);
+
+/** Widen an active engagement's scope to include a pivot subnet — an explicit human action. */
+export const addPivotSubnet = (
+  engagementId: string,
+  cidr: string,
+  signal?: AbortSignal
+) =>
+  postJSON<EngagementRecord>(
+    "/cockpit/tunnels/scope",
+    { engagement_id: engagementId, cidr },
+    signal
+  );
+
 // --- AD attack-path graph (see backend/adgraph) ---------------------------------
 // Read-only graph/parse/path/technique endpoints. Every abuse command a technique
 // returns is run ONLY through execCockpitStream (the gated executor) — approve-each,

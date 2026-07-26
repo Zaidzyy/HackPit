@@ -138,6 +138,9 @@ export function CockpitView() {
           <Link href="/repeater" className="hp-cv-adlink">
             ⇌ HTTP repeater — compose, send, replay and diff requests →
           </Link>
+          <Link href="/tunnels" className="hp-cv-adlink">
+            ⇢ pivot / tunnels — route through a compromised host (chisel · ligolo) →
+          </Link>
         </header>
 
         <section className="hp-cv-map-section">

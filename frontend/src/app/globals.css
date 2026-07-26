@@ -7608,3 +7608,85 @@ a.hp-card {
 .hp-rp-histurl { color: var(--white); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hp-rp-histtime { color: var(--dim); flex: 0 0 auto; margin-left: auto; }
 .hp-rp-clrdiff { margin-left: auto; }
+
+/* ============================================================================ *
+ *  Pivot / tunnels (Phase 4 item 4) — chisel / ligolo-ng routing
+ * ============================================================================ */
+.hp-tn { max-width: 1000px; margin: 0 auto; padding: 8px 0 80px; }
+.hp-tn-head { margin-bottom: 18px; }
+.hp-tn-title {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: clamp(28px, 4.4vw, 40px); font-weight: 600; letter-spacing: -0.01em;
+  color: var(--white); margin: 2px 0 6px;
+}
+.hp-tn-sub { color: var(--dim); max-width: 720px; line-height: 1.55; font-size: 13px; }
+.hp-tn-status {
+  display: inline-flex; align-items: center; gap: 8px; margin-top: 12px;
+  padding: 5px 11px; border-radius: 6px; font-size: 11px; letter-spacing: 0.4px;
+  border: 1px solid var(--border);
+}
+.hp-tn-status .hp-tn-dot { width: 8px; height: 8px; border-radius: 50%; }
+.hp-tn-status.is-up { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+.hp-tn-status.is-up .hp-tn-dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.hp-tn-status.is-down { color: var(--dim); }
+.hp-tn-status.is-down .hp-tn-dot { background: var(--dim); }
+.hp-tn-error {
+  margin: 12px 0; padding: 8px 10px; border-radius: 6px; font-size: 12px;
+  color: #f0776a; border: 1px solid rgba(240,119,106,0.4); background: rgba(240,119,106,0.08);
+}
+.hp-tn-card {
+  border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+  background: rgba(10,12,14,0.4); margin-bottom: 14px;
+}
+.hp-tn-cardhead {
+  font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); margin-bottom: 10px;
+}
+.hp-tn-cardsub { font-size: 12px; color: var(--dim); margin: -4px 0 10px; }
+.hp-tn-form, .hp-tn-routeform { display: flex; flex-wrap: wrap; gap: 8px; }
+.hp-tn-form select, .hp-tn-form input, .hp-tn-routeform input,
+.hp-tn-form button, .hp-tn-routeform button {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12.5px;
+  background: rgba(0,0,0,0.35); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--white); padding: 8px 10px;
+}
+.hp-tn-form input { flex: 1 1 200px; min-width: 120px; }
+.hp-tn-form .hp-tn-port { flex: 0 0 130px; }
+.hp-tn-routeform input { flex: 1 1 200px; }
+.hp-tn-form button, .hp-tn-routeform button {
+  flex: 0 0 auto; cursor: pointer; color: var(--accent);
+  border-color: var(--accent-line); background: var(--accent-soft);
+}
+.hp-tn-form button:disabled { opacity: 0.5; cursor: not-allowed; }
+.hp-tn-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.hp-tn-row { border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+.hp-tn-row.is-down { opacity: 0.55; }
+.hp-tn-rowtop { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hp-tn-kind {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12px; color: var(--accent);
+  border: 1px solid var(--accent-line); border-radius: 4px; padding: 1px 7px;
+}
+.hp-tn-state { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; padding: 1px 7px; border-radius: 4px; }
+.hp-tn-state.is-listening { color: #5ad18a; border: 1px solid rgba(90,209,138,0.4); }
+.hp-tn-state.is-down { color: var(--dim); border: 1px solid var(--border); }
+.hp-tn-state.is-starting { color: #e0913a; border: 1px solid rgba(224,145,58,0.4); }
+.hp-tn-subs { font-family: var(--font-jetbrains-mono), monospace; font-size: 12px; color: var(--white); }
+.hp-tn-stop {
+  margin-left: auto; background: transparent; border: 1px solid var(--border);
+  border-radius: 5px; color: var(--dim); cursor: pointer; font-size: 11px; padding: 4px 10px;
+}
+.hp-tn-stop:hover:not(:disabled) { color: #f0776a; border-color: rgba(240,119,106,0.4); }
+.hp-tn-oneliner { margin-top: 10px; }
+.hp-tn-olhint { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); margin-bottom: 5px; }
+.hp-tn-note { font-size: 12px; color: var(--dim); line-height: 1.55; margin: 8px 0; }
+.hp-tn-addscope {
+  display: inline-block; margin: 2px 6px 2px 0; padding: 4px 10px; cursor: pointer;
+  font-size: 11px; color: var(--accent); background: var(--accent-soft);
+  border: 1px solid var(--accent-line); border-radius: 5px;
+}
+.hp-tn-addscope:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.hp-tn-routeout { margin-top: 12px; }
+.hp-tn-routebadge {
+  display: inline-block; margin-bottom: 8px; font-size: 10px; letter-spacing: 0.5px;
+  color: var(--accent); border: 1px solid var(--accent-line); background: var(--accent-soft);
+  padding: 2px 8px; border-radius: 4px;
+}

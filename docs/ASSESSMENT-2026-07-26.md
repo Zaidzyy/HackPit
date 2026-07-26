@@ -93,7 +93,7 @@ Per-command approval is therefore **standing policy, not a deferred item**, and 
 
 ### Code scan (SAST)
 
-**Well-built and genuinely safe.** Static-only invariant asserted at every `_spawn()` and again by `test_codescan_safety.py`. Deliberately orthogonal — imports nothing from the engagement/executor/scope model. **Limits:** 19 bundled Semgrep rules, Python/JS/TS only; no Java/Go/PHP/Ruby/C#. Useful for open-source bug-bounty targets; thin as a general SAST.
+**Well-built and genuinely safe.** Static-only invariant asserted at every `_spawn()` and again by `test_codescan_safety.py`. Deliberately orthogonal — imports nothing from the engagement/executor/scope model. **Limits — now widened (post-assessment):** the offline bundle grew from 19 rules (Python/JS/TS) to **34 across 8 languages** — Java/Go/PHP/Ruby/C# added (`rules/hackpit-languages.yaml`: command injection, SQLi, unsafe deserialization, code-eval, file-inclusion, SSRF), plus a **ruleset picker** (bundled / per-language / a registry pack for the full online catalogue). Still offline-first. See "Post-assessment refinements".
 
 ### Frontend
 
@@ -129,7 +129,7 @@ Per-command approval is therefore **standing policy, not a deferred item**, and 
 
 *Phase 5 added:* hacktricks-cloud **578** · portswigger **372**.
 
-**Tiers:** 2,265 tier-3 · 241 tier-2 · **111 tier-1** (your own) — see finding 2.
+**Tiers:** 2,265 tier-3 · 241 tier-2 · **111 tier-1** (your own) — see finding 2. **Ranking rebalanced (post-assessment):** tier is now a *substance-gated* nudge, not a blanket trust prior — a thin tier-1 stub no longer outranks richer, more relevant lower-tier content, and a command-rich page wins close calls regardless of tier. See "Post-assessment refinements".
 
 ### Findings
 
@@ -182,6 +182,8 @@ Measured on disk against the built KB, not inferred.
 ### 4.2 Consolidation is lossy for some sources
 
 `madstuff` 797 md → 260 (33%). `oscp-cpts-notes` 85 md → 36 (42%). `PayloadsAllTheThings` 134 md → 49 (37%). Some is correct deduplication into HackTricks; a 3:1 collapse on your OSCP/CPTS notes is worth an eyeball — those are exactly the entries you'd want surviving as tier-1/tier-2.
+
+> **Audited (post-assessment) — healthy dedup, no loss.** A read-only provenance audit of the OSCP set: **36 survived as their own entries (33 with real commands)**, **12 folded into stronger canonical pages** (PayloadsAllTheThings/peh-notes/some-hacking-resources — preserved as `also_covered_in` + variants, not deleted), and the remaining ~37 were **same-technique OS/lab splits merged together** (the GitBook ships Linux/Windows/lab variants as separate files). **Zero** OSCP entries were dropped as low-value (only 11 were dropped KB-wide). Also corrected: `oscp-cpts-notes` is a **tier-3 public GitBook repo**, not your own writing — your genuine tier-1 comes from `writeups`/`peh-notes`/`htb-my-resources`. **Decision: no re-ingest** — re-adding with `no_merge` would just recreate duplicate technique pages that hurt search. See "Post-assessment refinements".
 
 ### 4.3 The biggest missed idea — PentestGPT's Pentest Task Tree — is now BUILT
 
@@ -256,7 +258,7 @@ These are not open work — they are the rules the project runs by, and building
 
 # PART III — BUILD LOG (Phases 1–5, shipped 2026-07-26)
 
-Branch `sandbox-kali-image`. Full hermetic safety suite green throughout (34 test files); both Docker proofs 4/4 (lab still egress-less; engage fully open); browser-verified with Ollama (`qwen3:8b`).
+Branch `sandbox-kali-image`. Full hermetic safety suite green throughout (36 test files); both Docker proofs 4/4 (lab still egress-less; engage fully open); browser-verified with Ollama (`qwen3:8b`).
 
 ## Decisions taken (D1–D15)
 
@@ -342,9 +344,35 @@ Every decision that drove the build. D1/D3/D4/D6/D7 were the Phase-1 build; D9 w
 
 **Deferred to a live VM:** the live/browser verification against a real Windows box, until the operator's VM is up (build + unit tests are hermetic) — the same way tunnels and AD-live execution were deferred.
 
+## Post-assessment refinements (2026-07-27)
+
+Three items from a read-through of this assessment, each done the low-risk way. All
+query-time / config / ranking changes — **no KB re-ingest, no 15 MB rewrite, no Defender risk.**
+
+- **KB consolidation audited (§4.2) — no re-ingest needed.** A read-only provenance audit
+  confirmed the OSCP "3:1 collapse" is healthy dedup, not loss: 36 command-rich survivors, 12
+  folded into stronger canonical pages (still attributed), ~37 same-technique OS/lab splits
+  merged, **0 dropped as low-value**. Also corrected the framing — `oscp-cpts-notes` is a
+  tier-3 public GitBook repo, not the author's own writing. Decision: leave the KB untouched
+  (re-adding with `no_merge` would recreate duplicate technique pages that hurt search).
+- **Relevance-first KB ranking (§3, tiers).** The composer was already relevance-first (BM25 +
+  cosine RRF; tier a small additive nudge), but a *thin* tier-1 stub still got a flat boost
+  that could edge out richer, more relevant lower-tier content. Fixed in `pipeline/search.py`:
+  the tier-1 boost is now **gated on substance** (a stub with no commands + little body gets
+  nothing), and a **completeness nudge** (command-rich, any tier, saturating/capped) lets
+  content decide close calls. Trust breaks ties among substantive entries; it no longer
+  manufactures relevance. Locked by `test_search_ranking.py`.
+- **SAST coverage widened (§ Code scan).** The offline Semgrep bundle grew from 19 rules
+  (Python/JS/TS) to **34 across 8 languages** — Java/Go/PHP/Ruby/C# added
+  (`rules/hackpit-languages.yaml`) — plus a **ruleset picker** (bundled / per-language, or a
+  registry pack for the full online catalogue). Default scan loads the whole offline directory.
+  Locked by `test_codescan_rules.py` (rules well-formed + 8-language coverage + `semgrep
+  --validate` where semgrep is present). *(Engagement export/import was considered and dropped
+  — the existing report generator already covers a shareable engagement dump.)*
+
 ## Verification
 
-- **Hermetic safety suite** (`sh backend/run_safety_tests.sh`) — green after every phase, expanded across all five with `test_phase1_runtime`, `test_state`, `test_scope_hostcheck`, `test_credvault`, `test_corpora`, `test_detection`/`test_detection_safety` (OPSEC channel + blue-view-unchanged), `test_repeater`, `test_tunnels`, `test_report_templates`, persistent-shell containment tests in `test_kali`, Phase 5's `test_terminal` (PTY containment + the sentinel shell provably untouched) and `test_exploits` (version comparison, tiered ranking, executes-nothing), and the Windows backend's `test_winrm` + `test_winrm_safety` (host-locked / no gate bypass / secret never leaks / orchestrator can't auto-run WinRM) with the AD oracle extended to the native Windows variants. **34 test files.**
+- **Hermetic safety suite** (`sh backend/run_safety_tests.sh`) — green after every phase, expanded across all five with `test_phase1_runtime`, `test_state`, `test_scope_hostcheck`, `test_credvault`, `test_corpora`, `test_detection`/`test_detection_safety` (OPSEC channel + blue-view-unchanged), `test_repeater`, `test_tunnels`, `test_report_templates`, persistent-shell containment tests in `test_kali`, Phase 5's `test_terminal` (PTY containment + the sentinel shell provably untouched) and `test_exploits` (version comparison, tiered ranking, executes-nothing), and the Windows backend's `test_winrm` + `test_winrm_safety` (host-locked / no gate bypass / secret never leaks / orchestrator can't auto-run WinRM) with the AD oracle extended to the native Windows variants, plus the post-assessment `test_search_ranking` (substance-gated tier boost + completeness nudge) and `test_codescan_rules` (8-language rule bundle + resolver). **36 test files.**
 - **Docker proofs** — `isolation_proof.sh` 4/4 (lab still cannot reach internet or host), `engage_open_proof.sh` 4/4 (engage has full reach).
 - **Browser** — every UI surface exercised against a live Ollama backend per the testing rule: the Phase-4 surfaces (payload-set arsenal rows, the OPSEC red-team channel, repeater send/replay/diff, tunnels route preview, exam report templates with the proof table) and the Phase-5 ones — `:terminal` running `top` and `vim` with live resize, `:exploits` resolving `vsftpd 2.3.4` to the backdoor exploit and its CVE, the state panel's per-service jump into it, and `/category/cloud` at 535 entries. **Windows targets** (`/windows`): profile create/list/test/delete and the AD-walk "run on" picker verified against the backend — the connectivity **test** and a live WinRM round-trip are deferred to a real VM (no Windows box exists yet), stated plainly rather than claimed.
 - **Frontend** — `tsc` clean, lint at the pre-existing baseline (11 errors + 1 warning, unchanged — verified by stashing the changes and re-running), `next build` exit 0 (routes include `/terminal`, `/exploits`, `/windows`).

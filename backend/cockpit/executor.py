@@ -15,9 +15,13 @@ import queue
 import re
 import subprocess
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Iterator, NamedTuple
+
+from state import ingest as state_ingest
 
 from . import allowlist, config, engagement, loot, runstore
 from .models import EngagementRecord, ExecRejected, ExecRequest, RunRecord
@@ -371,6 +375,10 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
 
     run_id = uuid.uuid4().hex[:12]
     started_at = _now()
+    # Wall-clock start, kept so the state ingest can tell which loot files THIS run wrote.
+    # Loot directories persist across runs; without this, an old scan's XML would be
+    # re-attributed to whatever ran last and the source_run_id would be a lie.
+    started_epoch = time.time()
     # Working directory: engagement runs land in their own loot directory so `-oA scan`
     # writes somewhere durable. LAB runs get None -> no -w flag -> argv byte-identical to
     # what it was before loot existed. See cockpit/loot.py for why the lab is excluded.
@@ -470,6 +478,26 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
         runstore.save_run(record)
     except Exception as exc:  # persistence must never crash the stream
         yield {"type": "error", "reason": f"run recorded in-memory only: {exc}"}
+
+    # STATE INGEST: turn this finished run into structured state — hosts, services,
+    # endpoints, credentials, findings — from its stdout AND from any file it just wrote
+    # into its loot directory (that is how `nmap -oA` gets picked up). Additive enrichment,
+    # never a gate: the command has already run and a failure here must not surface as a
+    # run failure. The ingest layer executes nothing.
+    if request.session_id:
+        try:
+            counts = state_ingest.ingest_run(
+                session_id=request.session_id,
+                run_id=run_id,
+                command=request.command,
+                stdout=record.stdout,
+                loot_dir=Path(loot.host_dir(eng.engagement_id)) if eng is not None else None,
+                started_at_epoch=started_epoch,
+            )
+            if any(counts.values()):
+                yield {"type": "state", "run_id": run_id, "added": counts}
+        except Exception as exc:  # pragma: no cover - never load-bearing
+            yield {"type": "error", "reason": f"state ingest skipped: {exc}"}
 
     # RECON-DRIVEN EXPANSION (engagement only): mine this run's output for hosts and sort them
     # by the engagement's PROGRAM SCOPE. In-scope hosts join the live allowed set (so the loop

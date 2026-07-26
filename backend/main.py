@@ -56,6 +56,9 @@ from cockpit import runstore as cockpit_runstore  # noqa: E402
 from cockpit import engagement as cockpit_engagement  # noqa: E402
 from cockpit import reconcile as cockpit_reconcile  # noqa: E402
 from cockpit import loot as cockpit_loot  # noqa: E402
+import state as engagement_state  # noqa: E402
+from state import store as state_store  # noqa: E402
+from state import tasks as state_tasks  # noqa: E402
 from cockpit.router import router as cockpit_router  # noqa: E402
 from adgraph import store as ad_store  # noqa: E402  (backend/adgraph — AD attack-path graph)
 from adgraph.router import (  # noqa: E402
@@ -294,6 +297,10 @@ async def lifespan(app: FastAPI):
     cockpit_engagement.init_db()
     # parsed AD attack-path graphs share it too.
     ad_store.init_db()
+    # structured engagement state (hosts/services/endpoints/credentials/findings) + the
+    # task tree share it too. This is what the orchestrator reasons over instead of
+    # re-reading stdout tails.
+    engagement_state.init_db()
     # :code scan — hand the KB to the SAST panel so a finding can point at the technique
     # behind it. Optional by design: with no KB the scan runs identically, just unlinked.
     set_codescan_kb(
@@ -899,6 +906,44 @@ def health() -> dict[str, str]:
     return {"status": "ok", "entries": str(len(STATE.entries))}
 
 
+@app.get("/sessions/{session_id}/state")
+def session_state(session_id: str) -> dict[str, Any]:
+    """The accumulated engagement state — hosts, services, endpoints, credentials, findings
+    — plus the live task tree.
+
+    This is what the orchestrator reasons over. Secrets are included: they are already in
+    the run records this was parsed from, and the operator needs them to drive the tools.
+    """
+    summary = state_store.load(session_id)
+    return {
+        **summary.to_dict(include_secrets=True),
+        "tasks": [t.to_dict() for t in state_tasks.load(session_id)],
+        "task_progress": state_tasks.progress(session_id),
+    }
+
+
+@app.post("/sessions/{session_id}/state/tasks/seed")
+def seed_session_tasks(session_id: str) -> dict[str, Any]:
+    """Seed the task tree from the composed plan's phases.
+
+    Idempotent per session: a session that already has tasks is left alone, so re-plotting
+    the attack path can never wipe the progress recorded against the existing tree.
+    """
+    session = sessions_db.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    plan = session.get("path") or {}
+    titles: list[str] = []
+    for phase in plan.get("phases") or []:
+        name = str(phase.get("name") or phase.get("phase") or "").strip()
+        if name:
+            titles.append(name)
+    if not titles:
+        titles = ["Recon", "Enumeration", "Exploitation", "Privilege escalation", "Post-exploitation"]
+    made = state_tasks.seed(session_id, titles)
+    return {"tasks": [t.to_dict() for t in made], "progress": state_tasks.progress(session_id)}
+
+
 @app.get("/tools")
 def tool_reconciliation(refresh: bool = False) -> dict[str, Any]:
     """Which catalogued tools the sandbox ACTUALLY has (D7).
@@ -1307,7 +1352,11 @@ def loop_propose(session_id: str, req: LoopProposeIn = Body(default=None)) -> di
     avoid = list(req.avoid) if req and req.avoid else []
     scope_ctx = _loop_scope_context(req.engagement_id if req else None)
     try:
-        return orchestrator.propose_next(plan, runs, llm.load_config(), avoid, scope_ctx)
+        # session_id is what grounds the proposal in accumulated STATE (hosts, services,
+        # credentials, findings) and the live task tree, instead of stdout tails alone.
+        return orchestrator.propose_next(
+            plan, runs, llm.load_config(), avoid, scope_ctx, session_id
+        )
     except llm.LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
 

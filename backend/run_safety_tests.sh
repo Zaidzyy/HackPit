@@ -89,6 +89,9 @@ echo "== tool arsenal SAFETY invariants (executes nothing / NO gate bypassed / g
 echo "== Phase-1 runtime (timeout clamp / background jobs / loot / tool reconciliation) =="
 "$PY" test_phase1_runtime.py
 
+echo "== Phase-2 state (parsers / upserts / task tree / prompt grounding / executes-nothing) =="
+"$PY" test_state.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

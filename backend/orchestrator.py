@@ -101,8 +101,30 @@ def _system_prompt(scope_ctx: ScopeContext | None = None) -> str:
         + lab
         + ':3000/rest/products/search?q=1", "--batch", "--dbs"], '
         '"rationale": "<1-2 sentences: why this is the next step>", '
-        '"step_id": "<the plan step id this realizes, or omit>"}'
+        '"step_id": "<the plan step id this realizes, or omit>"'
+        + _TASK_OPS_CONTRACT
     )
+
+
+#: How the model updates the live plan. Appended to BOTH system prompts so lab and
+#: real-target loops keep the task tree current the same way.
+#:
+#: Operations, not a rewritten tree: the model says what CHANGED and code validates each
+#: change against the stored tree. A bad id is rejected on its own and the rest still apply,
+#: so one wrong reference never costs the other observations in the same response.
+_TASK_OPS_CONTRACT = (
+    ', "task_ops": [<optional; update the task tree with what this run established>]}\n'
+    "TASK TREE — when a task tree is shown, keep it current in the SAME response. Add "
+    '"task_ops" as a list of operations, each one of:\n'
+    '  {"op": "mark_done", "id": "1.2", "evidence_run": "<run id that showed it>"}\n'
+    '  {"op": "mark_na", "id": "3.1", "why": "<what ruled this branch out>"}\n'
+    '  {"op": "add_subtask", "parent": "2", "title": "<what the results newly opened up>"}\n'
+    '  {"op": "add_root", "title": "<a whole new line of attack>"}\n'
+    '  {"op": "retitle", "id": "2.1", "title": "<a sharper description>"}\n'
+    "Only reference ids that appear in the tree. Mark a branch not-applicable as soon as "
+    "the evidence rules it out — a dead branch left open wastes later turns. Omit task_ops "
+    "entirely when nothing changed."
+)
 
 
 def _real_target_system_prompt(ctx: ScopeContext) -> str:
@@ -147,7 +169,8 @@ def _real_target_system_prompt(ctx: ScopeContext) -> str:
         '{"done": false, "command": "nmap", "args": ["-sV", "-p-", "'
         + primary
         + '"], "rationale": "<1-2 sentences: why this is the next step>", '
-        '"step_id": "<the plan step id this realizes, or omit>"}'
+        '"step_id": "<the plan step id this realizes, or omit>"'
+        + _TASK_OPS_CONTRACT
     )
 
 
@@ -228,8 +251,33 @@ def _arsenal_reference(goal: str) -> str:
         return ""
 
 
+def _state_reference(session_id: str | None) -> str:
+    """The accumulated engagement state as prompt text.
+
+    This is what replaces re-reading stdout tails: hosts, services, endpoints, credentials,
+    findings and the live task tree, deduplicated across every run so far. A tail window
+    forgets — a service found on run 3 is gone by run 20 — and state does not.
+
+    Best-effort and additive: no session, no state, or any failure yields "", which makes
+    the prompt byte-for-byte what it was before the state model existed.
+    """
+    if not session_id:
+        return ""
+    try:
+        from state import render as state_render
+        from state import store as state_store
+
+        return state_render.render_state(state_store.load(session_id), session_id)
+    except Exception:  # noqa: BLE001 - a reference block must never break the loop
+        return ""
+
+
 def build_user_prompt(
-    plan: dict, runs: list[dict], avoid: list[str], scope_ctx: ScopeContext | None = None
+    plan: dict,
+    runs: list[dict],
+    avoid: list[str],
+    scope_ctx: ScopeContext | None = None,
+    session_id: str | None = None,
 ) -> str:
     goal = plan.get("goal") or ""
     if scope_ctx is not None:
@@ -271,7 +319,20 @@ def build_user_prompt(
     lines.append("THE PLAN (composed; use it to ground your next step):")
     lines.append(_plan_digest(plan))
     lines.append("")
-    lines.append("ALREADY RUN (results so far — adapt to these):")
+    # STATE FIRST, raw output second. The structured picture is authoritative and complete;
+    # the excerpts below it are only for detail the parsers do not model yet (banner text,
+    # error messages, a tool whose output has no parser). Before this, the excerpts were
+    # ALL the model had, which is why it could not reason about an attack surface.
+    state_block = _state_reference(session_id)
+    if state_block:
+        lines.append(state_block)
+        lines.append("")
+        lines.append(
+            "RAW OUTPUT EXCERPTS (recent runs only — for detail the state above does not "
+            "capture; the state is authoritative):"
+        )
+    else:
+        lines.append("ALREADY RUN (results so far — adapt to these):")
     lines.append(digest)
     avoid = [a for a in (avoid or []) if a.strip()]
     if avoid:
@@ -336,6 +397,7 @@ def propose_next(
     cfg: dict,
     avoid: list[str] | None = None,
     scope_ctx: ScopeContext | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Ask the LLM for the next single proposed command (no execution).
 
@@ -349,14 +411,33 @@ def propose_next(
     ``llm.LLMError`` if the model is unreachable / unparseable (the API maps that to 503).
     """
     system = _system_prompt(scope_ctx)
-    user = build_user_prompt(plan, runs, avoid or [], scope_ctx)
-    raw = llm.chat(system, user, cfg, max_tokens=700)
+    user = build_user_prompt(plan, runs, avoid or [], scope_ctx, session_id)
+    raw = llm.chat(system, user, cfg, max_tokens=900)
     parsed = llm.extract_json(raw)
     if not isinstance(parsed, dict):
         raise llm.LLMError("the model did not return a proposal object")
 
+    # TASK TREE (D-PTT): the model may return operations that update the live plan. They
+    # are VALIDATED AND APPLIED BY CODE, never trusted wholesale — an unknown id or a bad
+    # status is rejected individually and the rest still apply. The tree is the durable
+    # record; the model can only mutate it in defined ways. Applying it here, before the
+    # proposal is even validated, is deliberate: what the model LEARNED from the last run
+    # is worth keeping even when the command it wants next turns out to be unusable.
+    tree_result: dict[str, Any] | None = None
+    if session_id and parsed.get("task_ops"):
+        try:
+            from state import tasks as task_tree
+
+            tree_result = task_tree.apply_ops(session_id, parsed.get("task_ops")).to_dict()
+        except Exception:  # noqa: BLE001 - the tree must never break the loop
+            tree_result = None
+
     if parsed.get("done") is True:
-        return {"done": True, "proposal": None, "reason": "the agent judged recon complete"}
+        return {
+            "done": True, "proposal": None,
+            "reason": "the agent judged recon complete",
+            "task_tree": tree_result,
+        }
 
     command = str(parsed.get("command") or "").strip()
     args = _coerce_args(parsed.get("args"))
@@ -365,6 +446,7 @@ def propose_next(
             "done": True,
             "proposal": None,
             "reason": "the agent proposed no further command",
+            "task_tree": tree_result,
         }
 
     gate_ok, gate_reason = precheck(command, args, scope_ctx)
@@ -381,4 +463,4 @@ def propose_next(
         "gate_reason": gate_reason,
         "dangerous_flags": dangerous,
     }
-    return {"done": False, "proposal": proposal, "reason": None}
+    return {"done": False, "proposal": proposal, "reason": None, "task_tree": tree_result}

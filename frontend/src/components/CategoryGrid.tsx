@@ -21,7 +21,6 @@ type CategoryGridProps = {
 const HIDDEN_CATEGORIES = new Set([
   "forensics",
   "ics",
-  "phishing",
   "supply-chain",
 ]);
 

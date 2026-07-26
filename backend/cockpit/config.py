@@ -59,5 +59,37 @@ LAB_TARGET_ALIASES: frozenset[str] = frozenset(
 ISOLATED_NETWORK = os.environ.get("HACKPIT_ISOLATED_NET", "hackpit-isolated")
 
 # --- Execution bounds --------------------------------------------------------
-# Hard ceiling on how long a single command may run before it is killed.
+# DEFAULT time a single command gets before it is killed. A request may ask for more
+# (ExecRequest.timeout_seconds / KaliRequest.timeout_seconds) up to MAX_TIMEOUT_SECONDS.
+# 180s is a sensible default for interactive work; it is NOT a safety property — the
+# safety gates are target-lock, approval, danger-confirm and (lab only) isolation, none
+# of which a longer timeout weakens.
 EXEC_TIMEOUT_SECONDS = int(os.environ.get("HACKPIT_EXEC_TIMEOUT", "180"))
+
+# HARD ceiling a per-request timeout is clamped to. Real work needs it: a full TCP sweep
+# is 2-10 min, `-sU --top-ports 100` 5-20 min, ffuf on raft-medium 5-30 min, a full nuclei
+# run 10-60 min. The arsenal's own first template (`nmap -p- --min-rate 2000`) could not
+# finish under the old flat 180s. An hour is long enough for all of them and still bounds
+# a runaway process. Requests above it are clamped, not refused.
+MAX_TIMEOUT_SECONDS = int(os.environ.get("HACKPIT_MAX_TIMEOUT", "3600"))
+
+# --- Long-running jobs -------------------------------------------------------
+# A backgrounded run keeps its output buffered in memory so a reconnecting client can
+# replay it. Cap per stream so a runaway `yes` cannot exhaust the backend's memory; the
+# persisted RunRecord is capped the same way.
+JOB_OUTPUT_CAP = int(os.environ.get("HACKPIT_JOB_OUTPUT_CAP", "2000000"))  # chars/stream
+
+# How long a FINISHED job's buffer is kept for late reconnects before the reaper drops it.
+# The RunRecord is already durable in SQLite by then; this only bounds the in-memory replay.
+JOB_RETENTION_SECONDS = int(os.environ.get("HACKPIT_JOB_RETENTION", "3600"))
+
+
+def clamp_timeout(requested: int | float | None) -> int:
+    """The effective timeout for one run: default when unset, clamped to the hard ceiling.
+
+    Clamps rather than rejects — a caller asking for 24h gets an hour, not a 422. A
+    non-positive value is treated as "unset" so `0` can never mean "no timeout".
+    """
+    if requested is None or requested <= 0:
+        return EXEC_TIMEOUT_SECONDS
+    return int(min(requested, MAX_TIMEOUT_SECONDS))

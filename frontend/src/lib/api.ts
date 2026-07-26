@@ -1648,7 +1648,38 @@ export type ArsenalTool = {
   /** KB entry documenting this tool; null when the KB doesn't (never fabricated). */
   kb_entry_id: string | null;
   kb_title: string | null;
+  /** "" for the Linux sandbox; "windows" for PowerShell/.NET tooling. */
+  platform: string;
+  /** False for tools that cannot run on the Linux sandbox at all (D9). */
+  runs_here: boolean;
 };
+
+/**
+ * Which catalogued tools the sandbox ACTUALLY has (D7).
+ *
+ * `available: false` means the probe could not run — availability is UNKNOWN, NOT that the
+ * tools are missing. The UI must say so rather than showing a wall of false gaps.
+ */
+export type ToolReconciliation = {
+  checked_at: string | null;
+  container: string | null;
+  available: boolean;
+  detail: string;
+  present_count: number;
+  /** Catalogued Linux tools the sandbox does not have — a real gap. */
+  missing: string[];
+  /** Windows-only entries: cannot run here by construction, NOT a gap to close. */
+  windows_only: string[];
+  loot?: {
+    mount: string;
+    host_root: string;
+    sandboxes_with_loot: string[];
+    lab_sandbox_has_loot: boolean;
+  };
+};
+
+export const getToolReconciliation = (signal?: AbortSignal) =>
+  getJSON<ToolReconciliation>("/tools", signal);
 
 export type ArsenalResponse = {
   total: number;

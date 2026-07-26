@@ -1,0 +1,5 @@
+# Loot directories land here — one per engagement id, plus `kali/` for the :kali shell.
+# Bind-mounted to /loot in the engagement and :kali sandboxes (docker/docker-compose.yml).
+# Contents are engagement artefacts and are NOT committed.
+*
+!.gitignore

@@ -54,6 +54,8 @@ import report as report_gen  # noqa: E402  (backend/report.py — LLM report dra
 import sessions as sessions_db  # noqa: E402  (backend/sessions.py — SQLite store)
 from cockpit import runstore as cockpit_runstore  # noqa: E402
 from cockpit import engagement as cockpit_engagement  # noqa: E402
+from cockpit import reconcile as cockpit_reconcile  # noqa: E402
+from cockpit import loot as cockpit_loot  # noqa: E402
 from cockpit.router import router as cockpit_router  # noqa: E402
 from adgraph import store as ad_store  # noqa: E402  (backend/adgraph — AD attack-path graph)
 from adgraph.router import (  # noqa: E402
@@ -308,6 +310,13 @@ async def lifespan(app: FastAPI):
         arsenal_loader.link_kb(loaded, STATE.by_id, attack_path.is_step_eligible)
         attack_path.set_arsenal(loaded)
         set_arsenal_catalog(loaded)
+        # STARTUP RECONCILIATION (D7): ask the sandbox which catalogued tools it actually
+        # has. This is what closes the loop that let the catalog claim 73 tools while the
+        # image shipped 7 — the planner's prompt block is filtered by the answer, so it can
+        # no longer propose a tool that is not installed. Runs on a background thread: the
+        # probe shells out to Docker, which can be slow or absent, and app start must never
+        # wait on it. Until it lands, availability reads as "unknown" and nothing is filtered.
+        cockpit_reconcile.check_in_background(loaded)
     except Exception:  # noqa: BLE001 - never fail startup over the catalog
         pass
     yield
@@ -888,6 +897,34 @@ class LoopProposeOut(BaseModel):
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "entries": str(len(STATE.entries))}
+
+
+@app.get("/tools")
+def tool_reconciliation(refresh: bool = False) -> dict[str, Any]:
+    """Which catalogued tools the sandbox ACTUALLY has (D7).
+
+    This is the check that would have caught the 73-catalogued / 7-installed gap on day one,
+    and it keeps catching it every time the image changes. The same answer filters the
+    planner's prompt block, so a catalogued-but-missing tool can never be proposed.
+
+    * ``missing``      catalogued Linux tools the sandbox does not have — a real gap.
+    * ``windows_only`` PowerShell/.NET entries that cannot run on a Linux sandbox by
+      construction (D9). NOT a gap to close: they stay catalogued because HackPit still
+      helps plan and write up that work, and they are excluded from the planner's prompt.
+    * ``available: false`` means the probe could not run (e.g. Docker down), so availability
+      is UNKNOWN — not that the tools are absent. Nothing is filtered in that state.
+
+    Served from main rather than the cockpit or arsenal router on purpose. The cockpit must
+    stay arsenal-blind (the execution gates can never be catalog-aware) and the arsenal must
+    never import the execution layer; test_arsenal_safety enforces BOTH directions. main is
+    the composition root that is already allowed to know about both.
+    """
+    if refresh:
+        try:
+            cockpit_reconcile.check(attack_path._arsenal())
+        except Exception as exc:  # noqa: BLE001 - a status endpoint must not 500
+            raise HTTPException(status_code=503, detail=f"probe failed: {exc}") from exc
+    return {**cockpit_reconcile.current().to_dict(), "loot": cockpit_loot.describe()}
 
 
 @app.get("/stats", response_model=StatsResponse)

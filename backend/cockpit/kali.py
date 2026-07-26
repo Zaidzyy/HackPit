@@ -47,11 +47,16 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
-from . import config, runstore
+from . import config, loot, runstore
 from .models import RunRecord
 
-# Per-command hard ceilings. A free shell must neither hang nor flood the audit log.
-KALI_TIMEOUT_SECONDS = 60
+# Per-command bounds. A free shell must neither hang nor flood the audit log.
+#
+# This used to be a hardcoded 60s with no override at all, which made `:kali` useless for
+# exactly the work a full shell is for — a port sweep, a long fuzz, a nuclei run. It is now
+# the shared cockpit default (180s) and a request may ask for more, clamped to the same
+# hard ceiling every other run obeys (config.MAX_TIMEOUT_SECONDS).
+KALI_TIMEOUT_SECONDS = config.EXEC_TIMEOUT_SECONDS
 # Cap EACH stream; a runaway `yes` or huge dump gets truncated (marked in the record).
 KALI_OUTPUT_CAP = 200_000  # chars per stream
 
@@ -67,6 +72,12 @@ class KaliRequest(BaseModel):
     command: str = Field(..., min_length=1, description="Shell command to run via `sh -c`.")
     session_id: str | None = Field(
         None, description="Optional engagement to record this run against."
+    )
+    timeout_seconds: int | None = Field(
+        None,
+        ge=1,
+        description="How long this command may run before it is killed. Omit for the 180s "
+        "default; values above the hard ceiling (3600s) are CLAMPED, not refused.",
     )
 
 
@@ -141,8 +152,15 @@ def run_kali(request: KaliRequest) -> KaliResult:
     started_at = _now()
 
     # The container is a CONSTANT, never from the request. `sh -c` is intentional: the
-    # human operator gets a full shell — here, one with full network reach.
-    argv = ["docker", "exec", config.KALI_OPEN_CONTAINER, "sh", "-c", request.command]
+    # human operator gets a full shell — here, one with full network reach. The working
+    # directory is `:kali`'s own loot directory so downloads and tool output survive a
+    # `docker compose down`; it is still a constant, never a request field.
+    timeout_seconds = config.clamp_timeout(request.timeout_seconds)
+    workdir = loot.kali_workdir()
+    argv = [
+        "docker", "exec", *loot.exec_flags(workdir),
+        config.KALI_OPEN_CONTAINER, "sh", "-c", request.command,
+    ]
 
     timed_out = False
     try:
@@ -150,13 +168,20 @@ def run_kali(request: KaliRequest) -> KaliResult:
             argv,
             capture_output=True,
             text=True,
-            timeout=KALI_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
         )
         stdout, stderr, exit_code = proc.stdout, proc.stderr, proc.returncode
     except subprocess.TimeoutExpired as exc:
         timed_out = True
         stdout = exc.stdout or ""
-        stderr = (exc.stderr or "") + f"\n[killed: exceeded {KALI_TIMEOUT_SECONDS}s timeout]"
+        # TimeoutExpired gives bytes when the call was made without text=True upstream;
+        # normalise so a timed-out run still reports whatever it managed to produce.
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", "replace")
+        partial_err = exc.stderr or ""
+        if isinstance(partial_err, bytes):
+            partial_err = partial_err.decode("utf-8", "replace")
+        stderr = partial_err + f"\n[killed: exceeded {timeout_seconds}s timeout]"
         exit_code = None
     except FileNotFoundError:
         stdout, stderr, exit_code = "", "docker CLI not found on PATH", 127

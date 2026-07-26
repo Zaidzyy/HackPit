@@ -46,6 +46,22 @@ class ExecRequest(BaseModel):
     step_id: str | None = Field(
         None, description="Optional attack-path step id ({phase}-{n}) this run realizes."
     )
+    timeout_seconds: int | None = Field(
+        None,
+        ge=1,
+        description="How long this ONE command may run before it is killed. Omit for the "
+        "180s default; values above the hard ceiling (3600s) are CLAMPED, not refused. Real "
+        "work needs this — a full port sweep or nuclei run does not finish in 180s. This is "
+        "not a safety control: every gate still applies regardless of the value.",
+    )
+    background: bool = Field(
+        False,
+        description="Run detached: the request returns a run_id immediately and the command "
+        "keeps running server-side. Output buffers so it can be replayed from "
+        "GET /cockpit/runs/{run_id}/stream, which survives a page reload or a dropped "
+        "connection. Gates are identical — a backgrounded run is still individually approved "
+        "BEFORE it starts, and nothing about detaching makes it hands-off.",
+    )
 
 
 class ExecAccepted(BaseModel):

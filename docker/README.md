@@ -24,11 +24,11 @@ absent — it cannot run on Linux.
 The image's default user is the unprivileged `sandbox`. Elevation lives in the compose
 service, not in the image:
 
-| Container | User | Capabilities | Devices |
-|---|---|---|---|
-| `hackpit-kali-sandbox` (lab) | `sandbox` | `cap_drop: ALL` | none |
-| `hackpit-kali-open` (`:kali`) | `sandbox` | `cap_drop: ALL` | none |
-| `hackpit-engage-sandbox` | **root** | `ALL` dropped, then Docker's default set + `NET_ADMIN` added | `/dev/net/tun` |
+| Container | User | Capabilities | Devices | Loot mount |
+|---|---|---|---|---|
+| `hackpit-kali-sandbox` (lab) | `sandbox` | `cap_drop: ALL` | none | **none** |
+| `hackpit-kali-open` (`:kali`) | `sandbox` | `cap_drop: ALL` | none | `/loot` |
+| `hackpit-engage-sandbox` | **root** | `ALL` dropped, then Docker's default set + `NET_ADMIN` added | `/dev/net/tun` | `/loot` |
 
 Only the engagement sandbox is elevated, and it is the one that never runs unattended —
 every command on it is human-approved. The `cap_add` list is written out in full in
@@ -37,6 +37,17 @@ privilege boundary is stated in the file instead of inherited from a Docker defa
 covers raw sockets (`-sS`/`-sU`/`-O`, masscan, tcpdump), privileged-port binds (responder,
 ntlmrelayx, low-port listeners), VPN, and ordinary root file work including `apt-get`.
 `SYS_ADMIN`, `SYS_PTRACE`, `SYS_MODULE` and `SYS_TIME` are still withheld.
+
+## Loot
+`backend/data/engagements` is bind-mounted to `/loot` in the engagement and `:kali`
+sandboxes, so `nmap -oA`, `ffuf -o`, `nuclei -o` and downloads survive `docker compose down`.
+Each engagement works in `/loot/<engagement_id>` and `:kali` in `/loot/kali`, set per command
+with `docker exec -w` — the parent is mounted once because a bind mount is fixed when a
+container is created, and these containers are long-lived and shared across engagements.
+
+The isolated lab sandbox deliberately gets **no** mount: it is the container the safety layer
+leans on and the host for unattended agent runs, so it is given no writable host directory.
+Lab output lives in the run record. See `backend/cockpit/loot.py`.
 
 ## Isolation model
 The shared network is declared `internal: true`, so Docker attaches **no gateway** —

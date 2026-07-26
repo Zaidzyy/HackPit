@@ -93,6 +93,10 @@ services:
     networks:
       - hackpit-open
     restart: unless-stopped
+    # LOOT: `:kali` downloads and tool output land on the host instead of dying with the
+    # container. Same parent mount as the engagement sandbox; :kali works in /loot/kali.
+    volumes:
+      - ../backend/data/engagements:/loot
     # Defense in depth is KEPT even though the network is open — non-root, no capabilities,
     # no devices. `:kali` gets the full new toolset (D4) but not the engage sandbox's privileges.
     cap_drop:
@@ -117,6 +121,17 @@ services:
     hostname: hackpit-engage-sandbox
     networks:
       - hackpit-engage
+    # LOOT: the host directory where engagement artefacts land — nmap -oA, ffuf -o, nuclei
+    # -o, secretsdump output, downloaded pages. The PARENT is mounted once (a bind mount is
+    # fixed when the container is created, and this container is long-lived and shared across
+    # engagements); each engagement gets /loot/<engagement_id> as its working directory via
+    # `docker exec -w`. See backend/cockpit/loot.py.
+    #
+    # The isolated LAB sandbox deliberately has NO such mount — it is the container the
+    # safety layer leans on and the host for unattended agent runs, so it gets no writable
+    # host directory. Lab output lives in the run record, which is enough for a practice app.
+    volumes:
+      - ../backend/data/engagements:/loot
     # --- PRIVILEGE: this service, and ONLY this service, is elevated (D3) ------------------
     # Same image as the other two sandboxes; the elevation lives here in the runtime posture.
     #   user: root       — write access to root-owned files (appending /etc/hosts to point at a

@@ -155,6 +155,50 @@ RUN curl -fsSL "https://github.com/tomnomnom/waybackurls/releases/download/v${WA
     && rm /tmp/waybackurls.tgz \
     && test -x /usr/local/bin/waybackurls
 
+# dalfox — XSS scanner. Not in kali-rolling.
+ARG DALFOX_VERSION=2.9.2
+RUN curl -fsSL "https://github.com/hahwul/dalfox/releases/download/v${DALFOX_VERSION}/dalfox_${DALFOX_VERSION}_linux_amd64.tar.gz" \
+        -o /tmp/dalfox.tgz \
+    && tar -xzf /tmp/dalfox.tgz -C /usr/local/bin dalfox \
+    && rm /tmp/dalfox.tgz \
+    && /usr/local/bin/dalfox version
+
+# gau (getallurls) — archived-URL discovery. Not in kali-rolling.
+ARG GAU_VERSION=2.2.4
+RUN curl -fsSL "https://github.com/lc/gau/releases/download/v${GAU_VERSION}/gau_${GAU_VERSION}_linux_amd64.tar.gz" \
+        -o /tmp/gau.tgz \
+    && tar -xzf /tmp/gau.tgz -C /usr/local/bin gau \
+    && rm /tmp/gau.tgz \
+    && test -x /usr/local/bin/gau
+
+# rustscan — fast port sweep that hands off to nmap. Not in kali-rolling. Upstream ships
+# the linux build as a .tar.gz INSIDE a .zip, hence the two-step extract.
+ARG RUSTSCAN_VERSION=2.4.1
+RUN curl -fsSL "https://github.com/bee-san/RustScan/releases/download/${RUSTSCAN_VERSION}/x86_64-linux-rustscan.tar.gz.zip" \
+        -o /tmp/rustscan.zip \
+    && unzip -o -j /tmp/rustscan.zip -d /tmp/rustscan \
+    && tar -xzf "$(find /tmp/rustscan -name '*.tar.gz' | head -1)" -C /tmp/rustscan \
+    && install -m 0755 "$(find /tmp/rustscan -type f -name 'rustscan' | head -1)" /usr/local/bin/rustscan \
+    && rm -rf /tmp/rustscan /tmp/rustscan.zip \
+    && /usr/local/bin/rustscan --version
+
+# jwt_tool — JWT analysis/forging. A Python script, not a binary and not packaged; it gets
+# its own venv so its pins never collide with Kali's system Python (which is PEP-668
+# externally-managed), plus a wrapper so `jwt_tool` resolves on PATH like any other tool.
+ARG JWT_TOOL_VERSION=2.2.6
+RUN curl -fsSL "https://github.com/ticarpi/jwt_tool/archive/refs/tags/v${JWT_TOOL_VERSION}.tar.gz" \
+        -o /tmp/jwt_tool.tgz \
+    && mkdir -p /opt/jwt_tool \
+    && tar -xzf /tmp/jwt_tool.tgz -C /opt/jwt_tool --strip-components=1 \
+    && rm /tmp/jwt_tool.tgz \
+    && python3 -m venv /opt/jwt_tool/venv \
+    && /opt/jwt_tool/venv/bin/pip install --no-cache-dir -q -r /opt/jwt_tool/requirements.txt \
+    && printf '#!/bin/sh\nexec /opt/jwt_tool/venv/bin/python /opt/jwt_tool/jwt_tool.py "$@"\n' \
+        > /usr/local/bin/jwt_tool \
+    && chmod 0755 /usr/local/bin/jwt_tool \
+    && chmod -R a+rX /opt/jwt_tool \
+    && /usr/local/bin/jwt_tool --help > /dev/null
+
 # --- 9. nuclei templates (baked — the sandbox can never fetch them) ----------
 # Cloned to a shared path, then symlinked into BOTH possible home directories, because
 # nuclei looks in $HOME/.local/nuclei-templates and the engagement sandbox runs as root

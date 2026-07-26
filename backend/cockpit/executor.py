@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterator, NamedTuple
 
-from . import allowlist, config, engagement, runstore
+from . import allowlist, config, engagement, loot, runstore
 from .models import EngagementRecord, ExecRejected, ExecRequest, RunRecord
 from .sandbox import SandboxError, assert_isolation_proven
 
@@ -371,7 +371,12 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
 
     run_id = uuid.uuid4().hex[:12]
     started_at = _now()
-    argv = ["docker", "exec", container, request.command, *request.args]
+    # Working directory: engagement runs land in their own loot directory so `-oA scan`
+    # writes somewhere durable. LAB runs get None -> no -w flag -> argv byte-identical to
+    # what it was before loot existed. See cockpit/loot.py for why the lab is excluded.
+    workdir = loot.workdir_for(mode, eng.engagement_id if eng is not None else None)
+    timeout_seconds = config.clamp_timeout(request.timeout_seconds)
+    argv = ["docker", "exec", *loot.exec_flags(workdir), container, request.command, *request.args]
 
     yield {
         "type": "start",
@@ -381,6 +386,8 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
         "target": target,
         "mode": mode,
         "started_at": started_at,
+        "timeout_seconds": timeout_seconds,
+        "workdir": workdir,
     }
 
     out_buf: list[str] = []
@@ -418,7 +425,7 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
 
     def _watchdog() -> None:
         try:
-            proc.wait(timeout=config.EXEC_TIMEOUT_SECONDS)
+            proc.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
             timed_out["v"] = True
             proc.kill()
@@ -442,7 +449,7 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
     exit_code = proc.poll()
     finished_at = _now()
     if timed_out["v"]:
-        yield {"type": "error", "reason": f"timed out after {config.EXEC_TIMEOUT_SECONDS}s"}
+        yield {"type": "error", "reason": f"timed out after {timeout_seconds}s"}
 
     record = RunRecord(
         run_id=run_id,

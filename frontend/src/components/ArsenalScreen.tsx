@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { PageShell } from "./PageShell";
 import { CopyButton } from "./CopyButton";
-import { getArsenal, type ArsenalTool } from "@/lib/api";
+import { getArsenal, getToolReconciliation, type ArsenalTool } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 
 const ARSENAL_COLOR = "#e0c15a";
@@ -28,8 +28,17 @@ const CATEGORY_LABEL: Record<string, string> = {
  */
 export function ArsenalScreen() {
   const arsenal = useApi(getArsenal, []);
+  // What the sandbox actually has (D7). Independent of the catalog load: an unreachable
+  // backend or a down Docker leaves this null and the catalog renders exactly as before.
+  const recon = useApi(getToolReconciliation, []);
   const [q, setQ] = useState("");
   const [cat, setCat] = useState<string>("all");
+
+  // Only trust a probe that actually ran — an unavailable probe must mark nothing missing.
+  const missing = useMemo(
+    () => new Set(recon.data?.available ? recon.data.missing : []),
+    [recon.data],
+  );
 
   const needle = q.trim().toLowerCase();
   const tools = useMemo<ArsenalTool[]>(() => {
@@ -118,6 +127,49 @@ export function ArsenalScreen() {
           </div>
         </div>
 
+        {/*
+          AVAILABILITY (D7). The catalog used to imply every entry was runnable while the
+          sandbox shipped a fraction of them. This band reports what the sandbox actually
+          answered to `command -v`. When the probe could not run, it says UNKNOWN rather
+          than showing a wall of false gaps — absence has to be proven.
+        */}
+        {recon.data && (
+          <p
+            className={`hp-ta-note${
+              recon.data.available && recon.data.missing.length > 0 ? " hp-ta-warn" : ""
+            }`}
+          >
+            {!recon.data.available ? (
+              <>
+                <b>Tool availability unknown.</b> {recon.data.detail}
+              </>
+            ) : (
+              <>
+                <b>
+                  {recon.data.present_count} of{" "}
+                  {recon.data.present_count + recon.data.missing.length} catalogued Linux
+                  tools are installed
+                </b>{" "}
+                in <code>{recon.data.container}</code>.
+                {recon.data.missing.length > 0 && (
+                  <> Not installed: {recon.data.missing.join(", ")}.</>
+                )}
+                {recon.data.windows_only.length > 0 && (
+                  <>
+                    {" "}
+                    {recon.data.windows_only.length} Windows-only entries (
+                    {recon.data.windows_only.join(", ")}) cannot run on a Linux sandbox at
+                    all — they stay here for planning and write-ups, and the planner is
+                    never offered them.
+                  </>
+                )}{" "}
+                Tools shown as unavailable are excluded from the planner&apos;s prompt, so
+                it cannot propose something that is not there.
+              </>
+            )}
+          </p>
+        )}
+
         {arsenal.loading && <p className="hp-ta-empty">Loading the catalog…</p>}
         {arsenal.error && (
           <p className="hp-ta-empty">Could not load the arsenal. Is the backend running?</p>
@@ -136,6 +188,17 @@ export function ArsenalScreen() {
               <article key={tool.name} className="hp-ta-tool">
                 <div className="hp-ta-toolhead">
                   <h3>{tool.name}</h3>
+                  {!tool.runs_here ? (
+                    <span className="hp-ta-unavail" title="PowerShell/.NET — cannot run on the Linux sandbox. Kept for planning and write-ups; never proposed by the planner.">
+                      windows only
+                    </span>
+                  ) : (
+                    missing.has(tool.name) && (
+                      <span className="hp-ta-unavail" title="Catalogued but not installed in the sandbox. Excluded from the planner's prompt.">
+                        not installed
+                      </span>
+                    )
+                  )}
                   {tool.aliases.length > 0 && (
                     <span className="hp-ta-alias">aka {tool.aliases.join(", ")}</span>
                   )}

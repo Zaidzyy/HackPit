@@ -22,7 +22,7 @@ step runs. Every command, tagged or not, goes through the same gated executor.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Callable
 
 from .loader import Arsenal, Tool
 
@@ -103,9 +103,19 @@ def prompt_block(
     phases: list[str] | None = None,
     needle: str | None = None,
     cap: int = MAX_BLOCK_CHARS,
+    is_available: Callable[[str], bool] | None = None,
 ) -> str:
     """The catalog rendered as prompt reference. "" when the catalog is empty, so a caller
-    with no arsenal produces byte-for-byte the prompt it produced before."""
+    with no arsenal produces byte-for-byte the prompt it produced before.
+
+    ``is_available`` filters out tools the sandbox does not actually have (D7). Pass
+    ``reconcile.current().is_present`` to ground the block in the live image. Omit it and
+    the block is byte-for-byte what it was before reconciliation existed — the filter is
+    additive, never a behaviour change for callers that do not opt in.
+
+    Tools marked ``platform: windows`` are ALWAYS excluded regardless of the filter: they
+    cannot run on a Linux sandbox by construction, so proposing one is never useful (D9).
+    """
     if not arsenal.tools:
         return ""
     wanted = phases or ["recon", "enumeration", "exploitation", "privesc", "post-exploitation"]
@@ -117,9 +127,14 @@ def prompt_block(
         "REFERENCE, not a restriction: you may propose any tool that fits the goal, and a "
         "command still needs the operator's approval before it runs.",
     ]
+    def _proposable(tool) -> bool:
+        if not tool.runs_here():
+            return False
+        return is_available(tool.name) if is_available is not None else True
+
     seen: set[str] = set()
     for phase in wanted:
-        picks = [t for t in arsenal.by_phase(phase) if t.name not in seen]
+        picks = [t for t in arsenal.by_phase(phase) if t.name not in seen and _proposable(t)]
         if needle:
             # STABLE sort on relevance alone — ties keep catalog order, so a needle
             # that matches nothing yields byte-for-byte the no-needle block.

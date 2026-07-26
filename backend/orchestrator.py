@@ -77,10 +77,11 @@ def _system_prompt(scope_ctx: ScopeContext | None = None) -> str:
         "target (a deliberately vulnerable web app). You do NOT run commands yourself — you "
         "propose ONE next command and a human approves it before it runs.\n"
         "HARD RULES:\n"
-        "- You may propose ANY single command (one binary + its args) — any tool on the "
-        "sandbox (nmap, curl, sqlmap, ffuf, nuclei, gobuster, nikto, and more). There is no "
-        "allowlist. It runs argv-style (never a shell), so give the binary and its args, not "
-        "a shell pipeline.\n"
+        "- You may propose ANY single command (one binary + its args) — any tool installed on "
+        "the sandbox. There is no allowlist. Prefer tools from the TOOL ARSENAL block below: it "
+        "is generated from what this sandbox actually has installed, so anything listed there is "
+        "certain to exist. It runs argv-style (never a shell), so give the binary and its args, "
+        "not a shell pipeline.\n"
         f"- The ONLY target is the lab host '{lab}' (or a URL on it, e.g. "
         f"http://{lab}:3000/). NEVER propose any other host, IP, or the internet. Point the "
         f"tool's target at the lab (e.g. -u http://{lab}:3000/…).\n"
@@ -116,10 +117,11 @@ def _real_target_system_prompt(ctx: ScopeContext) -> str:
         "You do NOT run commands yourself — you propose ONE next command and a human reviews "
         "and approves it before it runs. Every single command is approved individually.\n"
         "HARD RULES:\n"
-        "- You may propose ANY single command (one binary + its args) — any tool on the "
-        "sandbox (nmap, curl, sqlmap, ffuf, nuclei, gobuster, nikto, dig, whatweb, and more). "
-        "There is no allowlist. It runs argv-style (never a shell), so give the binary and its "
-        "args, not a shell pipeline.\n"
+        "- You may propose ANY single command (one binary + its args) — any tool installed on "
+        "the sandbox. There is no allowlist. Prefer tools from the TOOL ARSENAL block below: it "
+        "is generated from what this sandbox actually has installed, so anything listed there is "
+        "certain to exist. It runs argv-style (never a shell), so give the binary and its args, "
+        "not a shell pipeline.\n"
         f"- SCOPE IS ABSOLUTE. You may ONLY target hosts inside the authorized scope: {inc}. "
         + (f"NEVER target these, they are explicitly out of scope: {exc}. " if exc else "")
         + "Never target any other host, any third-party service, the operator's own machine or "
@@ -206,12 +208,22 @@ def _arsenal_reference(goal: str) -> str:
 
     Best-effort and additive: any problem loading the catalog yields "", which makes the
     proposer prompt byte-for-byte what it was before the arsenal existed.
+
+    Grounded in what the sandbox ACTUALLY has: the block is filtered by the startup
+    reconciliation probe (D7), so a tool that is catalogued but not installed is never
+    shown to the model and therefore never proposed. When the probe could not run (Docker
+    down), the filter passes everything — absence has to be proven, not assumed.
     """
     try:
         import attack_path
         from arsenal import planner as arsenal_planner
+        from cockpit import reconcile
 
-        return arsenal_planner.prompt_block(attack_path._arsenal(), needle=goal)
+        return arsenal_planner.prompt_block(
+            attack_path._arsenal(),
+            needle=goal,
+            is_available=reconcile.current().is_present,
+        )
     except Exception:  # noqa: BLE001 - a reference block must never break the loop
         return ""
 

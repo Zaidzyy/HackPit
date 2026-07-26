@@ -59,11 +59,22 @@ class Tool:
     templates: tuple[Template, ...]
     flags: tuple[dict[str, str], ...] = ()
     aliases: tuple[str, ...] = ()
+    # Where this tool can actually run. "" (the default) means the Linux sandbox.
+    # "windows" marks PowerShell/.NET tooling — PowerView, Rubeus, Mimikatz, SharpHound,
+    # winPEAS — which CANNOT run on the Linux sandbox no matter how good the image gets
+    # (D9). Those entries stay in the catalog because HackPit still helps you PLAN and
+    # WRITE UP that work; what had to stop was implying they were runnable here. The
+    # planner's prompt block excludes them, so the model can never propose one.
+    platform: str = ""
     kb_entry_id: str | None = None      # resolved at load time, never stored in the catalog
     kb_title: str | None = None
 
     def names(self) -> tuple[str, ...]:
         return (self.name, *self.aliases)
+
+    def runs_here(self) -> bool:
+        """False for tools that cannot execute on the Linux sandbox by construction."""
+        return self.platform.lower() != "windows"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +91,8 @@ class Tool:
                 for t in self.templates
             ],
             "flags": [dict(f) for f in self.flags],
+            "platform": self.platform,
+            "runs_here": self.runs_here(),
             "kb_entry_id": self.kb_entry_id,
             "kb_title": self.kb_title,
         }
@@ -162,6 +175,7 @@ def _coerce_tool(raw: dict[str, Any]) -> Tool | None:
             if isinstance(f, dict)
         ),
         aliases=tuple(str(a).strip() for a in (raw.get("aliases") or []) if str(a).strip()),
+        platform=str(raw.get("platform") or "").strip().lower(),
     )
 
 

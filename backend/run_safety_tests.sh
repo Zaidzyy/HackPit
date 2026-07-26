@@ -86,6 +86,9 @@ echo "== tool arsenal tests (catalog / lookup / target-faithful render / provena
 echo "== tool arsenal SAFETY invariants (executes nothing / NO gate bypassed / gates unchanged) =="
 "$PY" test_arsenal_safety.py
 
+echo "== Phase-1 runtime (timeout clamp / background jobs / loot / tool reconciliation) =="
+"$PY" test_phase1_runtime.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

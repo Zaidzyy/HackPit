@@ -1892,6 +1892,7 @@
     },
     {
       "name": "rubeus",
+      "platform": "windows",
       "aliases": ["Rubeus.exe"],
       "category": "network-ad",
       "purpose": "On-host Kerberos toolkit for Windows — roasting, ticket harvesting, pass-the-ticket and delegation abuse from inside a session, where Impacket's network-side equivalents cannot reach.",
@@ -1995,6 +1996,7 @@
     },
     {
       "name": "powerview",
+      "platform": "windows",
       "aliases": ["PowerView.ps1"],
       "category": "network-ad",
       "purpose": "PowerShell domain-enumeration library — the on-host counterpart to BloodHound's collection, letting you ask targeted directory questions from an existing session without dropping a collector.",
@@ -2063,6 +2065,7 @@
     },
     {
       "name": "mimikatz",
+      "platform": "windows",
       "aliases": ["mimikatz.exe"],
       "category": "credentials",
       "purpose": "Windows credential extraction — reads plaintext passwords, hashes and Kerberos tickets out of LSASS memory, and performs DCSync from an elevated session.",
@@ -2829,6 +2832,7 @@
     },
     {
       "name": "winpeas",
+      "platform": "windows",
       "aliases": ["winPEASx64", "winPEASx86", "winPEASany", "winPEAS.exe", "winpeas.bat"],
       "category": "privesc",
       "purpose": "The Windows counterpart to linpeas — enumerates services, registry, credentials, tokens and installed software, highlighting the misconfigurations that lead to SYSTEM.",

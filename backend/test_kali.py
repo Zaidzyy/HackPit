@@ -106,21 +106,34 @@ def test_target_container_is_hardcoded_to_open() -> None:
     for cmd in hostile_commands:
         with _Spy() as spy:
             run_kali(KaliRequest(command=cmd))
-            assert spy.argv[:3] == ["docker", "exec", config.KALI_OPEN_CONTAINER], (
-                f"exec target must be the hardcoded OPEN sandbox, got {spy.argv[:3]!r}"
+            # `docker exec` may carry flags (e.g. -w for the loot working directory), so
+            # locate the container POSITIONALLY: it is the first argv token after the
+            # flags, i.e. immediately before `sh -c`. Asserting on a fixed index would
+            # silently stop testing containment the next time a flag is added.
+            assert spy.argv[:2] == ["docker", "exec"], f"must be a docker exec, got {spy.argv!r}"
+            assert "sh" in spy.argv, "must run the command via sh -c"
+            sh_at = spy.argv.index("sh")
+            container = spy.argv[sh_at - 1]
+            assert container == config.KALI_OPEN_CONTAINER, (
+                f"exec target must be the hardcoded OPEN sandbox, got {container!r}"
             )
-            assert spy.argv[2] == config.KALI_OPEN_CONTAINER, "container must be the constant"
             # And it must NEVER be the isolated cockpit sandbox.
-            assert spy.argv[2] != config.SANDBOX_CONTAINER, (
+            assert container != config.SANDBOX_CONTAINER, (
                 ":kali must NOT exec into the isolated cockpit sandbox"
             )
-            assert spy.argv[3:5] == ["sh", "-c"], "must run the command via sh -c"
-            assert spy.argv[5] == cmd, "the command is the ONLY thing that varies"
+            assert spy.argv[sh_at:sh_at + 2] == ["sh", "-c"], "must run the command via sh -c"
+            assert spy.argv[sh_at + 2] == cmd, "the command is the ONLY thing that varies"
+            # Every flag before the container must be a constant chosen by the code, never
+            # anything derived from the request.
+            for tok in spy.argv[2:sh_at - 1]:
+                assert cmd not in tok, (
+                    f"no request-derived value may reach the docker flags, got {tok!r}"
+                )
 
     fields = set(KaliRequest.model_fields.keys())
-    assert fields == {"command", "session_id"}, (
-        f"KaliRequest must expose only command + session_id, got {fields} — a "
-        "container/target/host field would break containment rule #1"
+    assert fields == {"command", "session_id", "timeout_seconds"}, (
+        f"KaliRequest must expose only command + session_id + timeout_seconds, got {fields} "
+        "— a container/target/host field would break containment rule #1"
     )
     print("  target container is hardcoded to the OPEN sandbox: PASS")
 

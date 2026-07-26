@@ -8,18 +8,30 @@ Endpoints:
 * ``POST /cockpit/kali``             — :kali human-only shell: run ONE arbitrary command
                                        inside the isolated sandbox. 409 (no run) if the
                                        sandbox is not provably isolated.
-* ``GET  /cockpit/runs/{run_id}``    — the persisted run-record.
+* ``GET  /cockpit/runs/{run_id}``    — the persisted run-record, or live status while a
+                                       backgrounded run is still going.
+* ``GET  /cockpit/runs/{id}/stream`` — attach to a backgrounded run: replay its buffered
+                                       output, then follow it live. Reconnect-safe.
+* ``GET  /cockpit/jobs``             — backgrounded runs still in flight.
+* ``GET  /cockpit/loot``             — where run artefacts land on the host.
+
+NOTE: tool reconciliation (which catalogued tools the sandbox actually has) is served from
+``GET /tools`` in main.py, NOT from here. The cockpit package stays blind to the tool
+catalog — the execution gates must never become catalog-aware — and the catalog in turn
+never imports the execution layer. Both directions are enforced by a safety test that
+matches on a PLAIN SUBSTRING, so do not name that package anywhere in this file.
 """
 
 from __future__ import annotations
 
+import itertools
 import json
 from typing import Any, Iterator
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
-from . import allowlist, config, engagement, executor, runstore
+from . import allowlist, config, engagement, executor, jobs, loot, runstore
 from . import session as live_session
 from .kali import KaliRefused, KaliRequest, KaliResult, kali_status, run_kali
 from .models import (
@@ -101,8 +113,41 @@ def exec_command(request: ExecRequest):
             detail={"gate": rejected.gate, "reason": rejected.reason},
         )
 
+    stream = executor.iter_run(request, prevalidated=True)
+
+    if request.background:
+        # Pull ONLY the first event to learn the run_id. iter_run yields `start` before it
+        # spawns anything, so this costs nothing and launches nothing; the background
+        # thread does the actual work. Gates already ran above — detaching a run never
+        # skips one.
+        first = next(stream, None)
+        if first is None:  # pragma: no cover - iter_run always yields at least one event
+            raise HTTPException(status_code=500, detail="run produced no events")
+        if first.get("type") == "rejected":
+            raise HTTPException(
+                status_code=403,
+                detail={"gate": first.get("gate", "target"), "reason": first.get("reason", "")},
+            )
+        run_id = first["run_id"]
+        jobs.start(run_id, itertools.chain([first], stream))
+        return JSONResponse(
+            status_code=202,
+            content={
+                "run_id": run_id,
+                "background": True,
+                "command": first.get("command"),
+                "args": first.get("args", []),
+                "target": first.get("target"),
+                "mode": first.get("mode"),
+                "started_at": first.get("started_at"),
+                "timeout_seconds": first.get("timeout_seconds"),
+                "workdir": first.get("workdir"),
+                "stream_url": f"/cockpit/runs/{run_id}/stream",
+            },
+        )
+
     def gen() -> Iterator[str]:
-        for event in executor.iter_run(request, prevalidated=True):
+        for event in stream:
             yield _sse(event)
 
     return StreamingResponse(
@@ -305,8 +350,55 @@ def list_runs(session_id: str = Query(..., description="Engagement to list runs 
 
 @router.get("/runs/{run_id}")
 def get_run(run_id: str):
-    """The final, persisted record of a run."""
+    """The final, persisted record of a run — or its live status while it is still going.
+
+    A backgrounded run has no persisted record until it exits, so polling this endpoint
+    used to 404 for the entire life of the job. It now reports the in-flight job instead,
+    which is what a poller actually wants to know.
+    """
     record = runstore.get_run(run_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail="run not found")
-    return record
+    if record is not None:
+        return record
+    live = jobs.status(run_id)
+    if live is not None:
+        return {
+            "run_id": run_id,
+            "running": live["running"],
+            "events": live["events"],
+            "truncated": live["truncated"],
+            "detail": "background run in progress — attach to "
+            f"/cockpit/runs/{run_id}/stream for output",
+        }
+    raise HTTPException(status_code=404, detail="run not found")
+
+
+@router.get("/runs/{run_id}/stream")
+def stream_run(run_id: str):
+    """Attach to a backgrounded run: replay what it has already produced, then follow live.
+
+    Reconnect-safe by construction — every attach starts from the beginning of the job's
+    buffer, so a client that dropped mid-run ends up with the same transcript as one that
+    never disconnected. Attaching is read-only: it starts nothing and approves nothing.
+    """
+
+    def gen() -> Iterator[str]:
+        for event in jobs.follow(run_id):
+            yield _sse(event)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/jobs")
+def list_jobs() -> dict[str, Any]:
+    """Backgrounded runs still in flight — so the UI can show what is going."""
+    return {"jobs": jobs.active()}
+
+
+@router.get("/loot")
+def get_loot() -> dict[str, Any]:
+    """Where run artefacts land on the host, and which sandboxes have a loot mount."""
+    return loot.describe()

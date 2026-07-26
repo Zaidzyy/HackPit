@@ -55,8 +55,25 @@ VEC_WEIGHT = 0.5
 # Additive nudge for tier-1 (the author's notes). Tuned so notes rise into the
 # top few for topical queries (they were #4–6) without sweeping #1 — the curated
 # tier-2 entries still lead on exact-keyword queries.
+#
+# GATED ON SUBSTANCE (see tier_bonus): a THIN tier-1 stub (no commands, little body)
+# gets NO boost, so it can never edge out a richer, more relevant lower-tier page on
+# trust alone. Trust breaks ties among genuinely-substantive entries; it does not
+# manufacture relevance. See docs/ASSESSMENT §5.
 TIER_BOOST = 0.004
 BASELINE_TIER = 2   # tiers below this (i.e. tier 1) get the boost; >=2 get none.
+
+# Completeness nudge, applied to EVERY tier: a small, SATURATING bonus for command-rich
+# entries, so a page that actually shows you commands wins close calls regardless of tier
+# — ranking on content, not just trust. Capped (COMPLETENESS_BONUS, reached at
+# COMPLETENESS_SATURATION commands) so it can never dominate relevance; it is the same
+# magnitude as the tier nudge, so a rich lower-tier page ties/beats a thin higher-tier one.
+COMPLETENESS_BONUS = 0.004
+COMPLETENESS_SATURATION = 3
+# An entry is "substantive" (eligible for the tier-1 boost) when it carries at least one
+# command OR a body longer than this — the same "more than an overview stub" signal the
+# attack-path composer uses when it drops command-less notes from becoming steps.
+SUBSTANTIVE_BODY_CHARS = 400
 
 # Small additive bonus when the *whole* query is the literal name of an entry.
 # Typing a technique's exact title (or a leading-word prefix of it), an exact
@@ -215,9 +232,37 @@ def rrf(rankings: list[list[tuple[float, int]]],
     return fused
 
 
+def _command_count(entry: dict) -> int:
+    """How many runnable commands an entry carries across its steps."""
+    return sum(len(s.get("code") or []) for s in (entry.get("steps") or []))
+
+
+def _is_substantive(entry: dict) -> bool:
+    """True when an entry is more than an overview stub — it has at least one command, or a
+    body over SUBSTANTIVE_BODY_CHARS. This gates the tier-1 boost so a thin note doesn't
+    ride its tier past richer, more relevant content."""
+    if _command_count(entry) > 0:
+        return True
+    return len(entry.get("body_md") or "") >= SUBSTANTIVE_BODY_CHARS
+
+
 def tier_bonus(entry: dict, boost: float) -> float:
+    """Additive nudge for tier-1 — but ONLY for a SUBSTANTIVE entry. A thin tier-1 stub
+    gets nothing, so it can't outrank a richer, more relevant lower-tier page on trust
+    alone; trust only breaks ties among entries that are actually worth ranking."""
     tier = int(entry.get("tier", BASELINE_TIER))
-    return boost * max(0, BASELINE_TIER - tier)  # tier1 -> +boost; tier>=2 -> 0
+    if tier >= BASELINE_TIER or not _is_substantive(entry):
+        return 0.0
+    return boost * max(0, BASELINE_TIER - tier)  # substantive tier1 -> +boost
+
+
+def completeness_bonus(entry: dict) -> float:
+    """A small, saturating bonus for command-rich entries — applied to EVERY tier, so
+    content richness (not just tier) decides close calls. Capped at COMPLETENESS_BONUS."""
+    n = _command_count(entry)
+    if n <= 0:
+        return 0.0
+    return COMPLETENESS_BONUS * min(1.0, n / COMPLETENESS_SATURATION)
 
 
 def _norm(s: str) -> str:
@@ -288,7 +333,8 @@ def search(entries: list[dict], query: str, top: int, mode: str = "hybrid",
     else:  # hybrid: weighted RRF + tier boost
         fused = rrf([lex, vec], [LEX_WEIGHT, VEC_WEIGHT])
         for idx in fused:
-            fused[idx] += tier_bonus(entries[idx], tier_boost)
+            fused[idx] += tier_bonus(entries[idx], tier_boost)        # substantive tier-1 only
+            fused[idx] += completeness_bonus(entries[idx])            # command-rich, any tier
             fused[idx] += title_bonus(entries[idx], q_norm)
         order = sorted(((s, idx) for idx, s in fused.items()),
                        key=lambda x: x[0], reverse=True)

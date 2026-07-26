@@ -35,6 +35,9 @@ echo "== :kali containment tests (human-only / hardcoded-open-container / no-iso
 echo "== CVE -> exploit index (version comparison / tiered ranking / executes nothing) =="
 "$PY" test_exploits.py
 
+echo "== relevance-first KB ranking (substance-gated tier boost / completeness nudge) =="
+"$PY" test_search_ranking.py
+
 echo "== raw PTY terminal containment (human-only / hardcoded open box / sentinel shell untouched) =="
 "$PY" test_terminal.py
 

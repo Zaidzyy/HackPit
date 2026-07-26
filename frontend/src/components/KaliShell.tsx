@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { PageShell } from "./PageShell";
 import {
   ApiError,
@@ -206,6 +207,17 @@ export function KaliShell() {
             pipes, redirects, your whole toolkit. There is no allowlist and{" "}
             <b>no isolation</b> here — <b>you</b> are the operator. The container is
             fixed and disposable, and this is a human-only terminal.
+          </p>
+          <p className="hp-kali-sub hp-kali-xref">
+            Every command here is delimited server-side, so you get a clean, escape-free
+            transcript per command — that is what the reports are built from, and why
+            full-screen tools can&apos;t render in this view. For <code>vim</code>,{" "}
+            <code>top</code>, an interactive <code>msfconsole</code> or a raw{" "}
+            <code>evil-winrm</code> shell, use{" "}
+            <Link href="/terminal" className="hp-pty-xlink">
+              :terminal
+            </Link>{" "}
+            — a real PTY into this same sandbox.
           </p>
         </header>
 

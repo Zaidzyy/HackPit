@@ -7719,3 +7719,37 @@ a.hp-card {
   color: var(--accent); border: 1px solid var(--accent-line); background: var(--accent-soft);
   padding: 2px 8px; border-radius: 4px;
 }
+
+/* --- :terminal — raw PTY surface (a SECOND :kali surface, not a replacement) ------- */
+/* Reuses the :kali chrome (hp-kali / hp-ck-out-*) so the two read as siblings; only the
+   xterm stage and its overlay are new. */
+.hp-kali-xref { margin-top: 10px; font-size: 12.5px; }
+.hp-pty-xlink {
+  color: var(--accent); border-bottom: 1px solid var(--accent-line); text-decoration: none;
+}
+.hp-pty-xlink:hover { border-bottom-color: var(--accent); }
+.hp-pty-size {
+  margin-left: auto; font-size: 10px; letter-spacing: 0.5px; color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.hp-pty .hp-ck-out-bar .hp-kali-clear { margin-left: 10px; }
+.hp-pty-stage { position: relative; background: #07090c; }
+/* A fixed height keeps the pty geometry stable: xterm's fit addon measures this box, and
+   a box that grows with its content would feed back into the ioctl on every redraw. */
+.hp-pty-host { height: min(68vh, 720px); padding: 10px 12px; }
+.hp-pty-host .xterm { height: 100%; }
+.hp-pty-overlay {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(7, 9, 12, 0.82); backdrop-filter: blur(2px);
+}
+.hp-pty-attach {
+  font-family: inherit; font-size: 12px; letter-spacing: 0.5px; cursor: pointer;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line);
+  padding: 10px 20px; border-radius: 6px; transition: background 0.15s ease;
+}
+.hp-pty-attach:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.hp-pty-attach:disabled { opacity: 0.45; cursor: not-allowed; }
+.hp-pty-msg { font-size: 12px; color: var(--dim); letter-spacing: 0.3px; }
+.hp-pty-detail { margin-top: 10px; font-size: 12px; color: var(--dim); }

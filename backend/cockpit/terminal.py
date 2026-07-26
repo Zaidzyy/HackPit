@@ -419,7 +419,7 @@ def read_output(tid: str, size: int = 65536) -> bytes:
     # bufsize=0 Popen hands back a raw FileIO whose .read() is already that single syscall;
     # a buffered stream would block, so prefer .read1() when the object has it.
     stream = term.proc.stdout
-    read_available = getattr(stream, "read1", stream.read)
+    read_available = stream.read1 if hasattr(stream, "read1") else stream.read
     try:
         data = read_available(size)
     except (ValueError, OSError):

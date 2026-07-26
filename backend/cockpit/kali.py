@@ -172,6 +172,13 @@ def run_kali(request: KaliRequest) -> KaliResult:
             argv,
             capture_output=True,
             text=True,
+            # The sandbox is Linux and speaks UTF-8; text=True alone would decode with the
+            # HOST locale (cp1252 on Windows), which mangles every non-ASCII byte a tool
+            # emits — box names, an em dash in a file, a UTF-8 banner — in the transcript
+            # that reports are built from. errors="replace" keeps a stray binary byte from
+            # failing a run outright.
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout_seconds,
         )
         stdout, stderr, exit_code = proc.stdout, proc.stderr, proc.returncode
@@ -409,7 +416,10 @@ def start_shell(req: KaliShellStartRequest) -> KaliShellInfo:
     try:
         proc = subprocess.Popen(
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, bufsize=1,
+            # UTF-8 explicitly, for the same reason as the one-shot runner above: the host
+            # locale would otherwise decode the sandbox's output and corrupt the audited
+            # transcript. Applies to stdin too, which only ever carries the typed command.
+            text=True, encoding="utf-8", errors="replace", bufsize=1,
         )
     except FileNotFoundError:
         raise KaliShellRefused("docker CLI not found on PATH")

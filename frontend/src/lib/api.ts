@@ -1062,6 +1062,42 @@ export const loopPropose = (
     signal
   );
 
+// --- :terminal — raw PTY into the SAME open sandbox (a second surface, not a swap) ---
+
+/** Availability of the raw-terminal surface (GET /cockpit/terminal/status).
+ *  `isolated` is always false, exactly like :kali — this is the full-reach box. */
+export type TerminalStatus = {
+  container: string;
+  shell: string;
+  isolated: boolean;
+  up: boolean;
+  ready: boolean;
+  live: number;
+  max_live: number;
+  detail: string;
+};
+
+export const getTerminalStatus = (signal?: AbortSignal) =>
+  getJSON<TerminalStatus>("/cockpit/terminal/status", signal);
+
+/**
+ * The WebSocket URL for one raw PTY session.
+ *
+ * The geometry rides on the query string so the pty is created at the browser's real size
+ * — otherwise the first full-screen app would draw at the 80x24 default and only correct
+ * itself on the first resize. Nothing else is sent: no container, no shell, no command.
+ */
+export function terminalSocketUrl(
+  cols: number,
+  rows: number,
+  sessionId?: string | null
+): string {
+  const base = API_URL.replace(/^http/, "ws");
+  const qs = new URLSearchParams({ cols: String(cols), rows: String(rows) });
+  if (sessionId) qs.set("session_id", sessionId);
+  return `${base}/cockpit/terminal/ws?${qs.toString()}`;
+}
+
 // --- :kali — human-only arbitrary shell into the isolated sandbox ---------------
 
 /** Availability of the :kali OPEN sandbox (GET /cockpit/kali/status). Note: `isolated`

@@ -25,6 +25,9 @@ export const NAV: NavItem[] = [
   { key: "attack-paths", label: ":attack-paths", href: "/attack-path" },
   { key: "cockpit", label: ":cockpit", href: "/cockpit" },
   { key: "kali", label: ":kali", href: "/kali" },
+  // A SECOND surface onto the same open sandbox, not a replacement for :kali — a real
+  // pty, so vim/top/msfconsole render. :kali keeps the clean per-command transcripts.
+  { key: "terminal", label: ":terminal", href: "/terminal" },
   { key: "engagements", label: ":engagements", href: "/engagements" },
 ];
 

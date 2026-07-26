@@ -155,6 +155,11 @@ body {
   display: flex;
   gap: 20px;
   justify-self: center;
+  /* OPTICAL centre. The nav is geometrically centred, but the wordmark cell is stretched to
+     match the search cell, leaving a big empty gap to the right of the light "hackpit_" text
+     and almost none left of the bordered search box — so dead-centre reads as right-shifted.
+     A small left nudge balances it against the heavier right side. */
+  transform: translateX(-30px);
   font-size: 12px;
   letter-spacing: 2px;
   color: var(--dim);

@@ -7496,3 +7496,115 @@ a.hp-card {
 @media (max-width: 640px) {
   .hp-ta-phases, .hp-ta-kb { margin-left: 0; }
 }
+
+/* ============================================================================ *
+ *  HTTP repeater (Phase 4 item 3) — compose / send / replay / diff
+ * ============================================================================ */
+.hp-rp { max-width: 1200px; margin: 0 auto; padding: 8px 0 80px; }
+.hp-rp-head { margin-bottom: 18px; }
+.hp-rp-title {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: clamp(28px, 4.4vw, 40px);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--white);
+  margin: 2px 0 6px;
+}
+.hp-rp-sub { color: var(--dim); max-width: 720px; line-height: 1.55; font-size: 13px; }
+.hp-rp-status {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-top: 12px; padding: 5px 11px; border-radius: 6px;
+  font-size: 11px; letter-spacing: 0.4px;
+  border: 1px solid var(--border);
+}
+.hp-rp-status .hp-rp-dot { width: 8px; height: 8px; border-radius: 50%; }
+.hp-rp-status.is-up { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+.hp-rp-status.is-up .hp-rp-dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.hp-rp-status.is-down { color: var(--dim); }
+.hp-rp-status.is-down .hp-rp-dot { background: var(--dim); }
+
+.hp-rp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+@media (max-width: 900px) { .hp-rp-grid { grid-template-columns: 1fr; } }
+
+.hp-rp-req, .hp-rp-resp {
+  border: 1px solid var(--border); border-radius: 10px; padding: 14px; background: rgba(10,12,14,0.4);
+}
+.hp-rp-line { display: flex; gap: 8px; }
+.hp-rp-method, .hp-rp-url, .hp-rp-send, .hp-rp-eng, .hp-rp-hname, .hp-rp-hval, .hp-rp-body {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12.5px;
+  background: rgba(0,0,0,0.35); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--white); padding: 8px 10px;
+}
+.hp-rp-method { flex: 0 0 auto; }
+.hp-rp-url { flex: 1 1 auto; min-width: 0; }
+.hp-rp-send {
+  flex: 0 0 auto; cursor: pointer; color: var(--accent);
+  border-color: var(--accent-line); background: var(--accent-soft);
+}
+.hp-rp-send:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.hp-rp-send:disabled { opacity: 0.5; cursor: not-allowed; }
+.hp-rp-subhead {
+  font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim);
+  margin: 14px 0 6px; display: flex; align-items: center; gap: 10px;
+}
+.hp-rp-hrow { display: flex; gap: 6px; margin-bottom: 5px; }
+.hp-rp-hname { flex: 0 0 34%; }
+.hp-rp-hval { flex: 1 1 auto; min-width: 0; }
+.hp-rp-hx, .hp-rp-addh, .hp-rp-clrdiff, .hp-rp-histact {
+  background: transparent; border: 1px solid var(--border); border-radius: 5px;
+  color: var(--dim); cursor: pointer; font-size: 11px; padding: 4px 8px;
+}
+.hp-rp-hx:hover, .hp-rp-addh:hover, .hp-rp-histact:hover { color: var(--accent); border-color: var(--accent-line); }
+.hp-rp-addh { margin-top: 2px; }
+.hp-rp-body { width: 100%; resize: vertical; box-sizing: border-box; }
+.hp-rp-opts { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 12px; }
+.hp-rp-opt { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
+.hp-rp-eng { flex: 1 1 240px; min-width: 200px; }
+.hp-rp-error {
+  margin-top: 10px; padding: 8px 10px; border-radius: 6px; font-size: 12px;
+  color: #f0776a; border: 1px solid rgba(240,119,106,0.4); background: rgba(240,119,106,0.08);
+}
+.hp-rp-empty { color: var(--dim); font-size: 13px; padding: 20px 0; text-align: center; }
+
+.hp-rp-respline { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
+.hp-rp-respcode, .hp-rp-histcode {
+  font-family: var(--font-jetbrains-mono), monospace; font-weight: 600; font-size: 13px;
+  padding: 1px 8px; border-radius: 4px; border: 1px solid var(--border);
+}
+.hp-rp-respcode.is-2xx, .hp-rp-histcode.is-2xx { color: #5ad18a; border-color: rgba(90,209,138,0.4); }
+.hp-rp-respcode.is-3xx, .hp-rp-histcode.is-3xx { color: #5aa9f0; border-color: rgba(90,169,240,0.4); }
+.hp-rp-respcode.is-4xx, .hp-rp-histcode.is-4xx { color: #e0913a; border-color: rgba(224,145,58,0.4); }
+.hp-rp-respcode.is-5xx, .hp-rp-histcode.is-5xx { color: #f0776a; border-color: rgba(240,119,106,0.4); }
+.hp-rp-respcode.is-none, .hp-rp-histcode.is-none { color: var(--dim); }
+.hp-rp-respmeta { font-size: 11px; color: var(--dim); font-family: var(--font-jetbrains-mono), monospace; }
+.hp-rp-diffbadge, .hp-rp-diff {
+  font-size: 10px; letter-spacing: 0.5px; color: var(--accent);
+  border: 1px solid var(--accent-line); background: var(--accent-soft); padding: 1px 6px; border-radius: 4px;
+}
+.hp-rp-respheaders {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 11.5px; line-height: 1.6;
+  max-height: 180px; overflow: auto; margin-bottom: 10px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 6px; background: rgba(0,0,0,0.25);
+}
+.hp-rp-rhname { color: var(--accent); }
+.hp-rp-rhval { color: var(--white); word-break: break-all; }
+.hp-rp-resppre { max-height: 420px; overflow: auto; }
+.hp-rp-diffline { background: rgba(224,145,58,0.16); display: inline-block; width: 100%; }
+
+.hp-rp-hist { margin-top: 20px; }
+.hp-rp-histlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.hp-rp-histrow {
+  display: flex; align-items: center; gap: 6px; padding: 4px 6px;
+  border: 1px solid transparent; border-radius: 6px;
+}
+.hp-rp-histrow.is-sel { border-color: var(--accent-line); background: var(--accent-soft); }
+.hp-rp-histrow.is-diff { border-color: rgba(224,145,58,0.5); }
+.hp-rp-histmain {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 10px;
+  background: transparent; border: none; cursor: pointer; text-align: left;
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12px; color: var(--white);
+}
+.hp-rp-histmethod { color: var(--dim); flex: 0 0 auto; }
+.hp-rp-histurl { color: var(--white); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hp-rp-histtime { color: var(--dim); flex: 0 0 auto; margin-left: auto; }
+.hp-rp-clrdiff { margin-left: auto; }

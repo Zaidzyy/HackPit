@@ -1194,6 +1194,75 @@ export const closeKaliShell = (sid: string, signal?: AbortSignal) =>
     signal,
   });
 
+// --- HTTP repeater — compose / send / replay / diff (see backend/cockpit/repeater.py) ---
+//
+// SAME containment as :kali (hardcoded open container, HUMAN-ONLY, audited) plus a scope
+// check :kali does not have. It sends argv-only curl from inside the sandbox — never from
+// this browser or the backend host. A human clicking Send IS the approval; there is no
+// per-send gate. An out-of-scope host (for a named engagement) comes back as 403.
+
+export type RepeaterHeader = { name: string; value: string };
+
+export type RepeaterRequest = {
+  method: string;
+  url: string;
+  headers: RepeaterHeader[];
+  body: string;
+  follow_redirects: boolean;
+  insecure: boolean;
+  http2: boolean;
+  timeout_seconds?: number | null;
+  engagement_id?: string | null;
+  session_id?: string | null;
+};
+
+export type RepeaterResponse = {
+  status: number | null;
+  http_version: string;
+  reason: string;
+  headers: RepeaterHeader[];
+  body: string;
+  body_truncated: boolean;
+  size_bytes: number;
+  time_ms: number;
+  final_url: string;
+  error: string;
+};
+
+export type RepeaterExchange = {
+  id: string;
+  run_id: string;
+  request: RepeaterRequest;
+  response: RepeaterResponse;
+  sent_at: string;
+  container: string;
+  session_id: string | null;
+};
+
+export type RepeaterStatus = {
+  container: string;
+  up: boolean;
+  ready: boolean;
+  detail: string;
+};
+
+export const getRepeaterStatus = (signal?: AbortSignal) =>
+  getJSON<RepeaterStatus>("/cockpit/repeater/status", signal);
+
+/** Send one composed request. A 403 (out of scope) or 409 (sandbox down) surfaces as an
+ *  ApiError naming the gate + reason — nothing was sent. */
+export const repeaterSend = (req: RepeaterRequest, signal?: AbortSignal) =>
+  postJSON<RepeaterExchange>("/cockpit/repeater/send", req, signal);
+
+export const getRepeaterHistory = (
+  sessionId?: string | null,
+  signal?: AbortSignal
+) =>
+  getJSON<RepeaterExchange[]>(
+    `/cockpit/repeater/history${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,
+    signal
+  );
+
 // --- AD attack-path graph (see backend/adgraph) ---------------------------------
 // Read-only graph/parse/path/technique endpoints. Every abuse command a technique
 // returns is run ONLY through execCockpitStream (the gated executor) — approve-each,

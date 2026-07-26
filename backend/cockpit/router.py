@@ -34,6 +34,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from . import allowlist, config, engagement, executor, jobs, loot, runstore
 from . import session as live_session
 from . import kali as kali_mod
+from . import repeater as repeater_mod
 from .kali import KaliRefused, KaliRequest, KaliResult, kali_status, run_kali
 from .models import (
     AllowlistItem,
@@ -280,6 +281,47 @@ def close_kali_shell(sid: str) -> kali_mod.KaliShellInfo:
         return kali_mod.close_shell(sid)
     except kali_mod.KaliShellRefused as exc:
         raise HTTPException(status_code=404, detail={"reason": str(exc)})
+
+
+# --- HTTP repeater (Phase 4 item 3 — compose / send / replay / diff) ---------------- #
+#
+# SAME containment as :kali: hardcoded open container, HUMAN-ONLY (the orchestrator/agent has
+# ZERO path to repeater_mod.send — source-scan locked, test_repeater_is_human_only), audited to
+# the run store. Two differences from :kali: it is ARGV-ONLY curl (no shell parses any request
+# field), and it SCOPE-CHECKS the URL host when the send names an active engagement (out-of-
+# scope is refused, nothing sent). Still a LOCALHOST DEV TOOL with no auth — see /kali.
+
+
+@router.get("/repeater/status")
+def get_repeater_status() -> dict[str, Any]:
+    """Availability of the repeater's (open) sandbox — drives the UI banner."""
+    return repeater_mod.status()
+
+
+@router.post("/repeater/send", response_model=repeater_mod.RepeaterExchange)
+def repeater_send(req: repeater_mod.RepeaterRequest) -> repeater_mod.RepeaterExchange:
+    """Send ONE composed HTTP request from inside the open sandbox; return the parsed exchange.
+
+    HUMAN-ONLY — a request the operator composed and sent IS the approval, so there is no
+    per-send gate prompt. 409 if the open sandbox is down; 403 if the URL host is out of scope
+    for a named active engagement (nothing is sent in either case).
+    """
+    try:
+        return repeater_mod.send(req)
+    except repeater_mod.RepeaterRefused as exc:
+        reason = str(exc)
+        # Out-of-scope is a scope refusal (403); everything else is availability (409).
+        code = 403 if "OUT OF SCOPE" in reason or "not active" in reason else 409
+        gate = "scope" if code == 403 else "unavailable"
+        raise HTTPException(status_code=code, detail={"gate": gate, "reason": reason})
+
+
+@router.get("/repeater/history", response_model=list[repeater_mod.RepeaterExchange])
+def repeater_history(
+    session_id: str | None = Query(None, description="Engagement whose send history to return."),
+) -> list[repeater_mod.RepeaterExchange]:
+    """Most-recent-first send history for a session — feeds the replay / diff panel. Read-only."""
+    return repeater_mod.history(session_id)
 
 
 # --- Live sessions (catch + drive ONE shell by hand — see cockpit/session.py) ------ #

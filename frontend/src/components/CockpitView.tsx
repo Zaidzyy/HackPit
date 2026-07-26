@@ -135,6 +135,9 @@ export function CockpitView() {
           <Link href="/cockpit/session" className="hp-cv-adlink">
             ⌁ live session — catch a shell and drive it by hand →
           </Link>
+          <Link href="/repeater" className="hp-cv-adlink">
+            ⇌ HTTP repeater — compose, send, replay and diff requests →
+          </Link>
         </header>
 
         <section className="hp-cv-map-section">

@@ -46,8 +46,38 @@ MAX_FILES = 20_000           # a tree bigger than this is refused up front, not 
 # of these, never a program itself.
 _TOOLS = ("semgrep", "bandit")
 
-# Bundled offline Semgrep ruleset (see rules/hackpit-security.yaml).
-BUNDLED_RULES = Path(__file__).parent / "rules" / "hackpit-security.yaml"
+# Bundled offline Semgrep rules directory. Every *.yaml here loads with a single
+# `--config <dir>`, so dropping a new pack in extends coverage with no code change. The
+# default scan runs the WHOLE directory (Python/JS/TS + Java/Go/PHP/Ruby/C#) — all offline.
+RULES_DIR = Path(__file__).parent / "rules"
+# The Python/JS/TS pack, kept as a named ruleset (and for back-compat with callers/tests).
+BUNDLED_RULES = RULES_DIR / "hackpit-security.yaml"
+# Named, offline rulesets the picker offers. A value not in here is passed to semgrep
+# verbatim — so a registry pack ("p/security-audit", "p/java", …) still works when the
+# operator wants the full catalogue (that form REQUIRES network; documented, not silent).
+RULESETS: dict[str, str] = {
+    "bundled": str(RULES_DIR),                                   # default — all offline packs
+    "python-js-ts": str(BUNDLED_RULES),
+    "languages": str(RULES_DIR / "hackpit-languages.yaml"),      # Java/Go/PHP/Ruby/C#
+}
+DEFAULT_RULESET = "bundled"
+
+
+def resolve_ruleset(name: str | None) -> str:
+    """Map a picker choice to a semgrep --config value. None → the bundled directory; a
+    known key → its path; anything else (e.g. 'p/security-audit') is passed through."""
+    if not name:
+        return RULESETS[DEFAULT_RULESET]
+    return RULESETS.get(name, name)
+
+
+def list_rulesets() -> list[dict[str, str]]:
+    """The offline rulesets the UI can offer, plus a note on registry packs. Read-only."""
+    return [
+        {"key": "bundled", "label": "Bundled — all languages (offline)"},
+        {"key": "python-js-ts", "label": "Python / JS / TS only (offline)"},
+        {"key": "languages", "label": "Java / Go / PHP / Ruby / C# only (offline)"},
+    ]
 
 # Directories never worth scanning — dependency and build trees dominate the runtime and the
 # findings are not the reviewer's code.
@@ -234,13 +264,15 @@ def _parse_json(tool: str, text: str) -> dict[str, Any]:
 def run_semgrep(
     path: Path, timeout_s: int = DEFAULT_TIMEOUT_S, config: str | None = None
 ) -> dict[str, Any]:
-    """Semgrep over ``path``. Defaults to the BUNDLED offline ruleset — no network, no account.
+    """Semgrep over ``path``. Defaults to the BUNDLED offline rules DIRECTORY (all packs —
+    Python/JS/TS + Java/Go/PHP/Ruby/C#) — no network, no account.
 
-    ``config`` may name a registry ruleset (e.g. ``p/security-audit``) when the operator wants
-    the full catalogue; that form DOES require network access (documented, not silent).
+    ``config`` is a picker key (``bundled`` / ``python-js-ts`` / ``languages``) or a registry
+    ruleset (e.g. ``p/security-audit``); the registry form DOES require network access
+    (documented, not silent). Resolved by :func:`resolve_ruleset`.
     """
     exe = _require("semgrep")
-    ruleset = config or str(BUNDLED_RULES)
+    ruleset = resolve_ruleset(config)
     argv = [
         exe, "--json", "--quiet",
         "--config", ruleset,

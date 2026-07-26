@@ -2070,12 +2070,16 @@ export type CodeScanTool = {
   install_hint: string;
 };
 
+export type CodeScanRuleset = { key: string; label: string };
+
 export type CodeScanTools = {
   tools: CodeScanTool[];
   /** True when at least Semgrep is available. */
   ready: boolean;
-  /** Path of the bundled offline ruleset. */
+  /** Path of the default (resolved) offline ruleset. */
   ruleset: string;
+  /** Offline rulesets the picker offers (bundled / python-js-ts / languages). */
+  rulesets?: CodeScanRuleset[];
 };
 
 export type CodeScanSeverity = "critical" | "high" | "medium" | "low" | "info";

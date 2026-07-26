@@ -51,10 +51,18 @@ class ToolStatus(BaseModel):
     install_hint: str = Field(description="Exact command to install it.")
 
 
+class RulesetOption(BaseModel):
+    key: str
+    label: str
+
+
 class ToolsOut(BaseModel):
     tools: list[ToolStatus]
     ready: bool = Field(description="True when at least Semgrep is available.")
-    ruleset: str = Field(description="Bundled offline Semgrep ruleset path.")
+    ruleset: str = Field(description="The default (resolved) Semgrep ruleset path.")
+    rulesets: list[RulesetOption] = Field(
+        default_factory=list, description="Offline rulesets the scan picker offers."
+    )
 
 
 class ScanIn(BaseModel):
@@ -65,8 +73,9 @@ class ScanIn(BaseModel):
     )
     semgrep_config: str | None = Field(
         default=None,
-        description="Optional Semgrep ruleset override (e.g. 'p/security-audit'). A registry "
-        "ruleset REQUIRES network access; the default bundled ruleset does not.",
+        description="Ruleset to run. A picker key ('bundled' = all offline languages [default], "
+        "'python-js-ts', 'languages' = Java/Go/PHP/Ruby/C#) or a registry ruleset "
+        "(e.g. 'p/security-audit'). Registry rulesets REQUIRE network; the bundled ones do not.",
     )
     use_bandit: bool = Field(
         default=True, description="Also run Bandit when the tree contains Python."
@@ -132,7 +141,8 @@ def codescan_tools() -> dict[str, Any]:
     return {
         "tools": tools,
         "ready": bool(found.get("semgrep")),
-        "ruleset": str(runner.BUNDLED_RULES),
+        "ruleset": runner.resolve_ruleset(None),
+        "rulesets": runner.list_rulesets(),
     }
 
 
@@ -160,7 +170,7 @@ def codescan_scan(req: ScanIn = Body(...)) -> dict[str, Any]:
     warnings: list[str] = []
     tools_run: list[str] = []
     all_findings: list[fmod.Finding] = []
-    ruleset = req.semgrep_config or str(runner.BUNDLED_RULES)
+    ruleset = runner.resolve_ruleset(req.semgrep_config)
 
     # --- Semgrep (required: it is the multi-language half) --------------------
     try:

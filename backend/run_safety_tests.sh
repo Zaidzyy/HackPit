@@ -95,6 +95,9 @@ echo "== :code scan tests (normalisation / malformed output / merge / KB links /
 echo "== :code scan SAFETY invariants (static-only / orthogonal / bounded / read-only) =="
 "$PY" test_codescan_safety.py
 
+echo "== :code scan bundled rules + ruleset picker (multi-language coverage / resolver) =="
+"$PY" test_codescan_rules.py
+
 echo "== tool arsenal tests (catalog / lookup / target-faithful render / provenance tags) =="
 "$PY" test_arsenal.py
 

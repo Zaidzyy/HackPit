@@ -49,6 +49,8 @@ export function CodeScanScreen() {
   const [sevFilter, setSevFilter] = useState<SevFilter>("important");
   const [catFilter, setCatFilter] = useState<string>("all");
   const [exporting, setExporting] = useState(false);
+  // Which offline ruleset to scan with (bundled = all languages, default).
+  const [ruleset, setRuleset] = useState("bundled");
 
   const missing = (tools.data?.tools ?? []).filter((t) => !t.installed);
   const semgrepMissing = !tools.data?.ready && !tools.loading && !!tools.data;
@@ -60,7 +62,7 @@ export function CodeScanScreen() {
     setError(null);
     setResult(null);
     try {
-      const data = await runCodeScan({ path: target });
+      const data = await runCodeScan({ path: target, semgrep_config: ruleset });
       setResult(data);
       setSevFilter("all");
       setCatFilter("all");
@@ -163,6 +165,22 @@ export function CodeScanScreen() {
               disabled={scanning}
             />
           </label>
+          {(tools.data?.rulesets?.length ?? 0) > 0 && (
+            <label className="hp-cs-field">
+              <span>ruleset</span>
+              <select
+                value={ruleset}
+                onChange={(e) => setRuleset(e.target.value)}
+                disabled={scanning}
+              >
+                {tools.data!.rulesets!.map((r) => (
+                  <option key={r.key} value={r.key}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <button
             type="button"
             className="hp-cs-run"

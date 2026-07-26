@@ -705,6 +705,28 @@ export type ExecPayload = {
   /** When set to an ACTIVE engagement id, run in REAL-TARGET engagement mode (Wall-A
    *  sandbox, no isolation floor) against that engagement's named target. Omit for lab. */
   engagement_id?: string | null;
+  /** How long this ONE command may run before it is killed. Omit for the 180s default;
+   *  above the 3600s ceiling it is CLAMPED, not refused. A full port sweep, a big ffuf or
+   *  a nuclei run does not finish in 180s. Not a safety control — every gate still applies. */
+  timeout_seconds?: number | null;
+  /** Run detached: returns a run_id immediately and the command keeps going server-side,
+   *  with output replayable from /cockpit/runs/{id}/stream. Gates are identical — a
+   *  backgrounded run is still individually approved BEFORE it starts. */
+  background?: boolean;
+};
+
+/** 202 response to a backgrounded POST /cockpit/exec — the run is going, detached. */
+export type ExecAccepted = {
+  run_id: string;
+  background: true;
+  command: string;
+  args: string[];
+  target: string;
+  mode: "lab" | "engagement";
+  started_at: string;
+  timeout_seconds: number;
+  workdir: string | null;
+  stream_url: string;
 };
 
 // ---- Engagement mode (REAL targets — no isolation floor; Wall-A + approve-each) ---- //
@@ -840,7 +862,16 @@ export async function execCockpitStream(
     throw new ApiError(res.status, msg);
   }
 
-  const reader = res.body.getReader();
+  await pumpExecEvents(res.body, onEvent);
+}
+
+/** Drain an SSE body, handing each parsed `data:` payload to `onEvent`. Shared by the
+ *  foreground stream and the background reattach so both parse frames identically. */
+async function pumpExecEvents(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (ev: ExecEvent) => void
+): Promise<void> {
+  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
   for (;;) {
@@ -860,6 +891,69 @@ export async function execCockpitStream(
       }
     }
   }
+}
+
+/**
+ * Start a command DETACHED and return as soon as it is running.
+ *
+ * Same gates, same approval — `background` only changes when output is read. A safety-gate
+ * failure is still a 403 with nothing run. Follow the output with `attachCockpitStream`.
+ */
+export async function execCockpitBackground(
+  payload: ExecPayload,
+  signal?: AbortSignal
+): Promise<ExecAccepted> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/cockpit/exec`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, background: true }),
+      signal,
+    });
+  } catch {
+    throw new ApiError(0, `Cannot reach the API at ${API_URL}. Is it running?`);
+  }
+  if (!res.ok) {
+    let msg = `Request failed (${res.status}).`;
+    try {
+      const body = (await res.json()) as { detail?: { gate?: string; reason?: string } | string };
+      if (body?.detail && typeof body.detail === "object") {
+        msg = `[${body.detail.gate}] ${body.detail.reason}`;
+      } else if (typeof body?.detail === "string") {
+        msg = body.detail;
+      }
+    } catch {
+      /* keep fallback */
+    }
+    throw new ApiError(res.status, msg);
+  }
+  return (await res.json()) as ExecAccepted;
+}
+
+/**
+ * Attach to a backgrounded run: replays everything it has already produced, then follows
+ * it live. Safe to call repeatedly — each attach starts from the beginning of the buffer,
+ * which is what makes reconnecting after a reload lossless. Read-only: starts nothing.
+ */
+export async function attachCockpitStream(
+  runId: string,
+  onEvent: (ev: ExecEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/cockpit/runs/${encodeURIComponent(runId)}/stream`, {
+      headers: { Accept: "text/event-stream" },
+      signal,
+    });
+  } catch {
+    throw new ApiError(0, `Cannot reach the API at ${API_URL}. Is it running?`);
+  }
+  if (!res.ok || !res.body) {
+    throw new ApiError(res.status, `Could not attach to run ${runId} (${res.status}).`);
+  }
+  await pumpExecEvents(res.body, onEvent);
 }
 
 // --- the orchestrator loop: propose the NEXT command (no execution) -------------
@@ -945,7 +1039,14 @@ export type KaliResult = {
  * it is surfaced as an ApiError naming the gate + reason, and nothing ran.
  */
 export async function runKali(
-  payload: { command: string; session_id?: string | null },
+  payload: {
+    command: string;
+    session_id?: string | null;
+    /** Seconds before the command is killed. Omit for the 180s default; clamped at 3600s.
+     *  This used to be a hardcoded 60s with no override, which made :kali useless for the
+     *  long-running work a full shell is actually for. */
+    timeout_seconds?: number | null;
+  },
   signal?: AbortSignal
 ): Promise<KaliResult> {
   let res: Response;

@@ -29,6 +29,16 @@ type Block = {
   error?: string;
 };
 
+/** Per-command time budget. This used to be a hardcoded 60s with no override at all,
+ *  which made :kali useless for the long-running work a full shell is actually for.
+ *  The backend clamps to its own 3600s ceiling, so nothing here means "unbounded". */
+const KALI_TIMEOUT_CHOICES = [
+  { label: "3 min", seconds: 180 },
+  { label: "10 min", seconds: 600 },
+  { label: "30 min", seconds: 1800 },
+  { label: "1 hour", seconds: 3600 },
+] as const;
+
 export function KaliShell() {
   const [status, setStatus] = useState<KaliStatus | null>(null);
   const [command, setCommand] = useState("");
@@ -36,6 +46,8 @@ export function KaliShell() {
   const [running, setRunning] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
   const [histIdx, setHistIdx] = useState<number | null>(null);
+  // Index into KALI_TIMEOUT_CHOICES — how long the next command may run.
+  const [timeoutIdx, setTimeoutIdx] = useState(0);
 
   const idRef = useRef(0);
   const ctrlRef = useRef<AbortController | null>(null);
@@ -78,7 +90,7 @@ export function KaliShell() {
     const ctrl = new AbortController();
     ctrlRef.current = ctrl;
 
-    runKali({ command: cmd }, ctrl.signal)
+    runKali({ command: cmd, timeout_seconds: KALI_TIMEOUT_CHOICES[timeoutIdx].seconds }, ctrl.signal)
       .then((result) => {
         if (ctrl.signal.aborted) return;
         setBlocks((prev) =>
@@ -100,7 +112,7 @@ export function KaliShell() {
         refreshStatus();
         inputRef.current?.focus();
       });
-  }, [command, running, refreshStatus]);
+  }, [command, running, refreshStatus, timeoutIdx]);
 
   // Up/Down walk the command history (a terminal affordance).
   const onKeyDown = useCallback(
@@ -276,6 +288,25 @@ export function KaliShell() {
                 ▋
               </span>
             )}
+          </div>
+
+          {/* Time budget. Nothing about containment changes with it: the container is
+              still hardcoded server-side and every command is still recorded. */}
+          <div className="hp-ck-budget">
+            <span className="hp-ck-budget-label">time budget</span>
+            <div className="hp-ck-budget-opts">
+              {KALI_TIMEOUT_CHOICES.map((choice, i) => (
+                <button
+                  key={choice.seconds}
+                  type="button"
+                  className={`hp-ck-budget-opt${i === timeoutIdx ? " hp-on" : ""}`}
+                  onClick={() => setTimeoutIdx(i)}
+                  disabled={running}
+                >
+                  {choice.label}
+                </button>
+              ))}
+            </div>
           </div>
         </section>
 

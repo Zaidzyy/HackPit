@@ -4079,6 +4079,53 @@ a.hp-card {
 .hp-ck-args input {
   width: 100%;
 }
+/* Per-run time budget + detach. Deliberately quieter than the approve control: these
+   change how long a command gets, never whether it is allowed to run. */
+.hp-ck-budget {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 14px 0 10px;
+}
+.hp-ck-budget-label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--white) 42%, transparent);
+}
+.hp-ck-budget-opts { display: flex; gap: 6px; flex-wrap: wrap; }
+.hp-ck-budget-opt {
+  padding: 5px 11px;
+  border: 1px solid color-mix(in srgb, var(--white) 14%, transparent);
+  background: transparent;
+  color: color-mix(in srgb, var(--white) 62%, transparent);
+  border-radius: 7px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.hp-ck-budget-opt:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--white) 28%, transparent);
+  color: var(--white);
+}
+.hp-ck-budget-opt.hp-on {
+  border-color: color-mix(in srgb, var(--accent, #7fd1c1) 55%, transparent);
+  background: color-mix(in srgb, var(--accent, #7fd1c1) 12%, transparent);
+  color: var(--white);
+}
+.hp-ck-budget-opt:disabled { opacity: 0.45; cursor: not-allowed; }
+.hp-ck-detach {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--white) 62%, transparent);
+  cursor: pointer;
+}
+.hp-ck-detach input { cursor: pointer; }
+.hp-ck-detach:hover { color: var(--white); }
+
 .hp-ck-run {
   display: flex;
   align-items: center;

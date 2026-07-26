@@ -5,6 +5,8 @@ import { PageShell } from "./PageShell";
 import { CockpitEngagement } from "./CockpitEngagement";
 import {
   ApiError,
+  attachCockpitStream,
+  execCockpitBackground,
   execCockpitStream,
   getCockpitAllowlist,
   getCockpitStatus,
@@ -12,6 +14,22 @@ import {
   type CockpitStatus,
   type ExecEvent,
 } from "@/lib/api";
+
+/** Per-run time budget. The old flat 180s could not finish the arsenal's own first
+ *  template (`nmap -p- --min-rate 2000`), let alone a full nuclei run. The backend clamps
+ *  to its own 3600s ceiling, so nothing here can mean "unbounded". */
+const TIMEOUT_CHOICES = [
+  { label: "3 min", seconds: 180 },
+  { label: "10 min", seconds: 600 },
+  { label: "30 min", seconds: 1800 },
+  { label: "1 hour", seconds: 3600 },
+] as const;
+
+function fmtDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.round(seconds / 60);
+  return m < 60 ? `${m} min` : `${Math.round(m / 60)} h`;
+}
 
 /** Sensible starting args per command (recon-only, lab-target only). The user can
  *  edit these before approving. `-sT -Pn` keeps nmap unprivileged (the sandbox
@@ -41,6 +59,11 @@ export function CockpitScreen({
   const [lines, setLines] = useState<Line[]>([]);
   const [running, setRunning] = useState(false);
   const [exitCode, setExitCode] = useState<number | null>(null);
+  // Index into TIMEOUT_CHOICES — how long THIS command may run.
+  const [timeoutIdx, setTimeoutIdx] = useState(0);
+  // Detached: the run survives leaving this page and can be reattached by run_id.
+  const [detached, setDetached] = useState(false);
+  const [backgroundRunId, setBackgroundRunId] = useState<string | null>(null);
 
   // Bumped after each recorded run so the engagement panel re-pulls its runs.
   const [engToken, setEngToken] = useState(0);
@@ -103,9 +126,11 @@ export function CockpitScreen({
 
     const push = (line: Line) => setLines((prev) => [...prev, line]);
 
-    execCockpitStream(
-      { command, args, approved: true, session_id: sessionId },
-      (ev: ExecEvent) => {
+    // The per-run timeout the operator chose. The backend clamps to its own ceiling, so a
+    // silly value here can never mean "no timeout"; the executor's watchdog still bounds it.
+    const timeoutSeconds = TIMEOUT_CHOICES[timeoutIdx].seconds;
+
+    const onEvent = (ev: ExecEvent) => {
         switch (ev.type) {
           case "start":
             push({ kind: "meta", text: `▶ run ${ev.run_id} → ${ev.target}` });
@@ -127,24 +152,52 @@ export function CockpitScreen({
             push({ kind: "meta", text: `■ exit ${ev.code}` });
             break;
         }
-      },
-      ctrl.signal
-    )
-      .catch((err: unknown) => {
-        if (ctrl.signal.aborted) return;
-        push({
-          kind: "err",
-          text: err instanceof ApiError ? err.message : "Execution failed.",
-        });
-      })
-      .finally(() => {
-        if (ctrl.signal.aborted) return;
-        setRunning(false);
-        // The run is now persisted against the engagement — nudge the panel to
-        // re-pull the recorded runs.
-        setEngToken((t) => t + 1);
+    };
+
+    const finish = () => {
+      if (ctrl.signal.aborted) return;
+      setRunning(false);
+      // The run is now persisted against the engagement — nudge the panel to
+      // re-pull the recorded runs.
+      setEngToken((t) => t + 1);
+    };
+    const fail = (err: unknown) => {
+      if (ctrl.signal.aborted) return;
+      push({
+        kind: "err",
+        text: err instanceof ApiError ? err.message : "Execution failed.",
       });
-  }, [running, ready, args, command, preview, sessionId]);
+    };
+
+    const payload = {
+      command,
+      args,
+      approved: true,
+      session_id: sessionId,
+      timeout_seconds: timeoutSeconds,
+    };
+
+    if (detached) {
+      // DETACHED: the command outlives this request. We get a run_id back immediately and
+      // then attach to the replayable stream, so closing the tab or reloading loses
+      // nothing — reattaching replays the whole transcript. Approval is unchanged: the
+      // gates ran before this returned, and a refusal is still a 403 with nothing run.
+      execCockpitBackground(payload, ctrl.signal)
+        .then((acc) => {
+          setBackgroundRunId(acc.run_id);
+          push({
+            kind: "meta",
+            text: `▷ detached as ${acc.run_id} — up to ${fmtDuration(acc.timeout_seconds)}; safe to leave this page`,
+          });
+          return attachCockpitStream(acc.run_id, onEvent, ctrl.signal);
+        })
+        .catch(fail)
+        .finally(finish);
+      return;
+    }
+
+    execCockpitStream(payload, onEvent, ctrl.signal).catch(fail).finally(finish);
+  }, [running, ready, args, command, preview, sessionId, timeoutIdx, detached]);
 
   const inner = (
       <div className="hp-ck">
@@ -211,6 +264,35 @@ export function CockpitScreen({
             />
           </label>
 
+          {/* Time budget + detach. Neither changes what is ALLOWED to run — approval is
+              still per command and every gate fires exactly as before. They change only how
+              long the command gets and whether its output survives leaving this page. */}
+          <div className="hp-ck-budget">
+            <span className="hp-ck-budget-label">time budget</span>
+            <div className="hp-ck-budget-opts">
+              {TIMEOUT_CHOICES.map((choice, i) => (
+                <button
+                  key={choice.seconds}
+                  type="button"
+                  className={`hp-ck-budget-opt${i === timeoutIdx ? " hp-on" : ""}`}
+                  onClick={() => setTimeoutIdx(i)}
+                  disabled={running}
+                >
+                  {choice.label}
+                </button>
+              ))}
+            </div>
+            <label className="hp-ck-detach" title="Run detached: the command keeps going server-side and its output can be replayed by run id, so reloading or leaving this page loses nothing.">
+              <input
+                type="checkbox"
+                checked={detached}
+                onChange={(e) => setDetached(e.target.checked)}
+                disabled={running}
+              />
+              <span>run detached</span>
+            </label>
+          </div>
+
           <div className="hp-ck-run">
             <code className="hp-ck-preview">{preview}</code>
             <button
@@ -225,6 +307,12 @@ export function CockpitScreen({
               {running ? "running…" : "APPROVE & RUN"}
             </button>
           </div>
+          {backgroundRunId && (
+            <p className="hp-ck-note">
+              Detached run <code>{backgroundRunId}</code> — its output replays from the start
+              every time you reattach, so a reload loses nothing.
+            </p>
+          )}
           <p className="hp-ck-note">
             Any command may run, but only against <b>{allow?.lab_target ?? "the lab"}</b>{" "}
             in the isolated sandbox. Approval is per command — there is no autonomous mode —

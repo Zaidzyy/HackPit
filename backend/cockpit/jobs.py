@@ -29,6 +29,7 @@ no stdin here at all.
 
 from __future__ import annotations
 
+import atexit
 import threading
 import time
 from dataclasses import dataclass, field
@@ -58,6 +59,11 @@ class Job:
 
 _JOBS: dict[str, Job] = {}
 _LOCK = threading.Lock()
+_reaper: threading.Thread | None = None
+
+# How often the reaper wakes. Matches cockpit/session.py's reaper cadence so the two
+# background sweeps behave the same way.
+_REAP_INTERVAL_SECONDS = 30
 
 
 def _reap_locked(now: float) -> None:
@@ -78,6 +84,45 @@ def _reap_locked(now: float) -> None:
         del _JOBS[rid]
 
 
+def _ensure_reaper() -> None:
+    """Start the retention reaper once, lazily.
+
+    Without this, reaping only happened when a NEW job started — so a finished job's
+    buffer (up to JOB_OUTPUT_CAP per stream) was held until the next run began rather
+    than for JOB_RETENTION_SECONDS as the setting says. On a box where you fire one long
+    scan and then walk away, "until the next job" is indefinite.
+
+    Lazy rather than started at import so a process that never runs a job never spawns a
+    thread. Mirrors cockpit/session.py's reaper, including its 30s cadence.
+    """
+    global _reaper
+    with _LOCK:
+        if _reaper is not None and _reaper.is_alive():
+            return
+        t = threading.Thread(target=_reaper_loop, daemon=True, name="hackpit-job-reaper")
+        _reaper = t
+    t.start()
+
+
+def _reaper_loop() -> None:  # pragma: no cover - background timing
+    while True:
+        time.sleep(_REAP_INTERVAL_SECONDS)
+        try:
+            with _LOCK:
+                _reap_locked(time.time())
+        except Exception:
+            pass
+
+
+def reap_now() -> int:
+    """Reap on demand and return how many buffers were dropped. Used by the tests, which
+    must not wait 30s to prove retention works."""
+    with _LOCK:
+        before = len(_JOBS)
+        _reap_locked(time.time())
+        return before - len(_JOBS)
+
+
 # --------------------------------------------------------------------------- #
 # starting
 # --------------------------------------------------------------------------- #
@@ -92,6 +137,7 @@ def start(run_id: str, stream: Iterator[dict[str, Any]]) -> Job:
     with _LOCK:
         _reap_locked(time.time())
         _JOBS[run_id] = job
+    _ensure_reaper()
 
     def _drain() -> None:
         try:
@@ -196,3 +242,22 @@ def reset() -> None:
     """Drop all job state. Tests only — never called by the app."""
     with _LOCK:
         _JOBS.clear()
+
+
+def shutdown_all() -> None:
+    """Drop every buffer on backend stop. The durable RunRecords are already in SQLite;
+    this only releases the in-memory replay buffers.
+
+    NOTE: this does NOT kill the underlying processes — a job's exec client is already
+    detached and the executor's own watchdog still bounds it. Clearing buffers on a
+    process that is shutting down anyway is only tidiness.
+
+    (This module is deliberately kept free of any container-runtime vocabulary: a safety
+    test asserts jobs.py never names one, because a job registry that could spawn its own
+    process would sit outside the gates entirely.)
+    """
+    with _LOCK:
+        _JOBS.clear()
+
+
+atexit.register(shutdown_all)

@@ -153,6 +153,58 @@ def test_job_buffer_is_capped_but_lifecycle_still_arrives() -> None:
     print("  job buffer capped; start/exit still delivered through truncation: PASS")
 
 
+def test_finished_jobs_are_reaped_on_a_timer_not_only_on_the_next_start() -> None:
+    """Retention must mean elapsed time, not "until someone runs another command".
+
+    The reaper originally ran ONLY inside start(), so a finished job's buffer was held
+    until the next run began — which, on a box where you fire one long scan and walk away,
+    is indefinite. reap_now() is the same sweep the background thread performs.
+    """
+    jobs.reset()
+
+    def _events():
+        yield {"type": "start", "run_id": "job3"}
+        yield {"type": "exit", "run_id": "job3", "code": 0}
+
+    jobs.start("job3", _events())
+    for _ in range(300):
+        if jobs.get("job3") and jobs.get("job3").done:
+            break
+        time.sleep(0.01)
+
+    assert jobs.reap_now() == 0, "a just-finished job is inside the retention window"
+    assert jobs.get("job3") is not None
+
+    jobs.get("job3").finished_at = time.time() - config.JOB_RETENTION_SECONDS - 1
+    assert jobs.reap_now() == 1, "a job past its retention window must be dropped"
+    assert jobs.get("job3") is None, "the buffer must actually be released"
+
+    src = (Path(__file__).parent / "cockpit" / "jobs.py").read_text(encoding="utf-8")
+    assert "_ensure_reaper" in src and "_reaper_loop" in src, (
+        "retention must be swept by a timer, not only when a new job starts"
+    )
+    print("  finished jobs reaped on elapsed time, not on the next start: PASS")
+
+
+def test_a_running_job_is_never_reaped() -> None:
+    """Retention applies to FINISHED jobs. Reaping a live one would strand its follower."""
+    jobs.reset()
+    started = {"go": True}
+
+    def _events():
+        yield {"type": "start", "run_id": "job4"}
+        while started["go"]:
+            time.sleep(0.01)
+        yield {"type": "exit", "run_id": "job4", "code": 0}
+
+    jobs.start("job4", _events())
+    time.sleep(0.1)
+    assert jobs.reap_now() == 0, "a running job must never be reaped"
+    assert jobs.get("job4") is not None
+    started["go"] = False
+    print("  a still-running job is never reaped: PASS")
+
+
 def test_backgrounding_is_not_an_approval_bypass() -> None:
     """`background` must be a transport choice and nothing more."""
     from cockpit import executor as E
@@ -229,6 +281,29 @@ def test_orchestrator_prompt_names_no_specific_tools() -> None:
     print("  orchestrator prompt no longer hardcodes a tool list: PASS")
 
 
+def test_the_ui_can_actually_reach_the_new_run_controls() -> None:
+    """A backend capability the UI cannot send is not a delivered feature.
+
+    The first cut of this work shipped `timeout_seconds` and `background` on the API while
+    the frontend payload types carried neither — so from the app every command was still
+    capped at 180s and nothing could be detached. This guards the wiring, not the styling.
+    """
+    fe = Path(__file__).parent.parent / "frontend" / "src"
+    api = (fe / "lib" / "api.ts").read_text(encoding="utf-8")
+    for field in ("timeout_seconds", "background"):
+        assert field in api, f"the frontend API layer must be able to send {field}"
+    for fn in ("execCockpitBackground", "attachCockpitStream"):
+        assert fn in api, f"the frontend needs {fn} to drive a detached run"
+
+    cockpit = (fe / "components" / "CockpitScreen.tsx").read_text(encoding="utf-8")
+    assert "timeout_seconds" in cockpit, "the cockpit must send a per-run timeout"
+    assert "execCockpitBackground" in cockpit, "the cockpit must offer a detached run"
+
+    kali = (fe / "components" / "KaliShell.tsx").read_text(encoding="utf-8")
+    assert "timeout_seconds" in kali, ":kali must send a per-command timeout (was a hard 60s)"
+    print("  the cockpit and :kali UIs can send timeout + detach: PASS")
+
+
 if __name__ == "__main__":
     test_timeout_is_clamped_never_unbounded()
     test_timeout_is_not_a_gate_bypass()
@@ -238,7 +313,10 @@ if __name__ == "__main__":
     test_background_job_replays_then_follows()
     test_unknown_job_reads_as_an_error_event_not_an_exception()
     test_job_buffer_is_capped_but_lifecycle_still_arrives()
+    test_finished_jobs_are_reaped_on_a_timer_not_only_on_the_next_start()
+    test_a_running_job_is_never_reaped()
     test_backgrounding_is_not_an_approval_bypass()
+    test_the_ui_can_actually_reach_the_new_run_controls()
     test_unknown_availability_filters_nothing()
     test_windows_only_tools_are_excluded_from_the_prompt()
     test_prompt_block_is_unchanged_without_a_filter()

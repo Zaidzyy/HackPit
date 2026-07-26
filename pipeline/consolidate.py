@@ -82,6 +82,8 @@ SOURCE_LABELS = {
     "decepticon": "Decepticon",
     "writeups": "your writeups",
     "htb-writeups": "htb-writeups",
+    "portswigger": "PortSwigger Academy",
+    "hacktricks-cloud": "HackTricks Cloud",
 }
 
 # Full attribution for sources whose chip label is a short alias — surfaced as a
@@ -195,6 +197,36 @@ CANON: dict[str, list[list[str]]] = {
     "drupal": [["drupal"]],
     "joomla": [["joomla"]],
     "tomcat": [["tomcat"]],
+    # --- web classes the PortSwigger Academy batch adds (assessment finding 5) ---
+    # Without these the Academy's topic pages would land as new entries beside the
+    # HackTricks/PATT pages on the same class instead of consolidating into them.
+    "prototype-pollution": [["prototype", "pollution"]],
+    "path-traversal": [["path", "traversal"], ["directory", "traversal"]],
+    "host-header-injection": [["host", "header"], ["host", "header", "injection"]],
+    "websockets": [["websockets"], ["websocket"], ["web", "sockets"]],
+    "information-disclosure": [["information", "disclosure"]],
+    "api-testing": [["api", "testing"], ["rest", "api"], ["api", "recon"]],
+    "prompt-injection": [["prompt", "injection"], ["llm", "attacks"], ["llm", "prompt"]],
+    "dom-based": [["dom", "based"], ["dom", "xss"], ["dom", "based", "vulnerabilities"]],
+    # --- cloud / CI-CD classes the HackTricks-Cloud batch adds (finding 3) ---
+    # `cloud` had TWO entries before this; these are what make the new pages
+    # retrievable as techniques rather than as a heap of provider documentation.
+    "aws-privesc": [["aws", "privesc"], ["aws", "privilege", "escalation"]],
+    "azure-privesc": [["azure", "privesc"], ["azure", "privilege", "escalation"]],
+    "gcp-privesc": [["gcp", "privesc"], ["gcp", "privilege", "escalation"]],
+    "container-escape": [["container", "escape"], ["docker", "escape"],
+                         ["container", "breakout"]],
+    "s3-buckets": [["s3", "buckets"], ["bucket", "enumeration"]],
+    "iam-abuse": [["iam", "abuse"], ["iam", "privesc"], ["assume", "role"],
+                  ["passrole"]],
+    "instance-metadata": [["instance", "metadata"], ["imds"], ["metadata", "service"]],
+    # DELIBERATELY ABSENT — "kubernetes", "ci-cd", "supply-chain", "cloud-enumeration",
+    # "cloud-persistence". Those name a PLATFORM, not a technique, and CANON is the
+    # authority that decides what consolidates. Adding them collapsed 44 distinct
+    # CI/CD pages (Jenkins RCE, GH Actions cache poisoning, Okta, Cloudflare, Gitea…)
+    # into ONE candidate on the first dry run, and every "Kubernetes X" page into
+    # another — exactly the lossy consolidation §4.2 warns about. A class here must be
+    # something two sources could write the SAME page about.
 }
 
 # --------------------------------------------------------------------------- #
@@ -944,9 +976,30 @@ def parse_htb(path: Path, root: Path) -> Entry | None:
 
 def discover_htb(root: Path, failures: list | None = None,
                  flagged: list | None = None) -> list[Entry]:
-    """One candidate per HTB module README; skip empty/unreadable (recorded)."""
+    """One candidate per HTB module page; skip empty/unreadable (recorded).
+
+    Two fixes over the naive version, both found by auditing what this slice actually
+    contains against what got ingested:
+
+    * `_all_md` instead of `rglob` — the union with `git ls-files`. `File_Inclusion/
+      README.md` is tracked in git and 4.5 KB of real LFI module content, but it is GONE
+      from disk (the OneDrive-dehydration / Defender-quarantine pattern this repo has hit
+      before — and this module's content is full of web-shell examples, which is exactly
+      what trips the signature). rglob cannot see it; `_safe_read` git-recovers it.
+    * `.txt` as well as README.md — assessment §4.1's headline finding was that the
+      pipeline only reads `*.md`. In this slice that silently cost `File_Upload_Attacks/
+      1.txt`, 8 KB of module answers and webshell walkthroughs whose only sin is its
+      extension. It is markdown in all but name (`# ` headings and fenced examples).
+
+    This is a LOCAL SLICE of HTB Academy, not the syllabus: 18 module pages out of a
+    multi-hundred-module course. HTB Academy content is proprietary and is not scraped;
+    what is here is what Zaid saved while taking it, ingested as a hard-capped tier-3
+    digest. The "CPTS syllabus is essentially not ingested" gap is therefore narrowed,
+    not closed, and closing it properly would need the course itself.
+    """
     out: list[Entry] = []
-    for p in sorted(root.rglob("README.md")):
+    pages = _all_md(root, "README.md") + _all_md(root, "*.txt")
+    for p in sorted(set(pages)):
         e = parse_htb(p, root)
         if e is None:
             if failures is not None:
@@ -2451,6 +2504,243 @@ def discover_htbwriteups(root: Path, failures: list | None = None,
     return _disambiguate_titles(out)
 
 
+# =========================================================================== #
+#  SOURCE 15 — PortSwigger Web Security Academy (topics + every lab)
+# =========================================================================== #
+# Fetched to disk first by pipeline/fetch_portswigger.py, so by the time it gets
+# here it is an ordinary tree of markdown and nothing downstream is special-cased.
+# Every file carries YAML front-matter (title / url / kind / topic) written by the
+# fetcher, which is why this has its own parser rather than reusing
+# `_parse_oscp_file`: that helper reads the file itself and would take the
+# front-matter's `title:` line as the entry's summary.
+#
+# Tier 3 REFERENCE, attributed, with the source URL on every entry — the same
+# footing HackTricks is on. It is not Zaid's material and never presented as such.
+#
+# The Academy's first path segment IS its taxonomy ("access-control", "ssrf",
+# "request-smuggling"), so it maps straight onto a category, and a lab is filed
+# under the technique it drills rather than as a category of its own.
+PORTSWIGGER_CATEGORY = {
+    "access-control": "web", "api-testing": "web", "authentication": "web",
+    "business-logic": "web", "clickjacking": "web", "cors": "web", "csrf": "web",
+    "cross-site-scripting": "web", "dom-based": "web", "essential-skills": "methodology",
+    "file-upload": "web", "file-path-traversal": "web", "graphql": "web",
+    "host-header": "web", "information-disclosure": "web", "insecure-deserialization": "web",
+    "jwt": "web", "llm-attacks": "ai", "nosql-injection": "web", "oauth": "web",
+    "os-command-injection": "web", "prototype-pollution": "web", "race-conditions": "web",
+    "request-smuggling": "web", "server-side-template-injection": "web",
+    "sql-injection": "web", "ssrf": "web", "web-cache-deception": "web",
+    "web-cache-poisoning": "web", "websockets": "web", "xxe": "web",
+    "getting-started": "methodology",
+}
+
+
+def parse_portswigger(path: Path, root: Path) -> Entry | None:
+    """Adapt one Academy page into a canonical Entry (None for an unreadable/empty page)."""
+    raw_text = _safe_read(path)
+    if raw_text is None or not raw_text.strip():
+        return None
+    fm, body_src = _frontmatter(raw_text)
+    body_src, _n = _strip_gitbook(body_src)
+    lines = body_src.splitlines()
+
+    title = (fm.get("title") or "").strip()
+    if not title:
+        for line in lines:
+            if line.startswith("# "):
+                title = line[2:].strip()
+                break
+    title = title or humanize(path.stem)
+
+    summary = ""
+    for para in body_src.split("\n\n"):
+        p = " ".join(para.split())
+        if p and not p.startswith(("#", ">", "```", "|", "*", "-", "!")):
+            summary = p[:300].rstrip()
+            break
+
+    steps: list[Step] = []
+    for sec in _walk_sections(lines):
+        if sec["heading"].strip().lower() in _SKIP_HEADINGS:
+            continue
+        blocks = [Code(lang=(lg or "text"), cmd=cd[:MAX_CODE_CHARS]) for lg, cd in sec["code"]]
+        for ln in sec["raw"]:
+            m = _INLINE_CMD_RE.match(ln)
+            if m and (cmd := _PROMPT_RE.sub("", m.group(1).strip())):
+                blocks.append(Code(lang="bash", cmd=cmd[:MAX_CODE_CHARS]))
+        blocks = blocks[:MAX_CODE_PER_SECTION]
+        prose = " ".join(sec["prose"]).strip()
+        text = f"{sec['heading']} — {prose}"[:600] if prose else sec["heading"]
+        if blocks or (sec["heading"] and prose):
+            steps.append(Step(n=len(steps) + 1, text=text.strip(), code=blocks))
+        if len(steps) >= MAX_STEPS_NEW:
+            break
+
+    if not steps and len(summary) < 40:
+        return None  # nav/stub page
+
+    topic = (fm.get("topic") or path.relative_to(root).parts[0]).strip()
+    kind = (fm.get("kind") or "topic").strip()
+    url = (fm.get("url") or "").strip()
+    category = PORTSWIGGER_CATEGORY.get(topic, "web")
+    # A lab's canonical keys come from its TOPIC as well as its own title: "Lab: user ID
+    # controlled by request parameter" names no technique on its own, but it drills IDOR.
+    keys = sorted(canonical_keys(f"{title} {topic}"))
+    base = path.stem
+    return Entry(
+        id="psw-" + slugify(f"{topic}-{base}"), title=title, category=category,
+        source="portswigger", tier=3,
+        tags=_dedup([category, kind, slugify(topic)] + keys + [slugify(title)]),
+        tools=_oscp_tools(body_src), summary=summary or title, steps=steps,
+        body_md=_adapted_body(title, summary, steps),
+        references=_dedup(([url] if url else []) + _section_urls(lines)),
+        meta={"src_file": path.relative_to(root).as_posix(), "kind": "reference",
+              "source_label": SOURCE_LABELS["portswigger"], "canonical_keys": keys,
+              "portswigger_kind": kind, "portswigger_topic": topic,
+              "source_url": url, "also_covered_in": ["portswigger"]},
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def discover_portswigger(root: Path, failures: list | None = None,
+                         flagged: list | None = None) -> list[Entry]:
+    """Every fetched Academy page. Only the ROOT page of a topic may consolidate.
+
+    Two things stay standalone, both for the same reason — merging would bury the thing
+    that makes them worth having:
+
+    * LABS. A lab is a worked exercise, not a technique write-up (the same reason
+      `no_merge` exists for whole-box writeups). Folding "Lab: blind SSRF with out-of-band
+      detection" into the SSRF entry loses the named, reproducible exercise and pollutes
+      the technique with lab scaffolding.
+    * SUB-TOPIC pages — anything below the topic root, which the Academy expresses as URL
+      depth (`/web-security/cross-site-scripting` is the root; `/reflected`, `/stored`,
+      `/dom-based`, `/contexts`, `/content-security-policy` are its sub-topics). The first
+      dry run merged TEN of those into one pre-existing grab-bag note called "xss
+      resource", so "Reflected XSS" stopped being retrievable as itself. The root page
+      still consolidates, which is where consolidation actually earns its keep: one
+      authoritative entry per class, with the depth kept alongside it.
+    """
+    out: list[Entry] = []
+    for p in sorted(_all_md(root)):
+        text = _safe_read(p)
+        if text is None:
+            if failures is not None:
+                failures.append(p.relative_to(root).as_posix())
+            continue
+        e = parse_portswigger(p, root)
+        if e is None:
+            if flagged is not None:
+                flagged.append({"file": p.relative_to(root).as_posix(),
+                                "reason": "nav/index stub or empty — skipped"})
+            continue
+        depth = len(p.relative_to(root).parts)
+        if e.meta.get("portswigger_kind") == "lab" or depth > 1:
+            e.meta["no_merge"] = True
+        out.append(e)
+    return _disambiguate_titles(out)
+
+
+# =========================================================================== #
+#  SOURCE 16 — HackTricks Cloud (the public GitBook repo)
+# =========================================================================== #
+# The sibling of the HackTricks book already ingested (SOURCE 7): same GitBook
+# layout, same `_parse_oscp_file` adapter, same tier-3 reference footing — so it
+# reuses that machinery wholesale and only the taxonomy differs. It is the batch
+# that fills the assessment's emptiest category: cloud had 2 entries.
+#
+# Content lives under `src/`, split into `pentesting-cloud/` (AWS/Azure/GCP/k8s/
+# workspace) and `pentesting-ci-cd/` (GitHub Actions, Jenkins, supply chain).
+# Everything else in the repo is book scaffolding (theme, banners, images, the
+# preprocessor) and is skipped, recorded.
+HTCLOUD_CATEGORY = {
+    "pentesting-cloud": "cloud",
+    "pentesting-ci-cd": "supply-chain",
+}
+# The provider/platform is the SECOND path segment and is the useful grouping token
+# ("aws-security", "gcp-security", "kubernetes-security"), so it becomes a tag.
+_HTCLOUD_SKIP_DIRS = {"images", "files", "pdfs", "banners", "theme", "scripts", ".github"}
+
+
+def parse_htcloud(path: Path, root: Path) -> Entry | None:
+    """Adapt one HackTricks-Cloud page. Same shape as parse_hacktricks by design."""
+    pf = _parse_oscp_file(path, root)
+    if pf is None:
+        return None
+    steps = pf["steps"][:MAX_STEPS_NEW]
+    summary = pf["summary"]
+    if not steps and len(summary) < 40:
+        return None  # nav/index page
+
+    rel = path.relative_to(root)
+    parts = rel.parts
+    # Paths are `src/<tree>/<platform>/...`; drop the `src/` wrapper before reading them.
+    trimmed = parts[1:] if parts and parts[0] == "src" else parts
+    tree = trimmed[0] if trimmed else ""
+    platform = trimmed[1] if len(trimmed) > 1 else ""
+    category = HTCLOUD_CATEGORY.get(tree, "cloud")
+
+    stem = path.stem
+    base = path.parent.name if stem.lower() == "readme" else stem
+    title = (pf["title"] or "").lstrip("#").strip() or humanize(base)
+    keys = sorted(canonical_keys(f"{title} {platform}"))
+    plat_tag = slugify(platform) if platform and not platform.endswith(".md") else ""
+    return Entry(
+        id="htc-" + slugify(f"{platform}-{base}" if platform else base),
+        title=title, category=category, source="hacktricks-cloud", tier=3,
+        tags=_dedup([category] + ([plat_tag] if plat_tag else []) + keys + [slugify(title)]),
+        tools=pf["tools"], summary=summary or title, steps=steps,
+        body_md=_adapted_body(title, summary, steps),
+        references=_dedup(pf["refs"]),
+        meta={"src_file": rel.as_posix(), "kind": "reference",
+              "source_label": SOURCE_LABELS["hacktricks-cloud"], "canonical_keys": keys,
+              "cloud_platform": platform, "also_covered_in": ["hacktricks-cloud"]},
+        schema_version=SCHEMA_VERSION,
+    )
+
+
+def discover_htcloud(root: Path, failures: list | None = None,
+                     flagged: list | None = None) -> list[Entry]:
+    """Every content page under src/, skipping SUMMARY + asset/scaffolding dirs."""
+    out: list[Entry] = []
+    for p in sorted(_all_md(root)):
+        rel = p.relative_to(root)
+        rel_parts = set(rel.parts)
+        # ONLY the book's content tree. Everything outside `src/` is repository
+        # machinery — README.md, AGENTS.md ("Guidance for future agents working in this
+        # repository"), .github templates — and the first real run put AGENTS.md in the
+        # cloud category as a KB entry, which is how this rule got written.
+        if not rel.parts or rel.parts[0] != "src":
+            if flagged is not None:
+                flagged.append({"file": rel.as_posix(),
+                                "reason": "outside src/ — repository machinery, skipped"})
+            continue
+        if rel_parts & _HTCLOUD_SKIP_DIRS or p.name.lower() == "summary.md":
+            if flagged is not None:
+                flagged.append({"file": p.relative_to(root).as_posix(),
+                                "reason": "book scaffolding / asset dir — skipped"})
+            continue
+        text = _safe_read(p)
+        if text is None:
+            if failures is not None:
+                failures.append(p.relative_to(root).as_posix())
+            continue
+        e = parse_htcloud(p, root)
+        if e is None:
+            if flagged is not None:
+                flagged.append({"file": p.relative_to(root).as_posix(),
+                                "reason": "nav/index stub or empty — skipped"})
+            continue
+        out.append(e)
+    # NOT class-grouped, unlike the HackTricks book. Grouping folds same-class pages into
+    # one candidate, which is right when a source splits one technique across files — but
+    # here "Jenkins RCE via Groovy" and "GH Actions cache poisoning" are different attacks
+    # that merely share a platform. The first dry run collapsed 44 of them into a single
+    # entry. Each page stays its own candidate; consolidation still happens per page
+    # against the existing KB.
+    return _disambiguate_titles(out)
+
+
 # --------------------------------------------------------------------------- #
 # source registry
 # --------------------------------------------------------------------------- #
@@ -2532,6 +2822,16 @@ SPECS: dict[str, SourceSpec] = {
         "htb-writeups", SOURCE_LABELS["htb-writeups"],
         _src("Downloads", "hacks", "more new resources", "htb-writeups"),
         discover_htbwriteups),
+    # Written to disk by pipeline/fetch_portswigger.py before this runs.
+    "portswigger": SourceSpec(
+        "portswigger", SOURCE_LABELS["portswigger"],
+        _src("Downloads", "hacks", "portswigger"),
+        discover_portswigger),
+    # git clone https://github.com/HackTricks-wiki/hacktricks-cloud.git
+    "htcloud": SourceSpec(
+        "hacktricks-cloud", SOURCE_LABELS["hacktricks-cloud"],
+        _src("Downloads", "hacks", "hacktricks-cloud"),
+        discover_htcloud),
 }
 
 

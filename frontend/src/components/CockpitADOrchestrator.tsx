@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   ApiError,
   adOrchestrateAdvance,
@@ -75,12 +75,6 @@ export function CockpitADOrchestrator({
 
   const engagement = !!engagementId;
 
-  useEffect(() => {
-    listWindowsProfiles()
-      .then(setWinProfiles)
-      .catch(() => setWinProfiles([]));
-  }, []);
-
   const ask = useCallback(
     async (avoid: string[] = skipped) => {
       setThinking(true);
@@ -90,6 +84,11 @@ export function CockpitADOrchestrator({
       setAdvanced(null);
       setLines([]);
       setAck(false);
+      // Load the Windows-target list here (NOT in an effect) so the panel still runs nothing
+      // on mount — the picker only appears once a proposal exists, which `ask` produces.
+      listWindowsProfiles()
+        .then(setWinProfiles)
+        .catch(() => setWinProfiles([]));
       try {
         const res = await adOrchestratePropose({
           graph_id: graphId,

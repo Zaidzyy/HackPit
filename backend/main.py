@@ -81,6 +81,7 @@ from arsenal.router import (  # noqa: E402
     router as arsenal_router,
     set_arsenal as set_arsenal_catalog,
 )
+from exploits.router import router as exploits_router  # noqa: E402  (backend/exploits — CVE index)
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
 CAPTIONS_PATH = REPO_ROOT / "data" / "images" / "captions.json"
@@ -368,6 +369,12 @@ app.include_router(codescan_router)
 # planner draws on. It executes nothing and restricts nothing — a rendered invocation is a
 # string, and it runs only through the gated cockpit executor with an explicit human approval.
 app.include_router(arsenal_router)
+# CVE -> exploit index (see exploits/). READ-ONLY keyed lookup over the sandbox's local
+# exploit-db catalogue: service+version -> CVE -> public exploit, the OSCP inner loop. It
+# is deliberately NOT a KB source — that query wants an exact table, not prose retrieval.
+# A hit is information plus a path inside the sandbox; running it is a separate, gated,
+# human-approved command like every other.
+app.include_router(exploits_router)
 
 
 # --------------------------------------------------------------------------- #

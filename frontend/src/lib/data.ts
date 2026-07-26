@@ -28,6 +28,9 @@ export const NAV: NavItem[] = [
   // A SECOND surface onto the same open sandbox, not a replacement for :kali — a real
   // pty, so vim/top/msfconsole render. :kali keeps the clean per-command transcripts.
   { key: "terminal", label: ":terminal", href: "/terminal" },
+  // The OSCP inner loop (service+version -> CVE -> public exploit). A keyed lookup, so it
+  // is its own surface rather than another mode of :library's prose search.
+  { key: "exploits", label: ":exploits", href: "/exploits" },
   { key: "engagements", label: ":engagements", href: "/engagements" },
 ];
 

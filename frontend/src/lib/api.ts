@@ -1062,6 +1062,64 @@ export const loopPropose = (
     signal
   );
 
+// --- :exploits — the version-keyed CVE -> exploit lookup ------------------------
+
+/** Index size + readiness (GET /exploits/stats). `ready: false` = not built yet. */
+export type ExploitStats = {
+  ready: boolean;
+  entries?: number;
+  with_cve?: number;
+  with_version?: number;
+  distinct_cves?: number;
+  source?: string;
+  exploit_root?: string;
+};
+
+/** One exploit-db hit — `version_match` and `why` are the confidence, and the point. */
+export type ExploitHit = {
+  id: string;
+  title: string;
+  product: string;
+  version_kind: string;
+  versions: string[];
+  cves: string[];
+  type: string;
+  platform: string;
+  port: string;
+  author: string;
+  date: string;
+  verified: boolean;
+  /** Where the exploit body already sits INSIDE the sandbox. */
+  path: string;
+  url: string;
+  score: number;
+  /** exact | in-range | line | product-only | different */
+  version_match: string;
+  why: string;
+};
+
+export const getExploitStats = (signal?: AbortSignal) =>
+  getJSON<ExploitStats>("/exploits/stats", signal);
+
+/** Free-text: a CVE id, a product, or the `product version` straight off a banner. */
+export const searchExploits = (q: string, limit = 40, signal?: AbortSignal) =>
+  getJSON<ExploitHit[]>(
+    `/exploits/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    signal
+  );
+
+/** The structured form a discovered service maps onto (nmap product + version). */
+export const exploitsForService = (
+  product: string,
+  version?: string | null,
+  signal?: AbortSignal
+) =>
+  getJSON<ExploitHit[]>(
+    `/exploits/service?product=${encodeURIComponent(product)}` +
+      (version ? `&version=${encodeURIComponent(version)}` : ""),
+    signal
+  );
+
 // --- :terminal — raw PTY into the SAME open sandbox (a second surface, not a swap) ---
 
 /** Availability of the raw-terminal surface (GET /cockpit/terminal/status).

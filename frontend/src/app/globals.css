@@ -7753,3 +7753,82 @@ a.hp-card {
 .hp-pty-attach:disabled { opacity: 0.45; cursor: not-allowed; }
 .hp-pty-msg { font-size: 12px; color: var(--dim); letter-spacing: 0.3px; }
 .hp-pty-detail { margin-top: 10px; font-size: 12px; color: var(--dim); }
+
+/* --- :exploits — version-keyed CVE -> exploit lookup ------------------------------- */
+.hp-xp-head { margin-bottom: 18px; }
+.hp-xp-title {
+  font-family: var(--font-mono, ui-monospace), monospace; font-size: 40px; font-weight: 600;
+  letter-spacing: -1px; margin: 6px 0 10px;
+}
+.hp-xp-sub { color: var(--dim); max-width: 760px; line-height: 1.55; font-size: 13px; }
+.hp-xp-okbanner { border-color: var(--accent-line); background: var(--accent-soft); }
+.hp-xp-form { display: flex; gap: 10px; margin: 18px 0 10px; }
+.hp-xp-input {
+  flex: 1; font-family: var(--font-mono, ui-monospace), monospace; font-size: 14px;
+  color: var(--fg); background: rgba(255, 255, 255, 0.03); border: 1px solid var(--line);
+  border-radius: 6px; padding: 12px 14px; outline: none;
+}
+.hp-xp-input:focus { border-color: var(--accent-line); background: rgba(255, 255, 255, 0.05); }
+.hp-xp-input::placeholder { color: color-mix(in srgb, var(--dim) 70%, transparent); }
+.hp-xp-go {
+  font-family: inherit; font-size: 12px; letter-spacing: 0.5px; cursor: pointer;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line);
+  padding: 0 20px; border-radius: 6px; white-space: nowrap;
+}
+.hp-xp-go:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.hp-xp-go:disabled { opacity: 0.45; cursor: not-allowed; }
+.hp-xp-examples { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+.hp-xp-example {
+  font-family: var(--font-mono, ui-monospace), monospace; font-size: 11px; cursor: pointer;
+  color: var(--dim); background: transparent; border: 1px solid var(--line);
+  border-radius: 4px; padding: 4px 10px;
+}
+.hp-xp-example:hover { color: var(--accent); border-color: var(--accent-line); }
+.hp-xp-error { color: #ff8f6b; font-size: 12px; margin: 8px 0; }
+.hp-xp-resulthead { font-size: 12px; color: var(--dim); margin-bottom: 12px; }
+.hp-xp-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.hp-xp-hit {
+  border: 1px solid var(--line); border-left-width: 3px; border-radius: 6px;
+  padding: 12px 14px; background: rgba(255, 255, 255, 0.015);
+}
+/* The left edge carries the confidence — scannable without reading a word. */
+.hp-xp-m-exact { border-left-color: var(--accent); }
+.hp-xp-m-in-range { border-left-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.hp-xp-m-line { border-left-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.hp-xp-m-product-only { border-left-color: var(--line); }
+.hp-xp-m-different { border-left-color: transparent; opacity: 0.62; }
+.hp-xp-hitline { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.hp-xp-match {
+  font-size: 9.5px; letter-spacing: 0.6px; text-transform: uppercase; white-space: nowrap;
+  border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px; color: var(--dim);
+}
+.hp-xp-match-exact { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+.hp-xp-match-in-range, .hp-xp-match-line { color: var(--accent); border-color: var(--accent-line); }
+.hp-xp-hittitle { font-size: 13px; line-height: 1.45; }
+.hp-xp-verified { font-size: 10px; color: var(--accent); }
+.hp-xp-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.hp-xp-why { font-size: 11px; color: var(--dim); font-style: italic; }
+.hp-xp-tag {
+  font-size: 10px; letter-spacing: 0.4px; color: var(--dim);
+  border: 1px solid var(--line); border-radius: 3px; padding: 1px 6px;
+}
+.hp-xp-cve {
+  font-family: var(--font-mono, ui-monospace), monospace; font-size: 10.5px; cursor: pointer;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line);
+  border-radius: 3px; padding: 1px 6px;
+}
+.hp-xp-cve:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.hp-xp-path {
+  display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap;
+  font-size: 11.5px;
+}
+.hp-xp-path code { color: var(--dim); word-break: break-all; }
+.hp-xp-link { font-size: 11px; color: var(--dim); text-decoration: none; }
+.hp-xp-link:hover { color: var(--accent); }
+.hp-xp-foot { margin-top: 16px; font-size: 12px; color: var(--dim); line-height: 1.55; }
+/* the state panel's per-service jump into this page */
+.hp-cs-xploit {
+  margin-left: 8px; font-size: 10px; letter-spacing: 0.4px; text-decoration: none;
+  color: var(--accent); border-bottom: 1px solid var(--accent-line);
+}
+.hp-cs-xploit:hover { border-bottom-color: var(--accent); }

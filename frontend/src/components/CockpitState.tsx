@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   ApiError,
   fillCredential,
@@ -277,17 +278,30 @@ export function CockpitState({
                 </div>
                 {row.services.length > 0 ? (
                   <div className="hp-cs-svcs">
-                    {row.services.map((s) => (
-                      <span key={`${s.port}/${s.proto}`} className="hp-cs-svc">
-                        <b>
-                          {s.port}/{s.proto}
-                        </b>
-                        {s.name && ` ${s.name}`}
-                        {(s.product || s.version) && (
-                          <i>{` ${[s.product, s.version].filter(Boolean).join(" ")}`}</i>
-                        )}
-                      </span>
-                    ))}
+                    {row.services.map((s) => {
+                      // The OSCP inner loop, one click: a service whose product was
+                      // fingerprinted goes straight to the version-keyed exploit lookup.
+                      // Nothing is run — it opens a search.
+                      const q = [s.product, s.version].filter(Boolean).join(" ");
+                      return (
+                        <span key={`${s.port}/${s.proto}`} className="hp-cs-svc">
+                          <b>
+                            {s.port}/{s.proto}
+                          </b>
+                          {s.name && ` ${s.name}`}
+                          {q && <i>{` ${q}`}</i>}
+                          {q && (
+                            <Link
+                              href={`/exploits?q=${encodeURIComponent(q)}`}
+                              className="hp-cs-xploit"
+                              title={`Find public exploits for ${q}`}
+                            >
+                              exploits →
+                            </Link>
+                          )}
+                        </span>
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="hp-cs-svcs hp-cs-dim">no services recorded yet</div>

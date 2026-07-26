@@ -1,0 +1,10 @@
+# Optional dependency: driving a LIVE Windows/AD target over WinRM.
+#
+# The hermetic safety suite (sh backend/run_safety_tests.sh) does NOT need this — the WinRM
+# transport is lazy-imported and tests mock it. Install this only to run against a real box:
+#
+#   .venv/Scripts/python.exe -m pip install -r backend/requirements-winrm.txt
+#
+# pywinrm brings NTLM/Negotiate auth (local accounts over HTTP:5985) via pyspnego, which also
+# supports pass-the-hash (NT hash in LM:NT form). See docs/WINDOWS-EXECUTION.md.
+pywinrm>=0.4.3

@@ -38,6 +38,12 @@ echo "== CVE -> exploit index (version comparison / tiered ranking / executes no
 echo "== raw PTY terminal containment (human-only / hardcoded open box / sentinel shell untouched) =="
 "$PY" test_terminal.py
 
+echo "== WinRM Windows transport (profile CRUD / routes to WinRM / records mode=windows) =="
+"$PY" test_winrm.py
+
+echo "== WinRM SAFETY invariants (host-locked / no gate bypass / secret never leaks / no auto-run) =="
+"$PY" test_winrm_safety.py
+
 echo "== orchestrator-loop tests (proposer cannot execute / no :kali path / gate pre-check) =="
 "$PY" test_loop.py
 

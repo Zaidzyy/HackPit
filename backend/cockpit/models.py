@@ -33,6 +33,15 @@ class ExecRequest(BaseModel):
         "(the default) for isolated LAB mode. An unknown/exited id is refused (gate=engagement) "
         "— engagement mode cannot be entered by a bare exec; it must be explicitly entered first.",
     )
+    windows_profile_id: str | None = Field(
+        None,
+        description="When set to a saved Windows-target profile id, run in WINDOWS mode: the "
+        "command is a PowerShell string executed ON that Windows box over WinRM (a new "
+        "transport behind the SAME gates). The target is the profile's host — hardcoded by the "
+        "profile, never a request field — so a run can never reach a box you did not pick. An "
+        "unknown profile is refused (gate=windows). If an engagement_id is ALSO set, that "
+        "engagement's scope must additionally permit the host (belt-and-suspenders).",
+    )
     dangerous_ack: bool = Field(
         False,
         description="Explicit second confirmation for a command that carries dangerous "
@@ -82,8 +91,10 @@ class ExecRejected(BaseModel):
     reason: str
     # LAB gates: target -> approval -> danger -> sandbox (isolation).
     # ENGAGEMENT gates: engagement (explicit entry) -> target -> approval -> danger.
+    # WINDOWS gates: windows (profile exists) -> target (host in engagement scope, if any)
+    #   -> approval -> danger. No isolation gate (a real external box, like engagement).
     # (No wall_a gate — engagement mode is fully open; human-approve-each is the only bound.)
-    gate: Literal["target", "approval", "danger", "sandbox", "engagement"] = "target"
+    gate: Literal["target", "approval", "danger", "sandbox", "engagement", "windows"] = "target"
     # When gate == "danger": the heuristic reasons the command was flagged (for the confirm).
     dangerous_flags: list[str] = Field(default_factory=list)
 
@@ -96,8 +107,9 @@ class RunRecord(BaseModel):
     args: list[str]
     target: str
     approved: bool
-    # "lab" (isolated lab target) or "engagement" (real authorized target, fully-open sandbox).
-    # Drives how the report marks the run (a real-target engagement is called out as such).
+    # "lab" (isolated lab target), "engagement" (real authorized target, fully-open sandbox),
+    # or "windows" (a PowerShell command run on a Windows target over WinRM). Drives how the
+    # report marks the run (a real-target engagement / Windows box is called out as such).
     mode: str = "lab"
     exit_code: int | None = None
     stdout: str = ""

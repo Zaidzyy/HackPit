@@ -23,7 +23,7 @@ from typing import Any, Iterator, NamedTuple
 
 from state import ingest as state_ingest
 
-from . import allowlist, config, engagement, loot, runstore
+from . import allowlist, config, engagement, loot, runstore, winprofiles, winrm_transport
 from .models import EngagementRecord, ExecRejected, ExecRequest, RunRecord
 from .sandbox import SandboxError, assert_isolation_proven
 
@@ -213,6 +213,8 @@ def validate_request(request: ExecRequest) -> ExecRejected | None:
     entirely unchanged. An ``engagement_id`` that doesn't resolve is refused (never silently
     downgraded to lab), so engagement mode can only be reached by explicitly entering it.
     """
+    if request.windows_profile_id:
+        return _validate_windows(request)
     if request.engagement_id:
         eng = _engagement_for(request)
         if eng is None:
@@ -296,6 +298,69 @@ def _validate_engagement(request: ExecRequest, eng: EngagementRecord) -> ExecRej
     return None
 
 
+def _validate_windows(request: ExecRequest) -> ExecRejected | None:
+    """WINDOWS mode gates (a PowerShell command run on a Windows box over WinRM).
+
+    A NEW EXECUTION TRANSPORT behind the SAME gate discipline (docs/WINDOWS-EXECUTION.md).
+    Order:
+        windows (the named profile exists) → target (the profile HOST is the lock; if an
+        engagement is also named, its scope must additionally permit that host) →
+        NEVER-AUTO-RUN human approval → heuristic danger red-confirm.
+
+    There is NO isolation gate — the target is a real external box, exactly like engagement
+    mode. The target-lock is STRUCTURAL: a Windows run reaches only the profile's host,
+    resolved server-side from ``windows_profile_id`` (never a host in the request), so a
+    command can never run against a box the operator did not pick. That is the same
+    containment shape :kali gets from its hardcoded container.
+    """
+    profile = winprofiles.get_profile(request.windows_profile_id or "")
+    if profile is None:
+        return ExecRejected(
+            reason="no such Windows target profile — create one (POST /cockpit/windows/profiles) "
+            "or pick an existing one; a Windows run is locked to a saved profile's host",
+            gate="windows",
+        )
+
+    # Belt-and-suspenders: if an engagement is ALSO named, the profile host must be inside
+    # that engagement's authorized scope. This never widens anything — it only adds a second
+    # check on top of the structural profile-host lock.
+    if request.engagement_id:
+        eng = _engagement_for(request)
+        if eng is None:
+            return ExecRejected(
+                reason="engagement is not active for this id — cannot scope a Windows run to it",
+                gate="engagement",
+            )
+        allowed, in_scope, label = _engagement_lock(eng)
+        host = profile["host"]
+        in_allowed = host in allowed
+        in_matcher = bool(in_scope and in_scope(host))
+        if not (in_allowed or in_matcher):
+            return ExecRejected(
+                reason=f"Windows target host '{host}' is not in the engagement scope '{label}'",
+                gate="target",
+            )
+
+    # NEVER-AUTO-RUN: every command on a real Windows box needs an INDIVIDUAL human approval.
+    # No batch, no approve-all, no autonomy — the orchestrator may PROPOSE a WinRM command but
+    # can never fire one (regression-locked in test_winrm_safety.py).
+    if not request.approved:
+        return ExecRejected(
+            reason="windows mode: every command needs an individual human approval "
+            "(approved=true) — the orchestrator proposes, it never auto-runs a WinRM command",
+            gate="approval",
+        )
+
+    dangerous = allowlist.dangerous_command_heuristic(request.command, request.args)
+    if dangerous and not request.dangerous_ack:
+        return ExecRejected(
+            reason="this command is flagged dangerous — confirm to run: " + "; ".join(dangerous),
+            gate="danger",
+            dangerous_flags=dangerous,
+        )
+    return None
+
+
 class EngagementInactive(RuntimeError):
     """The request names an engagement that is no longer active — nothing may run.
 
@@ -304,13 +369,22 @@ class EngagementInactive(RuntimeError):
     """
 
 
-class ResolvedMode(NamedTuple):
-    """Which sandbox a request execs into, and what it is pointed at."""
+class WindowsProfileUnavailable(RuntimeError):
+    """The request names a Windows profile that no longer exists — nothing may run.
 
-    mode: str  # "lab" | "engagement"
-    container: str  # the sandbox container for that mode
+    Raised by :func:`resolve_mode` so a Windows run can never fall through to a different
+    transport when its profile has been deleted mid-flight.
+    """
+
+
+class ResolvedMode(NamedTuple):
+    """Which transport a request runs through, and what it is pointed at."""
+
+    mode: str  # "lab" | "engagement" | "windows"
+    container: str  # the sandbox container (lab/engagement) or a winrm:// marker (windows)
     target: str  # the resolved target, for the record/UI
     engagement: EngagementRecord | None
+    windows_profile: dict[str, Any] | None = None  # the FULL profile (incl. secret) for WinRM
 
 
 def resolve_mode(request: ExecRequest) -> ResolvedMode:
@@ -325,6 +399,23 @@ def resolve_mode(request: ExecRequest) -> ResolvedMode:
     active. Pure: it only reads the engagement record and resolves names — it never
     executes anything, so calling it before a gate re-check is safe.
     """
+    # WINDOWS mode: the transport is WinRM against the profile's host (resolved server-side
+    # from the id). The host is the locked target; the container slot carries a winrm:// marker
+    # only for display — the WinRM path never builds a docker argv.
+    if request.windows_profile_id:
+        profile = winprofiles.get_profile(request.windows_profile_id)
+        if profile is None:
+            raise WindowsProfileUnavailable(
+                "the Windows target profile is no longer available — refusing to run"
+            )
+        return ResolvedMode(
+            mode="windows",
+            container=f"winrm://{profile['host']}:{profile['port']}",
+            target=profile["host"],
+            engagement=_engagement_for(request),
+            windows_profile=profile,
+        )
+
     eng = _engagement_for(request)
     if request.engagement_id and eng is None:
         raise EngagementInactive("engagement is no longer active — refusing to run")
@@ -370,10 +461,32 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
     # Route by mode. An engagement_id that is set but no longer active is refused here too
     # (even when prevalidated), so a run can NEVER fall back to lab against a real-target id.
     try:
-        mode, container, target, eng = resolve_mode(request)
+        resolved = resolve_mode(request)
     except EngagementInactive as exc:
         yield {"type": "rejected", "gate": "engagement", "reason": str(exc)}
         return
+    except WindowsProfileUnavailable as exc:
+        yield {"type": "rejected", "gate": "windows", "reason": str(exc)}
+        return
+    mode, container, target, eng = (
+        resolved.mode, resolved.container, resolved.target, resolved.engagement
+    )
+
+    # WINDOWS mode: a PowerShell command run on a real Windows box over WinRM. Belt-and-
+    # suspenders approval re-check (like engagement) — never-auto-run is the sole floor on a
+    # real target, so its enforcement must not depend on every caller running validate first.
+    if mode == "windows":
+        if not request.approved:
+            yield {
+                "type": "rejected",
+                "gate": "approval",
+                "reason": "windows mode: every command needs an individual human approval "
+                "(approved=true) — the orchestrator proposes, it never auto-runs a WinRM command",
+            }
+            return
+        yield from _run_windows(request, resolved)
+        return
+
     if eng is not None:
         # Belt-and-suspenders (ENGAGEMENT ONLY): with Wall A down, per-command human
         # approval is the SOLE floor on a real target, so its enforcement must not depend
@@ -526,6 +639,140 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
     # can pivot to them); out-of-scope hosts are surfaced read-only and never added. This
     # approves NOTHING — every command against a discovered host still needs its own individual
     # human approval. Best-effort: a failure here can never affect the run that already ran.
+    if eng is not None:
+        try:
+            found = engagement.record_discoveries(
+                eng, record.stdout + record.stderr, run_id=run_id
+            )
+            if found["added"] or found["out_of_scope"]:
+                yield {
+                    "type": "discovered",
+                    "run_id": run_id,
+                    "in_scope": found["added"],
+                    "out_of_scope": found["out_of_scope"],
+                    "truncated": found["truncated"],
+                }
+        except Exception as exc:  # pragma: no cover - never load-bearing
+            yield {"type": "error", "reason": f"scope expansion skipped: {exc}"}
+
+    yield {"type": "exit", "run_id": run_id, "code": exit_code, "finished_at": finished_at}
+
+
+def _run_windows(request: ExecRequest, resolved: "ResolvedMode") -> Iterator[dict[str, Any]]:
+    """Run ONE PowerShell command on a Windows target over WinRM, streaming events.
+
+    Same event shape and same finalisation (record → state ingest → recon expansion) as the
+    docker path — only the transport differs. WinRM is request/response rather than a live
+    line stream, so the whole command runs on a worker thread (bounded by a wall-clock
+    timeout) and its captured stdout/stderr are emitted line-by-line once it returns.
+
+    The gates already ran (validate_request → _validate_windows) and approval was re-checked
+    by the caller. The target is the profile HOST, resolved server-side — this function is
+    handed the profile, it never reads a host from the request.
+    """
+    profile = resolved.windows_profile or {}
+    eng = resolved.engagement
+    target = resolved.target
+    # One PowerShell command STRING (fork #2): the operator/orchestrator's command + args,
+    # rejoined. Credentials live in the profile, never in the command, so nothing secret can
+    # leak into the command line, the record or the transcript.
+    ps_command = " ".join([request.command, *[str(a) for a in request.args]]).strip()
+
+    run_id = uuid.uuid4().hex[:12]
+    started_at = _now()
+    started_epoch = time.time()
+    timeout_seconds = config.clamp_timeout(request.timeout_seconds)
+
+    yield {
+        "type": "start",
+        "run_id": run_id,
+        "command": request.command,
+        "args": request.args,
+        "target": target,
+        "mode": "windows",
+        "transport": "winrm",
+        "container": resolved.container,  # winrm://host:port — display only
+        "started_at": started_at,
+        "timeout_seconds": timeout_seconds,
+        "workdir": None,
+    }
+
+    box: dict[str, Any] = {"result": None, "error": None}
+
+    def _worker() -> None:
+        try:
+            box["result"] = winrm_transport.run(profile, ps_command, timeout_seconds)
+        except winrm_transport.WinRMError as exc:
+            box["error"] = str(exc)
+        except Exception as exc:  # pragma: no cover - defensive, transport is isolated
+            box["error"] = f"WinRM transport error: {exc}"
+
+    worker = threading.Thread(target=_worker, daemon=True)
+    worker.start()
+    worker.join(timeout=timeout_seconds + 5)  # +5: the transport has its own read timeout
+
+    stdout = ""
+    stderr = ""
+    exit_code: int | None = None
+    finished_at = _now()
+
+    if worker.is_alive():
+        yield {"type": "error", "reason": f"timed out after {timeout_seconds}s"}
+        stderr = f"[winrm] timed out after {timeout_seconds}s"
+    elif box["error"] is not None:
+        yield {"type": "error", "reason": box["error"]}
+        stderr = str(box["error"])
+    else:
+        result = box["result"]
+        stdout = result.stdout if result else ""
+        stderr = result.stderr if result else ""
+        exit_code = result.exit_code if result else None
+        for line in stdout.splitlines():
+            yield {"type": "stdout", "line": line}
+        for line in stderr.splitlines():
+            yield {"type": "stderr", "line": line}
+
+    record = RunRecord(
+        run_id=run_id,
+        command=request.command,
+        args=request.args,
+        target=target,
+        approved=request.approved,
+        mode="windows",
+        exit_code=exit_code,
+        stdout=stdout,
+        stderr=stderr,
+        started_at=started_at,
+        finished_at=finished_at,
+        session_id=request.session_id,
+        step_id=request.step_id,
+    )
+    try:
+        runstore.save_run(record)
+    except Exception as exc:  # persistence must never crash the stream
+        yield {"type": "error", "reason": f"run recorded in-memory only: {exc}"}
+
+    # STATE INGEST — turn the remote command's stdout into structured state (hosts, creds,
+    # findings, proof flags). No loot directory: WinRM output comes back as text, not files.
+    if request.session_id:
+        try:
+            counts = state_ingest.ingest_run(
+                session_id=request.session_id,
+                run_id=run_id,
+                command=request.command,
+                stdout=record.stdout,
+                target=record.target or "",
+                command_line=ps_command,
+                loot_dir=None,
+                started_at_epoch=started_epoch,
+            )
+            if any(counts.values()):
+                yield {"type": "state", "run_id": run_id, "added": counts}
+        except Exception as exc:  # pragma: no cover - never load-bearing
+            yield {"type": "error", "reason": f"state ingest skipped: {exc}"}
+
+    # RECON-DRIVEN EXPANSION (only when a Windows run is also scoped to an engagement): mine
+    # the output for hosts and sort them by the engagement scope. Approves nothing.
     if eng is not None:
         try:
             found = engagement.record_discoveries(

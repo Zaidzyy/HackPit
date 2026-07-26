@@ -221,6 +221,32 @@ def test_prompt_block_ranks_on_the_goals_words() -> None:
     print("  prompt block ranks on the goal's words; a non-matching goal is unchanged: PASS")
 
 
+def test_response_model_carries_platform_and_runs_here() -> None:
+    """FastAPI filters every response through its response_model and SILENTLY DROPS any
+    field the model does not declare. ToolOut once omitted `platform`/`runs_here`, so
+    `runs_here` reached the UI as undefined and `!runs_here` badged EVERY tool — nmap
+    included — as 'windows only'. This pins both fields into the response contract.
+
+    (The classic three-places trap: a per-tool field needs the dataclass, to_dict AND the
+    Pydantic response model, or the API strips it. See the arsenal-schema memory.)
+    """
+    from arsenal.router import ToolOut
+
+    fields = set(ToolOut.model_fields)
+    assert "platform" in fields, "ToolOut must declare platform or the API strips it"
+    assert "runs_here" in fields, "ToolOut must declare runs_here or the API strips it"
+
+    # And a serialized tool must actually carry them with the right values.
+    ars = _load()
+    nmap = ars.get("nmap")
+    rubeus = ars.get("rubeus")
+    assert nmap is not None and rubeus is not None
+    assert ToolOut(**nmap.to_dict()).runs_here is True, "nmap runs on Linux"
+    assert ToolOut(**rubeus.to_dict()).runs_here is False, "rubeus is Windows-only"
+    assert ToolOut(**rubeus.to_dict()).platform == "windows"
+    print("  response model carries platform + runs_here (nmap runs, rubeus does not): PASS")
+
+
 if __name__ == "__main__":
     test_catalog_is_well_formed()
     test_every_category_and_phase_is_covered()
@@ -233,4 +259,5 @@ if __name__ == "__main__":
     test_empty_arsenal_is_a_no_op()
     test_prompt_block_is_bounded_and_says_it_is_a_reference()
     test_prompt_block_ranks_on_the_goals_words()
+    test_response_model_carries_platform_and_runs_here()
     print("ALL tool-arsenal tests pass")

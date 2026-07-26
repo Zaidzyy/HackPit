@@ -70,6 +70,22 @@ class ToolOut(BaseModel):
         "names it AND the entry actually invokes it. Null otherwise (never fabricated).",
     )
     kb_title: str | None = None
+    # These two MUST be declared here even though Tool.to_dict() already emits them:
+    # FastAPI filters the response through this model and silently DROPS any field the
+    # model does not declare. Omitting them made `runs_here` arrive as undefined in the
+    # UI, so `!tool.runs_here` was true for every tool and the catalog badged all 73 —
+    # nmap included — as "windows only".
+    platform: str = Field(
+        default="",
+        description="Where the tool can run. '' = the Linux sandbox; 'windows' = "
+        "PowerShell/.NET tooling that cannot run there at all (D9).",
+    )
+    runs_here: bool = Field(
+        default=True,
+        description="False for tools that cannot execute on the Linux sandbox by "
+        "construction. Those stay catalogued for planning and write-ups but the planner "
+        "is never offered them.",
+    )
 
 
 class ArsenalOut(BaseModel):

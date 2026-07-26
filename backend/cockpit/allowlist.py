@@ -123,8 +123,16 @@ def _ad_tool(command: str) -> str:
 
 # Always credential theft — replicating, dumping or parsing secrets.
 _AD_CRED_DUMP = frozenset({
-    "secretsdump", "mimikatz", "lsassy", "nanodump", "procdump", "pwdump", "gsecdump",
-    "safetykatz", "sharpdump", "dumpert", "handlekatz", "krbrelayx",
+    "secretsdump", "mimikatz", "invoke-mimikatz", "lsassy", "nanodump", "procdump", "pwdump",
+    "gsecdump", "safetykatz", "sharpdump", "dumpert", "handlekatz", "krbrelayx",
+})
+# Native Windows (PowerView / .NET) cmdlets that WRITE the directory or reset a credential.
+# These run ON the Windows box over WinRM and are as destructive as their impacket cousins, so
+# they must trip the same red confirm. Matched on the command name (no suffix to strip).
+_AD_PS_WRITE = frozenset({
+    "set-domainuserpassword", "add-domainobjectacl", "set-domainobjectowner",
+    "add-domaingroupmember", "set-domainrbcd", "set-domainobject", "add-domainobject",
+    "set-domainobjectowner.ps1",
 })
 # Always remote code execution on a domain host — drops a service/process on a real machine.
 _AD_REMOTE_EXEC = frozenset({
@@ -166,6 +174,8 @@ def _ad_abuse_reasons(command: str, args: list[str]) -> list[str]:
         reasons.append(f"{base}: remote code execution on a domain host")
     if base in _AD_DIR_WRITE:
         reasons.append(f"{base}: modifies the directory / coerces or relays authentication")
+    if base in _AD_PS_WRITE:
+        reasons.append(f"{base}: writes the directory / resets a credential (PowerView/.NET)")
 
     for marker in _AD_DUMP_MARKERS:
         if marker in blob:

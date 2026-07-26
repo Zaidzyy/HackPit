@@ -228,6 +228,26 @@ def _argv(cmd: str) -> tuple[str, list[str]]:
     return (parts[0], parts[1:]) if parts else ("", [])
 
 
+def _win_argv(cmd: str) -> tuple[str, list[str]]:
+    """Split a native Windows/PowerShell command into (program, args).
+
+    Uses a NON-POSIX split so Windows paths (``DOMAIN\\krbtgt``) and PowerShell quoting
+    survive — the executor rejoins command + args into one string for WinRM, so preserving
+    them verbatim is what matters. Comment-only lines (inherited-rights notes) yield ("", [])."""
+    line = next(
+        (ln.strip() for ln in (cmd or "").splitlines()
+         if ln.strip() and not ln.strip().startswith("#")),
+        "",
+    )
+    if not line:
+        return "", []
+    try:
+        parts = shlex.split(line, posix=False)
+    except ValueError:
+        return "", []
+    return (parts[0], parts[1:]) if parts else ("", [])
+
+
 def _precheck(
     command: str, args: list[str], scope_ctx: Any | None
 ) -> tuple[bool, str]:
@@ -266,6 +286,16 @@ def proposal_for_edge(
     raw_cmd = (cmds[0].get("cmd") if cmds else "") or ""
     command, args = _argv(raw_cmd)
     destructive = bool(tech.get("destructive"))
+
+    # NATIVE WINDOWS variant — the CRTP command that runs ON the box over WinRM. Parsed the
+    # same way (argv only, comments skipped) and given its OWN danger pre-check, so the UI can
+    # show that a Windows-target run would demand the red confirm before the human decides.
+    win_cmds = tech.get("windows_commands") or []
+    win_raw = (win_cmds[0].get("cmd") if win_cmds else "") or ""
+    win_command, win_args = _win_argv(win_raw)
+    win_dangerous = (
+        allowlist.dangerous_command_heuristic(win_command, win_args) if win_command else []
+    )
 
     # WHY THE COMMAND IS ABSENT MATTERS, and conflating the cases is dangerous.
     #
@@ -313,6 +343,15 @@ def proposal_for_edge(
         "command": command,
         "args": args,
         "cmd_display": raw_cmd,
+        # The native Windows variant (runs on the box over WinRM), with its own danger
+        # pre-check. Empty command when the edge has no native variant. The executor
+        # re-checks everything at run time — this is advisory, like the Linux gate_ok.
+        "windows_command": win_command,
+        "windows_args": win_args,
+        "windows_cmd_display": win_raw,
+        "windows_runnable": bool(win_command),
+        "windows_dangerous_flags": win_dangerous,
+        "windows_requires_confirm": bool(win_dangerous),
         "rationale": (rationale or "").strip()[:_MAX_RATIONALE],
         # Some edges are RIGHTS, not actions — MemberOf is rights you already inherit, so it
         # resolves to no command. Flagged rather than surfaced as a failed gate: there is

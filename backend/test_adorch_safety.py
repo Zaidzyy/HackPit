@@ -209,6 +209,67 @@ def test_every_destructive_technique_trips_the_heuristic() -> None:
           "trips the danger gate: PASS")
 
 
+def test_every_destructive_windows_variant_trips_the_heuristic() -> None:
+    """THE ORACLE, for the NATIVE WINDOWS variants (Rubeus/PowerView/Mimikatz that run on the
+    box over WinRM). Adding native command variants must not open a hole: any edge the catalog
+    calls destructive whose WINDOWS command the heuristic does NOT flag would let a domain-
+    altering PowerShell command run over WinRM without a red confirm."""
+    g = P.parse_collection(S.sample_collection())
+    holes, checked = [], 0
+    for kind in SC.ABUSABLE_EDGES:
+        prop = O.proposal_for_edge(g, _synthetic_edge(g, kind), "")
+        if not prop["destructive_technique"]:
+            continue
+        checked += 1
+        # a destructive edge must HAVE a native variant, and it must trip the heuristic
+        if not prop["windows_command"]:
+            holes.append((kind, "(no windows variant)"))
+        elif not prop["windows_dangerous_flags"]:
+            holes.append((kind, prop["windows_command"]))
+    assert not holes, (
+        "these destructive Windows variants would run over WinRM without a red confirm: "
+        + ", ".join(f"{k} -> {c}" for k, c in holes)
+    )
+    assert checked, "no destructive edges were exercised"
+    print(f"  every destructive edge's NATIVE WINDOWS variant ({checked} checked) trips the "
+          "danger gate too: PASS")
+
+
+def test_windows_variant_runs_through_the_same_gates() -> None:
+    """A native Windows abuse submitted through the executor is refused unapproved and demands
+    the red confirm — the SAME gates as the Linux command, now for the WinRM transport."""
+    import tempfile
+    from pathlib import Path as _P
+    from cockpit import winprofiles
+
+    g = P.parse_collection(S.sample_collection())
+    edge = next(e for e in g.edges if e.kind == "DCSync") if any(
+        e.kind == "DCSync" for e in g.edges) else _synthetic_edge(g, "DCSync")
+    prop = O.proposal_for_edge(g, edge, "")
+    assert prop["windows_command"] and prop["windows_requires_confirm"], prop
+
+    tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+    db_orig = winprofiles.DB_PATH
+    winprofiles.DB_PATH = _P(tmp.name) / "sessions.db"
+    try:
+        winprofiles.init_db()
+        p = winprofiles.create_profile("DC01", "10.0.0.5", "administrator", secret="pw")
+        # unapproved -> refused
+        rej = E.validate_request(ExecRequest(
+            command=prop["windows_command"], args=prop["windows_args"],
+            windows_profile_id=p["profile_id"], approved=False))
+        assert rej is not None and rej.gate in ("approval", "danger"), rej
+        # approved but not acked -> danger gate
+        rej2 = E.validate_request(ExecRequest(
+            command=prop["windows_command"], args=prop["windows_args"],
+            windows_profile_id=p["profile_id"], approved=True))
+        assert rej2 is not None and rej2.gate == "danger", rej2
+    finally:
+        winprofiles.DB_PATH = db_orig
+        tmp.cleanup()
+    print("  a native Windows abuse runs through the SAME gates (approval + danger) on WinRM: PASS")
+
+
 def test_a_destructive_abuse_never_renders_as_benign() -> None:
     """REGRESSION — found by driving a real model against the running backend.
 
@@ -334,6 +395,8 @@ if __name__ == "__main__":
     test_a_proposed_ad_step_runs_nothing_unapproved()
     test_destructive_ad_abuse_requires_the_red_confirm()
     test_every_destructive_technique_trips_the_heuristic()
+    test_every_destructive_windows_variant_trips_the_heuristic()
+    test_windows_variant_runs_through_the_same_gates()
     test_a_destructive_abuse_never_renders_as_benign()
     test_read_only_ad_enumeration_stays_clean()
     test_off_scope_ad_host_is_refused()

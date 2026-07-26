@@ -128,7 +128,23 @@ def test_a_proposal_is_well_formed() -> None:
         assert key in p, f"a proposal must carry {key}"
     assert p["edge"]["source"] in st.owned, "the proposed edge must leave an owned principal"
     assert p["rationale"] == "it shortens the path"
+    # a proposal also carries the NATIVE WINDOWS variant (for live WinRM execution)
+    for key in ("windows_command", "windows_args", "windows_cmd_display", "windows_runnable",
+                "windows_dangerous_flags", "windows_requires_confirm"):
+        assert key in p, f"a proposal must carry {key}"
     print("  a proposal is well-formed and leaves an owned principal: PASS")
+
+
+def test_proposal_exposes_a_native_windows_variant() -> None:
+    """For a destructive edge the proposal offers a native PowerShell/PowerView/Rubeus command
+    that runs on the Windows box over WinRM, with its own danger pre-check."""
+    g = _graph()
+    edge = next(e for e in g.edges if e.kind == "ForceChangePassword")
+    p = O.proposal_for_edge(g, edge, "reset the password")
+    assert p["windows_command"], "a destructive edge should have a native Windows variant"
+    assert "Set-DomainUserPassword" in p["windows_cmd_display"]
+    assert p["windows_requires_confirm"] is True, "a destructive Windows variant demands confirm"
+    print("  a proposal exposes a native Windows (PowerView/Rubeus) variant + its danger flag: PASS")
 
 
 def test_a_pick_outside_the_candidate_list_is_refused() -> None:
@@ -277,6 +293,7 @@ if __name__ == "__main__":
     test_frontier_is_what_you_can_reach_next()
     test_advance_is_pure_and_idempotent()
     test_a_proposal_is_well_formed()
+    test_proposal_exposes_a_native_windows_variant()
     test_a_pick_outside_the_candidate_list_is_refused()
     test_done_conditions()
     test_skipping_an_edge_removes_it_from_the_next_proposal()

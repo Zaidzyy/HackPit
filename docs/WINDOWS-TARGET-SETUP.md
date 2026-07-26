@@ -21,8 +21,10 @@ Microsoft ships a free, pre-built evaluation VM (90-day) that already includes V
 
 1. Go to Microsoft's "Windows 11 development environment" download page (search:
    *"Windows 11 dev environment VMware"* → aka.ms / Microsoft Dev Home downloads).
-2. Download the **VMware** edition (a `.zip` containing a `.ovf`/`.vmdk` set, ~20 GB).
-3. Unzip it somewhere with room to spare.
+2. Download the **VMware** edition (`WinDev….VMware.zip` — a `.zip` containing a `.ovf`/`.vmdk`
+   set, ~24 GB).
+3. Unzip it somewhere with room to spare. **Plan for ~70 GB free** on that drive: the ~24 GB
+   zip unpacks to a ~40 GB `.vmdk`, and the running VM grows further.
 
 A single Windows client is enough to prove the WinRM backend end to end (run PowerShell,
 PowerView against a live AD later, Rubeus, etc.). A full domain controller is a later step.
@@ -60,6 +62,15 @@ VMware Workstation / Player: `"C:\Program Files (x86)\VMware\VMware Workstation\
 ---
 
 ## 3. Enable WinRM inside the VM (local account, NTLM over HTTP:5985)
+
+> **First, give the account a real password.** The dev-environment eval VM auto-logs into a
+> local account (`User`) that effectively has no usable password, and **WinRM/NTLM cannot
+> authenticate a blank-password account**. In elevated PowerShell inside the VM:
+> ```powershell
+> net user User "P@ssw0rd!"
+> ```
+> Then use `User` / `P@ssw0rd!` (no domain) as the credentials when you add the target at
+> `/windows`. (On a Server/DC install you set the admin password during setup, so skip this.)
 
 Open **PowerShell as Administrator** *inside the VM* and run:
 
@@ -173,6 +184,7 @@ If that prints the VM's username + hostname, WinRM is working end to end and Hac
 
 | symptom | fix |
 |---|---|
+| auth fails on the dev-eval `User` account | it has no usable password — set one: `net user User "P@ssw0rd!"` (top of §3) |
 | `Test-NetConnection … 5985` fails | firewall rule (step 3.3) / listener (`winrm quickconfig`) |
 | auth denied as a **local** admin | `LocalAccountTokenFilterPolicy = 1` (step 3.5) |
 | `Basic auth` errors | you want **Negotiate/NTLM**, not Basic — step 3.4; HackPit uses NTLM |

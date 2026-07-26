@@ -382,8 +382,9 @@ query-time / config / ranking changes — **no KB re-ingest, no 15 MB rewrite, n
   already existed; forensics/ics/supply-chain stay hidden). The **top nav** dropped the
   redundant `:library` tile (home is the wordmark), the search field was widened to a one-line
   field, the unused accent-swatch picker was removed (amber is the default and only accent),
-  and with that room the nav is now **truly centered** in the bar. All display-only; no backend
-  touched.
+  and the nav is **optically centered** (a small left nudge balances it against the heavier
+  bordered search box, so it reads centered rather than geometrically dead-centre). All
+  display-only; no backend touched.
 
 ## Verification
 

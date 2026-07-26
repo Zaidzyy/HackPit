@@ -134,6 +134,10 @@ body {
      wordmark or the search/swatches are — a flex `margin:0 auto` only centred it in the
      leftover space, which read as off-centre. */
   display: grid;
+  /* 1fr auto 1fr centres the nav in the space between the wordmark and the right-hand
+     controls. (A true page-centre via minmax(0,1fr) forces equal side tracks, but at the
+     1080px cap the controls are wider than an equal track and overflow into the nav — the bar
+     is simply too full for a dead-centred nav + wordmark + search + swatches to coexist.) */
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   height: 66px;
@@ -165,13 +169,12 @@ body {
 }
 .hp-nav a {
   cursor: pointer;
-  color: var(--accent);
+  color: inherit;
   text-decoration: none;
-  transition: color 0.2s, filter 0.2s;
+  transition: color 0.2s;
 }
 .hp-nav a:hover {
-  color: var(--accent);
-  filter: brightness(1.25);
+  color: var(--grey);
 }
 .hp-nav .hp-on {
   color: var(--accent);
@@ -181,12 +184,18 @@ body {
   color: var(--grey);
   border: 1px solid var(--border-2);
   border-radius: 8px;
-  padding: 7px 12px;
+  padding: 8px 14px;
+  min-width: 215px;
   display: flex;
   gap: 8px;
   align-items: center;
+  justify-content: space-between;
   cursor: text;
   background: transparent;
+}
+.hp-cmdk-keys {
+  display: flex;
+  gap: 6px;
 }
 .hp-cmdk kbd {
   background: transparent;

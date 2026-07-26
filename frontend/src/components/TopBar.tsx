@@ -62,8 +62,11 @@ export function TopBar() {
           onClick={openPalette}
           aria-label="Open search"
         >
-          search {entryCount} entries <kbd>⌘</kbd>
-          <kbd>K</kbd>
+          <span>search {entryCount} entries</span>
+          <span className="hp-cmdk-keys">
+            <kbd>⌘</kbd>
+            <kbd>K</kbd>
+          </span>
         </button>
 
         <div className="hp-swatches">

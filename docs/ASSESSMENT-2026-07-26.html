@@ -117,6 +117,7 @@ a { color: var(--accent); text-decoration: none; }
   </div>
 <div class="toc"><span class="toctitle">Contents</span><div class="toc">
 <ul>
+<li><a href="#hackpit-capability-assessment-build-log">HackPit — Capability Assessment &amp; Build Log</a><ul>
 <li><a href="#0-verdict">0. Verdict</a></li>
 <li><a href="#1-remaining-gaps">1. Remaining gaps</a><ul>
 <li><a href="#11-the-pty-gap-now-closed-without-losing-the-transcript">1.1 The PTY gap — now closed, without losing the transcript</a></li>
@@ -147,24 +148,39 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#5-what-is-genuinely-excellent-do-not-refactor">5. What is genuinely excellent — do not refactor</a></li>
 <li><a href="#6-security-posture-of-hackpit-itself">6. Security posture of HackPit itself</a></li>
 <li><a href="#7-what-the-assessment-examined">7. What the assessment examined</a></li>
+</ul>
+</li>
+<li><a href="#part-ii-what-remains">PART II — WHAT REMAINS</a><ul>
 <li><a href="#standing-policy-unchanged-still-governs-the-project">Standing policy (unchanged, still governs the project)</a></li>
 <li><a href="#explicitly-deferred-with-the-reason">Explicitly deferred (with the reason)</a></li>
+</ul>
+</li>
+<li><a href="#part-iii-build-log-phases-15-shipped-2026-07-26">PART III — BUILD LOG (Phases 1–5, shipped 2026-07-26)</a><ul>
 <li><a href="#decisions-taken-d1d15">Decisions taken (D1–D15)</a></li>
 <li><a href="#phase-1-reach-a-real-target">Phase 1 — reach a real target</a></li>
 <li><a href="#phase-2-make-it-remember">Phase 2 — make it remember</a></li>
 <li><a href="#phase-3-make-it-fast-to-drive">Phase 3 — make it fast to drive</a></li>
 <li><a href="#phase-4-content-goal-specific">Phase 4 — content &amp; goal-specific</a></li>
 <li><a href="#phase-5-the-pty-gap-and-finishing-the-kb">Phase 5 — the PTY gap, and finishing the KB</a></li>
+<li><a href="#windows-execution-backend-the-winrm-driver-shipped-2026-07-26">Windows execution backend — the WinRM driver (shipped 2026-07-26)</a></li>
 <li><a href="#verification">Verification</a></li>
 <li><a href="#status">Status</a></li>
+</ul>
+</li>
 </ul>
 </div>
 </div>
 </div>
+<h1 id="hackpit-capability-assessment-build-log">HackPit — Capability Assessment &amp; Build Log</h1>
+<p><strong>Date:</strong> 2026-07-26
+<strong>Scope:</strong> every backend module, the frontend, the pipeline, the docker stack, the docs, and the live KB
+<strong>Targets this is measured against:</strong> OSCP · PNPT · eCPPT · HTB CPTS · CRTP · HTB boxes/CTF · bug bounty · real-world client pentests.</p>
+<p><strong>Status note (updated).</strong> This began as an assessment (Part I) and an agreed plan (Part II). <strong>All four phases of that plan have since been built</strong>, and a fifth followed — the execution substrate (Phase 1), the state model (Phase 2), the drive-speed gaps (Phase 3), the content-and-goal-specific work (Phase 4: KB Route-B ingest, the evasion/OPSEC channel, the HTTP repeater, pivot/tunnel routing, exam-mode report templates), and <strong>Phase 5</strong>, which closed the two things Part I had left standing: a real PTY (added as a <em>second</em> surface, so the auditable one survives) and the recommended KB enrichment (PortSwigger Academy, HackTricks Cloud, the HTB slice, and a CVE→exploit index). Part I has been trimmed to what genuinely remains; the completed blockers, decisions and phases live in <strong>Part III — Build Log</strong>.</p>
+<hr />
 <h2 id="0-verdict">0. Verdict</h2>
 <p>The <strong>architecture is genuinely strong</strong> — the safety engineering and the LLM-grounding discipline are better than most commercial tooling.</p>
 <p>The original problem this assessment found was <em>reach</em>: nothing in HackPit was fake or stubbed, but the container it executed into contained seven programs, so it could not finish a real HTB box, touch a real AD domain, run a bug-bounty recon sweep, or complete an OSCP-style engagement. <strong>That execution substrate has now been rebuilt (Phase 1), the loop reasons over structured state instead of stdout tails (Phase 2), the drive-speed gaps are closed (Phase 3), the content/goal work is done (Phase 4), and the interaction and knowledge gaps Part I left standing are closed (Phase 5).</strong> See Part III.</p>
-<p>Since then <strong>Phase 5</strong> has closed the PTY gap (a real terminal as a <em>second</em> surface, keeping the auditable one) and finished the KB enrichment the assessment recommended. What remains is a short list of <em>deliberately deferred</em> items — a Windows execution target for CRTP, a VPS for blind callbacks, and the last few thin KB categories — each deferred for a stated reason, not left undone. Risk-tiered approval is no longer among them: it has been <strong>decided against</strong> (see D5). See §1 and Part II's "Explicitly deferred".</p>
+<p>Since then <strong>Phase 5</strong> closed the PTY gap (a real terminal as a <em>second</em> surface, keeping the auditable one) and finished the KB enrichment the assessment recommended, and the <strong>Windows execution backend</strong> (a WinRM driver) has since made the CRTP toolset, the OSCP AD set and real internal pentests <em>executable</em> — and made the existing AD attack-path graph run <strong>live</strong> instead of on synthetic data. What remains is a short list of <em>deliberately deferred</em> items — a VPS for blind callbacks, and the last few thin KB categories — each deferred for a stated reason, not left undone. The Windows/CRTP execution target is <strong>no longer among them</strong>: it is closed by the WinRM driver against an external VM you run (see the Windows execution backend in Part III and D9). Risk-tiered approval is also gone — <strong>decided against</strong> (see D5). See §1 and Part II's "Explicitly deferred".</p>
 <hr />
 <h2 id="1-remaining-gaps">1. Remaining gaps</h2>
 <p>The blocker sections for everything the five phases fixed have been removed (see Part III). What is left is genuinely small.</p>
@@ -344,22 +360,22 @@ a { color: var(--accent); text-decoration: none; }
 <tr>
 <td>Technique catalog</td>
 <td><strong>Good</strong></td>
-<td>25 edge kinds, KB-grounded with catalog fallback, target-type specialization (<code>GenericAll</code> on a group → <code>AddMember</code>).</td>
+<td>25 edge kinds, KB-grounded with catalog fallback, target-type specialization (<code>GenericAll</code> on a group → <code>AddMember</code>). Each edge now also carries a <strong>native Windows variant</strong> (PowerView/Rubeus/Mimikatz) for live WinRM execution alongside the Linux impacket/evil-winrm one.</td>
 </tr>
 <tr>
 <td>Orchestrator</td>
 <td><strong>Excellent safety design</strong></td>
-<td>The model picks an <strong>edge index</strong>, never a command. Cannot invent a host, cannot author a command, cannot reach an edge outside the collection. A pick outside the list is refused rather than repaired.</td>
+<td>The model picks an <strong>edge index</strong>, never a command. Cannot invent a host, cannot author a command, cannot reach an edge outside the collection. A pick outside the list is refused rather than repaired. Now runs <strong>live</strong> — the approved command executes over WinRM on a selected Windows target (proposes, never auto-fires; regression-locked for the WinRM path too).</td>
 </tr>
 <tr>
 <td><code>advance</code> endpoint</td>
 <td><strong>Excellent</strong></td>
-<td>Advancement requires a <code>run_id</code> that was <strong>approved</strong> and <strong>exited 0</strong>, verified server-side.</td>
+<td>Advancement requires a <code>run_id</code> that was <strong>approved</strong> and <strong>exited 0</strong>, verified server-side — transport-agnostic, so the WinRM path advances the walk identically.</td>
 </tr>
 <tr>
 <td>Execution tooling</td>
-<td><strong>Now present</strong></td>
-<td>impacket, certipy-ad, bloodyad, netexec, evil-winrm, bloodhound.py, kerbrute, responder, mitm6 are in the image (Phase 1). Live collection/execution against a real domain is still untested; the feature was built on synthetic sample data.</td>
+<td><strong>Now present + executes live</strong></td>
+<td>impacket, certipy-ad, bloodyad, netexec, evil-winrm, bloodhound.py, kerbrute, responder, mitm6 are in the image (Phase 1). The <strong>WinRM driver</strong> (Windows execution backend) now runs the abuse <strong>live</strong> against a real Windows/AD box you run in VMware — the graph is no longer synthetic-only. Live verification against a real box is deferred until that VM is up (build + unit tests are hermetic, mocking WinRM).</td>
 </tr>
 </tbody>
 </table>
@@ -646,12 +662,12 @@ a { color: var(--accent); text-decoration: none; }
 <li><strong>D2 — Windows + Docker Desktop; a VPS is added later, only for bug-bounty callbacks.</strong> Docker Desktop is a real Linux VM (WSL2); the one thing it can't give is a publicly reachable listener for blind SSRF/XXE/RCE. The repeater (Phase 4) sends and reads the <em>direct</em> response; the VPS piece is still deferred until bounty work needs it.</li>
 <li><strong>D5 — Per-command approval stays. Risk-tiering is rejected, not deferred.</strong> One-keystroke approve shipped (Phase 3). Tiering — auto-running "passive" commands, batch-approving read-only plans — was reconsidered and <strong>decided against</strong> (§1.2): in engagement mode per-command approval is the <em>only</em> thing bounding where a command may go, and a classifier deciding when to skip the human is a new component on the wrong side of that boundary. Every execution surface since preserves this — repeater, tunnels (rewrite <em>visible before</em> approval), and Phase 5's <code>:terminal</code> (human-only, no agent path).</li>
 <li><strong>D8 — HexStrike is a reference, never an execution backend.</strong> Its tools bypass all four gates, the target-lock, the scope model and the audit trail. Rejected, not deferred.</li>
-<li><strong>D9 — Accept the CRTP Windows-execution gap; no Windows VM.</strong> CRTP's PowerShell/.NET tooling can't run on a Linux container; HackPit plans and writes up CRTP work, the lab work happens elsewhere. Windows-only tools are kept and <em>marked</em>, never listed as runnable.</li>
+<li><strong>D9 — CRTP Windows execution: CLOSED via a WinRM driver against an external VM (was "accept the gap").</strong> The original decision accepted that CRTP's PowerShell/.NET tooling can't run on the Linux container. That gap is now closed the honest way: <strong>no Windows VM lives inside the project</strong> — HackPit <em>drives</em> one you run in VMware over WinRM (Model A), a new execution transport behind the same gates. Windows-only tools now report runnable when a Windows target is selected (reconciled per active target); on a Linux run they are still N/A and marked. The AD graph executes live against that target. See the Windows execution backend in Part III.</li>
 </ul>
 <h2 id="explicitly-deferred-with-the-reason">Explicitly deferred (with the reason)</h2>
 <ul>
 <li><strong>A VPS for blind out-of-band callbacks</strong> (D2) — a NAT'd laptop has no public listener; deferred until bounty work needs it.</li>
-<li><strong>A Windows execution target for CRTP</strong> (D9) — accepted gap; HackPit plans and writes up CRTP work, the lab work happens elsewhere.</li>
+<li><strong>A Windows execution target for CRTP</strong> (D9) — <strong>DONE</strong> (no longer deferred): the WinRM driver executes CRTP/AD work live on an external VMware VM you run; only the live-box browser verification is deferred until that VM is up.</li>
 <li><strong>Growing tier-1</strong> (§3, finding 2) — the only KB item still open, and the one that cannot be solved by ingesting: it needs Zaid's own writing.</li>
 <li><strong>The HTB Academy syllabus proper</strong> (§3, finding 4) — the local slice is fully ingested; the rest is proprietary and needs the course.</li>
 <li><strong>Thin categories with no target on the list</strong> — mobile · iot · forensics · ics · phishing (§3, finding 3). Unfilled by choice.</li>
@@ -661,16 +677,16 @@ a { color: var(--accent); text-decoration: none; }
 </ul>
 <hr />
 <h1 id="part-iii-build-log-phases-15-shipped-2026-07-26">PART III — BUILD LOG (Phases 1–5, shipped 2026-07-26)</h1>
-<p>Branch <code>sandbox-kali-image</code>. Full hermetic safety suite green throughout (31 test files); both Docker proofs 4/4 (lab still egress-less; engage fully open); browser-verified with Ollama (<code>qwen3:8b</code>).</p>
+<p>Branch <code>sandbox-kali-image</code>. Full hermetic safety suite green throughout (34 test files); both Docker proofs 4/4 (lab still egress-less; engage fully open); browser-verified with Ollama (<code>qwen3:8b</code>).</p>
 <h2 id="decisions-taken-d1d15">Decisions taken (D1–D15)</h2>
-<p>Every decision that drove the build. D1/D3/D4/D6/D7 were the Phase-1 build; D9 is a standing accepted gap (Part II); D2/D5/D8 are standing policy (Part II); D10/D11/D12 were Phase-4 work, now built; D13 is this document; D14/D15 shaped Phase 5.</p>
+<p>Every decision that drove the build. D1/D3/D4/D6/D7 were the Phase-1 build; D9 was a standing accepted gap that is <strong>now built</strong> (the Windows execution backend); D2/D5/D8 are standing policy (Part II); D10/D11/D12 were Phase-4 work, now built; D13 is this document; D14/D15 shaped Phase 5.</p>
 <ul>
 <li><strong>D1 — Fix the sandbox image; HackPit <em>is</em> the attack box.</strong> A Kali VM's advantages (root, raw sockets, VPN, <code>/etc/hosts</code>) are all reachable in Docker via capabilities + <code>/dev/net/tun</code>. <em>Built (Phase 1).</em></li>
 <li><strong>D3 — Capabilities + root on the ENGAGE sandbox only.</strong> Lab keeps <code>cap_drop: ALL</code> + non-root. <em>Built.</em></li>
 <li><strong>D4 — All three sandboxes get the new toolset; only the lab's <em>network</em> isolation stays.</strong> <em>Built.</em></li>
 <li><strong>D6 — Catalog describes reality, not aspiration.</strong> <em>Built.</em></li>
 <li><strong>D7 — Startup reconciliation check.</strong> <em>Built.</em></li>
-<li><strong>D9 — Accept the CRTP gap; no Windows VM; stop listing Windows-only tools as available.</strong> <em>Built (marked, not removed).</em></li>
+<li><strong>D9 — CRTP Windows execution.</strong> Was "accept the gap; no Windows VM." Now <strong>closed by the WinRM driver</strong> (Windows execution backend): HackPit drives an external VMware VM you run — no Windows VM inside the project. Windows-only tools run when a Windows target is selected; still N/A + marked on a Linux run. <em>Built (the AD graph executes live).</em></li>
 <li><strong>D10 — Allow evasion/OPSEC content as an additive second channel, keeping the blue view.</strong> <em>Built (Phase 4).</em></li>
 <li><strong>D11 — Fix the KB gap via Route B (additive merge), not a rebuild.</strong> <em>Built (Phase 4).</em></li>
 <li><strong>D12 — Ingest PATT payloads + shodan dorks into the KB; <code>oscp_tools</code> into the Scripts Arsenal.</strong> <em>Built (Phase 4).</em></li>
@@ -725,14 +741,26 @@ a { color: var(--accent); text-decoration: none; }
 <li><strong>Item 5 — the HTB Academy slice, audited (§3, finding 4).</strong> Auditing what the local folder holds against what had been ingested found two files silently lost, both to one root cause — bare <code>rglob</code> over <code>*.md</code>. <code>File_Inclusion/README.md</code> (4.5 KB of LFI module content) is tracked in git but <strong>gone from disk</strong>, the dehydration/quarantine pattern this repo has hit before — and that module is full of web-shell examples, which is exactly what trips the signature. <code>File_Upload_Attacks/1.txt</code> (8 KB of module answers and webshell walkthroughs) was lost purely for its extension: §4.1's headline finding in miniature. Now <code>_all_md</code> (rglob ∪ <code>git ls-files</code>, with git recovery) plus <code>.txt</code>.</li>
 </ul>
 <p><strong>KB 1,667 → 2,617</strong>, 0 malformed rows, embeddings rebuilt incrementally, scripts index rebuilt, <code>entries.jsonl</code> verified present and counted after every pass (the Defender-quarantine trap).</p>
+<h2 id="windows-execution-backend-the-winrm-driver-shipped-2026-07-26">Windows execution backend — the WinRM driver (shipped 2026-07-26)</h2>
+<p><em>Commits <code>72b0959</code> (transport + profiles + <code>windows</code> mode), <code>cf64b8f</code> (profile CRUD/picker + per-target <code>/tools</code>), <code>d8854dc</code> (native Windows abuse variants + AD live), <code>1ce53ce</code> (frontend), the VM guide, and this doc.</em> Closes D9 the honest way. See <code>docs/WINDOWS-EXECUTION.md</code> + <code>docs/WINDOWS-TARGET-SETUP.md</code>.</p>
+<ul>
+<li><strong>A new execution transport, behind the same gates.</strong> <code>docker exec</code> is swapped for a WinRM call; nothing about the safety model changes. A third mode, <code>windows</code> (alongside <code>lab</code> and <code>engagement</code>), is selected by <code>ExecRequest.windows_profile_id</code>. The target is the profile's <strong>host — hardcoded server-side, never a request field</strong> (the same containment shape <code>:kali</code> gets from its hardcoded container: a command physically cannot reach a box you did not pick). Gates: <code>windows</code> (profile exists) → <code>target</code> (host in the engagement scope, if one is also named) → <strong>never-auto-run</strong> approval → danger red-confirm. No isolation gate — it is a real external box, like engagement.</li>
+<li><strong>Model A — HackPit drives, it does not own.</strong> No Windows VM lives inside the project. The operator runs a Windows/AD VM in VMware Workstation; HackPit opens a WinRM session and runs one PowerShell command string on the box (Rubeus/PowerView/Mimikatz/.NET all run <em>there</em>). <code>pywinrm</code> is <strong>lazy-imported</strong> so the hermetic suite needs no dependency and no network; the AD-live path is unit-tested with a <strong>mocked</strong> transport.</li>
+<li><strong>Saved connection profiles</strong> (<code>cockpit/winprofiles.py</code>) — a "Windows targets" store in the gitignored <code>sessions.db</code>: name, host, transport (WinRM; SSH a documented later seam), port, username, <code>password</code> <strong>or</strong> <code>ntlm-hash</code> (pass-the-hash, presented <code>LM:NT</code>), domain. The secret is <strong>write-only</strong> — masked to <code>has_secret</code> in every view, read only by the transport, never in a response, record or command line. A <strong>captured vault credential can fill a profile</strong>, resolved server-side so the secret never round-trips.</li>
+<li><strong>The AD graph executes live.</strong> Every abusable edge gained a <strong>native Windows variant</strong> (PowerView/Rubeus/Mimikatz) beside the Linux one; the walk/orchestrator's proposed command runs over WinRM when a Windows target is picked, and <code>advance</code> still requires an approved + exit-0 run. The danger heuristic learned the native destructive cmdlets (<code>Set-DomainUserPassword</code>, <code>Add-DomainObjectAcl</code>, <code>Set-DomainObjectOwner</code>, <code>Add-DomainGroupMember</code>, <code>Set-DomainRBCD</code>, <code>Invoke-Mimikatz</code>, …), so a native DCSync/password-reset trips the <strong>same</strong> red confirm as its Linux cousin — the oracle test now checks both transports.</li>
+<li><strong>Per-target tool reconciliation.</strong> Windows-only tools (Rubeus/PowerView/Mimikatz/winPEAS) report runnable when a Windows target is selected and N/A on a Linux run — reconciled per active target (<code>/tools?windows_profile_id=…</code>), never a global flip. Served from <code>main.py</code> so the cockpit stays arsenal-blind.</li>
+<li><strong>Frontend.</strong> A <strong>Windows targets</strong> page (<code>/windows</code>) — profile CRUD, masked secrets, connectivity test — and a "run on" picker in the AD walk (Linux sandbox vs a WinRM target); the confirm/flags/command shown follow whichever command will actually run.</li>
+<li><strong>Safety regression-lock</strong> (<code>test_winrm_safety.py</code>): host-locked to the profile / no gate bypass / secrets never leak / <strong>the orchestrator cannot auto-run WinRM</strong> (transport reachable only from the gated executor + the human router probe, source-scanned). Functional path (<code>test_winrm.py</code>) uses a mocked transport.</li>
+</ul>
+<p><strong>Deferred to a live VM:</strong> the live/browser verification against a real Windows box, until the operator's VM is up (build + unit tests are hermetic) — the same way tunnels and AD-live execution were deferred.</p>
 <h2 id="verification">Verification</h2>
 <ul>
-<li><strong>Hermetic safety suite</strong> (<code>sh backend/run_safety_tests.sh</code>) — green after every phase, expanded across all five with <code>test_phase1_runtime</code>, <code>test_state</code>, <code>test_scope_hostcheck</code>, <code>test_credvault</code>, <code>test_corpora</code>, <code>test_detection</code>/<code>test_detection_safety</code> (OPSEC channel + blue-view-unchanged), <code>test_repeater</code>, <code>test_tunnels</code>, <code>test_report_templates</code>, persistent-shell containment tests in <code>test_kali</code>, and Phase 5's <code>test_terminal</code> (PTY containment + the sentinel shell provably untouched) and <code>test_exploits</code> (version comparison, tiered ranking, executes-nothing). <strong>31 test files.</strong></li>
+<li><strong>Hermetic safety suite</strong> (<code>sh backend/run_safety_tests.sh</code>) — green after every phase, expanded across all five with <code>test_phase1_runtime</code>, <code>test_state</code>, <code>test_scope_hostcheck</code>, <code>test_credvault</code>, <code>test_corpora</code>, <code>test_detection</code>/<code>test_detection_safety</code> (OPSEC channel + blue-view-unchanged), <code>test_repeater</code>, <code>test_tunnels</code>, <code>test_report_templates</code>, persistent-shell containment tests in <code>test_kali</code>, Phase 5's <code>test_terminal</code> (PTY containment + the sentinel shell provably untouched) and <code>test_exploits</code> (version comparison, tiered ranking, executes-nothing), and the Windows backend's <code>test_winrm</code> + <code>test_winrm_safety</code> (host-locked / no gate bypass / secret never leaks / orchestrator can't auto-run WinRM) with the AD oracle extended to the native Windows variants. <strong>34 test files.</strong></li>
 <li><strong>Docker proofs</strong> — <code>isolation_proof.sh</code> 4/4 (lab still cannot reach internet or host), <code>engage_open_proof.sh</code> 4/4 (engage has full reach).</li>
-<li><strong>Browser</strong> — every UI surface exercised against a live Ollama backend per the testing rule: the Phase-4 surfaces (payload-set arsenal rows, the OPSEC red-team channel, repeater send/replay/diff, tunnels route preview, exam report templates with the proof table) and the Phase-5 ones — <code>:terminal</code> running <code>top</code> and <code>vim</code> with live resize, <code>:exploits</code> resolving <code>vsftpd 2.3.4</code> to the backdoor exploit and its CVE, the state panel's per-service jump into it, and <code>/category/cloud</code> at 535 entries.</li>
-<li><strong>Frontend</strong> — <code>tsc</code> clean, lint at the pre-existing baseline (11 errors + 1 warning, unchanged — verified by stashing the changes and re-running), <code>next build</code> exit 0 (routes include <code>/terminal</code>, <code>/exploits</code>).</li>
+<li><strong>Browser</strong> — every UI surface exercised against a live Ollama backend per the testing rule: the Phase-4 surfaces (payload-set arsenal rows, the OPSEC red-team channel, repeater send/replay/diff, tunnels route preview, exam report templates with the proof table) and the Phase-5 ones — <code>:terminal</code> running <code>top</code> and <code>vim</code> with live resize, <code>:exploits</code> resolving <code>vsftpd 2.3.4</code> to the backdoor exploit and its CVE, the state panel's per-service jump into it, and <code>/category/cloud</code> at 535 entries. <strong>Windows targets</strong> (<code>/windows</code>): profile create/list/test/delete and the AD-walk "run on" picker verified against the backend — the connectivity <strong>test</strong> and a live WinRM round-trip are deferred to a real VM (no Windows box exists yet), stated plainly rather than claimed.</li>
+<li><strong>Frontend</strong> — <code>tsc</code> clean, lint at the pre-existing baseline (11 errors + 1 warning, unchanged — verified by stashing the changes and re-running), <code>next build</code> exit 0 (routes include <code>/terminal</code>, <code>/exploits</code>, <code>/windows</code>).</li>
 </ul>
 <h2 id="status">Status</h2>
-<p>Everything is local on branch <code>sandbox-kali-image</code>. <strong>All five phases are complete.</strong> The only remaining work is the deliberately deferred list in Part II — where the largest item, growing tier-1, is writing rather than building.</p>
+<p>Everything is local on branch <code>sandbox-kali-image</code>. <strong>All five phases are complete, and the Windows execution backend (D9) is now built</strong> — the AD attack-path graph executes live over WinRM against an external VMware VM you run. The only remaining work is the deliberately deferred list in Part II — where the largest item, growing tier-1, is writing rather than building — plus the live-box verification of the WinRM driver, which waits on a VM being stood up.</p>
 </body>
 </html>

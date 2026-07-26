@@ -56,6 +56,7 @@ from cockpit import runstore as cockpit_runstore  # noqa: E402
 from cockpit import engagement as cockpit_engagement  # noqa: E402
 from cockpit import reconcile as cockpit_reconcile  # noqa: E402
 from cockpit import loot as cockpit_loot  # noqa: E402
+from cockpit import winprofiles as cockpit_winprofiles  # noqa: E402  (Windows target store)
 import state as engagement_state  # noqa: E402
 from state import store as state_store  # noqa: E402
 from state import tasks as state_tasks  # noqa: E402
@@ -297,6 +298,8 @@ async def lifespan(app: FastAPI):
     cockpit_runstore.init_db()
     # engagement-mode records (deliberate real-target entry) share it too.
     cockpit_engagement.init_db()
+    # saved Windows-target connection profiles (WinRM driver) share it too.
+    cockpit_winprofiles.init_db()
     # parsed AD attack-path graphs share it too.
     ad_store.init_db()
     # structured engagement state (hosts/services/endpoints/credentials/findings) + the
@@ -1035,8 +1038,14 @@ def seed_session_tasks(session_id: str) -> dict[str, Any]:
 
 
 @app.get("/tools")
-def tool_reconciliation(refresh: bool = False) -> dict[str, Any]:
+def tool_reconciliation(
+    refresh: bool = False, windows_profile_id: str | None = None
+) -> dict[str, Any]:
     """Which catalogued tools the sandbox ACTUALLY has (D7).
+
+    Per-target: pass ``windows_profile_id`` to reconcile against a selected WINDOWS box
+    instead of the Linux sandbox — Windows-only tools become runnable and Linux-only ones N/A
+    (availability is per active target, never a global flip). Omit it for the Linux view.
 
     This is the check that would have caught the 73-catalogued / 7-installed gap on day one,
     and it keeps catching it every time the image changes. The same answer filters the
@@ -1054,6 +1063,12 @@ def tool_reconciliation(refresh: bool = False) -> dict[str, Any]:
     never import the execution layer; test_arsenal_safety enforces BOTH directions. main is
     the composition root that is already allowed to know about both.
     """
+    if windows_profile_id:
+        profile = cockpit_winprofiles.get_public(windows_profile_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="no such Windows target profile")
+        view = cockpit_reconcile.windows_target_view(attack_path._arsenal(), profile["host"])
+        return {**view, "loot": cockpit_loot.describe()}
     if refresh:
         try:
             cockpit_reconcile.check(attack_path._arsenal())

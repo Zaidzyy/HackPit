@@ -202,6 +202,34 @@ def check(arsenal: Any = None) -> Reconciliation:
     return state
 
 
+def windows_target_view(arsenal: Any, host: str) -> dict[str, Any]:
+    """Tool availability reconciled for a WINDOWS target instead of the Linux sandbox.
+
+    Windows-only tools (Rubeus/PowerView/Mimikatz/winPEAS) DO run on a selected Windows box,
+    so they report runnable; the Linux tools are N/A for this target. Availability is per
+    ACTIVE TARGET — never a global flip: the Linux :func:`check` view is untouched. Computed
+    from the catalog's ``platform`` field (the same split :func:`check` uses), not a remote
+    probe. Pure: ``arsenal`` is an opaque catalog object, so this stays reconcile's job while
+    the cockpit gate modules stay catalog-blind.
+    """
+    windows_tools, linux_tools = [], []
+    for tool in getattr(arsenal, "tools", []) or []:
+        if (getattr(tool, "platform", "") or "").lower() == WINDOWS_PLATFORM:
+            windows_tools.append(tool.name)
+        else:
+            linux_tools.append(tool.name)
+    return {
+        "target_kind": "windows",
+        "target": host,
+        "available": True,
+        "detail": f"{len(windows_tools)} Windows tools runnable on {host}; "
+        f"{len(linux_tools)} Linux-only tools N/A for a Windows target",
+        "runnable": sorted(windows_tools),
+        "not_applicable": sorted(linux_tools),
+        "present_count": len(windows_tools),
+    }
+
+
 def current() -> Reconciliation:
     """The cached result. Safe before any check has run (reports 'not yet checked')."""
     with _LOCK:

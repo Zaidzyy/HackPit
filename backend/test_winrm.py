@@ -184,10 +184,30 @@ def test_ntlm_hash_credential_is_lm_nt_formatted() -> None:
     print("  ntlm-hash credential is LM:NT formatted; password passed verbatim: PASS")
 
 
+def test_per_target_tool_reconciliation() -> None:
+    """A Windows target flips availability: Windows-only tools runnable, Linux tools N/A —
+    per active target, never a global change to the Linux view."""
+    from arsenal import loader as arsenal_loader
+    from cockpit import reconcile
+
+    arsenal = arsenal_loader.load()  # hermetic: reads tools.json
+    view = reconcile.windows_target_view(arsenal, "10.0.0.5")
+    assert view["target_kind"] == "windows" and view["target"] == "10.0.0.5"
+    # Windows-only tools (marked platform=windows in the catalog) are runnable now.
+    win_names = {t.name for t in arsenal.tools if (t.platform or "").lower() == "windows"}
+    assert win_names, "the catalog should have Windows-only tools to reconcile"
+    assert set(view["runnable"]) == win_names
+    # Linux tools are N/A for a Windows target, and none overlap the runnable set.
+    assert win_names.isdisjoint(set(view["not_applicable"]))
+    assert view["available"] is True
+    print("  per-target reconciliation: Windows tools runnable, Linux tools N/A: PASS")
+
+
 if __name__ == "__main__":
     test_profile_crud_masks_secret()
     test_windows_exec_routes_to_winrm_and_records()
     test_command_and_args_rejoined_as_one_string()
     test_transport_error_is_reported_not_raised()
     test_ntlm_hash_credential_is_lm_nt_formatted()
+    test_per_target_tool_reconciliation()
     print("ALL WinRM functional tests pass")

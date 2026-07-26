@@ -43,6 +43,8 @@ from . import kali as kali_mod
 from . import repeater as repeater_mod
 from . import terminal as terminal_mod
 from . import tunnels as tunnels_mod
+from . import winprofiles as winprofiles_mod
+from . import winrm_transport
 from .kali import KaliRefused, KaliRequest, KaliResult, kali_status, run_kali
 from .models import (
     AllowlistItem,
@@ -219,6 +221,174 @@ def exit_engagement(engagement_id: str) -> dict[str, Any]:
     if not exited:
         raise HTTPException(status_code=404, detail="no active engagement with that id")
     return {"engagement_id": engagement_id, "exited": True}
+
+
+# --- Windows targets (WinRM driver — saved connection profiles + picker) ------------ #
+#
+# A profile names ONE Windows/AD box HackPit can drive over WinRM. The exec path is
+# POST /cockpit/exec with `windows_profile_id` (the SAME gated executor). These endpoints are
+# CRUD + a human-initiated connectivity probe. Secrets are write-only: created/updated here,
+# NEVER returned (every response is the masked public view). See docs/WINDOWS-EXECUTION.md.
+
+
+class WindowsProfileIn(BaseModel):
+    """Create a Windows target profile. The secret is stored, never echoed back."""
+
+    name: str = Field(..., min_length=1, description="Label for the picker.")
+    host: str = Field(..., min_length=1, description="The Windows box's IP/hostname.")
+    username: str = Field(..., min_length=1)
+    transport: str = Field("winrm", description="'winrm' (ssh is a later seam).")
+    port: int = Field(5985, ge=1, le=65535)
+    auth_kind: str = Field("password", description="'password' or 'ntlm-hash' (pass-the-hash).")
+    secret: str = Field("", description="Password or NT hash. Write-only; never returned.")
+    domain: str = Field("", description="AD domain, if any.")
+    # Fill the secret + account from a captured vault credential instead of typing it. The
+    # secret is resolved SERVER-SIDE and never transits back to the client.
+    from_credential: dict[str, str] | None = Field(
+        None,
+        description="{session_id, kind, principal, domain} — pull the account + secret from a "
+        "captured credential in that engagement's vault instead of supplying `secret`.",
+    )
+
+
+class WindowsProfileUpdateIn(BaseModel):
+    """Update selected fields. An empty/omitted secret leaves the stored one unchanged."""
+
+    name: str | None = None
+    host: str | None = None
+    username: str | None = None
+    transport: str | None = None
+    port: int | None = Field(None, ge=1, le=65535)
+    auth_kind: str | None = None
+    secret: str | None = None
+    domain: str | None = None
+
+
+def _resolve_credential_secret(ref: dict[str, str]) -> dict[str, str]:
+    """Pull (username, secret, auth_kind, domain) from a captured vault credential.
+
+    Runs SERVER-SIDE so the secret never has to be sent to the client and back. Maps the
+    credential kind to the profile's auth_kind (ntlm/hash -> ntlm-hash, else password)."""
+    from state import store as state_store  # lazy: keep router import-light
+
+    session_id = (ref.get("session_id") or "").strip()
+    kind = (ref.get("kind") or "").strip().lower()
+    principal = (ref.get("principal") or "").strip().lower()
+    domain = (ref.get("domain") or "").strip().lower()
+    cred = next(
+        (
+            c for c in state_store.load(session_id).credentials
+            if c.kind.lower() == kind
+            and c.principal.lower() == principal
+            and c.domain.lower() == domain
+        ),
+        None,
+    )
+    if cred is None:
+        raise HTTPException(status_code=404, detail="no such credential in this engagement")
+    is_hash = cred.kind.lower() in ("ntlm", "hash", "nt", "ntlm-hash")
+    return {
+        "username": cred.principal,
+        "secret": cred.secret or "",
+        "auth_kind": "ntlm-hash" if is_hash else "password",
+        "domain": cred.domain or "",
+    }
+
+
+@router.get("/windows/status")
+def get_windows_status() -> dict[str, Any]:
+    """Windows-target readiness for the UI: how many profiles exist + whether the live WinRM
+    dependency is installed (the hermetic app runs without it)."""
+    try:
+        import winrm  # noqa: F401, PLC0415
+        have_pywinrm = True
+    except ModuleNotFoundError:
+        have_pywinrm = False
+    return {
+        "profiles": len(winprofiles_mod.list_profiles()),
+        "pywinrm_installed": have_pywinrm,
+        "detail": "" if have_pywinrm else "pip install -r backend/requirements-winrm.txt to "
+        "drive a live Windows target (not needed for the app or the test suite)",
+    }
+
+
+@router.get("/windows/profiles")
+def list_windows_profiles() -> list[dict[str, Any]]:
+    """Every saved Windows target, masked, newest first — the picker's source. Read-only."""
+    return winprofiles_mod.list_profiles()
+
+
+@router.post("/windows/profiles")
+def create_windows_profile(req: WindowsProfileIn) -> dict[str, Any]:
+    """Create a Windows target profile. Returns the masked public view (never the secret)."""
+    username, secret, auth_kind, domain = req.username, req.secret, req.auth_kind, req.domain
+    if req.from_credential:
+        got = _resolve_credential_secret(req.from_credential)
+        username = got["username"] or username
+        secret = got["secret"] or secret
+        auth_kind = got["auth_kind"]
+        domain = got["domain"] or domain
+    try:
+        return winprofiles_mod.create_profile(
+            req.name, req.host, username, transport=req.transport, port=req.port,
+            auth_kind=auth_kind, secret=secret, domain=domain,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/windows/profiles/{profile_id}")
+def get_windows_profile(profile_id: str) -> dict[str, Any]:
+    """One profile, masked. 404 if unknown."""
+    pub = winprofiles_mod.get_public(profile_id)
+    if pub is None:
+        raise HTTPException(status_code=404, detail="no such Windows target profile")
+    return pub
+
+
+@router.put("/windows/profiles/{profile_id}")
+def update_windows_profile(profile_id: str, req: WindowsProfileUpdateIn) -> dict[str, Any]:
+    """Update a profile. Fields left unset are unchanged; an empty secret keeps the stored one."""
+    fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    try:
+        pub = winprofiles_mod.update_profile(profile_id, **fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if pub is None:
+        raise HTTPException(status_code=404, detail="no such Windows target profile")
+    return pub
+
+
+@router.delete("/windows/profiles/{profile_id}")
+def delete_windows_profile(profile_id: str) -> dict[str, Any]:
+    """Delete a profile. 404 if it did not exist."""
+    if not winprofiles_mod.delete_profile(profile_id):
+        raise HTTPException(status_code=404, detail="no such Windows target profile")
+    return {"profile_id": profile_id, "deleted": True}
+
+
+@router.post("/windows/profiles/{profile_id}/test")
+def test_windows_profile(profile_id: str) -> dict[str, Any]:
+    """HUMAN-INITIATED connectivity smoke test — run a HARDCODED `whoami` over WinRM.
+
+    The command is a constant, not a request field, so this probe cannot be turned into an
+    arbitrary-exec path; it only answers "can HackPit reach and authenticate to this box?".
+    Needs pywinrm installed + a reachable box; a failure returns ok=false with the reason
+    (never a 500)."""
+    profile = winprofiles_mod.get_profile(profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="no such Windows target profile")
+    try:
+        result = winrm_transport.run(profile, "whoami", timeout=20)
+    except winrm_transport.WinRMError as exc:
+        return {"ok": False, "error": str(exc), "host": profile["host"]}
+    return {
+        "ok": result.exit_code == 0,
+        "exit_code": result.exit_code,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "host": profile["host"],
+    }
 
 
 @router.get("/kali/status")

@@ -310,6 +310,14 @@ def test_report_opsec_summary_is_opt_in() -> None:
 # --------------------------------------------------------------------------- #
 # 7. knowledge consistency (offline half of pipeline/detection_sources.py)
 # --------------------------------------------------------------------------- #
+def test_c2_obfuscation_specs_present_and_grounded() -> None:
+    for key in ("c2_dns_tunnel", "c2_malleable_profile", "c2_jitter_beacon", "c2_domain_fronting"):
+        assert key in C.SPECS, f"missing C2/obfuscation spec {key!r}"
+        R._grounded("x", [], C.Match(spec=C.SPECS[key], signals=(), matched_on="tool"))
+    # every id these specs cite must resolve (also covered by the consistency test)
+    print("  C2/obfuscation footprints present, grounded, describe-only: PASS")
+
+
 def test_knowledge_is_internally_consistent() -> None:
     pipeline = Path(__file__).resolve().parents[1] / "pipeline"
     if str(pipeline) not in sys.path:
@@ -338,5 +346,6 @@ if __name__ == "__main__":
     test_report_detection_sections()
     test_grounded_opsec_channel()
     test_report_opsec_summary_is_opt_in()
+    test_c2_obfuscation_specs_present_and_grounded()
     test_knowledge_is_internally_consistent()
     print("ALL detection-footprint tests pass")

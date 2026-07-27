@@ -552,6 +552,60 @@ OPSEC: dict[str, OpsecNote] = {n.key: n for n in [
        "wtmp/lastlog.",
        "Matching a service-account pattern narrows which UID ranges are usable, and delaying first "
        "login only delays when the wtmp evidence appears, it doesn't remove it."),
+
+    # --- C2 / traffic obfuscation (TA0011) OPSEC pairing ---------------------------------- #
+    _o("c2_dns_tunnel",
+       "The tunnel SHAPE is the signal — an abnormal share of TXT/NULL/CNAME queries, long "
+       "high-entropy labels, and one resolver path carrying most of a host's DNS volume, all of "
+       "which DNS-tunnel Sigma/NDR rules are built to catch.",
+       "Cap per-query payload size so labels stay closer to legitimate domain lengths; "
+       "spread queries across more record types and resolvers instead of one dedicated channel; "
+       "throttle query rate toward the host's normal DNS baseline; "
+       "shape subdomains to look like real hostnames rather than base32/64 blobs",
+       "Every query still transits the recursive resolver and lands in DNS query logs / passive "
+       "DNS regardless of label shape, and a resolver-path anomaly (one host dominating a "
+       "resolver's volume) persists even when individual labels look tamer.",
+       "Smaller payloads and slower rates cut a tunnel's throughput sharply, turning a fast "
+       "exfil/C2 channel into a very slow one."),
+    _o("c2_malleable_profile",
+       "The client TLS handshake (JA3) and server response fingerprint are stable per toolkit "
+       "default, and beacon timing is periodic enough for a proxy/NDR tool to profile even "
+       "through a convincing web-traffic profile.",
+       "Rotate the TLS parameters a JA3 hash is built from (cipher order, extensions) across "
+       "sessions; match the profile to an app already legitimately used in the environment "
+       "rather than a generic template; add jitter to the beacon interval so period detection "
+       "needs a longer baseline; route through infrastructure the proxy already trusts",
+       "The proxy/NDR stack still logs the JA3/JA3S pair and connection metadata for every "
+       "session regardless of rotation, and a recurring destination stays visible in netflow "
+       "even once timing is jittered.",
+       "Building and maintaining a convincing profile that matches a real app's TLS stack and "
+       "traffic cadence is significant upfront work, and rotating parameters risks breaking the "
+       "profile's own internal consistency."),
+    _o("c2_jitter_beacon",
+       "A fixed check-in interval is what period-detection NDR rules alert on directly; jitter "
+       "and long sleeps exist specifically to break that fixed-interval shape.",
+       "Widen the jitter range and lengthen the average sleep further; "
+       "vary destination characteristics (rotate C2 endpoints/redirectors) instead of beaconing "
+       "to one host; "
+       "time check-ins to overlap with genuine background traffic (business hours)",
+       "Long-baseline NDR and netflow retention still accumulate every connection to the "
+       "(rotating) destinations, and cumulative volume/frequency analysis surfaces the pattern "
+       "once enough history is collected — this changes the detection's time horizon, not "
+       "whether the pattern exists.",
+       "Longer sleep and wider jitter directly slow operator tempo and command turnaround; "
+       "rotating infrastructure adds cost and operational overhead."),
+    _o("c2_domain_fronting",
+       "Domain fronting depends on a CDN routing by SNI to one domain while serving Host-header "
+       "content for another; the SNI/Host mismatch is visible to whoever terminates TLS, and "
+       "most major CDN providers now reject the mismatch outright.",
+       "Confirm the chosen CDN still permits a fronting/Host mismatch before relying on it (most "
+       "no longer do); keep the fronting and true domain on the same CDN tenant to reduce the "
+       "chance of a provider-side block",
+       "A TLS-terminating proxy or any middlebox that logs both SNI and Host header records the "
+       "mismatch directly, and the technique is unreliable enough that most CDNs (CloudFront, "
+       "Fastly, Google, Azure Front Door) have disabled cross-domain fronting entirely.",
+       "A working front is now rare and can stop working mid-engagement without warning as "
+       "providers patch it, with no fallback that preserves the same cover."),
 ]}
 
 
@@ -1049,6 +1103,34 @@ SPECS: dict[str, FootprintSpec] = {s.key: s for s in [
        "Moderate: useradd on most distributions writes to auth.log, and passwd / shadow changes "
        "are file-integrity-monitored where that control exists; the new account line is durable "
        "evidence even where live alerting is absent."),
+
+    # --- C2 / traffic obfuscation (TA0011) — describe side only -------------------------- #
+    _f("c2_dns_tunnel", "Command & control over a DNS tunnel", "T1071.004 T1572", "",
+       "DNS resolver query logs; NSM DNS analytics; passive DNS",
+       "loud",
+       "A defender watching DNS sees an abnormal share of TXT/NULL/CNAME queries, unusually long "
+       "and high-entropy labels, and one internal resolver path dominating volume.",
+       "DNS is ubiquitous so the CHANNEL blends, but the query SHAPE (entropy, record types, "
+       "volume) is exactly what DNS-tunnel detections score."),
+    _f("c2_malleable_profile", "C2 with a custom/malleable transport profile", "T1071.001 T1001", "",
+       "TLS/HTTP proxy logs; JA3/JA3S; NDR beacon analytics",
+       "moderate",
+       "Shaping traffic to look like normal web still leaves a client TLS fingerprint (JA3) and "
+       "server response fingerprint, plus beacon periodicity a proxy can profile.",
+       "A good profile defeats naive signatures; fingerprint + periodicity analytics still apply."),
+    _f("c2_jitter_beacon", "Low-and-slow beaconing with jitter", "T1029 T1071", "",
+       "NDR long-baseline beacon analytics; netflow",
+       "quiet",
+       "Jitter and long sleeps break fixed-interval detection, but cumulative connections to one "
+       "destination over a long baseline still form a beacon pattern NDR can surface.",
+       "Jitter suppresses fixed-interval alerting; cumulative-volume analytics over a long "
+       "baseline still surfaces the pattern, so the coverage gap is retention, not blindness."),
+    _f("c2_domain_fronting", "Domain fronting (describe-only; largely dead)", "T1090.004", "",
+       "TLS-terminating proxy logs (SNI vs Host)",
+       "moderate",
+       "At a TLS-terminating proxy the SNI (the fronting domain) and the inner HTTP Host header "
+       "disagree — the mismatch is the tell; most CDNs now block the technique outright.",
+       "Historically hid the true endpoint; now unreliable because providers disabled it."),
 ]}
 
 
@@ -1127,6 +1209,8 @@ ALIASES: dict[str, str] = {
     "useradd": "persist_account_linux", "adduser": "persist_account_linux",
     "sharpersist": "persist_scheduled_task", "sharpersist.exe": "persist_scheduled_task",
     "weevely": "persist_webshell", "weevely3": "persist_webshell",
+    # C2 / traffic obfuscation
+    "dnscat2": "c2_dns_tunnel", "iodine": "c2_dns_tunnel",
 }
 
 # Tools whose meaning depends on the FIRST argument (a protocol / subcommand).

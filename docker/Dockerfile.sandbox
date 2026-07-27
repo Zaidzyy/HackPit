@@ -344,6 +344,120 @@ RUN git clone --depth 1 https://github.com/1ndianl33t/Gf-Patterns /tmp/gfp \
             > /usr/share/resolvers.txt; } \
     && test -s /usr/share/resolvers.txt
 
+# --- 9b. C2 + evasion (build #4) ----------------------------------------------
+# Everything here was probed against THIS image's kali-rolling snapshot before being written,
+# because three of the five tools are not packaged and one is already installed:
+#   * dnscat2   — NOT in kali-rolling (verified with apt-cache policy, not assumed). Built from
+#                 source: the client is C (make) and the server is Ruby, and both gcc/make and
+#                 ruby are already in the image. Installed under the HYPHENATED names the
+#                 arsenal catalog advertises, so the catalog and the image agree.
+#   * iodine    — ALREADY PRESENT from the Kali toolset layer at /usr/sbin/iodine(d).
+#                 Nothing to install; it is only smoke-tested below so a future base-image
+#                 change that drops it fails the build instead of shipping a broken catalog.
+#   * sliver    — NOT packaged, and there is NO Go toolchain in this image (deliberately: the
+#                 Go layer is not kept). Official release binaries are the only option, which
+#                 also dodges the Go-version floor that a `go install` would impose.
+#   * donut     — no apt candidate and no py3.13 wheel, only a source tarball; it is a C
+#                 extension and gcc is present, so it builds. Own venv per this file's
+#                 convention (PEP 668 makes system pip a non-starter on Kali anyway).
+#   * ScareCrow — NOT packaged; release binary. Its signing step shells out to osslsigncode,
+#                 which IS available (2.13-2) and is installed alongside it, so the signing
+#                 path works. Note the release asset is tagged v5.1 and named
+#                 ScareCrow_5.1_linux_amd64 — there is no 5.1.x asset; a guessed patch
+#                 version 404s and fails this layer.
+# Every step ends in a smoke test so a bad URL or a moved release fails the build loudly.
+
+# Sliver — release binaries (server + client).
+ARG SLIVER_VERSION=1.5.42
+RUN set -eux; \
+    curl -fsSL -o /usr/local/bin/sliver-server \
+        "https://github.com/BishopFox/sliver/releases/download/v${SLIVER_VERSION}/sliver-server_linux"; \
+    curl -fsSL -o /usr/local/bin/sliver-client \
+        "https://github.com/BishopFox/sliver/releases/download/v${SLIVER_VERSION}/sliver-client_linux"; \
+    chmod 0755 /usr/local/bin/sliver-server /usr/local/bin/sliver-client; \
+    /usr/local/bin/sliver-server version; \
+    /usr/local/bin/sliver-client version
+
+# dnscat2 — DNS-tunnelled channel. Client compiled from source; server is the shipped Ruby.
+# Wrapped as dnscat2-server / dnscat2-client to match backend/arsenal/tools.json.
+# The server's four gems (trollop/salsa20/sha3/ecdsa, per its own Gemfile) are NOT optional —
+# without them dnscat2.rb dies on `require 'ecdsa'`. The smoke test below runs the server's
+# own --help so a missing gem fails the build instead of surfacing at engagement time.
+RUN set -eux; \
+    git clone --depth 1 https://github.com/iagox86/dnscat2.git /opt/dnscat2; \
+    make -C /opt/dnscat2/client; \
+    install -m 0755 /opt/dnscat2/client/dnscat /usr/local/bin/dnscat2-client; \
+    gem install --no-document trollop salsa20 sha3 ecdsa; \
+    printf '%s\n' '#!/bin/sh' 'exec ruby /opt/dnscat2/server/dnscat2.rb "$@"' \
+        > /usr/local/bin/dnscat2-server; \
+    chmod 0755 /usr/local/bin/dnscat2-server; \
+    /usr/local/bin/dnscat2-client --help 2>&1 | head -1; \
+    ruby -e "require 'ecdsa'; require 'salsa20'; require 'sha3'; require 'trollop'; puts 'dnscat2 server gems ok'"
+
+# iodine — already installed by the Kali toolset layer; assert it, do not reinstall.
+RUN set -eux; \
+    command -v iodine; \
+    command -v iodined; \
+    iodine -h 2>&1 | head -1
+
+# donut — shellcode-from-PE generator, in its own venv (this file's convention).
+# donut-shellcode is a C EXTENSION exposing exactly one callable, `donut.create(...)`. It has
+# no console_script and no __main__, so `python -m donut` cannot work — the CLI below is ours,
+# and its -i/-o/-a flags are what backend/arsenal/tools.json advertises.
+RUN set -eux; \
+    python3 -m venv /opt/donut/venv; \
+    /opt/donut/venv/bin/pip install --no-cache-dir -q donut-shellcode; \
+    /opt/donut/venv/bin/python -c "import donut; assert callable(donut.create)"; \
+    printf '%s\n' \
+        '#!/opt/donut/venv/bin/python' \
+        '"""Minimal CLI over donut-shellcode (the module ships none)."""' \
+        'import argparse, sys, donut' \
+        'p = argparse.ArgumentParser(prog="donut", description="PE/.NET -> position-independent shellcode")' \
+        'p.add_argument("-i", "--input", required=True, help="input .exe/.dll assembly")' \
+        'p.add_argument("-o", "--output", default="loader.bin", help="output shellcode file")' \
+        'p.add_argument("-a", "--arch", type=int, default=3, choices=(1, 2, 3), help="1=x86 2=amd64 3=both")' \
+        'p.add_argument("-p", "--params", default="", help="parameters passed to the entry point")' \
+        'a = p.parse_args()' \
+        'n = donut.create(file=a.input, output=a.output, arch=a.arch, params=a.params or None)' \
+        'if not n:' \
+        '    sys.exit("donut: generation failed")' \
+        'print(f"{n} bytes -> {a.output}")' \
+        > /usr/local/bin/donut; \
+    chmod 0755 /usr/local/bin/donut; \
+    /usr/local/bin/donut --help >/dev/null
+
+# ScareCrow — loader generator. Signing needs osslsigncode, which this snapshot lacks; the
+# apt attempt is tolerated so the build does not fail over an optional signing dependency.
+ARG SCARECROW_VERSION=5.1
+RUN set -eux; \
+    apt-get update && apt-get install -y --no-install-recommends osslsigncode \
+        && rm -rf /var/lib/apt/lists/*; \
+    curl -fsSL -o /tmp/scarecrow \
+        "https://github.com/optiv/ScareCrow/releases/download/v${SCARECROW_VERSION}/ScareCrow_${SCARECROW_VERSION}_linux_amd64"; \
+    install -m 0755 /tmp/scarecrow /usr/local/bin/ScareCrow; \
+    rm -f /tmp/scarecrow; \
+    /usr/local/bin/ScareCrow -h 2>&1 | head -1 || true; \
+    test -x /usr/local/bin/ScareCrow
+
+# One consolidated smoke test: the build FAILS if any advertised binary is missing.
+# A `command -v` check alone is not a smoke test — it passes for a binary that dies on its
+# first line. Each tool below is actually INVOKED. (dnscat2-server has no --help of its own,
+# so its gems are asserted directly; ScareCrow exits non-zero on -h by design.)
+RUN set -eux; \
+    for b in sliver-server sliver-client dnscat2-server dnscat2-client iodine iodined donut ScareCrow; do \
+        command -v "$b" >/dev/null || { echo "MISSING: $b"; exit 1; }; \
+    done; \
+    sliver-server version; \
+    sliver-client version; \
+    dnscat2-client --help >/dev/null 2>&1; \
+    ruby -e "require 'ecdsa'; require 'salsa20'; require 'sha3'; require 'trollop'"; \
+    iodine -h 2>&1 | head -1; \
+    iodined -h 2>&1 | head -1; \
+    donut --help >/dev/null; \
+    ScareCrow -h >/dev/null 2>&1 || true; \
+    osslsigncode --version >/dev/null; \
+    echo "build #4 C2/evasion toolset present and each tool runs"
+
 # --- 10. Strip file capabilities (REQUIRED — do not remove) -------------------
 # Kali ships a few binaries with FILE capabilities so unprivileged desktop users get raw
 # sockets: /usr/lib/nmap/nmap (cap_net_raw,cap_net_admin,cap_net_bind_service) and

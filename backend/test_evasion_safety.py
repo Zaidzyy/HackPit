@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cockpit import allowlist, config, executor as EX, loot, runstore  # noqa: E402
 from evasion import engine as G  # noqa: E402
+from test_support import scans  # noqa: E402
 
 BACKEND = Path(__file__).resolve().parent
 PKG = BACKEND / "evasion"
@@ -47,6 +48,11 @@ _ALLOWED = {"evasion/engine.py", "evasion/__init__.py", "test_evasion.py",
 # Modules that must NEVER reach this engine, matched on filename. "plan" is here because a
 # planner PROPOSES steps, which is the same hazard as an orchestrator running them.
 _AGENT_MARKERS = ("orchestrat", "loop", "adorch", "agent", "propose", "plan")
+# Matched as MODULE REFERENCES, not as the word. The AST pass is the load-bearing half — it
+# sees an aliased import, an import opened inside a function body, and importlib/getattr
+# indirection, none of which a regex can. The regexes are belt-and-braces for a qualified use.
+_EVASION_PATTERNS = [r"^\s*(?:from|import)\s+evasion\b", r"\bevasion\.engine\b"]
+_EVASION_AST_TARGETS = ["evasion", "evasion.engine"]
 
 
 def _fn(tree: ast.AST, name: str) -> ast.FunctionDef:
@@ -106,58 +112,52 @@ def _req(**kw) -> G.EvasionRequest:
 # --------------------------------------------------------------------------- #
 # 1. NO AGENT PATH
 # --------------------------------------------------------------------------- #
-def _agent_modules() -> list[Path]:
-    """Every backend module whose NAME marks it as agent-ish — the set actually line-scanned."""
-    roots = [BACKEND, BACKEND / "cockpit", BACKEND / "adgraph", BACKEND / "detection",
-             BACKEND / "state", BACKEND / "arsenal", BACKEND / "exploits", BACKEND / "codescan"]
-    found: list[Path] = []
-    for root in roots:
-        if not root.is_dir():
-            continue
-        for py in sorted(root.glob("*.py")):
-            if py.relative_to(BACKEND).as_posix() in _ALLOWED:
-                continue
-            if any(m in py.name.lower() for m in _AGENT_MARKERS):
-                found.append(py)
-    return found
-
-
 def test_no_orchestrator_or_agent_path_to_evasion() -> None:
-    """No agent-ish module may name the evasion engine.
+    """No module outside the allow-list may name the evasion engine.
 
-    THE POSITIVE CONTROL IS THE POINT. It used to count every .py file in the tree — a number
-    incremented BEFORE the agent-name filter — so `assert scanned > 40` only proved the backend
-    is large. Of 99 files counted, 5 were actually line-scanned. Renaming orchestrator.py would
-    have collapsed the scan to nothing and the test would still have printed a passing "99
-    modules scanned". The control now asserts the count of modules that are REALLY read, so
-    that rename fails this test instead of hiding in it.
+    THE FILENAME FILTER IS GONE, and that was the last half of this defect. Build #4 fixed the
+    COUNT (it used to increment before the filter, so `assert scanned > 40` reported 99 while 5
+    files were really inspected) but kept the filter itself: only modules whose NAME contained
+    orchestrat/loop/adorch/agent/propose/plan had their content read. `from evasion import
+    engine` in cockpit/executor.py, chat.py or adgraph/techniques.py was never looked at.
+
+    A module named something nobody predicted is exactly the case a name filter cannot cover,
+    so there is no name filter. Every backend module is read; the allow-list names the files
+    that legitimately reference the engine, keyed on repo-relative paths, and each of them is
+    asserted to STILL match so a rename cannot quietly empty the patterns.
+
+    THE PREDICATE TIGHTENED AT THE SAME TIME, and widening the file set is what forced it. The
+    old check was a bare ``"evasion" in line``, which is fine over five hand-picked files and
+    wrong over the whole tree: the detection package's ANTI-evasion guard — the code that
+    REFUSES prescriptive evasion copy — says the word constantly and imports nothing. Flagging
+    it would be a false positive, and the answer to a false positive is a better predicate, not
+    a narrower file set. So the claim asserted is the one the invariant makes: no module reaches
+    the engine, matched as an IMPORT (in every form the AST can see) or a qualified reference.
     """
-    modules = _agent_modules()
-    offenders: list[str] = []
-    for py in modules:
-        for i, line in enumerate(py.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
-            low = line.lower()
-            if low.lstrip().startswith("#"):
-                continue
-            if "evasion" in low:
-                offenders.append(f"{py.relative_to(BACKEND).as_posix()}:{i}: {line.strip()}")
-    assert not offenders, ("an agent/orchestrator module reaches the evasion engine:\n"
-                           + "\n".join(offenders))
-
-    # The control, on the number that matters. Both real orchestrators must be in the set —
-    # named explicitly, so renaming one is a FAILURE here rather than a silent loss of coverage.
-    names = {p.relative_to(BACKEND).as_posix() for p in modules}
-    # NOTE the paths: the main orchestrator is backend/orchestrator.py, NOT
-    # cockpit/orchestrator.py — the cockpit package has no orchestrator module. Naming a
-    # non-existent path here would make this control fail permanently for the wrong reason.
-    for required in ("orchestrator.py", "adgraph/orchestrator.py"):
-        assert required in names, (
-            f"{required} is no longer being scanned — either it moved/was renamed (add the new "
-            f"name to _AGENT_MARKERS) or the scan has silently stopped covering it. "
-            f"Currently scanning: {sorted(names)}")
-    assert len(modules) >= 4, f"only {len(modules)} agent-ish modules scanned: {sorted(names)}"
-    print(f"  {len(modules)} agent/orchestrator modules line-scanned: "
-          f"ZERO path to evasion: PASS")
+    res = scans.scan_source_tree(
+        patterns=_EVASION_PATTERNS, allowed=_ALLOWED, ast_targets=_EVASION_AST_TARGETS,
+    )
+    scans.assert_clean(
+        res,
+        what="an agent/orchestrator module reaches the evasion engine",
+        # The two real orchestrators, plus the modules the old filename filter could never
+        # reach — named explicitly so a rename fails HERE rather than silently losing coverage.
+        must_have_scanned=["orchestrator.py", "adgraph/orchestrator.py", "cockpit/executor.py",
+                           "cockpit/router.py", "chat.py", "adgraph/techniques.py",
+                           "detection/resolver.py", "report.py"],
+        min_checked=60,
+        # main.py is the only allow-listed file that CAN match: the other two are the engine's
+        # own package, and a module does not import itself. Demanding a control from them would
+        # be a permanently-failing assertion, not a guarantee.
+        require_controls=["main.py"],
+    )
+    scans.assert_catches_a_planted_violation(
+        plant="from evasion import engine",
+        patterns=_EVASION_PATTERNS, allowed=_ALLOWED, ast_targets=_EVASION_AST_TARGETS,
+        where="cockpit/executor.py",
+    )
+    print(f"  all {len(res.checked)} backend modules content-scanned: ZERO path to evasion "
+          "(+ planted-violation control): PASS")
 
 
 def test_the_engine_imports_no_agent_module() -> None:

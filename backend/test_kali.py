@@ -31,6 +31,7 @@ from pathlib import Path
 from cockpit import config
 from cockpit import kali as K
 from cockpit.kali import KaliRefused, KaliRequest, run_kali
+from test_support import scans
 
 
 class _Spy:
@@ -155,33 +156,51 @@ def test_no_isolation_gate_on_kali() -> None:
     print("  no isolation gate on :kali (cockpit keeps its own): PASS")
 
 
+# Only kali.py (defines the shell) + router.py (the HTTP route) may reference it. Keyed on
+# REPO-RELATIVE PATHS: the old form was `{"kali.py", "router.py"}` matched against `f.name`,
+# which exempted adgraph/router.py, detection/router.py, arsenal/router.py and every other
+# router.py in the tree by accident.
+_KALI_ALLOWED = {"cockpit/kali.py", "cockpit/router.py"}
+_KALI_PATTERNS = [r"run_kali", r"\bimport kali\b", r"from \.kali", r"cockpit\.kali"]
+_KALI_AST_TARGETS = ["cockpit.kali", "run_kali"]
+
+
 def test_kali_is_human_only() -> None:
     """run_kali must be reachable ONLY from the HTTP route + this test — NEVER the
     autonomous executor/agent path. A full-reach shell wired to the agent = autonomous
-    attacks on host/LAN/internet. Scan the whole (non-venv) source tree."""
-    backend = Path(__file__).parent
-    # Only kali.py (defines) + router.py (the HTTP route) may reference the shell.
-    # Test files are skipped: they are not the runtime agent path, and several
-    # legitimately name run_kali inside assertions that a module must NOT call it.
-    allowed = {"kali.py", "router.py"}
-    py_files = list(backend.glob("*.py")) + list((backend / "cockpit").glob("*.py"))
-    offenders = []
-    for f in py_files:
-        if f.name in allowed or f.name.startswith("test_"):
-            continue
-        text = f.read_text(encoding="utf-8")
-        if "run_kali" in text or "import kali" in text or "from .kali" in text or "cockpit.kali" in text:
-            offenders.append(f.name)
-    assert not offenders, (
-        f":kali must be HUMAN-ONLY — these non-route modules reference the shell: {offenders}. "
-        "The orchestrator/agent/executor must have NO path to run_kali."
+    attacks on host/LAN/internet.
+
+    THIS SCAN DID NOT DO WHAT ITS OWN DOCSTRING SAID. It globbed `backend/*.py` plus
+    `backend/cockpit/*.py` — 30 of 69 modules — so all of adgraph/, arsenal/, codescan/,
+    detection/, evasion/, exploits/ and state/ were never opened. A planted
+    `from cockpit.kali import run_kali` in adgraph/orchestrator.py, a literal orchestrator
+    module, shipped green. It is now the whole tree, with the allow-list keyed on paths and
+    an AST pass for the indirection a substring predicate cannot see.
+    """
+    res = scans.scan_source_tree(
+        patterns=_KALI_PATTERNS, allowed=_KALI_ALLOWED, ast_targets=_KALI_AST_TARGETS,
+    )
+    scans.assert_clean(
+        res,
+        what=":kali must be HUMAN-ONLY — the orchestrator/agent/executor must have NO path to "
+             "run_kali",
+        must_have_scanned=["orchestrator.py", "adgraph/orchestrator.py", "cockpit/executor.py",
+                           "cockpit/session.py", "main.py"],
+        min_checked=60,
+    )
+    # POSITIVE CONTROL, in this test: the same configuration DOES catch a real violation
+    # planted where the old glob could not see it.
+    scans.assert_catches_a_planted_violation(
+        plant="from cockpit.kali import run_kali",
+        patterns=_KALI_PATTERNS, allowed=_KALI_ALLOWED, ast_targets=_KALI_AST_TARGETS,
     )
     # Belt-and-suspenders: the cockpit executor (the autonomous exec path) exposes no kali hook.
     from cockpit import executor as EX
     assert not hasattr(EX, "run_kali") and not hasattr(EX, "kali"), (
         "the cockpit executor must not reference the :kali shell"
     )
-    print("  :kali is human-only (no agent/executor path): PASS")
+    print(f"  :kali is human-only across all {len(res.checked)} backend modules "
+          "(+ planted-violation control): PASS")
 
 
 def test_run_is_recorded_to_session() -> None:

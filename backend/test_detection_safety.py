@@ -97,8 +97,13 @@ def test_routes_are_read_only() -> None:
 def test_cockpit_package_is_untouched() -> None:
     """The execution layer must not know this feature exists — so it cannot be changed by it."""
     cockpit_dir = Path(__file__).resolve().parent / "cockpit"
+    modules = sorted(cockpit_dir.glob("*.py"))
+    # The file selection here was already right — it globs the WHOLE cockpit package, which is
+    # the entire population this claim is about (contrast the arsenal lock, which named five
+    # files out of twenty-two). What it lacked was a demonstration that it can fail, added below.
+    assert len(modules) >= 20, f"only {len(modules)} cockpit modules — this scan has gone vacuous"
     offenders = []
-    for py in sorted(cockpit_dir.glob("*.py")):
+    for py in modules:
         src = py.read_text(encoding="utf-8")
         if "detection" in src.replace("# ", "").lower():
             for i, line in enumerate(src.splitlines(), 1):
@@ -106,7 +111,19 @@ def test_cockpit_package_is_untouched() -> None:
                 if "detection" in low and not low.lstrip().startswith("#"):
                     offenders.append(f"{py.name}:{i}: {line.strip()}")
     assert not offenders, "the cockpit package must not reference detection:\n" + "\n".join(offenders)
-    print("  the cockpit package is untouched by this feature (no import, no reference): PASS")
+
+    # POSITIVE CONTROL: the same predicate, run over a module that DOES reference detection,
+    # must fire. Without it "no offenders" is indistinguishable from a predicate that matches
+    # nothing — which is exactly how three critical guards shipped green.
+    control = (Path(__file__).resolve().parent / "detection" / "resolver.py").read_text(
+        encoding="utf-8"
+    )
+    assert any(
+        "detection" in line.lower() and not line.lstrip().startswith("#")
+        for line in control.splitlines()
+    ), "the predicate no longer fires even on detection/resolver.py — it is now vacuous"
+    print(f"  all {len(modules)} cockpit modules are untouched by this feature "
+          "(+ positive control): PASS")
 
 
 # --------------------------------------------------------------------------- #

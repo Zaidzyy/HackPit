@@ -43,6 +43,7 @@ from cockpit.terminal import (
     encode_frame,
     encode_resize,
 )
+from test_support import scans
 
 
 class _FakePopen:
@@ -182,27 +183,37 @@ def test_no_isolation_gate_on_the_raw_terminal() -> None:
 # --------------------------------------------------------------------------- #
 # 3. HUMAN-ONLY (the one that matters most)
 # --------------------------------------------------------------------------- #
+_TERMINAL_ALLOWED = {"cockpit/terminal.py", "cockpit/router.py"}
+_TERMINAL_PATTERNS = [
+    r"open_terminal", r"write_input", r"from \.terminal", r"cockpit\.terminal",
+    r"\bimport terminal\b",
+]
+_TERMINAL_AST_TARGETS = ["cockpit.terminal", "open_terminal", "write_input"]
+
+
 def test_terminal_is_human_only() -> None:
     """The raw terminal must be reachable ONLY from the WebSocket route + this test.
 
     An interactive full-reach terminal wired to the agent = autonomous attacks on
-    host/LAN/internet. Scan the whole (non-venv, non-test) backend tree.
+    host/LAN/internet. Scan the whole (non-venv, non-test) backend tree — which this now
+    genuinely does. The old form said "the whole tree" and globbed 30 of 69 modules.
     """
-    backend = Path(__file__).parent
-    allowed = {"terminal.py", "router.py"}
-    py_files = list(backend.glob("*.py")) + list((backend / "cockpit").glob("*.py"))
-    offenders = []
-    for f in py_files:
-        if f.name in allowed or f.name.startswith("test_"):
-            continue
-        text = f.read_text(encoding="utf-8")
-        if ("open_terminal" in text or "write_input" in text
-                or "from .terminal" in text or "cockpit.terminal" in text
-                or "import terminal" in text):
-            offenders.append(f.name)
-    assert not offenders, (
-        f"the raw terminal must be HUMAN-ONLY — non-route modules reference it: {offenders}. "
-        "The orchestrator/agent/executor must have NO path to a pty in the open sandbox."
+    res = scans.scan_source_tree(
+        patterns=_TERMINAL_PATTERNS, allowed=_TERMINAL_ALLOWED,
+        ast_targets=_TERMINAL_AST_TARGETS,
+    )
+    scans.assert_clean(
+        res,
+        what="the raw terminal must be HUMAN-ONLY — the orchestrator/agent/executor must have "
+             "NO path to a pty in the open sandbox",
+        must_have_scanned=["orchestrator.py", "adgraph/orchestrator.py", "cockpit/executor.py",
+                           "cockpit/session.py"],
+        min_checked=60,
+    )
+    scans.assert_catches_a_planted_violation(
+        plant="from cockpit.terminal import open_terminal",
+        patterns=_TERMINAL_PATTERNS, allowed=_TERMINAL_ALLOWED,
+        ast_targets=_TERMINAL_AST_TARGETS,
     )
     # Belt-and-suspenders: the autonomous exec path exposes no terminal hook.
     from cockpit import executor as EX

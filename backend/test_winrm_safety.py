@@ -36,6 +36,7 @@ from pathlib import Path
 
 from cockpit import allowlist, executor, winprofiles, winrm_transport
 from cockpit.models import ExecRequest
+from test_support import scans
 
 
 class _Env:
@@ -160,31 +161,46 @@ def test_secret_never_leaks() -> None:
     print("  secret never leaks (public views / record / events clean): PASS")
 
 
+# Keyed on REPO-RELATIVE PATHS. The old allow-list was `{"executor.py", "winrm_transport.py",
+# "router.py"}` matched against `f.name` — and because this scan DID glob adgraph/,
+# `adgraph/router.py` was exempt purely because its basename happened to be `router.py`.
+# Planting `winrm_transport.run()` there was missed; planting it in adgraph/techniques.py was not.
+#
+# `cockpit/winrm_transport.py` is deliberately NOT allow-listed: it DEFINES the transport and
+# never names itself, so allow-listing it would mean permanently carrying an entry that matches
+# nothing — and an allow-list entry that can never match reads as coverage while providing none.
+# It is scanned like any other module and comes back clean, which is the honest result.
+_WINRM_ALLOWED = {"cockpit/executor.py", "cockpit/router.py"}
+_WINRM_PATTERNS = [r"winrm_transport"]
+_WINRM_AST_TARGETS = ["cockpit.winrm_transport", "winrm_transport"]
+
+
 def test_transport_not_reachable_from_orchestrator() -> None:
     """winrm_transport is reachable ONLY from the gated executor + the human router probe —
     never from a proposer/loop/agent module. A transport wired to the autonomous path would be
     autonomous execution on a real Windows box."""
-    backend = Path(__file__).parent
-    allowed = {"executor.py", "winrm_transport.py", "router.py"}
-    py_files = list(backend.glob("*.py")) + list((backend / "cockpit").glob("*.py")) \
-        + list((backend / "adgraph").glob("*.py"))
-    offenders = []
-    for f in py_files:
-        if f.name in allowed or f.name.startswith("test_"):
-            continue
-        text = f.read_text(encoding="utf-8")
-        if "winrm_transport" in text or "from .winrm_transport" in text:
-            offenders.append(str(f.relative_to(backend)))
-    assert not offenders, (
-        f"the WinRM transport must be reachable only from the gated executor + router — these "
-        f"modules reference it: {offenders}. The orchestrator PROPOSES; it must never fire WinRM."
+    res = scans.scan_source_tree(
+        patterns=_WINRM_PATTERNS, allowed=_WINRM_ALLOWED, ast_targets=_WINRM_AST_TARGETS,
+    )
+    scans.assert_clean(
+        res,
+        what="the WinRM transport must be reachable only from the gated executor + router; the "
+             "orchestrator PROPOSES, it must never fire WinRM",
+        must_have_scanned=["orchestrator.py", "adgraph/orchestrator.py", "cockpit/session.py",
+                           "main.py"],
+        min_checked=60,
+    )
+    scans.assert_catches_a_planted_violation(
+        plant="from cockpit import winrm_transport",
+        patterns=_WINRM_PATTERNS, allowed=_WINRM_ALLOWED, ast_targets=_WINRM_AST_TARGETS,
     )
     # The AD orchestrator specifically must not import the transport.
     from adgraph import orchestrator as adorch
     assert not hasattr(adorch, "winrm_transport"), (
         "the AD orchestrator must have no handle on the WinRM transport"
     )
-    print("  winrm transport is not reachable from any proposer/loop/agent module: PASS")
+    print(f"  winrm transport unreachable from any proposer/loop/agent module across all "
+          f"{len(res.checked)} backend modules (+ planted-violation control): PASS")
 
 
 # --------------------------------------------------------------------------- #

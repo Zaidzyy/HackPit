@@ -26,6 +26,7 @@ from pathlib import Path
 from cockpit import config
 from cockpit import repeater as RP
 from cockpit.repeater import (RepeaterHeader, RepeaterRefused, RepeaterRequest, send)
+from test_support import scans
 
 
 class _Spy:
@@ -135,26 +136,42 @@ def test_method_and_url_are_validated() -> None:
 # --------------------------------------------------------------------------- #
 # 3. human-only (source-scan lock)
 # --------------------------------------------------------------------------- #
+# `cockpit/repeater.py` is NOT allow-listed: the patterns are all QUALIFIED references
+# (`repeater.send`, `cockpit.repeater`) which the defining module never writes about itself.
+# An allow-list entry that can never match reads as coverage while providing none, so it is
+# scanned like any other module — and comes back clean, which is the honest result.
+_REPEATER_ALLOWED = {"cockpit/router.py"}
+_REPEATER_PATTERNS = [
+    r"repeater\.send", r"\bimport repeater\b", r"from \.repeater", r"cockpit\.repeater",
+]
+_REPEATER_AST_TARGETS = ["cockpit.repeater"]
+
+
 def test_repeater_is_human_only() -> None:
-    """repeater.send must be reachable ONLY from the route + this test — NEVER the agent path."""
-    backend = Path(__file__).parent
-    allowed = {"repeater.py", "router.py"}
-    py_files = list(backend.glob("*.py")) + list((backend / "cockpit").glob("*.py"))
-    offenders = []
-    for f in py_files:
-        if f.name in allowed or f.name.startswith("test_"):
-            continue
-        text = f.read_text(encoding="utf-8")
-        if ("repeater.send" in text or "import repeater" in text
-                or "from .repeater" in text or "cockpit.repeater" in text):
-            offenders.append(f.name)
-    assert not offenders, (
-        f"the repeater must be HUMAN-ONLY — non-route modules reference it: {offenders}"
+    """repeater.send must be reachable ONLY from the route + this test — NEVER the agent path.
+
+    Whole tree, path-keyed allow-list, AST pass. The old form covered 30 of 69 modules.
+    """
+    res = scans.scan_source_tree(
+        patterns=_REPEATER_PATTERNS, allowed=_REPEATER_ALLOWED,
+        ast_targets=_REPEATER_AST_TARGETS,
+    )
+    scans.assert_clean(
+        res,
+        what="the repeater must be HUMAN-ONLY",
+        must_have_scanned=["orchestrator.py", "adgraph/orchestrator.py", "cockpit/executor.py"],
+        min_checked=60,
+    )
+    scans.assert_catches_a_planted_violation(
+        plant="from cockpit.repeater import send",
+        patterns=_REPEATER_PATTERNS, allowed=_REPEATER_ALLOWED,
+        ast_targets=_REPEATER_AST_TARGETS,
     )
     from cockpit import executor as EX
     assert not hasattr(EX, "repeater") and not hasattr(EX, "send"), \
         "the executor must not reference the repeater"
-    print("  the repeater is human-only (no agent/executor path): PASS")
+    print(f"  the repeater is human-only across all {len(res.checked)} backend modules "
+          "(+ planted-violation control): PASS")
 
 
 # --------------------------------------------------------------------------- #

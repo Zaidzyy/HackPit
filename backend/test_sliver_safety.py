@@ -48,6 +48,7 @@ from cockpit import executor as EX
 from cockpit import sliver as S
 from cockpit.models import ExecRejected, ExecRequest
 from cockpit.sliver import ImplantRequest, SliverRefused, SliverServerRequest
+from test_support import scans
 
 BACKEND = Path(__file__).resolve().parent
 SLIVER_SRC = Path(S.__file__).read_text(encoding="utf-8")
@@ -99,11 +100,15 @@ def _call_names(node: ast.AST) -> set[str]:
 
 
 def _backend_py_files() -> list[Path]:
-    """Every backend source file, minus the venv/caches. Tests are excluded by the caller."""
-    skip = {".venv", "__pycache__", "node_modules", ".pytest_cache"}
-    return sorted(
-        p for p in BACKEND.rglob("*.py") if not (set(p.relative_to(BACKEND).parts) & skip)
-    )
+    """Every backend source file, minus the venv/caches. Tests are excluded by the caller.
+
+    Delegates to the SHARED selection. This file's scan was already correct — the audit called
+    it the reference standard — and the shared module was extracted FROM this construction
+    rather than invented beside it, so that the nine locks that were wrong and the two that
+    were right cannot drift apart again. The offender-collection and control logic below is
+    untouched, deliberately: migrating a working guard is a chance to lose an assertion.
+    """
+    return scans.source_files()
 
 
 # --------------------------------------------------------------------------- #

@@ -26,6 +26,7 @@ from pathlib import Path
 
 from arsenal import loader, planner
 from cockpit import allowlist
+from test_support import scans
 
 _PKG = Path(__file__).parent / "arsenal"
 _SOURCES = sorted(_PKG.glob("*.py"))
@@ -416,11 +417,58 @@ def test_console_subcommands_are_excused_only_when_their_console_is_flagged() ->
 
 
 def test_the_executor_knows_nothing_about_the_arsenal() -> None:
-    """No coupling in the other direction either — the gates cannot be arsenal-aware."""
-    for name in ("executor.py", "allowlist.py", "sandbox.py", "engagement.py", "router.py"):
-        src = (Path(__file__).parent / "cockpit" / name).read_text(encoding="utf-8")
-        assert "arsenal" not in src.lower(), f"cockpit/{name} references the arsenal"
-    print("  the cockpit package has zero references to the arsenal: PASS")
+    """No coupling in the other direction either — the gates cannot be arsenal-aware.
+
+    This used to be a HARDCODED LIST OF FIVE FILENAMES while the cockpit package holds
+    twenty-two modules. The test PRINTED "the cockpit package has zero references to the
+    arsenal" and checked less than a quarter of it: session.py, sliver.py, obfuscation.py,
+    jobs.py, kali.py, terminal.py, tunnels.py, repeater.py, reconcile.py, scope.py, loot.py,
+    models.py, config.py, runstore.py, winprofiles.py and winrm_transport.py could all import
+    the arsenal freely and nothing noticed. Every one of them post-dates the invariant.
+
+    Now: every cockpit module, drawn from the real directory, so a module added tomorrow is
+    covered without anyone remembering to add it.
+
+    THE PREDICATE CHANGED TOO, and widening the file set is what exposed why. A bare
+    ``"arsenal" in src`` conflates "depends on the arsenal" with "has a parameter spelled
+    arsenal". ``cockpit/reconcile.py`` is the second kind: it takes the loaded catalog as an
+    opaque ``Any`` argument injected by the caller, precisely SO THAT it has no import-time
+    dependency on the arsenal. Flagging it would have been a false positive, and the honest
+    response to a false positive is a better predicate, not a narrower file set. So the claim
+    asserted here is the one the invariant actually makes — no IMPORT, in any form — matched
+    the same way the arsenal->cockpit direction has always been matched.
+    """
+    pkg = Path(__file__).parent / "cockpit"
+    modules = sorted(p for p in pkg.glob("*.py"))
+    assert len(modules) >= 20, (
+        f"only {len(modules)} cockpit modules found — this scan has gone vacuous"
+    )
+    import_re = re.compile(r"^\s*(?:from|import)\s+arsenal\b|\barsenal\.(?:loader|planner)\b", re.M)
+    offenders = []
+    for path in modules:
+        raw = path.read_text(encoding="utf-8")
+        # Prose is stripped: a docstring EXPLAINING the decoupling rule must not violate it.
+        hits = [h for h in (import_re.search(scans.code_without_prose(raw)),) if h]
+        # ...and the AST pass, which sees an aliased import, an in-function import, and
+        # importlib/getattr indirection that no regex can.
+        hits += scans.ast_reference_hits(raw, ["arsenal"])
+        if hits:
+            offenders.append(f"cockpit/{path.name}")
+    assert not offenders, (
+        f"these cockpit modules import the arsenal: {offenders}. The two packages may not "
+        "reference each other in EITHER direction; cross-cutting endpoints belong in main.py."
+    )
+    # POSITIVE CONTROL: the check can fail, demonstrated on a planted violation rather than
+    # asserted. Without this, "zero references" is just a claim about a predicate that might
+    # never match anything.
+    scans.assert_catches_a_planted_violation(
+        plant="from arsenal import loader",
+        patterns=[r"^\s*(?:from|import)\s+arsenal\b"],
+        ast_targets=["arsenal"],
+        where="cockpit/session.py",
+    )
+    print(f"  all {len(modules)} cockpit modules have zero imports of the arsenal "
+          "(+ planted-violation control): PASS")
 
 
 def test_executor_gates_are_byte_for_byte_unchanged() -> None:

@@ -20,6 +20,12 @@ cd "$(dirname "$0")"
 PY="${PY:-.venv/Scripts/python.exe}"
 [ -x "$PY" ] || PY="$(command -v python3 || command -v python)"
 
+# FIRST, deliberately. Ten human-only / decoupling locks rest on this scanner, and every one
+# of them reports "no offenders" when it is working AND when it is broken. If the scanner
+# cannot demonstrate that it catches a planted violation, nothing after this line means much.
+echo "== shared source scanner (whole-tree sweep / path allow-lists / AST indirection / can-fail) =="
+"$PY" test_scans.py
+
 echo "== attack-path composer regressions =="
 "$PY" test_attack_path.py
 

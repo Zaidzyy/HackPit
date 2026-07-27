@@ -49,6 +49,7 @@ from cockpit import config
 from cockpit import executor as EX
 from cockpit import obfuscation as O
 from cockpit.obfuscation import ObfuscationRefused, ObfuscationRequest
+from test_support import scans
 
 BACKEND = Path(__file__).resolve().parent
 OBF_SRC = Path(O.__file__).read_text(encoding="utf-8")
@@ -221,10 +222,10 @@ def _sweep_read_routes(client, live_id: str) -> list[tuple[str, int, str]]:
 
 
 def _backend_py_files() -> list[Path]:
-    skip = {".venv", "__pycache__", "node_modules", ".pytest_cache"}
-    return sorted(
-        p for p in BACKEND.rglob("*.py") if not (set(p.relative_to(BACKEND).parts) & skip)
-    )
+    """The SHARED tree selection — see test_support/scans.py. This scan was already correct;
+    only the file-selection primitive moved, so the one implementation the locks share cannot
+    drift back into eleven copies. The offender/control logic below is untouched."""
+    return scans.source_files()
 
 
 class _FakeProc:

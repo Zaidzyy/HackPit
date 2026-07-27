@@ -26,6 +26,7 @@ from pathlib import Path
 from cockpit import config
 from cockpit import tunnels as T
 from cockpit.tunnels import Tunnel, TunnelRefused, TunnelStartRequest
+from test_support import scans
 
 
 class _Spy:
@@ -61,22 +62,34 @@ def _tun(**kw) -> Tunnel:
 # --------------------------------------------------------------------------- #
 # 1. human-only
 # --------------------------------------------------------------------------- #
+_TUNNEL_ALLOWED = {"cockpit/tunnels.py", "cockpit/router.py"}
+_TUNNEL_PATTERNS = [r"start_tunnel", r"\bimport tunnels\b", r"from \.tunnels", r"cockpit\.tunnels"]
+_TUNNEL_AST_TARGETS = ["cockpit.tunnels", "start_tunnel"]
+
+
 def test_tunnels_lifecycle_is_human_only() -> None:
-    backend = Path(__file__).parent
-    allowed = {"tunnels.py", "router.py"}
-    py_files = list(backend.glob("*.py")) + list((backend / "cockpit").glob("*.py"))
-    offenders = []
-    for f in py_files:
-        if f.name in allowed or f.name.startswith("test_"):
-            continue
-        text = f.read_text(encoding="utf-8")
-        if ("start_tunnel" in text or "import tunnels" in text
-                or "from .tunnels" in text or "cockpit.tunnels" in text):
-            offenders.append(f.name)
-    assert not offenders, f"tunnel lifecycle must be HUMAN-ONLY — referenced by: {offenders}"
+    """Whole tree, path-keyed allow-list, AST pass — see test_scans.py. The old form globbed
+    backend/*.py + cockpit/*.py, so a planted `from cockpit.tunnels import start_tunnel` in
+    detection/resolver.py was missed."""
+    res = scans.scan_source_tree(
+        patterns=_TUNNEL_PATTERNS, allowed=_TUNNEL_ALLOWED, ast_targets=_TUNNEL_AST_TARGETS,
+    )
+    scans.assert_clean(
+        res,
+        what="tunnel lifecycle must be HUMAN-ONLY",
+        must_have_scanned=["orchestrator.py", "adgraph/orchestrator.py", "cockpit/executor.py",
+                           "detection/resolver.py"],
+        min_checked=60,
+    )
+    scans.assert_catches_a_planted_violation(
+        plant="from cockpit.tunnels import start_tunnel",
+        patterns=_TUNNEL_PATTERNS, allowed=_TUNNEL_ALLOWED, ast_targets=_TUNNEL_AST_TARGETS,
+        where="detection/resolver.py",
+    )
     from cockpit import executor as EX
     assert not hasattr(EX, "tunnels") and not hasattr(EX, "start_tunnel")
-    print("  tunnel start/stop is human-only (no agent/executor path): PASS")
+    print(f"  tunnel start/stop is human-only across all {len(res.checked)} backend modules "
+          "(+ planted-violation control): PASS")
 
 
 def test_start_runs_in_engage_sandbox_hardcoded() -> None:

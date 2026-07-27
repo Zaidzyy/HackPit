@@ -24,7 +24,10 @@ approved is exactly what runs.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import os
+import re
 
 # Informational only — example commands the UI may surface. NOT an allowlist; anything
 # may run. Kept so the manual cockpit surface has something to suggest.
@@ -327,6 +330,221 @@ def dangerous_command_heuristic(command: str, args: list[str]) -> list[str]:
             reasons.append(f"argument requests OS command execution / file write: {marker!r}")
 
     # de-dup, preserve order
+    seen: set[str] = set()
+    out: list[str] = []
+    for r in reasons:
+        if r not in seen:
+            seen.add(r)
+            out.append(r)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# THE WHOLE-SCRIPT HEURISTIC (the WinRM transport)
+#
+# WHY THIS EXISTS, SEPARATELY FROM THE ONE ABOVE. On the docker path the executor passes an
+# ARGV LIST to `docker exec` — no shell, so `;` and `|` are literal tokens nothing interprets,
+# and classifying argv[0] is a fair model of what runs. On the WinRM path it is not: the
+# executor JOINS command + args into one string and the Windows transport hands the whole thing
+# to PowerShell, where `;`, `|` and newlines are live statement separators. Classifying
+# only the first token meant `Write-Host go ; Invoke-Mimikatz` ran on a real domain-joined host,
+# under real credentials, with no red-confirm. You defeated the gate by moving a cmdlet one
+# token to the right.
+#
+# WHY THIS DOES NOT PARSE POWERSHELL. The obvious fix — split into statements, classify each
+# statement's first token — needs a correct PowerShell tokeniser: quoting, `$( )`
+# subexpressions, the `&` call operator, backtick escapes, line continuations. Any parser
+# written here becomes a NEW bypass surface, which is precisely the bug being fixed: the
+# classifier's model of the input was narrower than the input. So every marker is looked for
+# EVERYWHERE in the joined string. There is no "position" to exploit, and that is the property
+# the argv version lacks.
+#
+# THE COST IS ALERT FATIGUE, AND IT IS MANAGED, NOT IGNORED. Whole-string scanning over-flags
+# by design (a path containing `nc`, a comment naming a cmdlet). That is acceptable ONLY because
+# this gate raises a red-confirm, never a block: a false positive costs one click, a false
+# negative runs Mimikatz on a domain controller. But an operator who sees a generic red banner
+# on everything learns to click through it, at which point a silent bypass has merely been
+# traded for a decorative one. So EVERY reason names the marker it matched and the offset it
+# matched at — a reason the operator can evaluate is a gate; a banner they cannot is theatre.
+# --------------------------------------------------------------------------- #
+
+# PowerShell-native code execution, download cradles and evasion shapes. A NAME-based scan
+# alone is defeated by a download cradle: `IEX (New-Object Net.WebClient).DownloadString(...)`
+# never spells the payload's name anywhere, so the CRADLE has to be the marker.
+_PS_SHAPE_MARKERS: tuple[tuple[str, str], ...] = (
+    ("invoke-expression", "executes a string as code (download cradle)"),
+    ("iex", "Invoke-Expression alias — executes a string as code"),
+    ("downloadstring", "fetches remote code into memory (download cradle)"),
+    ("downloadfile", "fetches a remote file to disk"),
+    ("downloaddata", "fetches remote bytes into memory"),
+    ("net.webclient", "web client — the classic download-cradle object"),
+    ("invoke-webrequest", "fetches remote content (cradle half)"),
+    ("invoke-restmethod", "fetches remote content (cradle half)"),
+    ("frombase64string", "decodes an embedded blob — a payload carrier"),
+    ("add-type", "compiles and loads arbitrary C# in-process"),
+    ("reflection.assembly", "loads an assembly reflectively — fileless execution"),
+    ("start-process", "starts another program on the host"),
+    ("invoke-command", "runs a script block on a (possibly remote) host"),
+    ("invoke-wmimethod", "remote method invocation via WMI"),
+    ("invoke-cimmethod", "remote method invocation via CIM"),
+    # Both of these were found by MEASURING the classifier against the real AD corpus
+    # (Task 1 Step 6) rather than by reading the sets: `Invoke-SQLOSCmd` is OS command
+    # execution on a SQL host, and `Enter-PSSession`/`New-PSSession` is a SECOND hop to
+    # another box from inside an existing WinRM session — lateral movement. Both were
+    # catalogued, both were silent.
+    ("invoke-sqloscmd", "OS command execution on a SQL host"),
+    ("enter-pssession", "opens an interactive remote session — a further hop"),
+    ("new-pssession", "opens a remote session — a further hop"),
+    ("new-service", "installs a service — persistence that executes a payload"),
+    ("register-scheduledtask", "installs a scheduled task — persistence"),
+    ("schtasks", "schedules a task — persistence"),
+    ("set-mppreference", "changes Defender's configuration — AV tampering"),
+    ("add-mppreference", "adds a Defender exclusion — AV tampering"),
+    ("amsiinitfailed", "AMSI bypass"),
+    ("amsiutils", "AMSI internals — bypass shape"),
+    ("-windowstyle hidden", "hides the window — delivery shape"),
+    ("bypass -", "execution-policy bypass"),
+    ("executionpolicy bypass", "execution-policy bypass"),
+)
+
+# PowerShell accepts any unambiguous PREFIX of a parameter name, so `-e`, `-en`, `-enc`,
+# `-encodedcommand` are all the same flag. Matching only the spellings a human would type is
+# how a text scan gets walked around, so every prefix is matched — and the flag must END there
+# (`-ErrorAction` is not `-e`).
+_ENCODED_FLAG_RE = re.compile(
+    r"(?<![\w-])-e(?:n(?:c(?:o(?:d(?:e(?:d(?:c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?)?)?)?)?)?)?)?"
+    r"(?![\w-])\s+(\S+)",
+    re.I,
+)
+# NOTE the `\S+` capture. It used to be `[A-Za-z0-9+/=]+`, i.e. "capture it only if it already
+# looks like base64" — which quietly skipped any payload that did not, so a blob the classifier
+# could not read was not reported at all. That is the same defect this whole module is fixing:
+# a condition narrower than the input. Capture whatever follows the flag, then let
+# :func:`_decode_encoded_command` judge it, and report the ones that will not decode.
+
+
+def _script_name_markers() -> tuple[tuple[str, str], ...]:
+    """``(binary-or-cmdlet name, why it is dangerous)`` for every set the argv heuristic uses.
+
+    Built from the SAME sets rather than a hand-copied list, so a name added for the docker
+    path is automatically looked for in a PowerShell script too. That shared derivation is the
+    point: two lists would drift, and drift is what produced this bug.
+
+    ``_AD_WRITE_SUBCOMMANDS`` is deliberately NOT included: its verbs are 2-4 character
+    fragments (``ca``, ``req``, ``cert``) that are meaningless outside their tool's argv and
+    would match half of every ordinary script. A confirm that fires on everything is one the
+    operator learns to click through.
+    """
+    groups: tuple[tuple[frozenset[str], str], ...] = (
+        (_INTERPRETERS, "language interpreter — runs arbitrary code"),
+        (_EXEC_TOOLS, "raw network tool — can carry a reverse shell"),
+        (_FRAMEWORKS, "exploitation framework / payload generator"),
+        (_TUNNEL_TOOLS, "covert tunnel / C2 channel — carries arbitrary traffic"),
+        (_RCE_TOOLS, "turns a vulnerability into command execution / a shell"),
+        (_PERSISTENCE_TOOLS, "installs persistence that executes a payload"),
+        (_AD_CRED_DUMP, "dumps/replicates domain credentials"),
+        (_AD_REMOTE_EXEC, "remote code execution on a domain host"),
+        (_AD_DIR_WRITE, "modifies the directory / coerces or relays authentication"),
+        (_AD_PS_WRITE, "writes the directory / resets a credential (PowerView/.NET)"),
+    )
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for names, why in groups:
+        for name in sorted(names):
+            if name not in seen:
+                seen.add(name)
+                out.append((name, why))
+    return tuple(out)
+
+
+_SCRIPT_NAME_MARKERS = _script_name_markers()
+# One compiled word-boundary pattern per name. Word-boundary rather than bare substring so
+# `nc` does not match every `Get-Content`; whole-string rather than first-token so position
+# cannot be exploited.
+_SCRIPT_NAME_RES: tuple[tuple[re.Pattern[str], str, str], ...] = tuple(
+    (re.compile(rf"(?<![\w.-]){re.escape(name)}(?![\w-])"), name, why)
+    for name, why in _SCRIPT_NAME_MARKERS
+)
+# Shape markers are matched as plain substrings — they are already distinctive
+# (`/dev/tcp/`, `downloadstring`, `--os-shell`) and several contain spaces or punctuation
+# that a word-boundary pattern would fight with.
+_SCRIPT_SHAPE_MARKERS: tuple[tuple[str, str], ...] = (
+    _PS_SHAPE_MARKERS
+    + tuple((m, "reverse-shell / code-exec pattern") for m in _SHELL_MARKERS)
+    + tuple((m, "requests OS command execution / a file write") for m in _RCE_ARG_MARKERS)
+    + tuple((m, "credential-dump flag") for m in _AD_DUMP_MARKERS)
+)
+
+_MAX_DECODE_DEPTH = 2
+
+
+def _decode_encoded_command(payload: str) -> str | None:
+    """The plaintext behind a ``-EncodedCommand`` blob, or ``None`` if it will not decode.
+
+    PowerShell encodes UTF-16LE; UTF-8 is tried as a fallback because operators and tooling
+    produce both. ``None`` is a FINDING, not a pass — see :func:`dangerous_script_heuristic`.
+    """
+    if len(payload) < 8:
+        return None
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    for encoding in ("utf-16-le", "utf-8"):
+        try:
+            text = raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        # A wrong guess decodes to mojibake; require it to look like text before trusting it.
+        printable = sum(ch.isprintable() or ch in "\r\n\t" for ch in text)
+        if text and printable / len(text) > 0.9:
+            return text
+    return None
+
+
+def dangerous_script_heuristic(script: str, _depth: int = 0) -> list[str]:
+    """Reasons this WHOLE PowerShell script looks dangerous (empty if it does not).
+
+    Scans the entire joined string for every marker, everywhere — see the block comment above
+    for why this deliberately does not parse PowerShell. Every reason names the matched marker
+    and the offset it matched at, so the red-confirm states a specific claim the operator can
+    evaluate rather than a generic warning they learn to click through.
+
+    ``-EncodedCommand`` payloads are decoded and re-scanned: base64 defeats every text scan by
+    construction. A payload that will NOT decode is itself reported — an opaque blob that the
+    classifier cannot read must never pass as clean.
+    """
+    text = str(script or "")
+    low = text.lower()
+    reasons: list[str] = []
+
+    for pattern, name, why in _SCRIPT_NAME_RES:
+        m = pattern.search(low)
+        if m:
+            reasons.append(f"powershell script: {name!r} at offset {m.start()} — {why}")
+    for marker, why in _SCRIPT_SHAPE_MARKERS:
+        idx = low.find(marker)
+        if idx >= 0:
+            reasons.append(f"powershell script: {marker!r} at offset {idx} — {why}")
+
+    # ENCODED COMMANDS. Decode and re-scan; an undecodable blob IS the finding.
+    if _depth < _MAX_DECODE_DEPTH:
+        for m in _ENCODED_FLAG_RE.finditer(text):
+            payload = m.group(1)
+            decoded = _decode_encoded_command(payload)
+            if decoded is None:
+                reasons.append(
+                    f"powershell script: encoded payload at offset {m.start(1)} COULD NOT BE "
+                    "DECODED — an opaque -EncodedCommand blob cannot be classified, so it is "
+                    "reported rather than passed"
+                )
+                continue
+            for inner in dangerous_script_heuristic(decoded, _depth + 1):
+                reasons.append(
+                    f"powershell script: -EncodedCommand at offset {m.start(1)} decodes to a "
+                    f"script that trips — {inner}"
+                )
+
     seen: set[str] = set()
     out: list[str] = []
     for r in reasons:

@@ -351,7 +351,7 @@ def _validate_windows(request: ExecRequest) -> ExecRejected | None:
             gate="approval",
         )
 
-    dangerous = allowlist.dangerous_command_heuristic(request.command, request.args)
+    dangerous = windows_danger_reasons(request.command, list(request.args))
     if dangerous and not request.dangerous_ack:
         return ExecRejected(
             reason="this command is flagged dangerous — confirm to run: " + "; ".join(dangerous),
@@ -359,6 +359,53 @@ def _validate_windows(request: ExecRequest) -> ExecRejected | None:
             dangerous_flags=dangerous,
         )
     return None
+
+
+def join_ps_command(command: str, args: list[Any]) -> str:
+    """The ONE PowerShell script a Windows run produces — command + args, rejoined.
+
+    THE SINGLE DERIVATION, and the reason it is a function. This string is what the Windows
+    transport executes, so it is also what the danger gate must classify. When those were built
+    in two places the gate read ``argv[0]`` while the transport ran a whole script, and
+    ``Write-Host go ; Invoke-Mimikatz`` was silent. Scanning a DIFFERENT string than the one
+    that runs would reproduce that bug somewhere new, so every caller comes through here and
+    test_winrm_safety asserts — on the source, transitively — that they still do.
+
+    Takes ``(command, args)`` rather than a request because the AD orchestrator needs the same
+    verdict for its advisory pre-check and is forbidden from constructing an ``ExecRequest``
+    (a proposer that can build one is one line away from firing it — locked in
+    test_adorch_safety.py).
+    """
+    return " ".join([str(command), *[str(a) for a in args]]).strip()
+
+
+def build_ps_command(request: ExecRequest) -> str:
+    """The PowerShell script for a request. Credentials live in the profile, never in the
+    command, so nothing secret can leak into the command line, the record or the transcript."""
+    return join_ps_command(request.command, list(request.args))
+
+
+def windows_danger_reasons(command: str, args: list[Any]) -> list[str]:
+    """Every reason a WinRM invocation must demand the red-confirm (empty if none).
+
+    The UNION of two classifiers, and additive by construction — it can only ever ADD reasons
+    to what the docker-path heuristic already returned, so no command flagged before this
+    change is unflagged after it:
+
+      * :func:`allowlist.dangerous_command_heuristic` on ``(command, args)`` — keeps the
+        argv-shaped verdicts (eval flags, per-tool exec flags) that read the argument STRUCTURE;
+      * :func:`allowlist.dangerous_script_heuristic` on the joined script — catches everything
+        the first-token view could not see, because on this transport the whole string is a
+        PowerShell program.
+
+    Shared by the executor's gate and by the AD orchestrator's advisory pre-check, so the panel
+    never promises a confirm the gate would not actually require, or stays quiet where it would.
+    """
+    reasons = list(allowlist.dangerous_command_heuristic(command, list(args)))
+    for reason in allowlist.dangerous_script_heuristic(join_ps_command(command, list(args))):
+        if reason not in reasons:
+            reasons.append(reason)
+    return reasons
 
 
 class EngagementInactive(RuntimeError):
@@ -673,10 +720,9 @@ def _run_windows(request: ExecRequest, resolved: "ResolvedMode") -> Iterator[dic
     profile = resolved.windows_profile or {}
     eng = resolved.engagement
     target = resolved.target
-    # One PowerShell command STRING (fork #2): the operator/orchestrator's command + args,
-    # rejoined. Credentials live in the profile, never in the command, so nothing secret can
-    # leak into the command line, the record or the transcript.
-    ps_command = " ".join([request.command, *[str(a) for a in request.args]]).strip()
+    # One PowerShell command STRING (fork #2), derived by the SAME function the danger gate
+    # classified — see build_ps_command() for why that sharing is the actual fix.
+    ps_command = build_ps_command(request)
 
     run_id = uuid.uuid4().hex[:12]
     started_at = _now()

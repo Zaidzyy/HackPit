@@ -293,8 +293,13 @@ def proposal_for_edge(
     win_cmds = tech.get("windows_commands") or []
     win_raw = (win_cmds[0].get("cmd") if win_cmds else "") or ""
     win_command, win_args = _win_argv(win_raw)
+    # Through the executor's OWN union, not the argv heuristic alone. A WinRM run joins
+    # command + args into one PowerShell script and classifies the whole thing, so asking the
+    # argv-only heuristic here would under-report exactly where the gate over-reports — the UI
+    # would promise no confirm and the operator would meet one, or worse, read "safe" on a step
+    # that trips. Advisory either way; the executor re-checks at run time.
     win_dangerous = (
-        allowlist.dangerous_command_heuristic(win_command, win_args) if win_command else []
+        executor.windows_danger_reasons(win_command, list(win_args)) if win_command else []
     )
 
     # WHY THE COMMAND IS ABSENT MATTERS, and conflating the cases is dangerous.

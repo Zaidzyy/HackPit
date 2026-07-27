@@ -1598,6 +1598,7 @@ export type EvasionOpsecNote = {
 
 export type EvasionResult = {
   run_id: string;
+  /** Empty when the generator failed or timed out — nothing was written, so there is no path. */
   artifact_path: string;
   techniques: string[];
   mode: string;
@@ -1611,7 +1612,7 @@ export type EvasionResult = {
 
 export type EvasionBody = {
   payload_path: string;
-  target_os: string;
+  /** Exactly one. The backend refuses more — a build carries the footprint of ONE technique. */
   techniques: string[];
   target?: string;
   engagement_id?: string | null;

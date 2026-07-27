@@ -125,7 +125,6 @@ export function EvasionScreen() {
   const [techniques, setTechniques] = useState<string[]>([]);
   const [technique, setTechnique] = useState("donut-pack");
   const [payloadPath, setPayloadPath] = useState("");
-  const [targetOs, setTargetOs] = useState("windows");
   const [target, setTarget] = useState("");
   const [engagementId, setEngagementId] = useState("");
 
@@ -152,14 +151,15 @@ export function EvasionScreen() {
   const body = useCallback(
     (approved: boolean, ack: boolean): EvasionBody => ({
       payload_path: payloadPath,
-      target_os: targetOs,
+      // Exactly one — the backend refuses a list, because a build can only carry the
+      // footprint of ONE technique and describing the wrong one is the failure that matters.
       techniques: [technique],
       target,
       engagement_id: engagementId || null,
       approved,
       dangerous_ack: ack,
     }),
-    [payloadPath, targetOs, technique, target, engagementId]
+    [payloadPath, technique, target, engagementId]
   );
 
   const onPreview = useCallback(() => {
@@ -223,20 +223,6 @@ export function EvasionScreen() {
                     {t}
                   </option>
                 ))}
-              </select>
-            </label>
-
-            <label className="text-sm">
-              <span className="block text-xs uppercase tracking-wide text-slate-400">
-                Target OS
-              </span>
-              <select
-                className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 text-slate-100"
-                value={targetOs}
-                onChange={(e) => setTargetOs(e.target.value)}
-              >
-                <option value="windows">windows</option>
-                <option value="linux">linux</option>
               </select>
             </label>
 
@@ -329,11 +315,19 @@ export function EvasionScreen() {
           <div className="space-y-4">
             <section className="rounded border border-slate-700 bg-slate-900/40 p-4">
               <h2 className="mb-2 text-sm font-semibold text-slate-200">Artifact</h2>
-              <p className="text-sm text-slate-300">
-                <span className="text-slate-500">path </span>
-                <code className="font-mono text-slate-100">{result.artifact_path}</code>{" "}
-                <CopyButton text={result.artifact_path} />
-              </p>
+              {/* An empty path means the generator failed or timed out and wrote nothing.
+                  Offering a copyable path to a file that does not exist reads as success. */}
+              {result.artifact_path ? (
+                <p className="text-sm text-slate-300">
+                  <span className="text-slate-500">path </span>
+                  <code className="font-mono text-slate-100">{result.artifact_path}</code>{" "}
+                  <CopyButton text={result.artifact_path} />
+                </p>
+              ) : (
+                <p className="text-sm text-amber-300">
+                  No artifact was produced — the generator did not complete successfully.
+                </p>
+              )}
               <p className="mt-1 text-xs text-slate-400">
                 mode {result.mode} · exit {String(result.exit_code)} · run {result.run_id}
               </p>

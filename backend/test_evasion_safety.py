@@ -40,9 +40,13 @@ TREE = ast.parse(SRC)
 # Files that are allowed to name the evasion package: the package itself, its tests, and the
 # HTTP layer that exposes it. main.py holds the route because the cockpit and arsenal packages
 # may not reference each other, so cross-cutting endpoints live there.
-_ALLOWED = {"engine.py", "__init__.py", "test_evasion.py", "test_evasion_safety.py", "main.py"}
-# Modules that must NEVER reach this engine, matched on filename.
-_AGENT_MARKERS = ("orchestrat", "loop", "adorch", "agent", "propose")
+# Matched on the path RELATIVE TO backend/, not the basename: a bare-basename allowlist
+# exempted every package's __init__.py from the scan, not just the evasion package's.
+_ALLOWED = {"evasion/engine.py", "evasion/__init__.py", "test_evasion.py",
+            "test_evasion_safety.py", "main.py"}
+# Modules that must NEVER reach this engine, matched on filename. "plan" is here because a
+# planner PROPOSES steps, which is the same hazard as an orchestrator running them.
+_AGENT_MARKERS = ("orchestrat", "loop", "adorch", "agent", "propose", "plan")
 
 
 def _fn(tree: ast.AST, name: str) -> ast.FunctionDef:
@@ -102,33 +106,58 @@ def _req(**kw) -> G.EvasionRequest:
 # --------------------------------------------------------------------------- #
 # 1. NO AGENT PATH
 # --------------------------------------------------------------------------- #
-def test_no_orchestrator_or_agent_path_to_evasion() -> None:
-    """Scan EVERY backend module. A hit in an agent-ish module is a real leak."""
-    offenders: list[str] = []
-    scanned = 0
+def _agent_modules() -> list[Path]:
+    """Every backend module whose NAME marks it as agent-ish — the set actually line-scanned."""
     roots = [BACKEND, BACKEND / "cockpit", BACKEND / "adgraph", BACKEND / "detection",
              BACKEND / "state", BACKEND / "arsenal", BACKEND / "exploits", BACKEND / "codescan"]
+    found: list[Path] = []
     for root in roots:
         if not root.is_dir():
             continue
         for py in sorted(root.glob("*.py")):
-            if py.name in _ALLOWED:
+            if py.relative_to(BACKEND).as_posix() in _ALLOWED:
                 continue
-            scanned += 1
-            src = py.read_text(encoding="utf-8", errors="ignore")
-            if not any(m in py.name.lower() for m in _AGENT_MARKERS):
+            if any(m in py.name.lower() for m in _AGENT_MARKERS):
+                found.append(py)
+    return found
+
+
+def test_no_orchestrator_or_agent_path_to_evasion() -> None:
+    """No agent-ish module may name the evasion engine.
+
+    THE POSITIVE CONTROL IS THE POINT. It used to count every .py file in the tree — a number
+    incremented BEFORE the agent-name filter — so `assert scanned > 40` only proved the backend
+    is large. Of 99 files counted, 5 were actually line-scanned. Renaming orchestrator.py would
+    have collapsed the scan to nothing and the test would still have printed a passing "99
+    modules scanned". The control now asserts the count of modules that are REALLY read, so
+    that rename fails this test instead of hiding in it.
+    """
+    modules = _agent_modules()
+    offenders: list[str] = []
+    for py in modules:
+        for i, line in enumerate(py.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+            low = line.lower()
+            if low.lstrip().startswith("#"):
                 continue
-            for i, line in enumerate(src.splitlines(), 1):
-                low = line.lower()
-                if low.lstrip().startswith("#"):
-                    continue
-                if "evasion" in low:
-                    offenders.append(f"{py.name}:{i}: {line.strip()}")
+            if "evasion" in low:
+                offenders.append(f"{py.relative_to(BACKEND).as_posix()}:{i}: {line.strip()}")
     assert not offenders, ("an agent/orchestrator module reaches the evasion engine:\n"
                            + "\n".join(offenders))
-    # Positive control: the scan must actually be capable of finding something.
-    assert scanned > 40, f"the scan only looked at {scanned} modules — it is not covering the tree"
-    print(f"  {scanned} modules scanned: ZERO orchestrator/agent/loop path to evasion: PASS")
+
+    # The control, on the number that matters. Both real orchestrators must be in the set —
+    # named explicitly, so renaming one is a FAILURE here rather than a silent loss of coverage.
+    names = {p.relative_to(BACKEND).as_posix() for p in modules}
+    # NOTE the paths: the main orchestrator is backend/orchestrator.py, NOT
+    # cockpit/orchestrator.py — the cockpit package has no orchestrator module. Naming a
+    # non-existent path here would make this control fail permanently for the wrong reason.
+    for required in ("orchestrator.py", "adgraph/orchestrator.py"):
+        assert required in names, (
+            f"{required} is no longer being scanned — either it moved/was renamed (add the new "
+            f"name to _AGENT_MARKERS) or the scan has silently stopped covering it. "
+            f"Currently scanning: {sorted(names)}")
+    assert len(modules) >= 4, f"only {len(modules)} agent-ish modules scanned: {sorted(names)}"
+    print(f"  {len(modules)} agent/orchestrator modules line-scanned: "
+          f"ZERO path to evasion: PASS")
 
 
 def test_the_engine_imports_no_agent_module() -> None:
@@ -160,15 +189,30 @@ def test_the_package_has_no_deploy_or_execute_primitive() -> None:
 
 
 def test_the_artifact_is_never_executed() -> None:
-    """Only the generator is exec'd; the produced path is never the program."""
+    """Only the generator is exec'd; the produced path is never the program.
+
+    The old form of the last assertion compared `artifact_path` to argv[3] — a filename against
+    the string "donut" — which cannot fail. What has to hold is that the produced path appears
+    ONLY as the value of an output flag, never in a program position.
+    """
     with _Spy() as spy:
         res = G.generate(_req())
     assert len(spy.run_argv) == 1, spy.run_argv
     argv = spy.run_argv[0]
     assert argv[0] == "docker" and argv[1] == "exec"
     assert argv[3] in ("donut", "ScareCrow"), f"argv[3] must be the generator, got {argv[3]!r}"
+
+    # The artifact path is present, and its ONLY occurrence is preceded by an output flag.
+    assert res.artifact_path, "this build should have produced a path"
+    positions = [i for i, tok in enumerate(argv) if tok == res.artifact_path]
+    assert positions, f"the artifact path is not in the argv at all: {argv}"
+    for i in positions:
+        assert argv[i - 1] in ("-o", "-O"), (
+            f"the artifact path appears at argv[{i}] after {argv[i - 1]!r} — it must only ever "
+            f"be an output-flag VALUE, never a program or a bare operand: {argv}")
+    # ...and nothing after `docker exec <container>` is the artifact.
     assert res.artifact_path != argv[3], "the artifact must never be the executed program"
-    print("  only the generator runs; the produced artifact is never executed: PASS")
+    print("  only the generator runs; the artifact is an output value, never a program: PASS")
 
 
 def test_stub_techniques_execute_nothing_at_all() -> None:
@@ -201,20 +245,34 @@ def test_both_generators_trip_the_red_confirm() -> None:
 
 
 def test_no_parameter_combination_escapes_the_red_confirm() -> None:
-    """Brute-force the request surface: nothing may build without dangerous_ack."""
+    """Brute-force the request surface: nothing may build without dangerous_ack.
+
+    The old form varied technique x `target_os` — and `target_os` was a field no code read, so
+    half the "combinations" were the same request twice. It now varies the fields that actually
+    reach the argv or the gate. Every combination here is lab-valid, so the FIRST gate any of
+    them can hit is the danger gate; a refusal at any other gate means this test stopped
+    testing what it says it tests.
+    """
     escaped = []
+    combos = 0
     for technique in G.TECHNIQUES:
-        for target_os in ("windows", "linux"):
-            req = _req(techniques=[technique], target_os=target_os, dangerous_ack=False)
-            with _Spy() as spy:
-                try:
-                    G.generate(req)
-                    escaped.append((technique, target_os))
-                except G.EvasionRefused as exc:
-                    assert exc.gate == "danger", f"{technique}: refused by {exc.gate!r}"
-                assert not spy.run_argv, f"{technique}: nothing may run without the ack"
+        for payload_path in ("/loot/in.exe", "", "nested/dir/in.exe"):
+            for target in ("", config.LAB_TARGET_HOST):
+                combos += 1
+                req = _req(techniques=[technique], payload_path=payload_path,
+                           target=target, dangerous_ack=False)
+                with _Spy() as spy:
+                    try:
+                        G.generate(req)
+                        escaped.append((technique, payload_path, target))
+                    except G.EvasionRefused as exc:
+                        assert exc.gate == "danger", (
+                            f"{technique}/{payload_path!r}/{target!r}: refused by {exc.gate!r}, "
+                            "not the red-confirm — this combination is no longer lab-valid and "
+                            "the test is not exercising the danger gate")
+                    assert not spy.run_argv, f"{technique}: nothing may run without the ack"
     assert not escaped, f"these combinations built with no red-confirm: {escaped}"
-    print(f"  all {len(G.TECHNIQUES) * 2} technique/OS combinations demand the red-confirm: PASS")
+    print(f"  all {combos} technique/payload/target combinations demand the red-confirm: PASS")
 
 
 # --------------------------------------------------------------------------- #
@@ -256,9 +314,16 @@ def test_every_result_carries_a_footprint_and_a_still_recorded_note() -> None:
 
 
 def test_the_honest_half_is_computed_before_anything_is_built() -> None:
-    """Ordering matters: the engine must not build first and describe afterwards."""
+    """Ordering matters: the engine must not build first and describe afterwards.
+
+    Checked TWICE, because the lexical half alone is brittle. The AST check reads line order
+    inside generate(), so extracting the subprocess call into a helper would remove `run` from
+    the tree and the check would silently stop protecting anything — hence the explicit
+    assertion that all three calls are still IN generate(). The runtime check then observes the
+    real call order, which no refactor can fake.
+    """
     fn = _fn(TREE, "generate")
-    order: list[str] = []
+    order: list[tuple[int, str]] = []
     for node in ast.walk(fn):
         if isinstance(node, ast.Call):
             f = node.func
@@ -269,7 +334,38 @@ def test_the_honest_half_is_computed_before_anything_is_built() -> None:
     names = [n for _, n in order]
     assert names and names[0] == "_honest_footprint", \
         f"_honest_footprint must be computed FIRST, got {names}"
-    print("  the honest half is computed before anything is generated: PASS")
+    # If any of these moved out of generate(), the line-order check above is no longer looking
+    # at the thing it claims to check. Fail loudly rather than pass vacuously.
+    for required in ("_honest_footprint", "run", "render_stub"):
+        assert required in names, (
+            f"{required}() is no longer called directly inside generate() — the AST ordering "
+            f"check has stopped covering it. Saw: {names}")
+
+    # RUNTIME control-flow check: the honest half must actually be computed before the
+    # generator is invoked, whatever the source layout looks like.
+    seen: list[str] = []
+    orig = G._honest_footprint
+    try:
+        def spy_footprint(techniques):
+            seen.append("_honest_footprint")
+            return orig(techniques)
+
+        G._honest_footprint = spy_footprint
+        with _Spy() as spy:
+            spy_run = G.subprocess.run
+
+            def watched(argv, **kw):
+                seen.append("generator")
+                return spy_run(argv, **kw)
+
+            G.subprocess.run = watched
+            G.generate(_req())
+        assert seen == ["_honest_footprint", "generator"], \
+            f"the honest half must be computed before the generator runs, got {seen}"
+        assert spy.run_argv, "the generator should have been invoked in this check"
+    finally:
+        G._honest_footprint = orig
+    print("  the honest half is computed before anything is generated (AST + runtime): PASS")
 
 
 def test_a_missing_opsec_note_refuses_the_build() -> None:

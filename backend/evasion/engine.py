@@ -78,8 +78,11 @@ class EvasionRefused(RuntimeError):
 class EvasionRequest(BaseModel):
     """One generate request. ``techniques`` drives both the argv and the honest footprint."""
 
+    # There is deliberately no `target_os`. One was accepted and surfaced as a panel dropdown
+    # but never read by any code here — donut emits Windows PE shellcode and `_scarecrow_argv`
+    # hardcodes a Windows `-Loader binary`, so the field could only ever have misled. If a
+    # cross-compile target is wanted later it has to actually reach the argv.
     payload_path: str = ""
-    target_os: str = "windows"
     techniques: list[str] = Field(default_factory=list)
     target: str = ""
     engagement_id: str | None = None
@@ -96,6 +99,24 @@ class EvasionRequest(BaseModel):
         unknown = [t for t in v if t not in TECHNIQUES]
         if unknown:
             raise ValueError(f"unknown technique(s): {', '.join(unknown)}")
+        # EXACTLY ONE — this is a forced-honesty rule, not a convenience.
+        #
+        # Every describing helper below reads techniques[0] and only techniques[0]
+        # (`_honest_footprint`, `render_stub`, `_artifact_name`), while `_needs_generator`
+        # reads the WHOLE list. A mixed request therefore used to BUILD one thing and
+        # DESCRIBE another: ["amsi-patch", "scarecrow-loader"] ran ScareCrow and handed the
+        # resulting loader back carrying the AMSI-patch footprint. Two stub techniques
+        # silently dropped the second. Both are the contract in the module docstring failing
+        # quietly, which is worse than refusing.
+        #
+        # A list stays the wire shape (the result echoes it, and one day a build may legitimately
+        # compose techniques) — but until the honest half can describe a COMBINATION, more than
+        # one entry is refused rather than half-honoured.
+        if len(v) > 1:
+            raise ValueError(
+                "exactly one technique per build — a build carries the footprint of ONE "
+                f"technique, so it may not name {len(v)}: {', '.join(v)}"
+            )
         return v
 
     @field_validator("payload_path")
@@ -184,9 +205,17 @@ def _gate_request(req: EvasionRequest) -> ExecRequest:
     if not target and not req.engagement_id:
         # LAB. Building an artifact has no network target, but the lab's target-lock requires
         # the command to name the lab. Naming it explicitly is the honest way to satisfy that:
-        # it does not widen anything (the lab host is the ONLY value the lock accepts), and it
-        # keeps the lock meaningful where it matters — in engagement mode an empty target still
-        # falls through to the scope gate and is refused.
+        # it does not widen anything, because the lab host is the ONLY value the lock accepts.
+        #
+        # ENGAGEMENT mode is deliberately NOT symmetrical here, and the earlier claim that an
+        # empty target "falls through to the scope gate and is refused" was WRONG: outside lab
+        # mode `executor.check_target_lock` permits a command that names no host at all (see its
+        # docstring — `nmap -iL targets.txt` hides its hosts in a file, so refusing on absence
+        # protected nothing). With no target the ExecRequest carries empty args and the scope
+        # gate has nothing to check, so it passes. Nothing is weakened by that: a generate
+        # reaches no host, `target` feeds only the audit record, and the one value that COULD
+        # be network-facing is `req.target` — which, when present, is gated exactly as it
+        # should be. Regression-locked in test_evasion.py.
         target = config.LAB_TARGET_HOST
     return ExecRequest(
         command=_generator_argv(req, "")[0],
@@ -255,7 +284,14 @@ def generate(req: EvasionRequest) -> EvasionResult:
     if rejected is not None:
         raise EvasionRefused(rejected.reason, gate=getattr(rejected, "gate", ""))
 
-    resolved = executor.resolve_mode(_gate_request(req))
+    # The engagement can exit between the gate and the resolve. `resolve_mode` refuses rather
+    # than silently falling back to LAB (that is the point of EngagementInactive), but it
+    # signals that by raising — so catch it and refuse the same way every other gate does,
+    # instead of letting it surface as a 500. Mirrors executor.iter_run's handling.
+    try:
+        resolved = executor.resolve_mode(_gate_request(req))
+    except executor.EngagementInactive as exc:
+        raise EvasionRefused(str(exc), gate="engagement") from exc
     run_id = uuid.uuid4().hex[:12]
     out_name = _artifact_name(run_id, req.techniques)
 
@@ -304,7 +340,10 @@ def generate(req: EvasionRequest) -> EvasionResult:
 
     return EvasionResult(
         run_id=run_id,
-        artifact_path=out_path,
+        # Only claim a path when something was actually written. A non-zero exit or a timeout
+        # means the generator produced nothing, and handing back a path to a file that does not
+        # exist reads as a successful build in the panel (it even offered a copy button for it).
+        artifact_path=out_path if exit_code == 0 else "",
         techniques=list(req.techniques),
         mode=resolved.mode,
         exit_code=exit_code,

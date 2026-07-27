@@ -630,22 +630,25 @@ OPSEC: dict[str, OpsecNote] = {n.key: n for n in [
        "Prefer an execution path AMSI does not sit on at all over patching it; if patching, do "
        "it once in-process rather than repeatedly; avoid the published byte patterns, which are "
        "individually signatured",
-       "The patch is the loudest part: opening a handle to the current process and writing into "
-       "amsi.dll is covered by named AMSI-bypass detections (Sysmon 8/10 plus EDR memory-write "
-       "telemetry), the amsi.dll image load still happens, and the hosting process still starts "
-       "and is still attributed to its parent.",
+       "The attempt is the loudest part, and it is recorded whether or not it works: the "
+       "reflection is script content, so AMSI scans it on the way in and script-block logging "
+       "keeps it verbatim (4104), where named rules match the AMSI utility type and its "
+       "init-failed field. The hosting process still starts and is still attributed to its "
+       "parent, and its module loads and child processes stay recorded.",
        "Fragile across patch levels and AMSI versions — a failed patch usually raises a louder "
        "signal than leaving AMSI alone, and it only removes ONE inspection point."),
     _o("evasion_etw_blind",
-       "ETW is the pipe several EDR sensors read from, so an unmodified process reports its "
-       "loads, calls and network activity into that pipeline continuously.",
+       "ETW is the pipe several sensors read from, and PowerShell logs its own script blocks and "
+       "pipelines through a provider of its own, so an unmodified process reports what it runs "
+       "into that pipeline continuously.",
        "Prefer doing less in the process over blinding it; scope any change to the current "
        "process rather than the provider host; expect sensor-health monitoring and keep the "
        "quiet window short",
        "The silence is itself the signal — sensor-health and telemetry-gap monitoring alert on a "
-       "provider going quiet for one process while the host keeps reporting. Kernel callbacks, "
-       "process creation, the parent chain and all network telemetry are unaffected, and the "
-       "ntdll handle access the patch needs is recorded.",
+       "provider going quiet for one process while the host keeps reporting. The rebinding also "
+       "runs as script content, so script-block logging (4104) keeps a verbatim copy of it "
+       "before the provider goes quiet. Kernel callbacks, process creation, the parent chain "
+       "and all network telemetry are unaffected.",
        "Process-scoped only, so it buys much less than it appears to; and on a stack that "
        "watches sensor health it converts a quiet signal into an investigated one."),
 ]}
@@ -1176,9 +1179,17 @@ SPECS: dict[str, FootprintSpec] = {s.key: s for s in [
 
     # --- AV/EDR evasion artifacts (build #4) — the blue view of what the engine emits -------- #
     # These exist so the bespoke evasion engine can never hand back an artifact without the
-    # defender's side of it. Every id cited here is already in the ATT&CK table under v19
-    # naming: T1685 "Disable or Modify Tools" (was T1562.001) and T1690 "Prevent Command
-    # History Logging" (was T1562.006). Describe-side only — the quieter half lives in OPSEC.
+    # defender's side of it. Every id cited here is already in the ATT&CK table.
+    #
+    # THE v19 RENAMES, checked against upstream's own `revoked-by` relationships rather than
+    # assumed — an earlier version of this comment had them wrong and put a command-history
+    # label on a sensor-tamper footprint:
+    #     T1562.001 Disable or Modify Tools        -> T1685 Disable or Modify Tools
+    #     T1562.006 Indicator Blocking             -> T1685 Disable or Modify Tools
+    #     T1562.003 Impair Command History Logging -> T1690 Prevent Command History Logging
+    # So BOTH halves of sensor tampering (tool disabling and indicator blocking) land on T1685,
+    # and T1690 is only ever about shell history — which is how the `log_tamper` arg signal
+    # below already uses it. Describe-side only; the quieter half lives in OPSEC.
     _f("evasion_packed_loader", "Running a packed / shellcode loader artifact", "T1027", "",
        "WinEventLog:Security EventCode=4688; WinEventLog:Sysmon EventCode=1, 7; "
        "auditd:SYSCALL execve",
@@ -1189,24 +1200,37 @@ SPECS: dict[str, FootprintSpec] = {s.key: s for s in [
        "recorded regardless of how the payload was packed.",
        "Packing changes the FILE's static signature, not the fact that a process started and "
        "loaded modules — which is what process-creation and image-load telemetry records."),
-    _f("evasion_amsi_patch", "In-process AMSI patching", "T1685", "",
-       "WinEventLog:Sysmon EventCode=1, 7, 8, 10; WinEventLog:Security EventCode=4688",
+    # NOTE on both of the below: these describe the MANAGED-REFLECTION variant, which is what
+    # evasion/templates/*.ps1.tmpl actually emit. They previously described an
+    # OpenProcess/WriteProcessMemory patch — Sysmon 8/10, "a write into amsi.dll", "the ntdll
+    # handle access" — telemetry those stubs never generate, while omitting the one thing that
+    # does fire. Keep the stub and its footprint in step: test_evasion.py asserts they agree.
+    _f("evasion_amsi_patch", "In-process AMSI disabling via managed reflection", "T1685", "",
+       "WinEventLog:PowerShell EventCode=4104, 4103; WinEventLog:Sysmon EventCode=1; "
+       "WinEventLog:Security EventCode=4688",
        "loud",
-       "The patch itself is the signal: a handle opened to the current process, a write into "
-       "amsi.dll's scan routine, and the amsi.dll image load that precedes it. Mature stacks "
-       "ship named detections for exactly this memory write, and the hosting process still "
-       "starts and is still attributed to its parent.",
-       "AMSI is one inspection point, not the audit trail. Removing it stops content scanning "
-       "while leaving process creation, image loads, and handle access fully recorded."),
-    _f("evasion_etw_blind", "Blinding ETW for the current process", "T1690", "",
-       "WinEventLog:Sysmon EventCode=1, 7, 10; WinEventLog:Security EventCode=4688; "
-       "EDR:sensor-health telemetry gap",
+       "The script that does this is inspected before it can take effect: AMSI scans the "
+       "content on its way to the engine, and script-block logging records it verbatim (4104). "
+       "Public rules key on exactly this shape — reflection onto the AMSI utility type and its "
+       "init-failed field. Once the flag is set the process stops submitting content for "
+       "scanning, but the hosting process still starts, is still attributed to its parent, and "
+       "its module loads and child processes are all still recorded.",
+       "AMSI is one inspection point, not the audit trail — and the reflection that switches it "
+       "off is itself script content, so the attempt is recorded even when it succeeds. Process "
+       "creation, image loads and the parent chain are untouched."),
+    _f("evasion_etw_blind", "Rebinding the process's own ETW logging provider", "T1685", "",
+       "WinEventLog:PowerShell EventCode=4104, 4103; WinEventLog:Sysmon EventCode=1; "
+       "WinEventLog:Security EventCode=4688; EDR:sensor-health telemetry gap",
        "loud",
-       "A defender sees a provider go quiet for one process while the rest of the host keeps "
-       "reporting — an absence that sensor-health monitoring treats as an event in its own "
-       "right — plus the ntdll image load and handle access the patch needs to happen at all.",
-       "ETW tampering is process-scoped: it does not stop kernel callbacks, the parent-process "
-       "chain, or network telemetry, and the silence itself is detectable."),
+       "The same shape as the AMSI case: the rebinding is script content, so script-block "
+       "logging records it (4104) before the provider stops reporting, and the provider type it "
+       "reflects onto is what public rules match on. After that the absence is the signal — "
+       "PowerShell logging goes quiet for one process while the rest of the host keeps "
+       "reporting, which sensor-health and telemetry-gap monitoring treat as an event in their "
+       "own right. Process creation, the parent chain and network telemetry are untouched.",
+       "This rebinds the provider PowerShell logs through, so it is process-scoped and "
+       "after-the-fact: the script that does it is already recorded, and kernel callbacks, the "
+       "parent-process chain and network telemetry continue regardless."),
 ]}
 
 

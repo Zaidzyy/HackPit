@@ -7,6 +7,7 @@ Run:  backend/.venv/Scripts/python.exe backend/test_evasion.py
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -15,7 +16,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cockpit import config, executor as EX, loot, runstore  # noqa: E402
 from cockpit.models import EngagementRecord  # noqa: E402
+from detection import attck, catalog  # noqa: E402
 from evasion import engine as G  # noqa: E402
+
+REPO = Path(__file__).resolve().parent.parent
+TEMPLATES = Path(G.__file__).resolve().parent / "templates"
 
 
 class _Spy:
@@ -55,7 +60,7 @@ class _Spy:
 
 
 def _req(**kw) -> G.EvasionRequest:
-    base = dict(payload_path="/loot/in.exe", target_os="windows",
+    base = dict(payload_path="/loot/in.exe",
                 techniques=["donut-pack"], approved=True, dangerous_ack=True)
     base.update(kw)
     return G.EvasionRequest(**base)
@@ -223,6 +228,229 @@ def test_lab_mode_gets_a_bare_filename_and_engagement_gets_the_loot_dir() -> Non
     print("  lab gets a bare filename; engagement lands in the loot dir: PASS")
 
 
+# --------------------------------------------------------------------------- #
+# Regression locks for the Tasks 8-13 review findings. Each of these FAILS on the
+# code as it was before the corresponding fix.
+# --------------------------------------------------------------------------- #
+def test_a_mixed_technique_request_is_refused_not_half_honoured() -> None:
+    """I1. `techniques` is a list, but only techniques[0] was ever described.
+
+    Before the fix, ["amsi-patch", "scarecrow-loader"] BUILT the ScareCrow loader (because
+    `_needs_generator` reads the whole list) and returned it carrying the AMSI-patch footprint
+    (because `_honest_footprint` reads only the first entry) — a real artifact described by a
+    technique it does not implement. Two stub techniques silently dropped the second. There was
+    no multi-technique test at all, which is why it shipped.
+    """
+    for combo in (["amsi-patch", "scarecrow-loader"],   # built one thing, described another
+                  ["donut-pack", "amsi-patch"],          # stub silently dropped
+                  ["amsi-patch", "etw-blind"],           # second stub silently dropped
+                  ["donut-pack", "donut-pack"]):         # even a duplicate is ambiguous
+        try:
+            G.EvasionRequest(payload_path="/loot/in.exe", techniques=combo)
+            assert False, f"{combo!r} must be refused — it cannot be described honestly"
+        except ValueError:
+            pass
+
+    # ...and every single-technique build still resolves to ITS OWN spec, not a near-miss.
+    for technique, spec_key in G.TECHNIQUES.items():
+        with _Spy():
+            res = G.generate(_req(techniques=[technique]))
+        assert res.footprint["spec_key"] == spec_key, \
+            f"{technique}: described as {res.footprint.get('spec_key')!r}, expected {spec_key!r}"
+        assert res.techniques == [technique]
+    print("  a multi-technique build is refused; each single build gets its own spec: PASS")
+
+
+def test_the_evasion_specs_cite_the_right_attck_techniques() -> None:
+    """I2. `evasion_etw_blind` cited T1690, which is about shell history, not sensors.
+
+    Checked against upstream's own revoked-by graph: T1562.001 (Disable or Modify Tools) AND
+    T1562.006 (Indicator Blocking) BOTH revoke into T1685; T1690 is the successor of T1562.003
+    (Impair Command History Logging). `pipeline/detection_sources.py --verify` cannot catch
+    this — it checks that a cited id's name/tactic/log sources match upstream, not that the
+    technique is the right one for the activity, so it reported 0 problems throughout.
+    """
+    assert attck.TECHNIQUES["T1690"].name == "Prevent Command History Logging", \
+        "upstream renamed T1690 — recheck which technique the sensor-tamper specs should cite"
+    assert attck.TECHNIQUES["T1685"].name == "Disable or Modify Tools"
+
+    for key in ("evasion_amsi_patch", "evasion_etw_blind"):
+        ids = catalog.SPECS[key].techniques
+        assert "T1690" not in ids, (
+            f"{key} cites T1690 ({attck.TECHNIQUES['T1690'].name}) — that is command-history "
+            "tampering, not sensor tampering. Sensor tampering is T1685.")
+        assert "T1685" in ids, f"{key} must cite T1685 (Disable or Modify Tools), got {ids}"
+
+    # T1690 stays where it belongs: the log/history-tampering arg signal.
+    log_tamper = next(s for s in catalog.ARG_SIGNALS if s.id == "log_tamper")
+    assert "T1690" in log_tamper.techniques, "T1690 belongs on the history-tampering signal"
+
+    # And the packed-loader spec is an obfuscation technique, not a tamper one.
+    assert "T1027" in catalog.SPECS["evasion_packed_loader"].techniques
+    print("  the 3 evasion specs cite the correct ATT&CK techniques: PASS")
+
+
+def test_the_stub_headers_match_what_the_stubs_actually_do() -> None:
+    """I3. The stubs are managed-reflection bypasses; the headers described memory patching.
+
+    The headers and the catalog copy have to move TOGETHER — the header is the honesty contract
+    that travels inside the artifact, the spec is the one the panel renders, and they describe
+    the same thing. Before the fix both claimed Sysmon 8/10, 'a write into amsi.dll' and 'the
+    ntdll handle access', none of which this code performs, while omitting the detection that
+    does fire: the script is scanned and script-block logged before it takes effect.
+    """
+    for name, spec_key in (("amsi_patch.ps1.tmpl", "evasion_amsi_patch"),
+                           ("etw_blind.ps1.tmpl", "evasion_etw_blind")):
+        low = (TEMPLATES / name).read_text(encoding="utf-8").lower()
+
+        # It really is the reflection variant — if that ever changes, recheck the header.
+        assert "getfield(" in low and "setvalue(" in low, \
+            f"{name}: expected a managed-reflection stub"
+        for api in ("openprocess", "writeprocessmemory", "virtualprotect", "ntprotectvirtual"):
+            assert api not in low, \
+                f"{name}: no longer a pure reflection stub ({api}) — the header must be rechecked"
+
+        # So it must not claim memory-patch telemetry it cannot generate.
+        for claim in ("write into amsi.dll", "ntdll handle access", "memory-write telemetry"):
+            assert claim not in low, f"{name}: claims {claim!r}, which this stub never produces"
+        assert not re.search(r"eventcode[^\n.]*\b(?:8|10)\b", low), \
+            f"{name}: cites Sysmon 8/10, which a reflection stub does not trigger"
+
+        # ...and it must name the detection that DOES fire, in the header and in the spec.
+        assert "4104" in low, f"{name}: must name script-block logging (4104)"
+        telemetry = " ".join(catalog.SPECS[spec_key].telemetry).lower()
+        assert "4104" in telemetry, f"{spec_key}: telemetry must name script-block logging"
+        assert "eventcode=1, 7, 8" not in telemetry and "7, 10" not in telemetry, \
+            f"{spec_key}: still cites memory-patch Sysmon codes"
+        blue = catalog.SPECS[spec_key].blue_view.lower()
+        for claim in ("write into amsi.dll", "ntdll image load", "handle access"):
+            assert claim not in blue, f"{spec_key}: blue_view claims {claim!r}"
+    print("  both stub headers and their specs describe the reflection variant: PASS")
+
+
+def test_engagement_mode_with_no_target_is_permitted_by_design() -> None:
+    """I5. Pins the behaviour `_gate_request`'s comment now describes.
+
+    The comment used to claim an empty target in engagement mode 'falls through to the scope
+    gate and is refused'. It does not: outside lab mode `check_target_lock` deliberately allows
+    a command that names no host. Nothing network-facing can reach a generate, so that is
+    correct — but the comment was wrong, and a wrong comment about a gate is how the next
+    reader gets misled. This test fails if either the comment's claim or the gate changes.
+    """
+    eng = EngagementRecord(engagement_id="eng-1", target="10.0.0.5", scope="10.0.0.5",
+                           authorization="authorized", active=True, entered_at="now")
+    import cockpit.engagement as CE
+    orig = CE.get_active
+    try:
+        CE.get_active = lambda i: eng
+        req = _req(target="", engagement_id="eng-1")
+        assert G._gate_request(req).args == [], "no target means no args reach the gate"
+        assert G.validate_build(req) is None, \
+            "engagement + empty target is PERMITTED — if this now refuses, fix the comment in " \
+            "_gate_request that says so"
+        # ...but a target that IS named is still scope-checked.
+        bad = _req(target="evil.example.com", engagement_id="eng-1")
+        rejected = G.validate_build(bad)
+        assert rejected is not None and rejected.gate == "target", \
+            f"an out-of-scope target must still be refused, got {rejected}"
+    finally:
+        CE.get_active = orig
+    print("  engagement + no target is allowed by design; a named target is still gated: PASS")
+
+
+def test_a_failed_build_claims_no_artifact_path() -> None:
+    """M7. A non-zero exit or a timeout produced no file, so no path may be claimed."""
+    with _Spy(returncode=3, stderr="donut: bad input"):
+        failed = G.generate(_req())
+    assert failed.exit_code == 3
+    assert failed.artifact_path == "", \
+        "a failed build must not hand back a path to a file that was never written"
+    # ...and it is still honest about what the technique would have looked like.
+    assert failed.footprint.get("activity") and failed.opsec_note["still_recorded"].strip()
+    with _Spy() as spy:
+        ok = G.generate(_req())
+    assert ok.artifact_path and spy.run_argv, "a successful build still reports its path"
+    print("  a failed build reports no artifact path, and stays honest: PASS")
+
+
+# --------------------------------------------------------------------------- #
+# The image layer (docker/Dockerfile.sandbox). No Docker needed — these read the
+# recipe. M1: a smoke test that cannot fail is not a smoke test.
+# --------------------------------------------------------------------------- #
+_DOCKERFILE = REPO / "docker" / "Dockerfile.sandbox"
+# The binaries the build-#4 layer advertises and claims to smoke-test.
+_BUILD4_BINARIES = ("sliver-server", "sliver-client", "dnscat2-client", "dnscat2-server",
+                    "iodine", "iodined", "donut", "ScareCrow", "osslsigncode")
+
+
+def test_the_image_smoke_tests_carry_a_status() -> None:
+    """M1. `tool -h | head -1` and `|| true` both discard the exit status.
+
+    A pipeline's status is its LAST command's, so `head` returns 0 for a tool that is missing,
+    empty or dies on its first line — and `|| true` is the same failure with the intent written
+    down. ScareCrow was checked with BOTH, making it the one advertised binary whose brokenness
+    could not fail the build, in a layer whose own comment says each tool is really invoked.
+    """
+    lines = _DOCKERFILE.read_text(encoding="utf-8").splitlines()
+    offenders = []
+    for i, line in enumerate(lines, 1):
+        if line.lstrip().startswith("#"):
+            continue
+        if not any(b in line for b in _BUILD4_BINARIES):
+            continue
+        if "|| true" in line or "| head" in line:
+            offenders.append(f"{i}: {line.strip()}")
+    assert not offenders, (
+        "these build-#4 smoke tests discard the tool's exit status, so a broken tool would "
+        "still produce a green build:\n  " + "\n  ".join(offenders))
+
+    # Positive control: the checks really are there to be discarded in the first place.
+    body = "\n".join(lines)
+    assert body.count("grep -qi") >= 8, \
+        "the consolidated smoke test no longer asserts each tool's output"
+    print(f"  all {len(_BUILD4_BINARIES)} build-#4 smoke tests carry a real exit status: PASS")
+
+
+def test_the_image_layer_pins_what_it_can_and_declares_what_it_cannot() -> None:
+    """M2. Reproducibility. Sliver and ScareCrow are pinned; three installs are NOT.
+
+    This does not assert full pinning, because it is not true yet — dnscat2 has no release tags
+    and the pins need values resolved from the network (docker/pin-build4-versions.sh does
+    that). What it DOES assert is that the unpinned set never grows silently, and that the gap
+    stays documented. Once the pin script has run, the known-unpinned markers disappear and the
+    first branch of each check takes over.
+    """
+    body = _DOCKERFILE.read_text(encoding="utf-8")
+
+    for arg in ("SLIVER_VERSION", "SCARECROW_VERSION"):
+        assert re.search(rf"^ARG {arg}=\S+", body, re.M), f"{arg} must stay pinned to a version"
+
+    known_unpinned = {
+        "dnscat2": ("git clone --depth 1 https://github.com/iagox86", "checkout --detach"),
+        "gems": ("gem install --no-document trollop salsa20 sha3 ecdsa", "trollop:"),
+        "donut-shellcode": ("-q donut-shellcode;", "donut-shellcode=="),
+    }
+    still_open = []
+    for what, (unpinned_form, pinned_form) in known_unpinned.items():
+        if pinned_form in body:
+            assert unpinned_form not in body, \
+                f"{what}: pinned and unpinned forms are BOTH present — a half-applied pin"
+            continue
+        assert unpinned_form in body, (
+            f"{what}: neither the known-unpinned form nor a pin is present — this install "
+            "changed shape; re-check whether it is reproducible")
+        still_open.append(what)
+
+    if still_open:
+        assert "NOT PINNED" in body, \
+            "the unpinned installs are no longer declared as a known gap in the Dockerfile"
+        assert "pin-build4-versions.sh" in body, "the fix path must stay named in the Dockerfile"
+        assert (REPO / "docker" / "pin-build4-versions.sh").is_file(), \
+            "the Dockerfile points at a pin script that does not exist"
+    print(f"  2 pinned via ARG; {len(still_open)} declared-unpinned "
+          f"({', '.join(still_open) or 'none'}): PASS")
+
+
 if __name__ == "__main__":
     test_generate_emits_artifact_and_mandatory_honest_footprint()
     test_the_footprint_cannot_be_suppressed()
@@ -235,4 +463,12 @@ if __name__ == "__main__":
     test_a_failed_build_is_recorded_not_raised()
     test_unknown_technique_is_rejected_at_the_model()
     test_lab_mode_gets_a_bare_filename_and_engagement_gets_the_loot_dir()
+    # Tasks 8-13 review regression locks
+    test_a_mixed_technique_request_is_refused_not_half_honoured()
+    test_the_evasion_specs_cite_the_right_attck_techniques()
+    test_the_stub_headers_match_what_the_stubs_actually_do()
+    test_engagement_mode_with_no_target_is_permitted_by_design()
+    test_a_failed_build_claims_no_artifact_path()
+    test_the_image_smoke_tests_carry_a_status()
+    test_the_image_layer_pins_what_it_can_and_declares_what_it_cannot()
     print("ALL evasion functional tests pass")

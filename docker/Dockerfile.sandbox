@@ -361,11 +361,18 @@ RUN git clone --depth 1 https://github.com/1ndianl33t/Gf-Patterns /tmp/gfp \
 #                 extension and gcc is present, so it builds. Own venv per this file's
 #                 convention (PEP 668 makes system pip a non-starter on Kali anyway).
 #   * ScareCrow — NOT packaged; release binary. Its signing step shells out to osslsigncode,
-#                 which IS available (2.13-2) and is installed alongside it, so the signing
-#                 path works. Note the release asset is tagged v5.1 and named
+#                 which IS available (2.13-2) and is installed alongside it as a HARD
+#                 requirement (no `|| true`) — the consolidated smoke test asserts it runs.
+#                 Note the release asset is tagged v5.1 and named
 #                 ScareCrow_5.1_linux_amd64 — there is no 5.1.x asset; a guessed patch
 #                 version 404s and fails this layer.
-# Every step ends in a smoke test so a bad URL or a moved release fails the build loudly.
+#
+# SMOKE TESTS MUST CARRY A STATUS. Every step ends in a smoke test so a bad URL or a moved
+# release fails the build loudly — but `tool -h | head -1` does NOT do that: the exit status of
+# a pipeline is the LAST command's, so `head` returns 0 even when the tool is missing, empty or
+# dies on its first line. `|| true` is the same failure with the intent written down. Every
+# invocation below therefore ends in `grep -q`, which fails when the tool produces no output.
+# Regression-locked in backend/test_evasion.py.
 
 # Sliver — release binaries (server + client).
 ARG SLIVER_VERSION=1.5.42
@@ -381,8 +388,15 @@ RUN set -eux; \
 # dnscat2 — DNS-tunnelled channel. Client compiled from source; server is the shipped Ruby.
 # Wrapped as dnscat2-server / dnscat2-client to match backend/arsenal/tools.json.
 # The server's four gems (trollop/salsa20/sha3/ecdsa, per its own Gemfile) are NOT optional —
-# without them dnscat2.rb dies on `require 'ecdsa'`. The smoke test below runs the server's
-# own --help so a missing gem fails the build instead of surfacing at engagement time.
+# without them dnscat2.rb dies on `require 'ecdsa'`. dnscat2.rb has no --help of its own, so
+# the gems are asserted DIRECTLY below; a missing gem fails the build rather than surfacing at
+# engagement time.
+#
+# NOT PINNED, and that is a known reproducibility gap (review finding M2, still open): this
+# clones master and resolves the four gems to whatever is current, so two builds of this
+# Dockerfile can differ. Sliver and ScareCrow below ARE pinned via ARG. Pinning these needs the
+# real upstream commit and gem versions resolved from the network — see
+# docker/pin-build4-versions.sh, which resolves them and rewrites this block in place.
 RUN set -eux; \
     git clone --depth 1 https://github.com/iagox86/dnscat2.git /opt/dnscat2; \
     make -C /opt/dnscat2/client; \
@@ -391,14 +405,14 @@ RUN set -eux; \
     printf '%s\n' '#!/bin/sh' 'exec ruby /opt/dnscat2/server/dnscat2.rb "$@"' \
         > /usr/local/bin/dnscat2-server; \
     chmod 0755 /usr/local/bin/dnscat2-server; \
-    /usr/local/bin/dnscat2-client --help 2>&1 | head -1; \
+    /usr/local/bin/dnscat2-client --help 2>&1 | grep -qi dnscat; \
     ruby -e "require 'ecdsa'; require 'salsa20'; require 'sha3'; require 'trollop'; puts 'dnscat2 server gems ok'"
 
 # iodine — already installed by the Kali toolset layer; assert it, do not reinstall.
 RUN set -eux; \
     command -v iodine; \
     command -v iodined; \
-    iodine -h 2>&1 | head -1
+    iodine -h 2>&1 | grep -qi iodine
 
 # donut — shellcode-from-PE generator, in its own venv (this file's convention).
 # donut-shellcode is a C EXTENSION exposing exactly one callable, `donut.create(...)`. It has
@@ -426,8 +440,9 @@ RUN set -eux; \
     chmod 0755 /usr/local/bin/donut; \
     /usr/local/bin/donut --help >/dev/null
 
-# ScareCrow — loader generator. Signing needs osslsigncode, which this snapshot lacks; the
-# apt attempt is tolerated so the build does not fail over an optional signing dependency.
+# ScareCrow — loader generator. Its signing step shells out to osslsigncode, which IS in this
+# snapshot (2.13-2) and is a HARD requirement here: no `|| true`, so a snapshot that drops it
+# fails this layer rather than shipping a ScareCrow whose signing path is broken.
 ARG SCARECROW_VERSION=5.1
 RUN set -eux; \
     apt-get update && apt-get install -y --no-install-recommends osslsigncode \
@@ -436,25 +451,29 @@ RUN set -eux; \
         "https://github.com/optiv/ScareCrow/releases/download/v${SCARECROW_VERSION}/ScareCrow_${SCARECROW_VERSION}_linux_amd64"; \
     install -m 0755 /tmp/scarecrow /usr/local/bin/ScareCrow; \
     rm -f /tmp/scarecrow; \
-    /usr/local/bin/ScareCrow -h 2>&1 | head -1 || true; \
-    test -x /usr/local/bin/ScareCrow
+    /usr/local/bin/ScareCrow -h 2>&1 | grep -qi scarecrow
 
-# One consolidated smoke test: the build FAILS if any advertised binary is missing.
+# One consolidated smoke test: the build FAILS if any advertised binary is missing OR broken.
 # A `command -v` check alone is not a smoke test — it passes for a binary that dies on its
-# first line. Each tool below is actually INVOKED. (dnscat2-server has no --help of its own,
-# so its gems are asserted directly; ScareCrow exits non-zero on -h by design.)
+# first line. Neither is `tool -h | head -1`: a pipeline's status is the LAST command's, so
+# `head` returns 0 for a tool that never ran. And `|| true` discards the status outright —
+# ScareCrow was checked that way, making it the one advertised binary whose brokenness could
+# not fail this build. Every tool below is INVOKED and its OUTPUT asserted with `grep -q`,
+# which fails on an empty or absent one. (dnscat2-server has no --help of its own, so its gems
+# are asserted directly; ScareCrow exits non-zero on -h by design, which grep does not care
+# about — grep sees the usage banner either way.)
 RUN set -eux; \
     for b in sliver-server sliver-client dnscat2-server dnscat2-client iodine iodined donut ScareCrow; do \
         command -v "$b" >/dev/null || { echo "MISSING: $b"; exit 1; }; \
     done; \
-    sliver-server version; \
-    sliver-client version; \
-    dnscat2-client --help >/dev/null 2>&1; \
+    sliver-server version 2>&1 | grep -qi sliver; \
+    sliver-client version 2>&1 | grep -qi sliver; \
+    dnscat2-client --help 2>&1 | grep -qi dnscat; \
     ruby -e "require 'ecdsa'; require 'salsa20'; require 'sha3'; require 'trollop'"; \
-    iodine -h 2>&1 | head -1; \
-    iodined -h 2>&1 | head -1; \
-    donut --help >/dev/null; \
-    ScareCrow -h >/dev/null 2>&1 || true; \
+    iodine -h 2>&1 | grep -qi iodine; \
+    iodined -h 2>&1 | grep -qi iodine; \
+    donut --help 2>&1 | grep -qi shellcode; \
+    ScareCrow -h 2>&1 | grep -qi scarecrow; \
     osslsigncode --version >/dev/null; \
     echo "build #4 C2/evasion toolset present and each tool runs"
 

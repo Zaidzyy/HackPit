@@ -131,6 +131,9 @@ echo "== Phase-4 exam report templates (proof-flag capture / per-host table / CV
 echo "== Sliver C2 containment (human-only server lifecycle / GATED implant gen / <listener> verbatim) =="
 "$PY" test_sliver.py
 
+echo "== DNS-tunnel obfuscation containment (human-only listener / client one-liner never delivered) =="
+"$PY" test_obfuscation.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

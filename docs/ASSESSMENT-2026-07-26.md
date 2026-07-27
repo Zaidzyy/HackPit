@@ -251,12 +251,14 @@ These are not open work — they are the rules the project runs by, and building
 - **The HTB Academy syllabus proper** (§3, finding 4) — the local slice is fully ingested; the rest is proprietary and needs the course.
 - **Thin categories with no target on the list** — mobile · iot · forensics · ics · phishing (§3, finding 3). Unfilled by choice.
 - **C2-framework install + the persistence evasion/OPSEC half** — **DONE** (build #4, no longer deferred): Sliver is installed and wired to a gated panel, and the persistence OPSEC notes were backfilled. Empire and weevely remain catalogued reference-only by choice.
-- **Live-fire verification of the C2 and tunnel surfaces (build #4) — OUTSTANDING, and the largest known gap in that build.** Everything shipped in build #4 is verified *hermetically* (42 suites, 446 checks, docker/subprocess stubbed) and *through the panel*, plus an image smoke test that invokes each binary. What has **never** happened is an end-to-end run against real infrastructure. Specifically still to do:
+- **Live-fire verification of the C2 and tunnel surfaces (build #4) — OUTSTANDING, and the largest known gap in that build.** Everything shipped in build #4 is verified *hermetically* (42 suites, 459 checks, docker/subprocess stubbed) and *through the panel*, plus an image smoke test that invokes each binary. What has **never** happened is an end-to-end run against real infrastructure. Specifically still to do:
     - **Catch a live Sliver beacon.** The server lifecycle starts and stops and is audited, but no implant has ever called back. Needs a listener reachable from a victim host — i.e. the same VPS gap as D2, or a lab VM on a routable segment. Until then the implant argv is only as correct as the catalog's documented syntax; a wrong flag surfaces as `status='failed'`, not as a containment failure.
     - **Stand up a real DNS tunnel.** `dnscat2-server` and `iodined` start inside the engage sandbox and the client one-liner is handed back, but no delegated zone exists to test against. Needs an authoritative zone the operator controls with an NS record pointed at the listener. `iodined` also needs a TUN device in the engage sandbox — plausible given its `NET_ADMIN`, but unproven.
     - **Run a generated artifact on a Windows box and watch the telemetry.** The evasion engine emits artifacts and the paired footprints claim specific Event IDs and Sysmon codes. Those claims are transcribed from ATT&CK v19.1 and SigmaHQ, not observed here. The honest version of this feature is only fully honest once someone detonates an artifact on an instrumented host and confirms the footprint matches what actually landed in the log. This is the natural pairing with the D9 Windows VM.
   None of this blocks the build shipping — the containment properties are what the test suite locks, and those are provable without live infrastructure. But the *efficacy* claims are, until then, documented rather than demonstrated, and this list should be worked through before build #4 is described as field-ready.
-- ~~**An independent review of build #4's Tasks 8–13**~~ — **DONE.** Run in a fresh session (the safety classifier had begun refusing subagent dispatch partway through the build, and it refuses on accumulated context). It found **no containment hole** — no agent path, no shell, the container never request-influenced, no delivery primitive — and five substantive defects, all fixed: a multi-technique request that built one artifact and described a different one; the T1690/T1685 mis-mapping above; two stub headers describing memory patching when the stubs are managed-reflection bypasses; a no-agent-path test whose positive control counted the wrong variable (99 files reported, 5 actually scanned); and a `_gate_request` comment asserting a scope-gate behaviour that does not hold. Plus seven minor items — an image smoke test that could not fail, unpinned installs, dead fields, weak assertions. Every fix carries a test that fails without it.
+- **An independent review of build #4's Tasks 8–13** — **DONE** (no longer outstanding). Run in a fresh session (the safety classifier had begun refusing subagent dispatch partway through the build, and it refuses on accumulated context). It found **no containment hole** — no agent path, no shell, the container never request-influenced, no delivery primitive — and five substantive defects, all fixed: a multi-technique request that built one artifact and described a different one; the T1690/T1685 mis-mapping above; two stub headers describing memory patching when the stubs are managed-reflection bypasses; a no-agent-path test whose positive control counted the wrong variable (99 files reported, 5 actually scanned); and a `_gate_request` comment asserting a scope-gate behaviour that does not hold. Plus seven minor items — an image smoke test that could not fail, unpinned installs, dead fields, weak assertions. Every fix carries a test that fails without it.
+- **Gate-integrity Criticals 2 and 3 — OUTSTANDING, and the highest-priority work in the project.** Planned as build #5 (`docs/superpowers/plans/2026-07-27-build5-gate-integrity.md`). **Critical 2** is the WinRM first-token classification, and it is the sharpest known hole in the tool: the red-confirm is defeated by moving a cmdlet one token to the right, on the one path that executes against a real domain-joined host under real credentials. **Critical 3** is the family of source-scan locks whose globs cover a fraction of the tree — the `:kali` human-only lock reaches 30 of 69 modules, the cockpit→arsenal lock 5 of 22 — so a planted violation in an unglobbed directory passes. The plan's third task is the one that matters longest: turning *a guard test must iterate real data, assert on what it actually checked, and prove it can fail* into a written repo convention, because every critical found so far reduces to a test that could not fail.
+- **Pinning the build-#4 install layer** (audit M2) — three of five install paths are unpinned (`git clone` of dnscat2, four `gem install`s, `pip install donut-shellcode`). `docker/pin-build4-versions.sh` resolves the real values and rewrites the layer; a test fails if the unpinned set grows. Deliberately left unpinned rather than pinned to invented values.
     - **Still open from that review:** three installs in the build-#4 image layer (dnscat2's clone, four Ruby gems, `donut-shellcode`) remain **unpinned**, so the layer is not byte-reproducible. Pinning needs upstream values resolved from the network; `docker/pin-build4-versions.sh` resolves them and rewrites the layer in place. The gap is declared in the Dockerfile and asserted by `test_evasion.py`, which fails if the unpinned set grows.
 - **Kali VM as an execution target; HexStrike as an execution backend; risk-tiered / batch approval** — **rejected, not deferred** (D8, D5, §1.2).
 - **Authentication before any non-localhost deployment** (§6) — no decision needed until a VPS enters the picture, but a hard blocker the moment it does. `:terminal` makes this sharper: an unauthenticated *interactive terminal* onto a box that reaches the host and LAN.
@@ -455,6 +457,49 @@ Build #4 closes the C2/evasion channel the persistence enrich deferred. Unlike t
 
 **Containment, restated.** No orchestrator, agent or loop module can reach any of the three surfaces — asserted by whole-tree source scans, not by convention. Nothing here is autonomous, no gate was weakened, and the only capability the agent gained is none: every new action is human-initiated and audited.
 
+## Gate-integrity audit (2026-07-27)
+
+After build #4 shipped, the whole project's **guards** were audited with one question: *would this
+actually fire?* Not "is a guard present" — the build had already shown that a guard can be present,
+look correct, pass its tests, and never trigger. **24 guards were probed by constructing a
+deliberate violation for each. Seven silently failed to fire.** Full detail in
+`GATE-AUDIT-FINDINGS.md`; the three criticals were:
+
+1. **Eight catalogued tools passed the danger gate with no red-confirm** — demonstrated end to end
+   through `executor.validate_request`. `weevely` (which both generates a webshell *and* drives it),
+   dnscat2's client and server, `iodine`/`iodined`, `commix`, `SSTImap`, `SharPersist` and
+   `Invoke-Obfuscation` all returned zero reasons, as did the argument-driven `sqlmap --os-shell`,
+   `commix --os-shell` and `netexec -x`. **FIXED and pushed (`4492fec`).**
+2. **The WinRM transport classifies only the first token of what is a whole PowerShell script.**
+   `executor.py` joins command+args and `run_ps()` executes the lot, so `;` and `|` are live
+   separators: `Write-Host go ; Invoke-Mimikatz` is silent, while the same cmdlet as `argv[0]`
+   fires. **OUTSTANDING — build #5.** This is the most consequential finding of the whole review
+   cycle, because it executes on a real domain-joined host under real credentials.
+3. **The `:kali` human-only lock never opens 39 of 69 backend modules** — its scan globs only
+   `backend/*.py` and `cockpit/*.py`. A planted `from cockpit.kali import run_kali` in
+   `adgraph/orchestrator.py` passes. The same narrow glob was copied into the tunnels, repeater,
+   terminal and WinRM locks, and the cockpit→arsenal lock covers 5 of 22 modules.
+   **OUTSTANDING — build #5.**
+
+**What Critical 1's fix actually changed**, because the shape matters more than the list. The
+`.exe`/`.py`/`.ps1` normalisation that the AD sets already did was **collapsed into one shared
+normaliser used by every set** — that asymmetry was the root cause, not a symptom, and it was why
+`powershell.exe`, `nc.exe` and even `sliver-client.exe` produced no reason at all on the transport
+where `.exe` is the ordinary spelling. Two new sets were added rather than padding `_FRAMEWORKS`,
+so the reason the operator reads is true: `_TUNNEL_TOOLS` (a tunnel is a C2 path and an exfil path,
+not a payload generator) and `_RCE_TOOLS`. `_FRAMEWORKS`' `ligolo` entry was corrected to
+`ligolo-proxy` — the binary the repo actually runs — an entry that could never match, added *after*
+the `sliver`/`sliver-client` bug was fixed, and worse than no entry because it reads as coverage.
+
+**The finding underneath all three.** `test_arsenal_safety` claimed to verify that a catalogued
+dangerous invocation demands the red-confirm — while testing `python3`, **a command that is not in
+the catalog at all.** That single choice is why eight tools shipped ungated. It now pins all **176**
+catalogued invocation names (every name, alias and template `argv[0]`) into exactly one bucket, so
+an unclassified tool fails the suite; five planted regressions were run against it and all five fail
+correctly. Every critical in this audit, and two of the five findings in the Tasks 8–13 review,
+reduce to the same root cause: **a test that could not fail, or that tested a value the real system
+never produces.** That is what build #5's third task turns into a written repo convention.
+
 ## Verification
 
 - **Hermetic safety suite** (`sh backend/run_safety_tests.sh`) — green after every phase, expanded across all five with `test_phase1_runtime`, `test_state`, `test_scope_hostcheck`, `test_credvault`, `test_corpora`, `test_detection`/`test_detection_safety` (OPSEC channel + blue-view-unchanged), `test_repeater`, `test_tunnels`, `test_report_templates`, persistent-shell containment tests in `test_kali`, Phase 5's `test_terminal` (PTY containment + the sentinel shell provably untouched) and `test_exploits` (version comparison, tiered ranking, executes-nothing), and the Windows backend's `test_winrm` + `test_winrm_safety` (host-locked / no gate bypass / secret never leaks / orchestrator can't auto-run WinRM) with the AD oracle extended to the native Windows variants, plus the post-assessment `test_search_ranking` (substance-gated tier boost + completeness nudge) and `test_codescan_rules` (8-language rule bundle + resolver), plus build #4's six new suites — `test_sliver`/`test_sliver_safety`, `test_obfuscation`/`test_obfuscation_safety` and `test_evasion`/`test_evasion_safety` (no agent path, gated-vs-human-only split preserved, `<listener>` never substituted, the tunnel key never crossing the HTTP boundary, the artifact never executed, and a negative control proving that stripping the OPSEC note makes the engine **refuse** rather than degrade). **42 test files, 446 checks, 0 failures.**
@@ -468,4 +513,6 @@ Build #4 (AV/EDR evasion + traffic obfuscation) is complete and verified: image 
 
 A note the review sharpened, because it cuts against the instinct to trust the tooling: `pipeline/detection_sources.py --verify` reported **0 problems** throughout, including while `evasion_etw_blind` carried a technique id about shell history. It verifies that every id, name, tactic, log source and Sigma reference matches live upstream — it cannot verify that the technique chosen is the right one for the activity being described. A clean `--verify` is a check on transcription, not on judgement.
 
-Everything is local on branch `sandbox-kali-image`. **All five phases are complete, and the Windows execution backend (D9) is now built** — the AD attack-path graph executes live over WinRM against an external VMware VM you run. The only remaining work is the deliberately deferred list in Part II — where the largest item, growing tier-1, is writing rather than building — plus the live-box verification of the WinRM driver, which waits on a VM being stood up.
+Build #4 and gate-audit Critical 1 are **pushed** on `sandbox-kali-image` (through `4492fec`); the suite stands at 42 files / 459 checks / 0 failures. The next work is **build #5** — gate-integrity Criticals 2 and 3, above — and it should be treated as the priority, because Critical 2 is a red-confirm bypass on the path that reaches real domain-joined hosts.
+
+**All five phases are complete, and the Windows execution backend (D9) is now built** — the AD attack-path graph executes live over WinRM against an external VMware VM you run. The only remaining work is the deliberately deferred list in Part II — where the largest item, growing tier-1, is writing rather than building — plus the live-box verification of the WinRM driver, which waits on a VM being stood up.

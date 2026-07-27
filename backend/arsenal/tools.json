@@ -50,7 +50,9 @@
     "<keyword>": "A base keyword/company name to derive cloud asset names from.",
     "<token-file>": "Path to a file of API tokens, one per line.",
     "<dorks-file>": "Path to a file of dork queries, one per line.",
-    "<path>": "A URL path component, e.g. /admin."
+    "<path>": "A URL path component, e.g. /admin.",
+    "<payload>": "The command, script or implant to run when the persistence mechanism fires.",
+    "<name>": "A name/identifier for the object being created (task, service, registry value, unit, shortcut)."
   },
   "tools": [
     {
@@ -3799,6 +3801,137 @@
           "what": "log output to file"
         }
       ]
+    },
+    {
+      "name": "SharPersist",
+      "platform": "windows",
+      "aliases": [
+        "SharPersist.exe"
+      ],
+      "category": "persistence",
+      "purpose": "Windows persistence toolkit (Mandiant) — add or remove one persistence mechanism at a time from inside a session: scheduled tasks, registry autorun, startup folder and services, with add/remove and list modes so an operator can also clean up.",
+      "phases": [
+        "post-exploitation"
+      ],
+      "techniques": [
+        "scheduled task",
+        "registry autorun",
+        "startup folder",
+        "service",
+        "persistence"
+      ],
+      "docs": "https://github.com/mandiant/SharPersist",
+      "templates": [
+        {
+          "label": "Scheduled-task persistence (logon)",
+          "template": "SharPersist.exe -t schtask -c \"<payload>\" -n \"<name>\" -m add",
+          "note": "Adds a logon-triggered task. `-m remove` reverses it; `-m check`/`-m list` enumerate what is present."
+        },
+        {
+          "label": "Registry Run-key persistence",
+          "template": "SharPersist.exe -t reg -c \"<payload>\" -a \"<name>\" -k \"hkcurun\" -m add",
+          "note": "Writes a CurrentVersion\\Run value under HKCU (or `hklmrun` with admin)."
+        },
+        {
+          "label": "Startup-folder persistence",
+          "template": "SharPersist.exe -t startupfolder -c \"<payload>\" -f \"<name>\" -m add",
+          "note": "Drops a shortcut into the user's Startup folder."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-t",
+          "what": "technique (schtask, reg, startupfolder, service, …)"
+        },
+        {
+          "flag": "-m",
+          "what": "mode: add / remove / check / list"
+        },
+        {
+          "flag": "-c",
+          "what": "command / payload to run"
+        },
+        {
+          "flag": "-k",
+          "what": "registry key location (hkcurun / hklmrun)"
+        }
+      ]
+    },
+    {
+      "name": "Sliver",
+      "category": "persistence",
+      "purpose": "Open-source C2 framework (Bishop Fox) whose implants support several persistence mechanisms. Reference-only in HackPit: NOT installed — its install and C2 wiring are deferred to build #4, so reconcile shows it not-present and the planner will not propose it.",
+      "phases": [
+        "command-and-control",
+        "post-exploitation"
+      ],
+      "techniques": [
+        "C2",
+        "implant persistence",
+        "beaconing"
+      ],
+      "docs": "https://github.com/BishopFox/sliver",
+      "templates": [
+        {
+          "label": "Generate an mTLS implant (Sliver console)",
+          "template": "generate --mtls <listener> --save <output>",
+          "note": "Run inside the Sliver console. Reference-only — Sliver is not installed (deferred to build #4)."
+        }
+      ],
+      "flags": []
+    },
+    {
+      "name": "Empire",
+      "category": "persistence",
+      "purpose": "PowerShell/Python post-exploitation framework with a catalogue of persistence modules. Reference-only in HackPit: NOT installed — install and C2 wiring deferred to build #4, so reconcile shows it not-present and the planner will not propose it.",
+      "phases": [
+        "command-and-control",
+        "post-exploitation"
+      ],
+      "techniques": [
+        "C2",
+        "PowerShell/Python agents",
+        "persistence modules"
+      ],
+      "docs": "https://github.com/BC-SECURITY/Empire",
+      "templates": [
+        {
+          "label": "Select a persistence module (Empire client)",
+          "template": "usemodule persistence/<technique>",
+          "note": "Run inside the Empire client. Reference-only — Empire is not installed (deferred to build #4)."
+        }
+      ],
+      "flags": []
+    },
+    {
+      "name": "weevely",
+      "aliases": [
+        "weevely3"
+      ],
+      "category": "persistence",
+      "purpose": "Obfuscated PHP web-shell generator and client (T1505.003) — generates a stealthy PHP backdoor and drives it over an encrypted channel. Reference-only in HackPit: NOT installed.",
+      "phases": [
+        "post-exploitation"
+      ],
+      "techniques": [
+        "web shell",
+        "T1505.003",
+        "persistence"
+      ],
+      "docs": "https://github.com/epinna/weevely3",
+      "templates": [
+        {
+          "label": "Generate an obfuscated PHP web shell",
+          "template": "weevely generate <password> <output>",
+          "note": "Produces the backdoor file you then drop into the web root."
+        },
+        {
+          "label": "Connect to a planted web shell",
+          "template": "weevely <url> <password>",
+          "note": "Opens the managed session against an already-deployed shell."
+        }
+      ],
+      "flags": []
     }
   ]
 }

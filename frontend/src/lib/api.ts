@@ -1430,6 +1430,11 @@ export const startTunnel = (
     listen_port?: number | null;
     subnets: string[];
     engagement_id?: string | null;
+    // A pivot listener is a route into a real network, so starting it clears the same gates as
+    // any execution: an explicit approval and the danger red-confirm. Both default false on the
+    // backend, so omitting them is a refusal, never a silent grant.
+    approved?: boolean;
+    dangerous_ack?: boolean;
   },
   signal?: AbortSignal
 ) => postJSON<Tunnel>("/cockpit/tunnels", body, signal);

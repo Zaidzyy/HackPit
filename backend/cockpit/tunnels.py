@@ -30,10 +30,27 @@ CONTAINMENT:
 * ``start_tunnel`` / ``stop_tunnel`` run a listener process and are HUMAN-ONLY: the
   orchestrator / agent / executor have ZERO path to them (source-scan locked, like :kali and
   the repeater). A listener that an agent could raise would be an autonomous pivot.
+* ``start_tunnel`` is ALSO GATED — approval + the heuristic red-confirm — through the real
+  ``executor.validate_request``, before anything is spawned. See below for why that was added.
 * The rewritten command still runs through the NORMAL gated executor — approve-each, scope,
   the works. Wrapping adds a prefix; it introduces NO new execution capability and no new gate
   bypass. A proxychained command to an internal host is refused unless that subnet was added to
   scope by hand.
+
+WHY THE LISTENER START IS GATED (finding I2, gate audit 2026-07-27). This module used to reach
+``subprocess.Popen`` directly with no ``validate_request`` call, and ``POST /cockpit/tunnels``
+carried no ``approved`` / ``dangerous_ack`` field at all. The bullet above about the rewritten
+command was true and beside the point: **the listener start is the tunnel primitive.** A tunnel
+is a C2 path and an exfil path in one, moving arbitrary traffic to somewhere the operator has
+not been gated against — and it was raised by a plain POST. Human-only was the ONLY bound on
+it, which is strictly less than every other execution surface in the cockpit gets.
+
+Note this is deliberately NOT the D17 shape. For Sliver, C2 *lifecycle* is human-only while
+artifact *generation* is gated, because starting a listener that nothing has connected to yet
+is inert. That reasoning does not transfer: a pivot listener's whole purpose is to become a
+route into a network the scope gate has never seen, so it is gated like an execution, not
+treated as lifecycle.
+
 
 Live pivoting is inherently untested without a real compromised host to connect back; the
 lifecycle, routing, one-liner generation and command rewriting are built and unit-tested, and
@@ -86,6 +103,19 @@ class TunnelStartRequest(BaseModel):
         "172.16.0.0/24. Used for route resolution; adding them to SCOPE is a separate step.",
     )
     engagement_id: str | None = Field(None, description="Engagement to associate + record against.")
+    # THE GATE FIELDS. Both default False, so a client that omits them is REFUSED rather than
+    # allowed — a default of True would mean an omitted field silently grants exactly what the
+    # field was added to require.
+    approved: bool = Field(
+        False,
+        description="Explicit human approval for starting this listener. Never defaulted true, "
+        "never batched — a pivot listener is an execution, not a lifecycle no-op.",
+    )
+    dangerous_ack: bool = Field(
+        False,
+        description="The explicit red-confirm. A tunnel is a C2 path and an exfil path in one, "
+        "so the danger heuristic always flags the server binary and this is always required.",
+    )
 
     @field_validator("kind")
     @classmethod
@@ -126,7 +156,20 @@ class Tunnel(BaseModel):
 
 
 class TunnelRefused(RuntimeError):
-    """The listener could not start / the request was invalid. Nothing runs."""
+    """The listener could not start / the request was invalid. Nothing runs.
+
+    Carries the GATE that refused it, so the route can map a safety refusal (403) apart from an
+    availability problem (409) instead of collapsing both into one status. ``dangerous_flags``
+    is populated when the danger gate refused, so the UI can render WHY rather than a generic
+    banner — the same discipline the WinRM confirm follows.
+    """
+
+    def __init__(self, reason: str, gate: str = "unavailable",
+                 dangerous_flags: list[str] | None = None):
+        super().__init__(reason)
+        self.reason = reason
+        self.gate = gate
+        self.dangerous_flags = dangerous_flags or []
 
 
 # --------------------------------------------------------------------------- #
@@ -185,15 +228,100 @@ def _ligolo_plan(req: TunnelStartRequest) -> tuple[list[str], str, str, int | No
 
 
 # --------------------------------------------------------------------------- #
-# lifecycle — HUMAN-ONLY
+# the gate — approval + the heuristic red-confirm, before anything spawns
+# --------------------------------------------------------------------------- #
+def server_argv_for(req: TunnelStartRequest) -> list[str]:
+    """The listener argv this request will run. THE SINGLE DERIVATION.
+
+    Both the gate and :func:`start_tunnel` come through here, for the same reason the WinRM
+    path funnels through one join: classifying a DIFFERENT argv than the one that executes
+    reproduces the bug in a new place. A test asserts the gated argv and the spawned argv are
+    equal.
+    """
+    plan = _chisel_plan(req) if req.kind == "chisel" else _ligolo_plan(req)
+    return list(plan[0])
+
+
+def _gate_request(req: TunnelStartRequest) -> "ExecRequest":
+    """The ExecRequest the real gates run against.
+
+    Surface: the SERVER BINARY (which drives the danger heuristic — ``chisel`` and
+    ``ligolo-proxy`` are both in ``allowlist._TUNNEL_TOOLS``, so a listener start always demands
+    the red-confirm) plus the engagement.
+
+    ``lhost`` is deliberately NOT in the gate surface. It is the OPERATOR's own callback address
+    — the VPN IP the victim dials back to — not a target, and scope-gating it would refuse the
+    operator's own machine. Same reasoning that keeps ``<listener>`` from ever being rewritten
+    to the target in the arsenal templates.
+
+    ``subnets`` are deliberately not gated here either, and that is not a gap: an internal
+    subnet enters engagement scope ONLY through the explicit, audited
+    ``engagement.add_pivot_subnet``. Gating them at start would duplicate that decision in a
+    place where refusing is meaningless — the tunnel does not reach them until an agent
+    connects, and the commands that DO reach them are gated one at a time, by scope, as always.
+
+    THE SERVER'S OWN FLAGS ARE ALSO NOT IN THE SURFACE, and leaving them out is deliberate
+    rather than lazy. A listener has no target: its arguments are a bind address and a port
+    (``-laddr 0.0.0.0:11601``). The scope extractor reads any dotted token as a hostname, so
+    feeding them in makes the gate refuse ``0.0.0.0`` as an out-of-scope host — a refusal about
+    the operator's own socket, which teaches nothing and would train a workaround. Nothing is
+    weakened: the danger verdict comes from the BINARY (both server binaries are in
+    ``allowlist._TUNNEL_TOOLS``, so the red-confirm always fires), and the only values that
+    could be network-facing — the internal subnets — are governed by the scope amendment.
+    """
+    from .models import ExecRequest
+
+    argv = server_argv_for(req)
+    return ExecRequest(
+        command=argv[0],
+        args=[],
+        approved=req.approved,
+        dangerous_ack=req.dangerous_ack,
+        engagement_id=req.engagement_id,
+    )
+
+
+def validate_start(req: TunnelStartRequest):
+    """The gate verdict for starting this listener, spawning nothing. PURE.
+
+    A TUNNEL START NOW REQUIRES AN ENGAGEMENT, which is a deliberate tightening rather than a
+    side effect. Without one the request would resolve to LAB mode, and lab mode's isolation
+    gate proves the LAB sandbox is egress-less — a property of a container this listener does
+    not run in. Firing a gate on an unrelated condition is its own kind of dishonesty: the
+    operator would be told to prove the lab is isolated in order to start a pivot into a client
+    network. Engagement mode is the coherent home for it — no isolation floor (correct, the
+    target is real), scope enforced per command, and the pivot subnet's scope amendment already
+    demanded an engagement id anyway.
+    """
+    from . import executor
+    from .models import ExecRejected
+
+    if not req.engagement_id:
+        return ExecRejected(
+            reason="a pivot listener must name an engagement — it is a route into a real "
+            "network, so it is attributed and scoped like every other engagement action "
+            "(and its subnets can only enter scope through that engagement's amendment)",
+            gate="engagement",
+        )
+    return executor.validate_request(_gate_request(req))
+
+
+# --------------------------------------------------------------------------- #
+# lifecycle — HUMAN-ONLY *and* GATED
 # --------------------------------------------------------------------------- #
 def start_tunnel(req: TunnelStartRequest) -> Tunnel:
     """Start a pivot listener in the ENGAGE sandbox and return it + the agent one-liner.
 
-    HUMAN-ONLY (route-driven). Runs the chisel/ligolo *server* inside the engage sandbox — a
-    local listener, no target, so no target-scope gate applies to starting it. Refuses if the
-    sandbox is down or the live cap is hit; nothing runs on refusal.
+    HUMAN-ONLY (route-driven) AND GATED. The chisel/ligolo *server* runs inside the engage
+    sandbox; the real ``executor.validate_request`` runs FIRST, so an unapproved or
+    un-red-confirmed start is refused with NOTHING spawned. Also refuses if the sandbox is down
+    or the live cap is hit; nothing runs on any refusal.
     """
+    rejected = validate_start(req)
+    if rejected is not None:
+        raise TunnelRefused(rejected.reason, gate=rejected.gate,
+                            dangerous_flags=list(rejected.dangerous_flags))
+
     if not _container_running(config.ENGAGE_SANDBOX_CONTAINER):
         raise TunnelRefused(
             f"engage sandbox '{config.ENGAGE_SANDBOX_CONTAINER}' is not running — bring the "
@@ -202,17 +330,20 @@ def start_tunnel(req: TunnelStartRequest) -> Tunnel:
     with _lock:
         live = sum(1 for t in _tunnels.values() if t.model.status != "down")
         if live >= MAX_LIVE_TUNNELS:
-            raise TunnelRefused(f"too many live tunnels ({live}/{MAX_LIVE_TUNNELS}) — stop one first")
+            raise TunnelRefused(f"too many live tunnels ({live}/{MAX_LIVE_TUNNELS}) — stop one first",
+                                gate="limit")
 
     if req.kind == "chisel":
-        server_argv, agent, note, socks = _chisel_plan(req)
+        _server_argv, agent, note, socks = _chisel_plan(req)
         routing, port = "socks", (req.listen_port or CHISEL_DEFAULT_PORT)
     else:
-        server_argv, agent, note, socks = _ligolo_plan(req)
+        _server_argv, agent, note, socks = _ligolo_plan(req)
         routing, port = "interface", (req.listen_port or LIGOLO_DEFAULT_PORT)
 
     tid = uuid.uuid4().hex[:12]
-    argv = ["docker", "exec", config.ENGAGE_SANDBOX_CONTAINER, *server_argv]
+    # Through server_argv_for, NOT the local plan tuple: the argv that runs must be the argv
+    # the gate above classified.
+    argv = ["docker", "exec", config.ENGAGE_SANDBOX_CONTAINER, *server_argv_for(req)]
     try:
         proc = subprocess.Popen(
             argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

@@ -49,6 +49,31 @@ class _Spy:
         T._container_running, T.subprocess.Popen = self._orig
 
 
+class _Engagement:
+    """A live engagement to attribute a tunnel start to. Yields its id; exits on the way out."""
+
+    def __init__(self, label: str = "eng-tun"):
+        self.label = label
+        self.eng_id = ""
+
+    def __enter__(self) -> str:
+        from cockpit import engagement
+
+        engagement.init_db()
+        eng = engagement.enter("10.10.10.5", "authorized", scope_spec="10.10.10.0/24")
+        self.eng_id = eng.engagement_id
+        return self.eng_id
+
+    def __exit__(self, *exc):
+        from cockpit import engagement
+
+        try:
+            engagement.exit_engagement(self.eng_id)
+        except Exception:
+            pass
+        return False
+
+
 def _tun(**kw) -> Tunnel:
     base = dict(
         id="t1", kind="chisel", routing="socks", lhost="10.8.0.2", listen_port=8080,
@@ -92,11 +117,116 @@ def test_tunnels_lifecycle_is_human_only() -> None:
           "(+ planted-violation control): PASS")
 
 
+# --------------------------------------------------------------------------- #
+# 1b. THE LISTENER START IS GATED (finding I2 from the 2026-07-27 gate audit)
+#
+# `start_tunnel` reached `subprocess.Popen` directly, with NO call to
+# `executor.validate_request`, and `POST /cockpit/tunnels` carried no `approved` /
+# `dangerous_ack` field at all. The module docstring's claim that "the rewritten command still
+# runs through the NORMAL gated executor" was true — and beside the point, because the LISTENER
+# START is the tunnel primitive. A tunnel is a C2 path and an exfil path in one, moving
+# arbitrary traffic to somewhere the operator has not been gated against, and it was raised on
+# an unauthenticated POST with no approval and no red-confirm.
+#
+# Human-only is preserved (the source-scan lock above is untouched); this is purely additive.
+# --------------------------------------------------------------------------- #
+def test_starting_a_listener_needs_approval_and_the_red_confirm() -> None:
+    """Unapproved refuses at `approval`; approved-without-ack refuses at `danger`. Nothing runs."""
+    T.reset()
+    with _Spy() as spy, _Engagement("eng-tun") as eng_id:
+        # No engagement at all -> refused before any gate that could be mistaken for one.
+        try:
+            T.start_tunnel(TunnelStartRequest(kind="chisel", lhost="10.8.0.2"))
+            raise AssertionError("a pivot listener started with no engagement named")
+        except TunnelRefused as exc:
+            assert exc.gate == "engagement", f"expected the engagement gate, got {exc.gate!r}"
+        assert spy.popen_argv is None
+
+        unapproved = TunnelStartRequest(kind="chisel", lhost="10.8.0.2",
+                                        subnets=["172.16.0.0/24"], engagement_id=eng_id)
+        try:
+            T.start_tunnel(unapproved)
+            raise AssertionError("an UNAPPROVED tunnel listener started — I2 is back")
+        except TunnelRefused as exc:
+            assert exc.gate == "approval", f"expected the approval gate, got {exc.gate!r}"
+        assert spy.popen_argv is None, "a refused start must never reach subprocess.Popen"
+
+        # Approved, but a tunnel is a C2/exfil channel — it still needs the explicit confirm.
+        approved = unapproved.model_copy(update={"approved": True})
+        try:
+            T.start_tunnel(approved)
+            raise AssertionError("a tunnel listener started with NO red-confirm")
+        except TunnelRefused as exc:
+            assert exc.gate == "danger", f"expected the danger gate, got {exc.gate!r}"
+            assert exc.dangerous_flags, "the confirm must carry its reasons"
+            assert any("chisel" in f.lower() for f in exc.dangerous_flags), exc.dangerous_flags
+        assert spy.popen_argv is None, "a refused start must never reach subprocess.Popen"
+
+        # With both, it runs.
+        ok = unapproved.model_copy(update={"approved": True, "dangerous_ack": True})
+        tun = T.start_tunnel(ok)
+        assert tun.status == "listening" and spy.popen_argv is not None
+    print("  a tunnel listener needs approval + the red-confirm; a refusal runs nothing: PASS")
+
+
+def test_both_tunnel_binaries_actually_trip_the_heuristic() -> None:
+    """THE POSITIVE CONTROL for the gate above. If neither server binary produced a reason, the
+    danger leg would pass vacuously and the test above would be asserting nothing.
+
+    This is exactly how `ligolo` failed before: the set entry was the string `ligolo` while the
+    binary the repo runs is `ligolo-proxy`, so it could never match — an entry that reads as
+    coverage while providing none."""
+    from cockpit import allowlist
+
+    for kind in ("chisel", "ligolo"):
+        req = TunnelStartRequest(kind=kind, lhost="10.8.0.2")
+        argv = T.server_argv_for(req)
+        reasons = allowlist.dangerous_command_heuristic(argv[0], argv[1:])
+        assert reasons, (
+            f"{kind}: the server binary {argv[0]!r} produces NO danger reason, so the confirm "
+            "on a tunnel start would never fire — this is the `ligolo` vs `ligolo-proxy` bug"
+        )
+    print("  both chisel and ligolo-proxy trip the heuristic (the danger leg is live): PASS")
+
+
+def test_the_gated_argv_is_the_argv_that_runs() -> None:
+    """The drift lock, and the lesson from Critical 2: gating a DIFFERENT string than the one
+    that executes reproduces the bug somewhere new. Both come from `server_argv_for`."""
+    T.reset()
+    with _Spy() as spy, _Engagement() as eng_id:
+        req = TunnelStartRequest(kind="ligolo", lhost="10.8.0.2", listen_port=11601,
+                                 engagement_id=eng_id, approved=True, dangerous_ack=True)
+        gated = T.server_argv_for(req)
+        T.start_tunnel(req)
+        assert spy.popen_argv[:3] == ["docker", "exec", config.ENGAGE_SANDBOX_CONTAINER]
+        assert spy.popen_argv[3:] == gated, (
+            f"the gate classified {gated} but Popen ran {spy.popen_argv[3:]}"
+        )
+    print("  the argv the gate classified IS the argv that runs: PASS")
+
+
+def test_the_request_carries_the_gate_fields() -> None:
+    """The route cannot demand an approval the model has no field for — the original defect was
+    half a missing call and half a missing field."""
+    fields = set(TunnelStartRequest.model_fields)
+    for needed in ("approved", "dangerous_ack"):
+        assert needed in fields, f"TunnelStartRequest has no {needed!r} field"
+    # ...and both default to FALSE, so an old client that omits them is refused, never allowed.
+    fresh = TunnelStartRequest(kind="chisel", lhost="10.8.0.2")
+    assert fresh.approved is False and fresh.dangerous_ack is False, (
+        "the gate fields must default to False — a default of True would mean an omitted field "
+        "silently grants what it was added to require"
+    )
+    print("  the start request carries approved + dangerous_ack, both defaulting False: PASS")
+
+
 def test_start_runs_in_engage_sandbox_hardcoded() -> None:
     T.reset()
-    with _Spy() as spy:
-        tun = T.start_tunnel(TunnelStartRequest(kind="chisel", lhost="10.8.0.2",
-                                                subnets=["172.16.0.0/24"]))
+    with _Spy() as spy, _Engagement() as eng_id:
+        tun = T.start_tunnel(TunnelStartRequest(
+            kind="chisel", lhost="10.8.0.2", subnets=["172.16.0.0/24"],
+            engagement_id=eng_id, approved=True, dangerous_ack=True,
+        ))
     argv = spy.popen_argv
     assert argv[:3] == ["docker", "exec", config.ENGAGE_SANDBOX_CONTAINER], argv[:3]
     assert "chisel" in argv and "server" in argv
@@ -108,12 +238,17 @@ def test_start_runs_in_engage_sandbox_hardcoded() -> None:
 
 def test_refuses_when_sandbox_down_or_capped() -> None:
     T.reset()
-    with _Spy(up=False):
+    with _Spy(up=False), _Engagement() as eng_id:
         try:
-            T.start_tunnel(TunnelStartRequest(kind="chisel", lhost="x"))
+            # Fully gated, so the ONLY thing left to refuse it is the down sandbox — otherwise
+            # this would pass for the wrong reason and stop testing availability at all.
+            T.start_tunnel(TunnelStartRequest(
+                kind="chisel", lhost="10.8.0.2", engagement_id=eng_id,
+                approved=True, dangerous_ack=True,
+            ))
             assert False, "must refuse when the engage sandbox is down"
-        except TunnelRefused:
-            pass
+        except TunnelRefused as exc:
+            assert exc.gate == "unavailable", f"refused for the wrong reason: {exc.gate!r}"
     T.reset()
     print("  a down sandbox refuses the start; nothing runs: PASS")
 
@@ -205,6 +340,10 @@ def test_recon_expansion_still_cannot_widen() -> None:
 
 if __name__ == "__main__":
     test_tunnels_lifecycle_is_human_only()
+    test_starting_a_listener_needs_approval_and_the_red_confirm()
+    test_both_tunnel_binaries_actually_trip_the_heuristic()
+    test_the_gated_argv_is_the_argv_that_runs()
+    test_the_request_carries_the_gate_fields()
     test_start_runs_in_engage_sandbox_hardcoded()
     test_refuses_when_sandbox_down_or_capped()
     test_route_matches_on_ip_only()

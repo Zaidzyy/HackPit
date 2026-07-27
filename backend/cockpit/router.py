@@ -639,14 +639,23 @@ def get_tunnels_status() -> dict[str, Any]:
 def start_tunnel(req: tunnels_mod.TunnelStartRequest) -> tunnels_mod.Tunnel:
     """Start a pivot listener (chisel server / ligolo proxy) and return the agent one-liner.
 
-    HUMAN-ONLY. 409 if the engage sandbox is down or the live-tunnel cap is hit (nothing runs).
+    HUMAN-ONLY AND GATED. The request carries ``approved`` + ``dangerous_ack``, and the real
+    ``executor.validate_request`` runs before anything spawns: a pivot listener is a route into
+    a real network, so it clears the same red-confirm as any other execution. A SAFETY refusal
+    (engagement / approval / danger) is **403** naming the gate, with the danger reasons for the
+    confirm; an AVAILABILITY problem (sandbox down / cap hit) is **409**. Nothing runs on either.
     Delivering the returned one-liner to the compromised host is the operator's manual step —
     HackPit cannot reach a machine it has not compromised.
     """
     try:
         return tunnels_mod.start_tunnel(req)
     except tunnels_mod.TunnelRefused as exc:
-        raise HTTPException(status_code=409, detail={"gate": "unavailable", "reason": str(exc)})
+        status = 409 if exc.gate in {"unavailable", "limit"} else 403
+        raise HTTPException(status_code=status, detail={
+            "gate": exc.gate,
+            "reason": exc.reason,
+            "dangerous_flags": exc.dangerous_flags,
+        })
 
 
 @router.get("/tunnels", response_model=list[tunnels_mod.Tunnel])

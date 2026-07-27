@@ -36,6 +36,9 @@ export function TunnelsScreen() {
   const [subnets, setSubnets] = useState("");
   const [engagementId, setEngagementId] = useState("");
   const [starting, setStarting] = useState(false);
+  // The danger gate is a RED CONFIRM, not a failure: when the backend refuses a start with
+  // [danger], we hold the reason here and re-send with dangerous_ack once the operator confirms.
+  const [dangerReason, setDangerReason] = useState<string | null>(null);
 
   // route preview
   const [rCmd, setRCmd] = useState("nmap -sV");
@@ -55,28 +58,39 @@ export function TunnelsScreen() {
     refresh();
   }, [refresh]);
 
-  const start = useCallback(async () => {
-    if (!lhost.trim() || starting) return;
-    setStarting(true);
-    setError(null);
-    try {
-      await startTunnel({
-        kind,
-        lhost: lhost.trim(),
-        listen_port: port.trim() ? Number(port) : null,
-        subnets: subnets
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
-        engagement_id: engagementId.trim() || null,
-      });
-      refresh();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
-    } finally {
-      setStarting(false);
-    }
-  }, [kind, lhost, port, subnets, engagementId, starting, refresh]);
+  /** Start a listener. `ack` re-sends after the danger gate's red confirm. */
+  const start = useCallback(
+    async (ack: boolean) => {
+      if (!lhost.trim() || starting) return;
+      setStarting(true);
+      setError(null);
+      try {
+        await startTunnel({
+          kind,
+          lhost: lhost.trim(),
+          listen_port: port.trim() ? Number(port) : null,
+          subnets: subnets
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean),
+          engagement_id: engagementId.trim() || null,
+          approved: true,
+          dangerous_ack: ack,
+        });
+        setDangerReason(null);
+        refresh();
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.message : String(e);
+        // A tunnel start always trips the danger gate (the server binary is a C2/exfil tool),
+        // so this is the normal path, not an error: surface it as the red confirm.
+        if (msg.startsWith("[danger]")) setDangerReason(msg.replace(/^\[danger\]\s*/, ""));
+        else setError(msg);
+      } finally {
+        setStarting(false);
+      }
+    },
+    [kind, lhost, port, subnets, engagementId, starting, refresh]
+  );
 
   const stop = useCallback(
     async (tid: string) => {
@@ -172,10 +186,45 @@ export function TunnelsScreen() {
               placeholder="engagement id (for scope amendment)"
               aria-label="engagement id"
             />
-            <button type="button" onClick={start} disabled={starting || !lhost.trim()}>
+            <button
+              type="button"
+              onClick={() => start(false)}
+              disabled={starting || !lhost.trim()}
+            >
               {starting ? "starting…" : "start ▸"}
             </button>
           </div>
+
+          {/* RED CONFIRM — the danger gate refused; a pivot listener is a C2/exfil channel, so
+              starting it always demands this. Re-confirm to send with dangerous_ack. */}
+          {dangerReason && (
+            <div className="hp-tn-danger" role="alert">
+              <div className="hp-tn-danger-head">⚠ this starts a covert channel — confirm</div>
+              <p className="hp-tn-danger-why">{dangerReason}</p>
+              <p className="hp-tn-danger-note">
+                A pivot listener routes arbitrary traffic into a network the scope gate has not
+                seen. It is attributed to the engagement and recorded like every other action.
+              </p>
+              <div className="hp-tn-danger-actions">
+                <button
+                  type="button"
+                  className="hp-tn-danger-go"
+                  onClick={() => start(true)}
+                  disabled={starting}
+                >
+                  {starting ? "starting…" : "confirm & start ▸"}
+                </button>
+                <button
+                  type="button"
+                  className="hp-tn-danger-cancel"
+                  onClick={() => setDangerReason(null)}
+                  disabled={starting}
+                >
+                  cancel
+                </button>
+              </div>
+            </div>
+          )}
         </section>
 
         {/* ---- live tunnels ---- */}

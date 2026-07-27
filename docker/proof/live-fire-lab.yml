@@ -109,3 +109,33 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     command: ["sleep", "infinity"]
+
+  # The iodine client. SEPARATE from the dnscat2 client on purpose, because it needs privileges
+  # the dnscat2 client must not have: iodine brings up a whole IP-over-DNS *interface*, so it
+  # needs a TUN device (`/dev/net/tun`) and `NET_ADMIN` to configure it. Keeping them apart means
+  # the dnscat2 host stays `cap_drop: ALL` and only this one carries the capability iodine
+  # genuinely requires — least privilege per fixture, the same discipline the surfaces follow.
+  #
+  # CONTAINMENT IS UNAFFECTED. `NET_ADMIN` lets a process manage network interfaces INSIDE its own
+  # namespace; it does not widen what the container can reach. This host's only network is
+  # `lf-dns` (`internal: true`), so it has no route off the bridge no matter what it does to its
+  # own `dns0` tun. The capability buys the tunnel, not egress.
+  iodine-client:
+    image: hackpit/kali-sandbox:m1
+    container_name: hackpit-lf-iodine-client
+    hostname: lf-iodine-client
+    networks: [lf-dns]
+    # RUNS AS ROOT, unlike every other lab host, and only this one. The image's default user is
+    # `sandbox` (uid 1000); iodine 0.7.0 opens `/dev/net/tun` and configures the interface, which
+    # needs an EFFECTIVE NET_ADMIN — a `cap_add` alone does not grant that to a non-root process.
+    # The trade is bounded: this container's only network is `lf-dns` (`internal: true`), it still
+    # drops every capability except NET_ADMIN, and root inside a capability-stripped, egress-less
+    # namespace reaches nothing it could not reach as `sandbox`. Root buys the tun device, not
+    # reach — exactly as NET_ADMIN does.
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    security_opt: [no-new-privileges:true]
+    command: ["sleep", "infinity"]

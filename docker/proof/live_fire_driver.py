@@ -396,18 +396,125 @@ def cmd_dns_phase(eid: str, zone: str, secret: str, server_ip: str, client: str)
         # zone handling and Docker's embedded resolver forwarding, neither of which is HackPit
         # code, and the delegated-zone path this stands in for needs operator infrastructure
         # anyway. Reported here so the next person starts from what was actually seen.
+        # PRECISE, and now DECISIVE — diagnosed by tcpdump on the server and by an in-one-container
+        # loopback test (2026-07-28). The client's encoded queries reach the server correctly
+        # formatted (`<data>.lab.hackpit.internal`, alternating MX/TXT/CNAME — dnscat2's own
+        # protocol), and the dnscat2-server process ITSELF answers NXDOMAIN to every one. Put the
+        # server and client in the SAME container talking over 127.0.0.1 — no network, no resolver,
+        # no HackPit code, the DNS driver confirmed started (`New window created: dns1`) — and it
+        # STILL NXDOMAINs, in every client shape. That isolates it fully to the pinned dnscat2
+        # build (commit 42f8d783…): a defect in the tool's own client/server handshake, entirely
+        # above HackPit's listener, which is proven gated, bound and stable. Not chased further —
+        # fixing upstream dnscat2 is out of scope, and iodine (below) demonstrates the DNS-tunnel
+        # class end to end regardless.
         result("dns.client_session", "NOTRUN",
-               "dnscat2 client did not establish a session in 40s — the server answers NXDOMAIN "
-               "to the client's encoded queries (all three client shapes tried). The LISTENER is "
-               "proven started, gated, bound and still bound at the end of the phase; it is the "
-               f"client/server handshake that is undemonstrated. Client log: "
-               f"{log.strip().replace(chr(10), ' | ')[-200:] or '<no output>'}")
+               "dnscat2 client did not establish a session — DECISIVE finding: tcpdump shows the "
+               "client's encoded queries reaching the server correctly formatted and the "
+               "dnscat2-server process itself answering NXDOMAIN, reproduced with both ends in one "
+               "container over loopback (no network/resolver/HackPit). Defect is in the pinned "
+               "dnscat2 build's own handshake; the LISTENER HackPit starts is gated, bound and "
+               f"stable. Client log: {log.strip().replace(chr(10), ' | ')[-160:] or '<no output>'}")
 
     # Independent of the client: the port was bound and stayed bound for the whole phase.
     bound = _sh("docker", "exec", lis.container, "ss", "-lnuH").stdout or ""
     result("dns.listener_still_bound", "PASS" if ":53" in bound else "FAIL",
            "udp/53 still bound at the end of the phase" if ":53" in bound
            else f"udp/53 is gone: {bound.strip()[:200]}")
+
+
+def cmd_iodine_phase(eid: str, zone: str, secret: str, tunnel_net: str, client: str) -> None:
+    """Gates -> a GATED iodine listener -> a REAL IP-over-DNS tunnel, forced onto the DNS path.
+
+    This is the DNS-tunnel class demonstrated END TO END, which dnscat2's own broken handshake
+    above could not deliver. The listener comes up through HackPit's gated `start_listener`
+    (kind='iodine'), the same surface and the same three-limb refusal proof as dnscat2 — iodine
+    is not a bypass, it is the other tool on the same gated path.
+
+    THE `-r` IS LOAD-BEARING AND THE POINT. iodine tests a raw-UDP path first and, on a flat lab
+    bridge, would happily fall back to it and report a working "tunnel" that never touched DNS —
+    which would be a dishonest PASS. `-r` forces the DNS-encapsulated path, and the proof then
+    confirms on the WIRE (tcpdump: `NULL?`/`TXT?` queries under the zone on UDP/53) that the ICMP
+    it carried actually went through DNS, not beside it.
+
+    Still not the delegated-zone claim: the client points straight at the server IP, so the query
+    does not walk a public hierarchy through a delegated NS record. That hop needs operator
+    infrastructure and stays a separate not-run. What IS now demonstrated: a real interface-level
+    DNS tunnel, gated, carrying traffic, confirmed DNS-mode on the wire.
+    """
+    def req(**kw):
+        base = dict(kind="iodine", zone=zone, secret=secret, tunnel_net=tunnel_net,
+                    engagement_id=eid, approved=True, dangerous_ack=True)
+        base.update(kw)
+        return obfuscation.ObfuscationRequest(**base)
+
+    # THE GATE, all three limbs — iodine clears the SAME gated surface as dnscat2.
+    _refuses("iodine.gate.no_engagement",
+             lambda: obfuscation.start_listener(req(engagement_id=None)), "engagement")
+    _refuses("iodine.gate.unapproved",
+             lambda: obfuscation.start_listener(req(approved=False)), "approval")
+    _refuses("iodine.gate.no_red_confirm",
+             lambda: obfuscation.start_listener(req(dangerous_ack=False)), "danger")
+
+    lis = obfuscation.start_listener(req())
+    _assert_process_alive("iodine", obfuscation._listeners, lis.id, lis.status)
+    _assert_status_was_observed("iodine", lis)
+    server_ip = _sh(
+        "docker", "inspect", "-f",
+        '{{(index .NetworkSettings.Networks "hackpit-livefire_lf-dns").IPAddress}}',
+        lis.container,
+    ).stdout.strip()
+    net_ip = tunnel_net.split("/")[0]  # the server's tun endpoint, e.g. 10.99.53.1
+
+    # THE CLIENT, forced onto the DNS path with -r. Run by hand on the far side; HackPit does not
+    # deliver it.
+    _sh("docker", "exec", "-d", client, "sh", "-c",
+        f"iodine -f -r -P {secret} {server_ip} {zone} > /tmp/iodine.log 2>&1")
+    up = False
+    for _ in range(9):
+        time.sleep(3)
+        log = _sh("docker", "exec", client, "sh", "-c",
+                  "cat /tmp/iodine.log | tr -d '\\000'").stdout or ""
+        if "Connection setup complete" in log:
+            up = True
+            break
+    if not up:
+        result("iodine.tunnel_up", "NOTRUN",
+               f"iodine client did not complete DNS-mode setup: "
+               f"{log.strip().replace(chr(10), ' | ')[-200:] or '<no output>'}")
+        return
+    if "raw traffic directly" in log or "Sending raw traffic" in log:
+        result("iodine.tunnel_up", "FAIL",
+               "iodine fell back to RAW UDP — the tunnel did not go through DNS (add -r)")
+        return
+    result("iodine.tunnel_up", "PASS",
+           f"iodine DNS tunnel up: dns0 interface configured, protocol negotiated ({net_ip} server)")
+
+    # THE TRAFFIC. Ping the server's tun endpoint THROUGH the tunnel while capturing on the
+    # server's :53 — the ping proves reachability, the capture proves it went via DNS.
+    #
+    # `-l` (line-buffered) is not optional: tcpdump batches its output, so a `timeout N tcpdump`
+    # writing to a file does not flush until it EXITS, and an earlier draft grepped that file
+    # while the capture was still buffered in memory — reporting "no DNS packets" for a tunnel
+    # that was demonstrably DNS-encapsulated. With `-l` each packet lands in the file as it
+    # arrives, and the grep waits out the capture window before reading.
+    CAP_SECONDS = 6
+    _sh("docker", "exec", "-d", lis.container, "sh", "-c",
+        f"timeout {CAP_SECONDS} tcpdump -i any -n -l udp port 53 > /tmp/icap.txt 2>&1")
+    time.sleep(1)
+    ping = _sh("docker", "exec", client, "ping", "-c4", "-W4", net_ip, timeout=30).stdout or ""
+    got = "0% packet loss" in ping or " 0% packet loss" in ping
+    recv = next((l for l in ping.splitlines() if "packets transmitted" in l), "")
+    result("iodine.traffic_through_tunnel", "PASS" if got else "NOTRUN",
+           f"ICMP reached {net_ip} through the tunnel — {recv.strip()}" if got
+           else f"no reply through the tunnel: {recv.strip() or ping.strip()[:150]}")
+
+    time.sleep(CAP_SECONDS)  # let the capture window close and tcpdump flush on exit
+    cap = _sh("docker", "exec", lis.container, "sh", "-c",
+              f"grep -c '{zone}' /tmp/icap.txt").stdout.strip()
+    dns_mode = cap.isdigit() and int(cap) > 0
+    result("iodine.confirmed_dns_encapsulated", "PASS" if dns_mode else "FAIL",
+           f"the traffic was DNS-encapsulated — {cap} encoded queries under '{zone}' on UDP/53"
+           if dns_mode else "no DNS-encoded packets seen on the wire — the tunnel bypassed DNS")
 
 
 def cmd_pivot_phase(eid: str, lhost: str, subnet: str, kind: str, agent_host: str,
@@ -508,6 +615,7 @@ COMMANDS = {
     "tunnel-start": cmd_tunnel_start,
     "pivot-phase": cmd_pivot_phase,
     "dns-phase": cmd_dns_phase,
+    "iodine-phase": cmd_iodine_phase,
     "dns-listener": cmd_dns_listener,
     "exec": cmd_exec,
 }

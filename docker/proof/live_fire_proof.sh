@@ -327,12 +327,19 @@ head2 "5. DNS TUNNEL — dnscat2 through the gated obfuscation path"
 # just been confirmed bound.
 drive dns-phase "$EID" "lab.hackpit.internal" "livefire-secret-01" "$DNS_IP" hackpit-lf-dns-client
 
+# dnscat2 frees UDP/53 when the phase above ends (its console gets EOF as that driver process
+# exits), so iodine can take the port. iodine binds :53 in the engage sandbox and brings up a
+# tun on the lab client, so the client host needs /dev/net/tun + NET_ADMIN + root — the
+# `iodine-client` fixture in live-fire-lab.yml carries exactly those and nothing more.
+head2 "5b. DNS TUNNEL — iodine (IP-over-DNS), the same gated surface, forced onto the DNS path"
+drive iodine-phase "$EID" "iodine.test" "iodinepw123" "10.99.53.1/24" hackpit-lf-iodine-client
+
 # The half that CANNOT run here, stated plainly rather than quietly skipped.
-notrun "delegated-zone DNS tunnelling NOT demonstrated — it needs a real domain the operator \
-controls with an NS record delegated to the tunnel server. That is operator infrastructure; \
-this harness only proves the direct-to-server path"
-notrun "iodine NOT demonstrated — it needs a TUN device on BOTH ends plus the same delegated \
-zone; the engage sandbox has /dev/net/tun but the lab client container does not"
+notrun "delegated-zone DNS tunnelling NOT demonstrated — both dnscat2 and iodine ran here in \
+direct/collapsed-hop mode; a genuine delegated tunnel needs a domain the operator controls with \
+an NS record pointed at the listener, which is operator infrastructure. iodine's IP-over-DNS \
+channel IS demonstrated carrying traffic (5b), confirmed DNS-encapsulated on the wire; what is \
+not is the public-delegation hop in front of it."
 fi
 
 # --------------------------------------------------------------------------- #

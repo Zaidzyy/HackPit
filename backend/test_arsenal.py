@@ -44,11 +44,58 @@ def test_catalog_is_well_formed() -> None:
 
 def test_every_category_and_phase_is_covered() -> None:
     ars = _load()
-    for category in ("recon", "web", "network-ad", "credentials", "cloud", "binary"):
+    for category in ("recon", "web", "network-ad", "credentials", "cloud", "binary",
+                     "c2", "evasion"):
         assert ars.by_category(category), f"no tools in category {category}"
     for phase in ("recon", "enumeration", "exploitation"):
         assert ars.by_phase(phase), f"no tools for phase {phase}"
     print("  every category and the core phases have tools: PASS")
+
+
+def test_c2_and_evasion_tools_catalogued() -> None:
+    """The AV/EDR-evasion + traffic-obfuscation toolset, and Sliver filed as the C2 it is.
+
+    These are catalog entries — DATA. A template here is a string; it becomes a command
+    only by going through the same gated executor as everything else.
+    """
+    ars = _load()
+    for name in ("dnscat2", "iodine", "donut", "ScareCrow", "Invoke-Obfuscation"):
+        tool = ars.get(name)
+        assert tool is not None, f"missing arsenal entry {name!r}"
+        assert tool.category == "evasion", f"{name} should sit in the evasion category"
+        assert tool.templates and tool.phases, f"{name} is a stub"
+
+    # Invoke-Obfuscation is a PowerShell module: catalogued to PLAN and WRITE UP with,
+    # never implied to be runnable on the Linux sandbox.
+    io_ = ars.get("Invoke-Obfuscation")
+    assert io_.platform == "windows" and io_.runs_here() is False
+
+    assert ars.by_category("c2"), "no tools in category c2"
+    sliver = ars.get("sliver")
+    assert sliver is not None and sliver.category == "c2", (
+        f"Sliver is a C2 framework, not a persistence tool — got {sliver and sliver.category}"
+    )
+    assert "build #4" not in sliver.purpose, (
+        "the Sliver entry still defers itself to the build that is adding it"
+    )
+
+    # A DNS tunnel's zone belongs to the OPERATOR, exactly like <listener>. Spelling it
+    # <domain> would hand the composer's target substitution a tunnel pointed at the
+    # system under test.
+    import attack_path
+
+    for tool in (ars.get("dnscat2"), ars.get("iodine")):
+        for tpl in tool.templates:
+            assert "<domain>" not in tpl.template, (
+                f"{tool.name}/{tpl.label}: <domain> is rewritten to the target"
+            )
+            survived = attack_path.substitute_target(tpl.template, "hackpit-lab-target")
+            assert "<tunnel-zone>" in survived, (
+                f"{tool.name}/{tpl.label}: the operator's tunnel zone did not survive "
+                f"substitution — got {survived}"
+            )
+    print("  c2 + evasion tools catalogued, Sliver in c2, tunnel zone stays the "
+          "operator's: PASS")
 
 
 # --------------------------------------------------------------------------- #
@@ -250,6 +297,7 @@ def test_response_model_carries_platform_and_runs_here() -> None:
 if __name__ == "__main__":
     test_catalog_is_well_formed()
     test_every_category_and_phase_is_covered()
+    test_c2_and_evasion_tools_catalogued()
     test_lookup_by_name_alias_and_technique()
     test_render_fills_target_and_keeps_gaps_visible()
     test_render_never_invents_a_host()

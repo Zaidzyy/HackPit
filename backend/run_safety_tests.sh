@@ -140,6 +140,12 @@ echo "== DNS-tunnel obfuscation containment (human-only listener / client one-li
 echo "== DNS-tunnel SAFETY invariants (no agent path / one-liner never delivered / secret never crosses HTTP) =="
 "$PY" test_obfuscation_safety.py
 
+echo "== evasion engine (generate-only / gated / forced honest footprint) =="
+"$PY" test_evasion.py
+
+echo "== evasion engine SAFETY invariants (no agent path / never runs what it builds / footprint has no off switch) =="
+"$PY" test_evasion_safety.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

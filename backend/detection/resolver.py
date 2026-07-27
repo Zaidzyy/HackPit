@@ -395,56 +395,29 @@ RULES — absolute:
 * `still_recorded` is MANDATORY and must be substantive. The honest point of this note is that
   against logging that is actually enabled there is no free lunch. If a quieter approach truly
   escapes ALL telemetry you must still name what a defender could turn on to catch it.
-* Advise on tradecraft, not on disabling, tampering with or destroying the defender's telemetry.
-  "Turn off Sysmon / clear the log / kill the EDR" is out of scope — that is attacking the
-  sensor, not operating quietly, and the answer will be rejected.
+* Prescriptive evasion IS in scope (build #4), including in-process sensor tradecraft — AMSI
+  patching, ETW blinding, obfuscation/encoding. The one hard rule is the honesty marker: you
+  MUST still name what records the activity anyway — the tamper technique's OWN detections
+  (e.g. the AMSI-bypass memory write, ETW-tamper telemetry) and the process / parent process /
+  network that remain logged. A note claiming something goes fully invisible is rejected.
 * No detection rule names or IDs. No invented ATT&CK IDs.
 * Concrete and specific to THIS command. No generic "be careful" filler.
 """
 
-# Attacking the sensor itself is not OPSEC tradecraft — it is a different, louder act with its
-# own detections. The OPSEC channel describes operating quietly, never blinding the defender.
-_SENSOR_TAMPER = re.compile(
-    r"""(?ix)
-    \b(?:
-        (?:disable|turn\s+off|stop|kill|uninstall|blind|silence|bypass|unhook|tamper\s+with)\s+
-            (?:the\s+)?(?:edr|av|antivirus|defender|sysmon|etw|amsi|auditing|audit\s+log\w*|
-                          logging|sensor|siem|agent)
-      | (?:clear|wipe|delete|flush|purge)\s+(?:the\s+)?(?:event\s+)?log\w*
-      | wevtutil\s+cl | Clear-EventLog | Remove-EventLog
-      | amsi(?:utils)?\s*\.?\s*bypass | patch\s+amsi
-    )\b
-    """
-)
-
-
-def _opsec_has_tamper(*texts: str) -> str | None:
-    for t in texts:
-        m = _SENSOR_TAMPER.search(t or "")
-        if m:
-            return m.group(0).strip()
-    return None
-
-
 def assert_opsec_is_separate(opsec: dict[str, Any], where: str) -> None:
-    """The OPSEC channel's own guard — the counterpart to the never-prescribe guard on blue.
+    """The OPSEC/evasion channel's guard (build #4, D-guard).
 
-    Asserts the two invariants that let this coexist with the blue view: the honesty marker is
-    present, and the note is tradecraft rather than an attack on the defender's sensors.
+    History: this channel once refused any sensor-blinding phrasing. Build #4 lifts that
+    ban as an explicit, documented decision (assessment D10 amendment) — the bespoke evasion
+    engine EMITS AMSI-patch / ETW-blind artifacts, so its own honest note must be able to say
+    so. The surviving invariant is the honesty marker: a quieter path that named nothing that
+    still logs it would be an evasion how-to, which this is not. The blue-view footprint is
+    ALWAYS produced alongside (never suppressible) — enforced by the callers, not here.
     """
     if not opsec:
         return
     if not str(opsec.get("still_recorded") or "").strip():
-        raise ValueError(f"{where}: an OPSEC note must name what still records the activity")
-    hit = _opsec_has_tamper(
-        opsec.get("loud_because", ""), opsec.get("still_recorded", ""),
-        opsec.get("tradeoff", ""), *(opsec.get("quieter") or []),
-    )
-    if hit:
-        raise ValueError(
-            f"{where}: OPSEC is operating quietly, not blinding the defender — found "
-            f"sensor-tampering phrasing {hit!r}"
-        )
+        raise ValueError(f"{where}: an OPSEC/evasion note must name what still records the activity")
 
 
 def _opsec_grounded(spec_key: str) -> dict[str, Any] | None:

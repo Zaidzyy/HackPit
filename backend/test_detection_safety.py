@@ -299,48 +299,84 @@ def test_every_curated_opsec_note_carries_the_honesty_marker() -> None:
     print(f"  all {len(C.OPSEC)} curated OPSEC notes carry still_recorded + pass the guard: PASS")
 
 
-def test_opsec_guard_catches_sensor_tampering() -> None:
-    """OPSEC is operating quietly, never blinding the defender. The guard proves the line."""
-    must_reject = [
-        "Disable Sysmon before running this.",
-        "Clear the event log afterwards with wevtutil cl Security.",
-        "Patch AMSI so the script does not get scanned.",
-        "Turn off the EDR agent first.",
-        "Kill the SIEM forwarder to stop the events reaching the console.",
+def test_opsec_guard_allows_prescriptive_evasion_with_honesty() -> None:
+    """New contract (build #4, D-guard): prescriptive evasion — including in-process
+    sensor-blinding (AMSI-patch, ETW-blind) — is ALLOWED as long as every note names what
+    still records it. The one surviving invariant is the honesty marker."""
+    now_allowed = [
+        {"loud_because": "AMSI scans the script as it loads.",
+         "quieter": ["Patch AMSI in-process before loading the script."],
+         "still_recorded": "The patch itself is a known-bad memory write Sysmon/EDR image-load "
+                           "and AMSI-bypass rules flag; the process still starts.",
+         "tradeoff": "Fragile across patch levels; a failed patch is louder than none."},
+        {"loud_because": "ETW feeds the EDR's script/telemetry pipeline.",
+         "quieter": ["Blind ETW for the current process."],
+         "still_recorded": "ETW-tampering has its own detections; the parent process, its image "
+                           "load and network are still recorded.",
+         "tradeoff": "Process-scoped only; does not stop kernel callbacks."},
     ]
-    for text in must_reject:
-        assert R._opsec_has_tamper(text), f"OPSEC guard MISSED sensor-tampering: {text!r}"
-    # ...and allows legitimate tradecraft that operates quietly without touching the sensor
-    must_allow = [
-        "Rate-limit the scan and add jitter so it falls under burst thresholds.",
-        "Password-spray one password across many accounts to stay under lockout.",
-        "Use an execution method that does not create a service.",
-        "The DC still logs every Kerberos TGS request regardless.",
-    ]
-    for text in must_allow:
-        assert not R._opsec_has_tamper(text), f"OPSEC guard FALSE-POSITIVED: {text!r}"
-    print(f"  OPSEC guard rejects all {len(must_reject)} sensor-tampering phrasings, "
-          f"allows {len(must_allow)} quiet-tradecraft ones: PASS")
+    for op in now_allowed:
+        R.assert_opsec_is_separate(op, "test")   # must NOT raise
+    # The one surviving invariant: a note with no honesty marker is rejected.
+    try:
+        R.assert_opsec_is_separate(
+            {"loud_because": "x", "quieter": ["patch amsi"], "still_recorded": "  ", "tradeoff": ""},
+            "test",
+        )
+        assert False, "a note missing still_recorded must be rejected"
+    except ValueError:
+        pass
+    print("  OPSEC guard allows prescriptive evasion; still_recorded stays mandatory: PASS")
 
 
-def test_model_opsec_tampering_is_discarded() -> None:
-    """An ai_suggested OPSEC note that tells you to blind the sensor is thrown away."""
+def test_model_opsec_kept_with_honesty_marker() -> None:
+    """An ai_suggested evasion note is KEPT when it carries the honesty marker (build #4),
+    and DROPPED when it does not."""
     import llm
 
-    bad = json.dumps({
-        "loud_because": "Loud process creation.",
-        "quieter": ["Disable Defender real-time protection first."],
-        "still_recorded": "Nothing if the sensor is off.",
+    honest = json.dumps({
+        "loud_because": "AMSI scans the script as it loads.",
+        "quieter": ["Patch AMSI in-process before loading the script."],
+        "still_recorded": "The patch is a known-bad memory write EDR/AMSI-bypass rules flag; "
+                          "the process still starts.",
+        "tradeoff": "Fragile across patch levels.",
+    })
+    dishonest = json.dumps({
+        "loud_because": "AMSI scans the script as it loads.",
+        "quieter": ["Patch AMSI in-process before loading the script."],
+        "still_recorded": "",
         "tradeoff": "None.",
     })
+    # `footprint(include_opsec=True)` makes TWO model calls with two different system prompts —
+    # the blue footprint first, then the OPSEC note (and the OPSEC one is only attempted when
+    # the footprint came back usable). Answer each with the payload it actually asked for.
+    blue = json.dumps({
+        "activity": "Runs an uncatalogued binary.",
+        "blue_view": "A new process appears under the shell with an unfamiliar image name.",
+        "why_rating": "Process creation is recorded by default on an audited host.",
+        "loudness": "moderate",
+        "telemetry": ["Process creation event carrying the image path and command line."],
+        "techniques": [],
+    })
+
+    def _answer(opsec_reply):
+        def chat(system, user, cfg, max_tokens=0):
+            return opsec_reply if "OPSEC advisor" in system else blue
+        return chat
+
     orig = llm.chat
     try:
-        llm.chat = lambda system, user, cfg, max_tokens=0: bad
-        fp = R.footprint("some-unknown-tool", ["-x"], include_opsec=True)
+        llm.chat = _answer(honest)
+        kept = R.footprint("some-unknown-tool", ["-x"], include_opsec=True)
+        llm.chat = _answer(dishonest)
+        dropped = R.footprint("some-unknown-tool", ["-x"], include_opsec=True)
     finally:
         llm.chat = orig
-    assert fp.get("opsec") is None, "a tampering OPSEC note must NOT be rendered"
-    print("  a model OPSEC note advising sensor-tampering is DISCARDED: PASS")
+    assert kept["ai_suggested"] is True, "the blue footprint should have come from the model"
+    assert kept.get("opsec") and kept["opsec"]["ai_suggested"] is True, \
+        "an honest ai_suggested evasion note must be kept"
+    assert dropped.get("opsec") is None, "a note with no still_recorded must be dropped"
+    print("  a model evasion note is kept iff it carries the honesty marker: PASS")
 
 
 def test_opsec_never_leaks_into_the_blue_fields() -> None:
@@ -376,7 +412,7 @@ if __name__ == "__main__":
     test_annotation_returns_data_not_execution()
     test_blue_view_is_byte_identical_with_and_without_opsec()
     test_every_curated_opsec_note_carries_the_honesty_marker()
-    test_opsec_guard_catches_sensor_tampering()
-    test_model_opsec_tampering_is_discarded()
+    test_opsec_guard_allows_prescriptive_evasion_with_honesty()
+    test_model_opsec_kept_with_honesty_marker()
     test_opsec_never_leaks_into_the_blue_fields()
     print("ALL detection safety-invariant tests pass")

@@ -300,8 +300,9 @@ def test_report_opsec_summary_is_opt_in() -> None:
     op = report_gen.build_opsec_summary(_session(runs))
     assert op.startswith("## OPSEC assessment (red team)")
     assert "**Loud because:**" in op and "**Still recorded:**" in op
-    # No sensor-tampering copy anywhere in the rendered section (uses the real guard).
-    assert R._opsec_has_tamper(op) is None, "the OPSEC summary must carry no sensor-tampering copy"
+    # Every rendered family carries the honesty marker (build #4: the guard no longer bans
+    # prescriptive/sensor-blinding copy — the still-recorded marker is the surviving invariant).
+    assert op.count("**Still recorded:**") >= 1, "each OPSEC family must name what still records it"
     assert report_gen.build_opsec_summary(_session([])) == "", "no runs -> no OPSEC section"
     print("  the report OPSEC summary is opt-in and carries the still-recorded marker: PASS")
 

@@ -409,6 +409,149 @@ OPSEC: dict[str, OpsecNote] = {n.key: n for n in [
        "process — encryption hides content, not the existence of the channel.",
        "Protocol-matched, jittered C2 is far more work to set up than a one-line reverse shell and "
        "trades interactivity for stealth."),
+
+    # --- persistence (TA0003) OPSEC backfill (#4 seam) ---------------------------------- #
+    _o("persist_registry_run",
+       "A Run/RunOnce value write is a Sysmon EID 13 registry event, and the value sits in a "
+       "narrow, well-known key that every autostart baseline (Autoruns, EDR) enumerates.",
+       "Write to HKCU rather than HKLM if per-user reach is enough, which fewer stacks watch as "
+       "closely; name the value and its target path to match a vendor's own naming pattern; point "
+       "it at an already-present binary via an argument rather than dropping a new one",
+       "The value still exists under the same Run key regardless of hive or name, and Autoruns / "
+       "any EDR autostart sweep enumerates it on its next pass; where registry auditing (4657) is "
+       "on, the write is logged no matter how it's named.",
+       "Blending the name buys nothing once someone runs an autostart audit, which is the whole "
+       "point of that control; HKCU-only reach is lost if the user context changes."),
+    _o("persist_startup_folder",
+       "Dropping into a Startup folder is a Sysmon EID 11 file-create in one of a handful of fixed "
+       "paths, and the shortcut or binary sits there for any Autoruns pass to list.",
+       "Point the shortcut at an existing signed binary via an argument instead of dropping a new "
+       "executable; keep the payload itself elsewhere and let the Startup entry only reference it; "
+       "use a generic, vendor-plausible filename",
+       "The file-create event still fires wherever Sysmon EID 11 covers the Startup path regardless "
+       "of filename, and the shortcut or reference persists on disk for Autoruns or manual review "
+       "to find either way.",
+       "Referencing an external payload adds a second artefact that itself has to land and survive; "
+       "plausible naming only delays discovery, it doesn't reduce the number of artefacts."),
+    _o("persist_scheduled_task",
+       "Task creation writes Security 4698 (author named) and a Task Scheduler operational-log "
+       "entry; the on-disk task XML in C:\\Windows\\System32\\Tasks is a file-create event.",
+       "Prefer an existing task's action over creating a new one; name it to blend with vendor "
+       "tasks; trigger on a common event rather than a fixed clock time",
+       "4698/4702 fire whenever scheduled-task auditing is on (mature stacks enable it), and the "
+       "Tasks-folder file write is recorded regardless of the audit policy.",
+       "Editing an existing task risks breaking it; blending takes recon time and is site-specific."),
+    _o("persist_service",
+       "sc.exe / the service-installation API triggers System 7045 almost unconditionally the "
+       "moment a NEW service is registered, and the service key lands under a fixed registry path.",
+       "Modify an existing, unused or disabled service's ImagePath instead of creating a new one; "
+       "name a new service to match the vendor pattern already on the host; run the install through "
+       "an API path that keeps sc.exe off the process line",
+       "7045 is specifically a NEW-service event — reusing one avoids it, but Sysmon EID 13 still "
+       "records the ImagePath registry change, and the service is enumerable in the registry either "
+       "way regardless of naming.",
+       "Reusing an existing service risks breaking whatever legitimately depended on it, and finding "
+       "one whose disruption goes unnoticed needs prior host recon."),
+    _o("persist_wmi_event",
+       "Registering a permanent filter/consumer/binding touches root\\subscription, and where "
+       "WMI-Activity or Sysmon WMI logging (EID 19-21) is enabled the registration is logged "
+       "directly.",
+       "Name the filter/consumer/binding to blend with subscriptions already present on the host; "
+       "trigger on an event that already fires often rather than a distinctive one, so the "
+       "consumer's activity doesn't stand out; avoid registering against well-known monitored "
+       "classes",
+       "The three WMI objects persist in the subscription namespace and are enumerable by a WMI "
+       "query at any time no matter how they're named, and where WMI-Activity/Sysmon WMI logging is "
+       "on the registration events fire regardless of naming or trigger choice.",
+       "This mechanism's quiet is really 'the defender never turned WMI logging on' — plausible "
+       "naming buys nothing once a subscription audit runs, and picking a common trigger still "
+       "needs the payload logic to filter correctly."),
+    _o("persist_accessibility",
+       "An IFEO Debugger value on sethc.exe/utilman.exe is a registry write (Sysmon EID 13) on a "
+       "small, famous set of binaries, and the resulting child process is an unmistakable "
+       "parent-process anomaly.",
+       "Point the Debugger value at a legitimate-looking wrapper rather than cmd.exe directly; use "
+       "a less-monitored accessibility binary than sethc/utilman where the target's baseline only "
+       "watches the famous two",
+       "The Debugger value still sits under the same well-known IFEO key regardless of the target "
+       "binary or payload, and process-creation logging still captures whatever the wrapper "
+       "ultimately spawns as a child of an accessibility binary — an anomaly no wrapper removes.",
+       "Widening past sethc/utilman needs a different pre-auth-reachable binary, which not every "
+       "host exposes; a wrapper adds a hop that itself has to be delivered to disk."),
+    _o("persist_account_windows",
+       "Account creation (4720) and privileged-group addition (4732/4728) name the actor and are "
+       "among the most universally collected, watchlisted directory events there are.",
+       "Add the account to a narrower group that still carries the access needed rather than "
+       "Domain Admins directly; separate the group addition in time from the account creation; "
+       "reuse an existing disabled account instead of creating a new one",
+       "4720 (or 4722 when re-enabling a disabled account) and the group-membership event still "
+       "fire on the DC no matter which group is chosen or how the timing is spread — these are "
+       "default audit-policy events on most domains, not opt-in.",
+       "A narrower group may not grant the access actually needed; reusing a disabled account "
+       "requires one to already exist, and re-enabling it is itself a logged 4722 event."),
+    _o("persist_webshell",
+       "The dropped script is a file-create in the web root (Sysmon EID 11), and a web-server "
+       "process spawning a shell is a parent/child pair no legitimate request produces.",
+       "Use a webshell that executes in-process rather than shelling out to cmd/sh, dropping the "
+       "parent/child anomaly entirely; name the file and its path to match the app's own naming "
+       "convention; keep request bodies small and low-entropy rather than large encoded payloads",
+       "The file write is still there in file-creation monitoring and on disk regardless of shell "
+       "type, and the web access log still shows the requests to that path — in-process execution "
+       "removes the parent/child anomaly but not the file or the request record.",
+       "In-process execution is limited to whatever the web app's own runtime allows; blending the "
+       "filename still requires the file to exist somewhere a crawl or diff can find it."),
+    _o("persist_cron",
+       "Writing a crontab or dropping a file in /etc/cron.d is a file write auditd can PATH-watch, "
+       "and the job then runs on a fixed, discoverable schedule.",
+       "Add the entry to an existing, already-legitimate crontab rather than a new spool file; use "
+       "a cadence that matches other jobs already on the box; avoid unusual binaries or paths in "
+       "the command line",
+       "The crontab / cron.d file and its mtime persist on disk and are readable by anyone with "
+       "access regardless of which file or cadence was chosen; where auditd watches cron paths the "
+       "write still fires no matter the target file.",
+       "Editing an existing crontab risks its owner noticing an unexplained line; matching an "
+       "existing cadence limits how soon the persistence actually triggers."),
+    _o("persist_systemd",
+       "A new unit/timer file under /etc/systemd/system is a file write auditd can watch, and "
+       "journald records the unit starting the moment systemctl enables or starts it.",
+       "Add an ExecStartPost / drop-in to an existing, already-running unit instead of creating a "
+       "new one; name a new unit to match the distribution's own naming convention; time a "
+       "daemon-reload alongside other legitimate reloads",
+       "journald still logs the unit's start events regardless of naming, and file-integrity "
+       "monitoring on /etc/systemd/system, where enabled, still records the write whether it is a "
+       "new unit or a drop-in on an existing one.",
+       "Editing an existing unit risks breaking or restarting a service other things depend on; "
+       "matching naming conventions requires already knowing what's normal on this host."),
+    _o("persist_ssh_authkeys",
+       "A publickey login from a new key later stands out, and the write to "
+       "~/.ssh/authorized_keys is a file event auditd can watch.",
+       "Match the key comment to an existing key; place it on an account that already logs in by "
+       "key; avoid changing the file's mtime pattern",
+       "If auditd watches authorized_keys the write is logged, and the first login with the key "
+       "is a publickey auth event in the SSH/auth logs.",
+       "Quiet only until first use; picking a plausible account needs prior enumeration."),
+    _o("persist_shell_profile",
+       "The appended line in a shell-init file is a file write with a changed mtime, and it fires "
+       "the moment any interactive shell sources it.",
+       "Append rather than replace, and keep the line syntactically boring so a manual read doesn't "
+       "stand out; target a rarely-reviewed per-user init file rather than a system-wide "
+       "/etc/profile.d script when only one account's shells need to be caught",
+       "The file's mtime change and the appended content persist regardless of how boring the line "
+       "looks, and where auditd watches the init files the write is still logged no matter its "
+       "content.",
+       "A boring-looking line still has to actually do something, which caps how subtle it can be; "
+       "targeting a per-user file limits the persistence to that one account's shells only."),
+    _o("persist_account_linux",
+       "useradd/adduser execve and the resulting /etc/passwd and /etc/shadow writes land in "
+       "auth.log by default on essentially every distribution.",
+       "Set the new account's UID and shell to match an existing service-account pattern rather "
+       "than an obvious interactive user; delay logging in as it (which is what generates the "
+       "wtmp/lastlog entry) until it's actually needed",
+       "auth.log still records the useradd invocation and the new passwd line persists on disk "
+       "regardless of UID choice, and the first login — whenever it happens — still lands in "
+       "wtmp/lastlog.",
+       "Matching a service-account pattern narrows which UID ranges are usable, and delaying first "
+       "login only delays when the wtmp evidence appears, it doesn't remove it."),
 ]}
 
 

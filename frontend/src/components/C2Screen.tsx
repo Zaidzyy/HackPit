@@ -439,7 +439,8 @@ export function C2Screen() {
             <input
               value={secret}
               onChange={(e) => setSecret(e.target.value)}
-              placeholder="pre-shared key (required for iodine)"
+              placeholder="pre-shared key, 8+ chars (required for iodine)"
+              minLength={8}
               aria-label="secret"
               type="password"
             />

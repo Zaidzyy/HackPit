@@ -25,10 +25,13 @@ actually happens:
      in the record.
   6. NO SHELL ANYWHERE; THE CONTAINER IS A CODE CONSTANT a request cannot redirect.
   7. *** THE SECRET NEVER CROSSES THE HTTP BOUNDARY. *** The listener model carries the
-     operator's tunnel key (start_listener has to hand it to the server process) AND embeds it
-     in ``client_command``. The RunRecord redaction covers the audit trail only; an HTTP route
-     is a SECOND, independent export path, so the response model has no ``secret`` field and
-     the one-liner is masked on the way out. Asserted against real HTTP response bodies.
+     operator's tunnel key — start_listener has to hand it to the server process — and the
+     RunRecord redaction covers the audit trail only, so an HTTP route is a SECOND, independent
+     export path. Held STRUCTURALLY rather than at the edge: ``client_command`` is RENDERED
+     from a ``_mask_secret`` copy inside the module, so no route can export the key through it
+     even by forgetting to scrub, and no short/colliding key can corrupt the rendered line.
+     Asserted at the AST level, on the raw model, and against real HTTP response bodies from
+     every read route under both prefixes, enumerated from the live router.
 
 Hermetic: subprocess, the container liveness probe and runstore.save_run are monkeypatched by
 manual save/restore (this repo has NO pytest). No Docker daemon, no network, no DB writes.
@@ -78,7 +81,7 @@ def _fn(tree: ast.AST, name: str) -> ast.FunctionDef:
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == name:
             return node
-    raise AssertionError(f"{name}() has vanished from obfuscation.py — the lock cannot be evaluated")
+    raise AssertionError(f"{name}() has vanished from the parsed source — the lock cannot be evaluated")
 
 
 def _dotted(func: ast.AST) -> str:
@@ -94,6 +97,37 @@ def _dotted(func: ast.AST) -> str:
 
 def _call_names(node: ast.AST) -> set[str]:
     return {_dotted(n.func) for n in ast.walk(node) if isinstance(n, ast.Call)} - {""}
+
+
+# Both surfaces that can hold a listener/implant. The secret sweep runs over EVERY read route
+# under these, enumerated from the live router — not a hard-coded list of today's four.
+_EXPORT_PREFIXES = ("/api/obfuscation", "/api/sliver")
+
+
+def _sweep_read_routes(client, live_id: str) -> list[tuple[str, int, str]]:
+    """GET every read route under both prefixes; return ``(path, status, body)`` for each.
+
+    Enumerated from ``main.app.routes`` so a route added later is swept the day it lands,
+    rather than the day someone remembers to extend this test. Path parameters are filled with
+    a real live listener id, so ``/…/{lid}``-shaped routes return a real object rather than a
+    404 that would make the sweep pass vacuously.
+    """
+    import main
+
+    out: list[tuple[str, int, str]] = []
+    for r in main.app.routes:
+        path = str(getattr(r, "path", ""))
+        if not path.startswith(_EXPORT_PREFIXES):
+            continue
+        if "GET" not in (getattr(r, "methods", set()) or set()):
+            continue
+        try:
+            resp = client.get(re.sub(r"\{[^}]+\}", live_id, path))
+        except Exception as exc:  # a route that cannot run under the fakes is not a leak —
+            out.append((path, -1, repr(exc)))  # but its traceback is still swept for the key
+            continue
+        out.append((path, resp.status_code, resp.text))
+    return out
 
 
 def _backend_py_files() -> list[Path]:
@@ -296,7 +330,12 @@ def test_client_oneliner_is_pure_and_no_delivery_primitive_exists() -> None:
             line = O.operator_oneliner(lis)
         assert spy.popen_calls == 1, "operator_oneliner must not spawn a process"
         assert len(spy.saved) == 1, "operator_oneliner must not record anything"
-        assert line == lis.client_command, "the model echoes the SAME pure function's output"
+        # The model echoes the SAME pure function's output — over a MASKED copy, which is what
+        # keeps the key out of every field that can cross a boundary (see §7).
+        assert lis.client_command == O.operator_oneliner(O._mask_secret(lis)), lis.client_command
+        assert line == lis.client_command.replace(O.SECRET_MASK, SECRET), (
+            "the masked render must differ from the raw one ONLY where the key was"
+        )
         assert line.startswith(O.DNSCAT2_CLIENT_BIN), line
         assert O.DNSCAT2_SERVER_BIN not in line, "the one-liner is the CLIENT half"
     print("  operator_oneliner is a PURE string builder; the module has no delivery path: PASS")
@@ -338,7 +377,10 @@ def test_zone_and_tunnel_net_survive_target_substitution() -> None:
         for public in ("8.8.8.8/24", "1.1.1.1/32"):
             raised = False
             try:
-                ObfuscationRequest(kind="iodine", zone="t.example", secret="pw", tunnel_net=public)
+                # NB: a valid-length secret, so tunnel_net is the only thing on trial here.
+                ObfuscationRequest(
+                    kind="iodine", zone="t.example", secret="tunnel-pw-01", tunnel_net=public
+                )
             except Exception:
                 raised = True
             assert raised, f"a public tunnel_net ({public}) must be refused"
@@ -422,15 +464,94 @@ def test_no_shell_and_the_container_is_never_a_request_field() -> None:
 # --------------------------------------------------------------------------- #
 # 7. *** THE SECRET NEVER CROSSES THE HTTP BOUNDARY ***
 # --------------------------------------------------------------------------- #
+def test_the_masked_one_liner_is_authoritative_in_the_module() -> None:
+    """*** THE BOUNDARY IS STRUCTURAL: the key is never embedded in client_command AT ALL. ***
+
+    The earlier shape put the masking at the route (``main._listener_public`` did a
+    ``str.replace`` on the way out). Two things were wrong with that and both are asserted
+    against here:
+
+      1. It was ONE helper, and nothing forced a future route to call it. A route declaring
+         ``response_model=ObfuscationListenerOut`` and returning the raw model would drop the
+         ``secret`` FIELD and still export the key inside ``client_command``.
+      2. ``str.replace`` is over-broad. A key that is short, or that happens to be a substring
+         of the zone, mangles tokens that had nothing to do with it — the operator copies a
+         corrupt command and the audit argv is wrong in the same way.
+
+    So ``start_listener`` now RENDERS the one-liner from a ``_mask_secret`` copy: the mask is
+    placed where the key would have gone and touches nothing else, and no caller can opt out.
+    """
+    # Structural: the rendered line and the audited argv are both built from a masked copy.
+    start = _call_names(_fn(OBF_TREE, "start_listener"))
+    assert "_mask_secret" in start, (
+        "start_listener must render client_command from a _mask_secret copy — if the masking "
+        "moved back out to a caller, the boundary is no longer structural"
+    )
+    assert "_mask_secret" in _call_names(_fn(OBF_TREE, "_redacted")), (
+        "_redacted must REBUILD the argv from a masked copy, not string-substitute the live one"
+    )
+    assert "_server_args" in _call_names(_fn(OBF_TREE, "_redacted")), _call_names(
+        _fn(OBF_TREE, "_redacted")
+    )
+    # And NOTHING on either side of the boundary scrubs by substitution any more — asserted at
+    # the AST level, so prose about the old shape does not trip it and real code cannot hide.
+    # (str.replace is over-broad: a key that is short, or a substring of the zone, eats tokens
+    # that are not the key.)
+    main_tree = ast.parse((BACKEND / "main.py").read_text(encoding="utf-8"))
+    for label, node in (
+        ("cockpit/obfuscation.py", OBF_TREE),
+        ("main.py::_listener_public", _fn(main_tree, "_listener_public")),
+    ):
+        offending = {c for c in _call_names(node) if c.split(".")[-1] == "replace"}
+        assert not offending, (
+            f"{label} masks by str.replace ({sorted(offending)}) — mask by CONSTRUCTION "
+            "(_mask_secret) instead, or a short/colliding key corrupts the rendered command"
+        )
+
+    # Behavioural: the RAW internal model — no route helper involved — is already clean.
+    with _Spy():
+        for req in (_dnscat(), _iodine()):
+            lis = O.start_listener(req)
+            assert SECRET not in lis.client_command, (
+                "*** THE KEY IS EMBEDDED IN THE MODEL'S OWN client_command *** — any route "
+                f"returning this model leaks it: {lis.client_command}"
+            )
+            assert O.SECRET_MASK in lis.client_command, lis.client_command
+            assert lis.zone in lis.client_command, "the line must stay useful"
+            assert lis.secret == SECRET, "the internal field still holds the real key"
+
+        O.reset()  # both kinds are live and the cap is 2 — clear before the next start
+        # THE CORRUPTION CASE. `operator` is a legal 8-char key AND a substring of the zone;
+        # str.replace masking rendered `***-owned.example` here. Building cannot.
+        lis = O.start_listener(
+            ObfuscationRequest(kind="dnscat2", zone="operator-owned.example", secret="operator")
+        )
+        assert lis.client_command == (
+            f"{O.DNSCAT2_CLIENT_BIN} --secret={O.SECRET_MASK} operator-owned.example"
+        ), f"masking corrupted a token that was not the key: {lis.client_command!r}"
+
+        # ...and the audit argv is correct rather than string-mangled, for the same reason.
+        collide = ObfuscationRequest(
+            kind="iodine", zone="operator-owned.example", secret="operator",
+            tunnel_net="10.99.53.1/24",
+        )
+        assert O._redacted(collide) == [
+            O.IODINE_SERVER_BIN, "-f", "-c", "-P", O.SECRET_MASK,
+            "10.99.53.1/24", "operator-owned.example",
+        ], f"the redacted audit argv is mangled: {O._redacted(collide)}"
+    print("  the masked one-liner is built in the module, so no route can un-mask it: PASS")
+
+
 def test_secret_never_crosses_the_http_boundary() -> None:
     """THE LOAD-BEARING ROUTE TEST. Adding an API is what creates the export path.
 
-    ObfuscationListener carries the operator's pre-shared key on the model AND embeds it in
-    ``client_command`` — start_listener has to hand the real key to the server process. The
-    RunRecord redaction covers the audit trail ONLY. So the HTTP boundary gets its own
-    redaction: a response model with no ``secret`` field, plus masking INSIDE the one-liner
-    (dropping the field alone would still export the key). Asserted against real response
-    bodies, on every route that can return a listener.
+    ObfuscationListener carries the operator's pre-shared key on the model — start_listener has
+    to hand the real key to the server process — and the RunRecord redaction covers the audit
+    trail ONLY. So the HTTP boundary is held two ways: a response model with no ``secret``
+    field, and a ``client_command`` that was already masked in the module (see
+    :func:`test_the_masked_one_liner_is_authoritative_in_the_module`). Asserted against real
+    response bodies, on EVERY route under the prefix — enumerated from ``main.app.routes``, not
+    hard-coded, so a route added tomorrow is covered by this test today.
     """
     import main
     from fastapi.testclient import TestClient
@@ -464,19 +585,31 @@ def test_secret_never_crosses_the_http_boundary() -> None:
             assert req.zone in body["client_command"], body["client_command"]
 
             lid = body["id"]
+            # Grab the start argv NOW: the sweep below calls status routes that probe the
+            # container, which would overwrite the spy's last-argv.
+            started_argv = list(spy.popen_argv or [])
 
-            # ...and on every other route that can return a listener.
-            r = client.get("/api/obfuscation/listeners")
-            assert r.status_code == 200 and SECRET not in r.text, r.text
-            r = client.get("/api/obfuscation/status")
-            assert r.status_code == 200 and SECRET not in r.text, r.text
+            # ...and on EVERY OTHER READ ROUTE UNDER BOTH PREFIXES, enumerated from the app.
+            # This is the part that survives someone adding a route: it is not a list of the
+            # four that exist today, it is whatever the router holds when the test runs.
+            swept = _sweep_read_routes(client, lid)
+            assert len(swept) >= 4, f"the route sweep found almost nothing: {swept}"
+            for path, status, text in swept:
+                assert SECRET not in text, (
+                    f"*** THE OPERATOR'S TUNNEL KEY LEAKED FROM {path} (HTTP {status}) *** {text}"
+                )
+
             r = client.delete(f"/api/obfuscation/listeners/{lid}")
             assert r.status_code == 200, r.text
             assert SECRET not in r.text, f"the key leaked in the STOP response: {r.text}"
             assert r.json()["status"] == "down", r.text
 
-        # The key DID reach the server process and the internal model — only the wire is clean.
-        assert SECRET in spy.popen_argv, "the real key must still reach the server process"
+            # The key DID reach the server process — only the wire is clean. (Counter-assertion:
+            # without it, "no key in the response" would also be satisfied by losing the key.)
+            assert any(SECRET in t for t in started_argv), (  # dnscat2 fuses it into --secret=
+                f"the real key must still reach the {req.kind} server process: {started_argv}"
+            )
+
         assert any(SECRET in (l.secret or "") for l in O.list_listeners()), (
             "the internal model must still hold the key; only the HTTP boundary strips it"
         )
@@ -519,6 +652,7 @@ if __name__ == "__main__":
     test_zone_and_tunnel_net_survive_target_substitution()
     test_every_action_is_audited_with_the_secret_redacted()
     test_no_shell_and_the_container_is_never_a_request_field()
+    test_the_masked_one_liner_is_authoritative_in_the_module()
     test_secret_never_crosses_the_http_boundary()
     test_http_routes_add_no_capability_and_stay_human_only()
     print("ALL DNS-tunnel obfuscation safety invariants hold")

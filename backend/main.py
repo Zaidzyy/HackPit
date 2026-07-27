@@ -1643,9 +1643,10 @@ class ObfuscationListenerOut(BaseModel):
 
     Deliberately NOT ``cockpit.obfuscation.ObfuscationListener``: that model carries the
     operator's pre-shared tunnel key, because the module has to hand it to the server process.
-    This one has no ``secret`` field at all, and ``client_command`` arrives already masked
-    (:func:`_listener_public`), so the key cannot leave the process through an API response —
-    the same rule the RunRecord redaction enforces for the audit trail.
+    This one has no ``secret`` field at all, and ``client_command`` arrives already masked —
+    masked *at source*, inside the module (``start_listener`` renders it from a
+    ``_mask_secret`` copy), not scrubbed here on the way out. So the key cannot leave the
+    process through an API response, and that holds for routes nobody has written yet.
     """
 
     id: str
@@ -1666,19 +1667,22 @@ class ObfuscationListenerOut(BaseModel):
 
 
 def _listener_public(lis: "cockpit_obfuscation.ObfuscationListener") -> dict[str, Any]:
-    """The listener minus its secret, one-liner included but MASKED. *** THE BOUNDARY. ***
+    """The listener minus its ``secret`` field. Drops — it does NOT scrub.
 
-    Two things happen here and both are load-bearing:
-      1. ``secret`` is dropped outright.
-      2. the key is masked INSIDE ``client_command`` — dropping the field alone would still
-         export the key, because the one-liner embeds it (``--secret=…`` / ``-P …``).
-    The operator supplied that key and knows it; the panel shows the shape of the line and
-    tells them to substitute it. Pinned by test_obfuscation_safety.py.
+    *** THE BOUNDARY IS NOT HERE ANY MORE, AND THAT IS THE POINT. *** ``client_command``
+    arrives already masked: ``cockpit.obfuscation.start_listener`` builds it from a
+    ``_mask_secret`` copy, so the operator's key is never embedded in it at all. A future route
+    that returns the raw model therefore cannot leak the key through the one-liner even if it
+    never calls this helper — the guarantee is structural, in the module, not a discipline the
+    HTTP layer has to remember.
+
+    This function now does exactly one thing — drop the ``secret`` field — which
+    ``response_model=ObfuscationListenerOut`` also does independently. Two cheap, overlapping
+    drops of a field is the right amount of redundancy; a string-substitution pass here was
+    not, because ``str.replace`` is over-broad (a key that is a substring of the zone would
+    have eaten the zone). Pinned by test_obfuscation_safety.py.
     """
-    data = lis.model_dump(exclude={"secret"})
-    if lis.secret:
-        data["client_command"] = str(data.get("client_command") or "").replace(lis.secret, "***")
-    return data
+    return lis.model_dump(exclude={"secret"})
 
 
 @app.get("/api/obfuscation/status")

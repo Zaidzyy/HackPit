@@ -123,7 +123,7 @@ def _iodine(**over) -> ObfuscationRequest:
 def test_operator_oneliner_is_pure_and_delivers_nothing() -> None:
     """It builds a STRING for the human to paste by hand. It must run and send NOTHING."""
     with _Spy() as spy:
-        lis = O.start_listener(_dnscat(secret="pre-shared-key"))
+        lis = O.start_listener(_dnscat(secret="pre-shared-key-9000"))
         iod = O.start_listener(_iodine())
 
         # PURE: with subprocess blown up, the one-liner must still be constructible.
@@ -149,16 +149,31 @@ def test_operator_oneliner_is_pure_and_delivers_nothing() -> None:
         # It names the CLIENT half and the OPERATOR's own zone.
         assert line.startswith(O.DNSCAT2_CLIENT_BIN), line
         assert "tunnel.operator-owned.example" in line, line
-        assert "pre-shared-key" in line, "the operator needs their own key in the paste-line"
+        assert "pre-shared-key-9000" in line, (
+            "operator_oneliner is a FORMATTER: handed a listener carrying a real key it renders "
+            "that key. What keeps the key off the wire is WHICH listener start_listener hands "
+            "it (a masked copy) — asserted next."
+        )
         assert O.DNSCAT2_SERVER_BIN not in line, "the one-liner is the CLIENT half, not the server"
 
         assert iline.startswith(O.IODINE_CLIENT_BIN + " "), iline
         assert "t.operator-owned.example" in iline, iline
         assert O.IODINE_SERVER_BIN not in iline.split()[0], iline
 
-        # The model hands back the SAME string start_listener computed.
-        assert lis.client_command == line, lis.client_command
-        assert iod.client_command == iline, iod.client_command
+        # *** The stored one-liner is the MASKED render — built, not scrubbed. *** It is the
+        # same pure function over a _mask_secret copy, so it matches token for token except
+        # where the key was, and the operator's key is not in it at all.
+        assert lis.client_command == O.operator_oneliner(O._mask_secret(lis)), lis.client_command
+        assert iod.client_command == O.operator_oneliner(O._mask_secret(iod)), iod.client_command
+        for stored, raw_key in ((lis.client_command, "pre-shared-key-9000"),
+                                (iod.client_command, "s3cr3t-tunnel-pw")):
+            assert raw_key not in stored, f"the operator's key is embedded in {stored!r}"
+            assert O.SECRET_MASK in stored, stored
+        # Masking must not corrupt the rest of the line: everything but the key survives.
+        assert lis.client_command == line.replace("pre-shared-key-9000", O.SECRET_MASK), (
+            f"masking changed a token it had no business changing: {lis.client_command!r}"
+        )
+        assert "tunnel.operator-owned.example" in lis.client_command, lis.client_command
 
         # Building it did not start, stop or record anything new.
         assert len(spy.procs) == 2, "operator_oneliner must not spawn a process"
@@ -205,7 +220,10 @@ def test_request_carries_no_container_and_bounds_its_fields() -> None:
     for bad_net in ("8.8.8.8/24", "not-a-cidr", "example.com"):
         raised = False
         try:
-            ObfuscationRequest(kind="iodine", zone="t.example", secret="pw", tunnel_net=bad_net)
+            # NB: a valid-length secret, so what is on trial here is tunnel_net and nothing else.
+            ObfuscationRequest(
+                kind="iodine", zone="t.example", secret="tunnel-pw-01", tunnel_net=bad_net
+            )
         except Exception:
             raised = True
         assert raised, f"tunnel_net {bad_net!r} must be refused"
@@ -225,6 +243,17 @@ def test_request_carries_no_container_and_bounds_its_fields() -> None:
     except Exception:
         raised = True
     assert raised, "a flag-shaped secret must be refused"
+
+    # A one- or two-character pre-shared key is not a legitimate value for the thing that
+    # authenticates every client to the operator's tunnel server.
+    for short in ("a", "pw", "1234567"):
+        raised = False
+        try:
+            ObfuscationRequest(kind="iodine", zone="t.example", secret=short)
+        except Exception:
+            raised = True
+        assert raised, f"a {len(short)}-character tunnel secret must be refused"
+    ObfuscationRequest(kind="iodine", zone="t.example", secret="12345678")  # the boundary passes
     print("  no container field; zone/secret/tunnel_net are bounded and operator-owned: PASS")
 
 

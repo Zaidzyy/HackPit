@@ -606,6 +606,48 @@ OPSEC: dict[str, OpsecNote] = {n.key: n for n in [
        "Fastly, Google, Azure Front Door) have disabled cross-domain fronting entirely.",
        "A working front is now rare and can stop working mid-engagement without warning as "
        "providers patch it, with no fallback that preserves the same cover."),
+
+    # --- AV/EDR evasion artifacts (build #4) ------------------------------------------------ #
+    # These three are the reason the tamper ban was lifted (D-guard): the evasion engine EMITS
+    # AMSI-patch / ETW-blind / packed-loader artifacts, so its own honest note has to be able to
+    # say so. `still_recorded` is where that honesty is enforced — each one names the tamper
+    # technique's OWN detections, not just "something might see it".
+    _o("evasion_packed_loader",
+       "A loader that has to allocate executable memory, copy shellcode into it and hand "
+       "execution over produces a recognisable allocate/write/execute sequence, and it starts "
+       "as an unsigned image from a user-writable path.",
+       "Prefer a signed, already-present interpreter over dropping a new binary; keep the "
+       "artifact off disk where the execution method allows it; match the file's name, icon and "
+       "path to something the host's software inventory already expects",
+       "Process creation (4688/Sysmon 1) and image loads (Sysmon 7) are recorded whatever the "
+       "packer does, the allocate-write-execute sequence is itself a named behavioural "
+       "detection, and any child process inherits a parent chain that points straight back.",
+       "Packing costs reliability — it breaks on some hosts, trips generic-heuristic engines "
+       "that ignore signatures entirely, and an unpacking failure is louder than not packing."),
+    _o("evasion_amsi_patch",
+       "AMSI scans script and in-memory content at the moment it is handed to the engine, so "
+       "unmodified script content is inspected before it ever runs.",
+       "Prefer an execution path AMSI does not sit on at all over patching it; if patching, do "
+       "it once in-process rather than repeatedly; avoid the published byte patterns, which are "
+       "individually signatured",
+       "The patch is the loudest part: opening a handle to the current process and writing into "
+       "amsi.dll is covered by named AMSI-bypass detections (Sysmon 8/10 plus EDR memory-write "
+       "telemetry), the amsi.dll image load still happens, and the hosting process still starts "
+       "and is still attributed to its parent.",
+       "Fragile across patch levels and AMSI versions — a failed patch usually raises a louder "
+       "signal than leaving AMSI alone, and it only removes ONE inspection point."),
+    _o("evasion_etw_blind",
+       "ETW is the pipe several EDR sensors read from, so an unmodified process reports its "
+       "loads, calls and network activity into that pipeline continuously.",
+       "Prefer doing less in the process over blinding it; scope any change to the current "
+       "process rather than the provider host; expect sensor-health monitoring and keep the "
+       "quiet window short",
+       "The silence is itself the signal — sensor-health and telemetry-gap monitoring alert on a "
+       "provider going quiet for one process while the host keeps reporting. Kernel callbacks, "
+       "process creation, the parent chain and all network telemetry are unaffected, and the "
+       "ntdll handle access the patch needs is recorded.",
+       "Process-scoped only, so it buys much less than it appears to; and on a stack that "
+       "watches sensor health it converts a quiet signal into an investigated one."),
 ]}
 
 
@@ -1131,6 +1173,40 @@ SPECS: dict[str, FootprintSpec] = {s.key: s for s in [
        "At a TLS-terminating proxy the SNI (the fronting domain) and the inner HTTP Host header "
        "disagree — the mismatch is the tell; most CDNs now block the technique outright.",
        "Historically hid the true endpoint; now unreliable because providers disabled it."),
+
+    # --- AV/EDR evasion artifacts (build #4) — the blue view of what the engine emits -------- #
+    # These exist so the bespoke evasion engine can never hand back an artifact without the
+    # defender's side of it. Every id cited here is already in the ATT&CK table under v19
+    # naming: T1685 "Disable or Modify Tools" (was T1562.001) and T1690 "Prevent Command
+    # History Logging" (was T1562.006). Describe-side only — the quieter half lives in OPSEC.
+    _f("evasion_packed_loader", "Running a packed / shellcode loader artifact", "T1027", "",
+       "WinEventLog:Security EventCode=4688; WinEventLog:Sysmon EventCode=1, 7; "
+       "auditd:SYSCALL execve",
+       "loud",
+       "A defender sees an unsigned or oddly-signed image start from a user-writable path, with "
+       "an image-load set and an entropy/section profile that does not match anything the "
+       "software inventory knows about; the process, its parent, and its child processes are all "
+       "recorded regardless of how the payload was packed.",
+       "Packing changes the FILE's static signature, not the fact that a process started and "
+       "loaded modules — which is what process-creation and image-load telemetry records."),
+    _f("evasion_amsi_patch", "In-process AMSI patching", "T1685", "",
+       "WinEventLog:Sysmon EventCode=1, 7, 8, 10; WinEventLog:Security EventCode=4688",
+       "loud",
+       "The patch itself is the signal: a handle opened to the current process, a write into "
+       "amsi.dll's scan routine, and the amsi.dll image load that precedes it. Mature stacks "
+       "ship named detections for exactly this memory write, and the hosting process still "
+       "starts and is still attributed to its parent.",
+       "AMSI is one inspection point, not the audit trail. Removing it stops content scanning "
+       "while leaving process creation, image loads, and handle access fully recorded."),
+    _f("evasion_etw_blind", "Blinding ETW for the current process", "T1690", "",
+       "WinEventLog:Sysmon EventCode=1, 7, 10; WinEventLog:Security EventCode=4688; "
+       "EDR:sensor-health telemetry gap",
+       "loud",
+       "A defender sees a provider go quiet for one process while the rest of the host keeps "
+       "reporting — an absence that sensor-health monitoring treats as an event in its own "
+       "right — plus the ntdll image load and handle access the patch needs to happen at all.",
+       "ETW tampering is process-scoped: it does not stop kernel callbacks, the parent-process "
+       "chain, or network telemetry, and the silence itself is detectable."),
 ]}
 
 
@@ -1211,6 +1287,11 @@ ALIASES: dict[str, str] = {
     "weevely": "persist_webshell", "weevely3": "persist_webshell",
     # C2 / traffic obfuscation
     "dnscat2": "c2_dns_tunnel", "iodine": "c2_dns_tunnel",
+    "dnscat2-server": "c2_dns_tunnel", "dnscat2-client": "c2_dns_tunnel",
+    "iodined": "c2_dns_tunnel",
+    # evasion artifacts (build #4). The generators map to the artifact they PRODUCE, because
+    # that is what a defender will actually see run.
+    "donut": "evasion_packed_loader", "scarecrow": "evasion_packed_loader",
 }
 
 # Tools whose meaning depends on the FIRST argument (a protocol / subcommand).

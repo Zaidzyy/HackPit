@@ -296,25 +296,27 @@ TECHNIQUES: dict[str, Technique] = {t.id: t for t in [
        "WinEventLog:Sysmon EventCode=3, 22; WinEventLog:Sysmon EventCode=11; "
        "auditd:SYSCALL connect, execve, write; iptables:LOG TCP connections"),
     _t("T1071", "Application Layer Protocol", "TA0011",
-       "Network Connection Creation; Network Traffic Content; Network Traffic Flow",
-       "NSM:Flow conn.log; NSM:Content protocol/payload inspection; "
-       "WinEventLog:Sysmon EventCode=3, 22; auditd:SYSCALL connect"),
+       "Command Execution; Network Connection Creation; Network Traffic Content; "
+       "Network Traffic Flow; Process Creation",
+       "NSM:Flow conn.log, http.log, dns.log, ssl.log; WinEventLog:Sysmon EventCode=3, 22; "
+       "auditd:SYSCALL execve"),
     _t("T1071.004", "Application Layer Protocol: DNS", "TA0011",
-       "Network Traffic Content; Network Traffic Flow",
-       "DNS resolver query logs; NSM:Flow dns.log; passive DNS analytics"),
+       "Network Connection Creation; Network Traffic Content; Network Traffic Flow; "
+       "Process Creation",
+       "NSM:Flow dns.log; WinEventLog:Sysmon EventCode=3, 22; auditd:SYSCALL execve"),
     _t("T1572", "Protocol Tunneling", "TA0011",
-       "Network Connection Creation; Network Traffic Content; Network Traffic Flow",
-       "NSM:Flow conn.log protocol/port mismatch; NSM:Content tunnel-signature inspection; "
-       "WinEventLog:Sysmon EventCode=3, 22"),
+       "Application Log Content; Network Connection Creation; Network Traffic Content; "
+       "Network Traffic Flow; Process Creation",
+       "WinEventLog:Sysmon EventCode=1; WinEventLog:Sysmon EventCode=3, 22; "
+       "auditd:SYSCALL socket/connect calls showing SSH processes forwarding arbitrary ports; "
+       "linux:syslog sshd sessions with unusual port forwarding parameters"),
     _t("T1001", "Data Obfuscation", "TA0011",
-       "Network Traffic Content; Network Traffic Flow",
-       "NSM:Content payload entropy/structure inspection; TLS/HTTP proxy logs; NDR traffic analytics"),
-    _t("T1029", "Scheduled Transfer", "TA0011",
-       "Network Traffic Flow",
-       "NSM:Flow long-baseline periodicity analysis; netflow cumulative-volume analytics"),
+       "Network Connection Creation; Network Traffic Content; Process Creation",
+       "NSM:Flow HTTP; auditd:SYSCALL connect"),
     _t("T1090.004", "Proxy: Domain Fronting", "TA0011",
-       "Network Traffic Content; Network Traffic Flow",
-       "TLS-terminating proxy logs (SNI vs Host header); NSM:Content TLS ClientHello SNI capture"),
+       "Network Connection Creation; Network Traffic Content; Process Creation",
+       "NSM:Connections TLS handshake + HTTP headers; WinEventLog:Sysmon EventCode=3, 22; "
+       "auditd:SYSCALL execve"),
 
     # --- stealth / defense impairment (SURFACED, never prescribed) -------------------------- #
     _t("T1027", "Obfuscated Files or Information", "TA0005",

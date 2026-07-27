@@ -1118,7 +1118,7 @@ SPECS: dict[str, FootprintSpec] = {s.key: s for s in [
        "Shaping traffic to look like normal web still leaves a client TLS fingerprint (JA3) and "
        "server response fingerprint, plus beacon periodicity a proxy can profile.",
        "A good profile defeats naive signatures; fingerprint + periodicity analytics still apply."),
-    _f("c2_jitter_beacon", "Low-and-slow beaconing with jitter", "T1029 T1071", "",
+    _f("c2_jitter_beacon", "Low-and-slow beaconing with jitter", "T1071", "",
        "NDR long-baseline beacon analytics; netflow",
        "quiet",
        "Jitter and long sleeps break fixed-interval detection, but cumulative connections to one "

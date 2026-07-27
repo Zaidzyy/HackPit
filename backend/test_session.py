@@ -34,6 +34,7 @@ from cockpit import config
 from cockpit import executor as EX
 from cockpit import session as S
 from cockpit.session import SessionRefused, SessionStartRequest
+from test_support import scans
 
 BACKEND = Path(__file__).parent
 
@@ -258,11 +259,16 @@ def test_session_stdin_is_human_only() -> None:
     THE LOAD-BEARING TEST. A live session is already approved and already running, so
     anything able to type into it is executing un-gated commands — that is exactly the
     autonomy the approve-each model exists to prevent. The orchestrator/agent/loop/
-    executor/adgraph must have NO path here. Scans the whole (non-venv) source tree,
-    by RELATIVE PATH so adgraph/router.py is not accidentally allowed alongside
-    cockpit/router.py.
+    executor/adgraph must have NO path here.
+
+    IT SAID "the whole (non-venv) source tree" AND GLOBBED THREE DIRECTORIES — backend/,
+    cockpit/ and adgraph/ — leaving arsenal/, codescan/, detection/, evasion/, exploits/ and
+    state/ unopened. It had already fixed the basename half of the C3 defect (the allow-list is
+    keyed by relative path, so adgraph/router.py is not exempt alongside cockpit/router.py) but
+    not the coverage half. This lock was not in the build's task list; it was found by sweeping
+    for the pattern rather than the named files, which is the only way the class stays closed.
     """
-    allowed = {Path("cockpit/session.py"), Path("cockpit/router.py")}
+    allowed = {"cockpit/session.py", "cockpit/router.py"}
     # Import forms that would pull the live-session module in, plus the writer itself.
     # \bsession\b does not match `sessions` (backend/sessions.py, the engagement store).
     patterns = [
@@ -274,25 +280,23 @@ def test_session_stdin_is_human_only() -> None:
         r"\bfrom\s+\.\s+import\s+[^\n]*\bsession\b",
         r"\bcockpit\.session\b",
     ]
-    py_files = (
-        list(BACKEND.glob("*.py"))
-        + list((BACKEND / "cockpit").glob("*.py"))
-        + list((BACKEND / "adgraph").glob("*.py"))
+    ast_targets = ["cockpit.session", "write_stdin"]
+    res = scans.scan_source_tree(patterns=patterns, allowed=allowed, ast_targets=ast_targets)
+    scans.assert_clean(
+        res,
+        what="a live session's stdin must be HUMAN-ONLY — the orchestrator/agent/executor must "
+             "have NO path to session.write_stdin",
+        must_have_scanned=["orchestrator.py", "adgraph/orchestrator.py", "cockpit/executor.py",
+                           "detection/resolver.py", "evasion/engine.py", "state/store.py"],
+        min_checked=60,
     )
-    offenders: list[str] = []
-    for f in py_files:
-        rel = f.relative_to(BACKEND)
-        if rel in allowed or f.name.startswith("test_"):
-            continue
-        text = f.read_text(encoding="utf-8")
-        hits = [p for p in patterns if re.search(p, text)]
-        if hits:
-            offenders.append(f"{rel.as_posix()} ({', '.join(hits)})")
-    assert not offenders, (
-        "a live session's stdin must be HUMAN-ONLY — these modules can reach it: "
-        f"{offenders}. The orchestrator/agent/executor must have NO path to session.write_stdin."
+    scans.assert_catches_a_planted_violation(
+        plant="from cockpit.session import write_stdin",
+        patterns=patterns, allowed=allowed, ast_targets=ast_targets,
+        where="evasion/engine.py",
     )
-    print("  session stdin is HUMAN-ONLY (no agent/loop/executor path): PASS")
+    print(f"  session stdin is HUMAN-ONLY across all {len(res.checked)} backend modules "
+          "(+ planted-violation control): PASS")
 
 
 def test_agent_path_modules_expose_no_session_hook() -> None:

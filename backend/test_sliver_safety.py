@@ -315,9 +315,13 @@ def test_no_orchestrator_or_agent_path_to_sliver() -> None:
         if rel in ALLOWED_REFERENCES:
             controls[rel] = hits
             continue
-        scanned.append(rel)
         if f.name.startswith("test_"):
             continue  # the tests exist precisely to exercise it
+        # NOTE THE ORDER. This append used to sit ABOVE the test_ skip, so `scanned` counted
+        # files OPENED rather than files whose content was actually judged — the same shape as
+        # build #4's `scanned > 40` control, which reported 99 while 5 files were inspected.
+        # The count below is only evidence if it counts the right thing.
+        scanned.append(rel)
         if hits:
             offenders.append(f"{rel.as_posix()} ({', '.join(hits)})")
 

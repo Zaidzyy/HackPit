@@ -298,9 +298,11 @@ def test_no_orchestrator_or_agent_path_to_obfuscation() -> None:
         if rel in ALLOWED_REFERENCES:
             controls[rel] = hits
             continue
-        scanned.append(rel)
         if f.name.startswith("test_"):
             continue
+        # Below the skip, not above it: `scanned` must count files whose content was JUDGED,
+        # never files opened. See the same note in test_sliver_safety.py.
+        scanned.append(rel)
         if hits:
             offenders.append(f"{rel.as_posix()} ({', '.join(hits)})")
 

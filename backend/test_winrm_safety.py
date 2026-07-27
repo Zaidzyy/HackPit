@@ -284,6 +284,28 @@ def test_the_whole_script_is_classified_not_just_the_first_token() -> None:
     print(f"  all {len(_AUDIT_BYPASSES)} audited script bypasses now demand the red-confirm: PASS")
 
 
+def test_mimikatz_module_syntax_fires_as_the_first_token_too() -> None:
+    """The mirror image of the same defect, on the mimikatz side.
+
+    `_AD_DUMP_MARKERS` was scanned against the ARGS only, so the catalog's own third mimikatz
+    template — `sekurlsa::pth ... /run:cmd.exe` as argv[0] — fired ONLY by accident, because
+    `cmd.exe` happens to appear in the args. Change it to `/run:powershell.exe` and it went
+    silent. `kerberos::list /export`, which writes every ticket in the session to disk, matched
+    nothing at all.
+    """
+    for script in (
+        "sekurlsa::pth /user:admin /domain:corp /ntlm:aabb /run:powershell.exe",
+        "kerberos::list /export",
+        "lsadump::dcsync /domain:corp /user:corp\\krbtgt",
+        "crypto::capi",
+        "privilege::debug",
+    ):
+        assert allowlist.dangerous_script_heuristic(script), (
+            f"{script!r} produces NO reason — mimikatz module syntax as the first token"
+        )
+    print("  mimikatz module syntax fires wherever it appears, first token included: PASS")
+
+
 def test_an_undecodable_encoded_command_is_itself_the_finding() -> None:
     """-enc defeats every text scan by construction. An opaque blob must not pass unflagged."""
     reasons = allowlist.dangerous_script_heuristic("powershell -EncodedCommand ####not-base64####")
@@ -570,6 +592,7 @@ if __name__ == "__main__":
     test_secret_never_leaks()
     test_transport_not_reachable_from_orchestrator()
     test_the_whole_script_is_classified_not_just_the_first_token()
+    test_mimikatz_module_syntax_fires_as_the_first_token_too()
     test_an_undecodable_encoded_command_is_itself_the_finding()
     test_the_scanned_string_is_the_executed_string()
     test_every_reason_names_the_matched_marker_and_where()

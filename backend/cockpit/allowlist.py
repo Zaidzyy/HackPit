@@ -402,6 +402,16 @@ _PS_SHAPE_MARKERS: tuple[tuple[str, str], ...] = (
     ("add-mppreference", "adds a Defender exclusion — AV tampering"),
     ("amsiinitfailed", "AMSI bypass"),
     ("amsiutils", "AMSI internals — bypass shape"),
+    # mimikatz MODULE SYNTAX. `sekurlsa` and `lsadump` were already reachable through
+    # _AD_DUMP_MARKERS, but `kerberos::list /export` — which writes every TGT/TGS in the
+    # session to disk, i.e. the input to a pass-the-ticket — matched nothing at all. The
+    # `module::` spelling is unmistakable and appears in no legitimate PowerShell, so this
+    # costs nothing in confirm fatigue.
+    ("kerberos::", "mimikatz Kerberos module — exports/injects tickets"),
+    ("crypto::", "mimikatz crypto module — exports keys and certificates"),
+    ("vault::", "mimikatz vault module — reads stored credentials"),
+    ("token::", "mimikatz token module — impersonates another user"),
+    ("privilege::debug", "acquires SeDebugPrivilege — the mimikatz prelude"),
     ("-windowstyle hidden", "hides the window — delivery shape"),
     ("bypass -", "execution-policy bypass"),
     ("executionpolicy bypass", "execution-policy bypass"),

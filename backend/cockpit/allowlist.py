@@ -91,6 +91,11 @@ _FRAMEWORKS = frozenset({
     # red-confirm — the one gate that stops a beacon being built on a plain approval.
     # Purely additive: this can only ever ADD reasons, never remove one.
     "sliver-client", "sliver-server",
+    # The build-#4 evasion generators. Same reasoning as the Sliver binaries above: neither
+    # name matched anything here, so an artifact build would have passed the danger gate on a
+    # plain approval with no red-confirm. They generate a runnable payload, which is exactly
+    # what this set exists to flag. `scarecrow` is matched lowercased, as every entry is.
+    "donut", "scarecrow",
     "covenant", "cobaltstrike", "beacon", "chisel", "ligolo",
 })
 # Flags that mean "run this inline code / command".

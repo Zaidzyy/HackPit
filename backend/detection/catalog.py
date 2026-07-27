@@ -766,6 +766,146 @@ SPECS: dict[str, FootprintSpec] = {s.key: s for s in [
        "Nothing yet — this step happens off-target.",
        "Quiet only because the target is not involved. The generated artefact carries its own "
        "footprint the moment it lands, which is where file-write and AV telemetry take over."),
+
+    # --- persistence (TA0003) — describe side only; honesty carried in why_rating ---------- #
+    _f("persist_registry_run", "Persistence via Registry Run / RunOnce key", "T1547.001", "",
+       "Sysmon EID 13: a value written under a ...\\CurrentVersion\\Run key; "
+       "Security 4657 (registry value modified) where registry auditing is enabled; "
+       "reg.exe / powershell captured in Security 4688 and Sysmon EID 1; "
+       "Autoruns and EDR autostart baselines enumerate the new value on their next sweep",
+       "quiet",
+       "A new value under a Run key — nothing in real time unless registry auditing is on, but "
+       "plainly visible to any autostart baseline.",
+       "Quiet: Run-key writes are seldom audited live, so detection leans on autostart baselining "
+       "(Autoruns / EDR). That reliance is the defender's coverage gap to close, not an operator "
+       "advantage — the value sits on disk and is enumerable at any time."),
+    _f("persist_startup_folder", "Persistence via Startup folder / shortcut", "T1547.001", "",
+       "Sysmon EID 11: a file created in a Startup folder; "
+       "Microsoft-Windows-Shell-Core: a new Startup shortcut or binary registered; "
+       "the shortcut / binary itself on disk; "
+       "Autoruns lists the Startup entry",
+       "quiet",
+       "A new shortcut or binary in a Startup folder — durable on disk and listed by any autostart "
+       "audit.",
+       "Quiet: a Startup drop rarely raises a live alert, so detection depends on file-creation "
+       "monitoring (Sysmon EID 11) or an autostart baseline being in place — the gap the defender "
+       "closes with that coverage and periodic Autoruns review."),
+    _f("persist_scheduled_task", "Persistence via scheduled task", "T1053.005", "",
+       "Security 4698 (scheduled task created) / 4702 (updated), naming the author; "
+       "Microsoft-Windows-TaskScheduler/Operational 106/140; "
+       "schtasks.exe / svchost captured in Sysmon EID 1 and Security 4688; "
+       "the task XML under C:\\Windows\\System32\\Tasks",
+       "notable",
+       "A task-created event naming who registered it, plus the task definition on disk.",
+       "Notable: 4698 is a distinctive, well-collected event and the task XML is durable evidence; "
+       "detection needs scheduled-task auditing enabled, which mature stacks turn on."),
+    _f("persist_service", "Persistence via Windows service", "T1543.003", "",
+       "System 7045 (a service was installed); "
+       "Security 4697 (service installed) where audited; "
+       "the service key under HKLM\\SYSTEM\\CurrentControlSet\\Services; "
+       "sc.exe captured in Sysmon EID 1 and Security 4688; "
+       "Autoruns lists the service",
+       "notable",
+       "A new service appearing — 7045 in the System log, with the binary path recorded.",
+       "Notable: 7045 is collected almost everywhere and names the service binary; a SYSTEM-level "
+       "service is durable and enumerable, so this is strong evidence as well as a likely alert."),
+    _f("persist_wmi_event", "Persistence via WMI event subscription", "T1546.003", "",
+       "WMI-Activity/Operational 5859/5860/5861 (a permanent consumer/filter/binding registered); "
+       "Sysmon EID 19/20/21 (WMI filter / consumer / binding); "
+       "the __EventFilter, __EventConsumer and __FilterToConsumerBinding instances in the "
+       "root\\subscription namespace",
+       "quiet",
+       "A permanent WMI subscription — invisible unless WMI or Sysmon WMI logging is on, but "
+       "queryable in the subscription namespace.",
+       "Quiet: WMI-Activity and Sysmon WMI events are frequently not collected, so this fileless "
+       "mechanism often leaves no live alert — precisely the coverage gap Sysmon EID 19-21 exists "
+       "to close; the subscription objects persist and can be enumerated at any time."),
+    _f("persist_accessibility", "Persistence via accessibility feature / IFEO", "T1546.008", "",
+       "Sysmon EID 13: an Image File Execution Options Debugger value on sethc.exe / utilman.exe; "
+       "Sysmon EID 11: a replaced accessibility binary; "
+       "Security 4688 / Sysmon EID 1: cmd.exe or powershell spawned by sethc.exe / utilman.exe "
+       "(a parent-process anomaly); "
+       "file-integrity on the on-disk accessibility binary",
+       "notable",
+       "cmd or PowerShell spawned by sethc.exe / utilman.exe, or an IFEO Debugger value pointing "
+       "at them — both distinctive.",
+       "Notable: the accessibility-binary parent and the IFEO Debugger key are specific, "
+       "rule-covered artefacts; detection needs registry (EID 13) or process-creation auditing on, "
+       "which the pre-auth reach of this technique makes worth enabling."),
+    _f("persist_account_windows", "Persistence via backdoor account / privileged group",
+       "T1136.001 T1098", "",
+       "Security 4720 (user account created); "
+       "Security 4722 (account enabled); "
+       "Security 4732/4728 (added to a privileged local/global group), naming who added whom; "
+       "net.exe / net1.exe captured in Security 4688 and Sysmon EID 1",
+       "loud",
+       "A new account created and added to a privileged group — among the most closely watched "
+       "host and directory events.",
+       "Loud: 4720/4732 are collected almost everywhere and usually sit on a watchlist; the events "
+       "name the actor, so this is durable evidence as well as a live alert."),
+    _f("persist_webshell", "Persistence via web shell", "T1505.003", "",
+       "Sysmon EID 11: a script (.php/.jsp/.aspx) written into the web root; "
+       "Sysmon EID 1 / Security 4688: the web-server process (w3wp / apache / nginx) spawning "
+       "cmd / sh / powershell — a parent-process anomaly; "
+       "web access log: requests to the shell path; "
+       "NSM: POST requests with high-entropy bodies to script paths",
+       "notable",
+       "The web server giving birth to a shell, plus a script file in the web root and requests to "
+       "it in the access log.",
+       "Notable: the web-server-spawns-shell parent-child pair is distinctive and the dropped file "
+       "is durable; detection depends on process-creation and file-creation monitoring reaching "
+       "the web host."),
+    _f("persist_cron", "Persistence via cron", "T1053.003", "",
+       "auditd: execve of crontab and writes to /etc/cron*, /var/spool/cron; "
+       "cron / syslog entries when a job runs; "
+       "the crontab or /etc/cron.d file on disk, with its mtime",
+       "quiet",
+       "A new cron entry — usually silent until the job runs, but sitting in a crontab file on "
+       "disk.",
+       "Quiet: cron edits raise no live alert unless auditd watches /etc/cron* and the spool, which "
+       "many hosts do not — the coverage gap; the crontab file and its mtime remain as durable "
+       "evidence."),
+    _f("persist_systemd", "Persistence via systemd unit / timer", "T1543.002 T1053.006", "",
+       "auditd: writes to /etc/systemd/system/*.service and *.timer, and execve of "
+       "systemctl enable/start; "
+       "journald records the unit starting; "
+       "the unit and timer files on disk",
+       "quiet",
+       "A new systemd unit or timer — visible in journald when it starts and as a unit file on "
+       "disk.",
+       "Quiet: unit-file writes are seldom alerted unless auditd watches /etc/systemd, so detection "
+       "leans on file-integrity and journald review — the gap; the unit and timer files persist on "
+       "disk."),
+    _f("persist_ssh_authkeys", "Persistence via SSH authorized_keys", "T1098.004", "",
+       "auditd: a write to ~/.ssh/authorized_keys (a PATH watch); "
+       "sshd 'Accepted publickey' in auth.log / secure.log for the new key fingerprint; "
+       "the authorized_keys file and its mtime",
+       "quiet",
+       "A new key in authorized_keys — silent until it is used, then a publickey login from a "
+       "fingerprint that was not there before.",
+       "Quiet: appending a key raises no alert unless auditd watches authorized_keys; detection "
+       "then relies on the sshd accepted-key log and key-fingerprint baselining — the coverage "
+       "gap; the key remains in the file as durable evidence."),
+    _f("persist_shell_profile", "Persistence via shell-init profile", "T1546.004", "",
+       "auditd: writes to ~/.bashrc, ~/.bash_profile, ~/.profile, /etc/profile.d/*, ~/.zshrc; "
+       "the appended line and file mtime; "
+       "on some hosts an unexpected process or connection right after an interactive shell starts",
+       "quiet",
+       "An extra line in a shell-init file — inert on disk until the next interactive shell sources "
+       "it.",
+       "Quiet: profile edits rarely alert unless auditd watches the init files; detection leans on "
+       "file-integrity monitoring — the gap; the modification and its mtime persist for review."),
+    _f("persist_account_linux", "Persistence via backdoor account / /etc/passwd", "T1136.001", "",
+       "auditd: execve of useradd / adduser and writes to /etc/passwd and /etc/shadow; "
+       "auth.log / secure.log new-user entries; "
+       "wtmp / lastlog when the account logs in; "
+       "the new /etc/passwd line",
+       "moderate",
+       "A new local account — recorded in auth.log and the passwd / shadow files, and in wtmp once "
+       "it is used.",
+       "Moderate: useradd on most distributions writes to auth.log, and passwd / shadow changes "
+       "are file-integrity-monitored where that control exists; the new account line is durable "
+       "evidence even where live alerting is absent."),
 ]}
 
 
@@ -838,6 +978,12 @@ ALIASES: dict[str, str] = {
     "msfvenom": "payload_gen",
     "msfconsole": "remote_exploit", "msfcli": "remote_exploit", "searchsploit": "payload_gen",
     "gpp-decrypt": "sysvol_creds", "gpp_decrypt": "sysvol_creds",
+    # persistence — unambiguous binaries only (reg/sc/net/systemctl stay on the argv/LLM path)
+    "schtasks": "persist_scheduled_task",
+    "crontab": "persist_cron",
+    "useradd": "persist_account_linux", "adduser": "persist_account_linux",
+    "sharpersist": "persist_scheduled_task", "sharpersist.exe": "persist_scheduled_task",
+    "weevely": "persist_webshell", "weevely3": "persist_webshell",
 }
 
 # Tools whose meaning depends on the FIRST argument (a protocol / subcommand).

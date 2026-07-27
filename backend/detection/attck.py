@@ -335,6 +335,65 @@ TECHNIQUES: dict[str, Technique] = {t.id: t for t in [
     # --- resource development -------------------------------------------------------------- #
     _t("T1588.002", "Obtain Capabilities: Tool", "TA0042",
        "Malware Metadata", "Malware Repository"),
+
+    # --- persistence (TA0003) mechanisms — additive; fields transcribed from ATT&CK v19.1 -- #
+    _t("T1547.001", "Boot or Logon Autostart Execution: Registry Run Keys / Startup Folder",
+       "TA0003 TA0004",
+       "File Creation; Process Creation; Windows Registry Key Modification",
+       "WinEventLog:Microsoft-Windows-Shell-Core New startup folder shortcut or binary placed "
+       "in Startup directory; WinEventLog:Sysmon EventCode=1; WinEventLog:Sysmon EventCode=13, 14"),
+    _t("T1543.003", "Create or Modify System Process: Windows Service", "TA0003 TA0004",
+       "Driver Load; Process Creation; Service Creation; Windows Registry Key Modification",
+       "WinEventLog:Security EventCode=4697; WinEventLog:Sysmon EventCode=1; "
+       "WinEventLog:Sysmon EventCode=13, 14; WinEventLog:Sysmon EventCode=6"),
+    _t("T1543.002", "Create or Modify System Process: Systemd Service", "TA0003 TA0004",
+       "Command Execution; File Creation; File Modification; Process Creation; Service Creation",
+       "auditd:SYSCALL execution of systemctl or service with enable/start parameters; "
+       "auditd:SYSCALL fork/exec of service via PID 1 (systemd); "
+       "auditd:SYSCALL modification of existing .service file; "
+       "auditd:SYSCALL write, open, or rename to /etc/systemd/system/*.service; "
+       "linux:osquery newly registered unit file with ExecStart pointing to unknown binary"),
+    _t("T1053.003", "Scheduled Task/Job: Cron", "TA0002 TA0003 TA0004",
+       "File Modification; Process Creation; Scheduled Job Creation",
+       "auditd:SYSCALL execve; auditd:SYSCALL write"),
+    _t("T1053.006", "Scheduled Task/Job: Systemd Timers", "TA0002 TA0003 TA0004",
+       "File Creation; Process Creation; Scheduled Job Creation",
+       "auditd:SYSCALL creat, open, write on /etc/systemd/system and /usr/lib/systemd/system; "
+       "auditd:SYSCALL execve logging for /usr/bin/systemctl and systemd-run; "
+       "linux:osquery file_events"),
+    _t("T1546.003",
+       "Event Triggered Execution: Windows Management Instrumentation Event Subscription",
+       "TA0003 TA0004",
+       "Module Load; Process Creation; WMI Creation",
+       "WinEventLog:Sysmon EventCode=1; WinEventLog:Sysmon EventCode=7; "
+       "WinEventLog:WMI EventCode=5857, 5858, 5860, 5861"),
+    _t("T1546.004", "Event Triggered Execution: Unix Shell Configuration Modification",
+       "TA0003 TA0004",
+       "File Modification; Network Traffic Content; Process Creation",
+       "NSM:Flow unexpected network activity initiated shortly after shell session starts; "
+       "auditd:EXECVE execution of unexpected binaries during user shell startup; "
+       "auditd:SYSCALL AUDIT_SYSCALL (open, write, rename, unlink)"),
+    _t("T1546.008", "Event Triggered Execution: Accessibility Features", "TA0003 TA0004",
+       "File Creation; File Metadata; Process Creation; Windows Registry Key Modification",
+       "WinEventLog:Sysmon EventCode=1; WinEventLog:Sysmon EventCode=11; "
+       "WinEventLog:Sysmon EventCode=13, 14; WinEventLog:Sysmon EventCode=15"),
+    _t("T1136.001", "Create Account: Local Account", "TA0003",
+       "Command Execution; File Modification; Process Creation; User Account Creation",
+       "WinEventLog:Security EventCode=4720; WinEventLog:Sysmon EventCode=1; "
+       "auditd:SYSCALL useradd or adduser executed; "
+       "auditd:SYSCALL write operation on /etc/passwd or /etc/shadow"),
+    _t("T1505.003", "Server Software Component: Web Shell", "TA0003",
+       "File Creation; File Modification; Logon Session Creation; Network Traffic Content; "
+       "Process Creation",
+       "NSM:Flow Inbound HTTP POST with suspicious payload size or user-agent; "
+       "NSM:Flow POST requests to .php, .jsp, .aspx files with high entropy body; "
+       "WinEventLog:Security EventCode=4624, 4648; WinEventLog:Sysmon EventCode=1; "
+       "WinEventLog:Sysmon EventCode=11; "
+       "auditd:SYSCALL apache2 or nginx spawning sh, bash, or python interpreter; "
+       "auditd:SYSCALL new file created in /var/www/html, /srv/http, or similar web root"),
+    _t("T1098.004", "Account Manipulation: SSH Authorized Keys", "TA0003 TA0004",
+       "Command Execution; File Modification; Process Creation",
+       "auditd:SYSCALL execve; auditd:SYSCALL write | PATH=/home/*/.ssh/authorized_keys"),
 ]}
 
 

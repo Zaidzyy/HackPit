@@ -10,7 +10,8 @@ import { useApi } from "@/lib/useApi";
 const ARSENAL_COLOR = "#e0c15a";
 
 const CATEGORY_LABEL: Record<string, string> = {
-  recon: "Recon & OSINT",
+  recon: "Recon",
+  osint: "OSINT",
   web: "Web",
   "network-ad": "Network & Active Directory",
   credentials: "Credentials",

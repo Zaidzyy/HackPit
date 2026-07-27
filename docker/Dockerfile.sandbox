@@ -236,6 +236,114 @@ RUN set -e; \
     done; \
     for n in testssl.sh certipy bloodyAD; do command -v "$n" >/dev/null; done
 
+# --- 9c. reconFTW recon tools — apt (kali packages) --------------------------
+# massdns (the resolver engine puredns drives) and commix are both in kali-rolling.
+# Placed below the expensive kali/seclists/nuclei layers so editing the recon set never
+# invalidates their cache.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        massdns commix \
+    && rm -rf /var/lib/apt/lists/* \
+    && command -v massdns && command -v commix >/dev/null
+
+# --- 9d. reconFTW recon tools — Go (built with a temporary toolchain) ---------
+# No kali package for these (checked against reconFTW's own install list). Rather than guess
+# ~18 release-asset URLs, build them with `go install` using the exact module paths from
+# reconFTW's install.sh, into /usr/local/bin. The Go toolchain + build cache are removed at
+# the end of the layer so only the binaries ship. @latest matches reconFTW; pin a tag for a
+# fully reproducible build. Every binary is smoke-checked so a bad module fails the build.
+ARG GO_VERSION=1.23.4
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tgz \
+    && tar -C /usr/local -xzf /tmp/go.tgz && rm /tmp/go.tgz \
+    && export PATH="/usr/local/go/bin:$PATH" GOBIN=/usr/local/bin GOFLAGS=-buildvcs=false \
+    && for mod in \
+        github.com/tomnomnom/gf@latest \
+        github.com/tomnomnom/qsreplace@latest \
+        github.com/tomnomnom/unfurl@latest \
+        github.com/lc/subjs@latest \
+        github.com/BishopFox/jsluice/cmd/jsluice@latest \
+        github.com/dwisiswant0/crlfuzz/cmd/crlfuzz@latest \
+        github.com/d3mondev/puredns/v2@latest \
+        github.com/Josue87/gotator@latest \
+        github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest \
+        github.com/projectdiscovery/asnmap/cmd/asnmap@latest \
+        github.com/projectdiscovery/tlsx/cmd/tlsx@latest \
+        github.com/gwen001/github-subdomains@latest \
+        github.com/gwen001/gitlab-subdomains@latest \
+        github.com/damit5/gitdorks_go@latest \
+        github.com/sa7mon/s3scanner@latest \
+        github.com/edoardottt/csprecon/cmd/csprecon@latest \
+        github.com/devploit/nomore403@latest \
+    ; do echo ">> go install $mod" && go install "$mod"; done \
+    # getjs overlaps subjs and its module path is less stable — best-effort, never fails the build.
+    && { go install github.com/003random/getJS/v2@latest \
+         && ln -sfn "$(command -v getJS)" /usr/local/bin/getjs; } || echo "getjs: optional, skipped" \
+    && rm -rf /usr/local/go /root/go /root/.cache/go-build \
+    && for b in gf qsreplace unfurl subjs jsluice crlfuzz puredns gotator mapcidr asnmap tlsx \
+                github-subdomains gitlab-subdomains gitdorks_go s3scanner csprecon nomore403; do \
+           command -v "$b" >/dev/null || { echo "MISSING go tool: $b"; exit 1; }; \
+       done
+
+# --- 9d-bis. trufflehog (release binary, not `go install`) -------------------
+# trufflehog's recent releases require Go >= 1.25, a moving target that broke the pinned Go
+# toolchain above. Its official installer fetches the prebuilt linux/amd64 binary instead —
+# no toolchain, no version treadmill. Smoke-tested so a bad fetch still fails the build.
+RUN curl -fsSL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
+        | sh -s -- -b /usr/local/bin \
+    && /usr/local/bin/trufflehog --version 2>&1 | head -1 \
+    && command -v trufflehog >/dev/null
+
+# --- 9e. reconFTW recon tools — Python (venv + PATH wrapper) ------------------
+# No kali package; each gets an isolated venv (Kali's system Python is PEP-668 managed) and a
+# PATH wrapper, the jwt_tool idiom. subwiz is deliberately NOT here: it downloads an ML model
+# at runtime, so it is catalogued but runs only in the egress-enabled sandboxes
+# (engagement / :kali), never the airgapped lab — gotator/regulator cover permutations offline.
+RUN set -eu; \
+    mkvenv() { git clone --depth 1 "https://github.com/$1" "/opt/$2"; \
+               python3 -m venv "/opt/$2/venv"; \
+               if [ -f "/opt/$2/requirements.txt" ]; then \
+                   "/opt/$2/venv/bin/pip" install --no-cache-dir -q -r "/opt/$2/requirements.txt"; fi; }; \
+    wrap() { printf '#!/bin/sh\nexec %s "$@"\n' "$2" > "/usr/local/bin/$1"; chmod 0755 "/usr/local/bin/$1"; }; \
+    mkvenv cramppet/regulator regulator; \
+        wrap regulator "/opt/regulator/venv/bin/python /opt/regulator/main.py"; \
+    mkvenv vladko312/SSTImap SSTImap; \
+        wrap SSTImap "/opt/SSTImap/venv/bin/python /opt/SSTImap/sstimap.py"; \
+    mkvenv six2dez/dorks_hunter dorks_hunter; \
+        "/opt/dorks_hunter/venv/bin/pip" install --no-cache-dir -q xnldorker || true; \
+        wrap dorks_hunter "/opt/dorks_hunter/venv/bin/python /opt/dorks_hunter/dorks_hunter.py"; \
+    mkvenv initstring/cloud_enum cloud_enum; \
+        wrap cloud_enum "/opt/cloud_enum/venv/bin/python /opt/cloud_enum/cloud_enum.py"; \
+    git clone --depth 1 https://github.com/vortexau/dnsvalidator /opt/dnsvalidator; \
+        python3 -m venv /opt/dnsvalidator/venv; \
+        /opt/dnsvalidator/venv/bin/pip install --no-cache-dir -q /opt/dnsvalidator; \
+        wrap dnsvalidator "/opt/dnsvalidator/venv/bin/dnsvalidator"; \
+    git clone --depth 1 https://github.com/Arcanum-Sec/msftrecon /opt/msftrecon; \
+        python3 -m venv /opt/msftrecon/venv; \
+        /opt/msftrecon/venv/bin/pip install --no-cache-dir -q -e /opt/msftrecon; \
+        wrap msftrecon "/opt/msftrecon/venv/bin/msftrecon"; \
+    chmod -R a+rX /opt/regulator /opt/SSTImap /opt/dorks_hunter /opt/cloud_enum /opt/dnsvalidator /opt/msftrecon; \
+    for b in regulator SSTImap dorks_hunter cloud_enum dnsvalidator msftrecon; do command -v "$b" >/dev/null; done
+
+# --- 9f. gf pattern packs + a static resolver list (baked — no runtime egress) ---
+# gf is inert without pattern packs; the lab has no egress so they must be present in the
+# image. Merge 1ndianl33t/Gf-Patterns with tomnomnom/gf's own examples into a shared dir and
+# symlink it as root's ~/.gf (the sandbox user's ~/.gf is symlinked in the users layer below).
+# The resolver list is the offline default for puredns/massdns; dnsvalidator refreshes it only
+# where there is egress (engagement / :kali).
+RUN git clone --depth 1 https://github.com/1ndianl33t/Gf-Patterns /tmp/gfp \
+    && git clone --depth 1 https://github.com/tomnomnom/gf /tmp/gf \
+    && mkdir -p /usr/share/gf-patterns \
+    && cp /tmp/gfp/*.json /usr/share/gf-patterns/ \
+    && cp /tmp/gf/examples/*.json /usr/share/gf-patterns/ 2>/dev/null || true \
+    && rm -rf /tmp/gfp /tmp/gf \
+    && ln -sfn /usr/share/gf-patterns /root/.gf \
+    && test -n "$(ls /usr/share/gf-patterns/*.json 2>/dev/null)" \
+    && { curl -fsSL https://raw.githubusercontent.com/trickest/resolvers/main/resolvers.txt \
+            -o /usr/share/resolvers.txt \
+         || printf '%s\n' 1.1.1.1 8.8.8.8 8.8.4.4 9.9.9.9 1.0.0.1 208.67.222.222 208.67.220.220 \
+            > /usr/share/resolvers.txt; } \
+    && test -s /usr/share/resolvers.txt
+
 # --- 10. Strip file capabilities (REQUIRED — do not remove) -------------------
 # Kali ships a few binaries with FILE capabilities so unprivileged desktop users get raw
 # sockets: /usr/lib/nmap/nmap (cap_net_raw,cap_net_admin,cap_net_bind_service) and
@@ -271,6 +379,8 @@ RUN useradd -m -s /bin/bash sandbox \
     && mkdir -p /root/.local /home/sandbox/.local /home/sandbox/.config \
     && ln -s /usr/share/nuclei-templates /root/.local/nuclei-templates \
     && ln -s /usr/share/nuclei-templates /home/sandbox/.local/nuclei-templates \
+    && ln -sfn /usr/share/gf-patterns /home/sandbox/.gf \
+    && chown -h sandbox:sandbox /home/sandbox/.gf \
     && chown -R sandbox:sandbox /home/sandbox/.local /home/sandbox/.config
 
 # A tiny baked wordlist kept from the pre-Kali image so any command still referencing it

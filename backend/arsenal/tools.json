@@ -38,7 +38,19 @@
     "<payload>": "A payload name (e.g. a msfvenom/metasploit payload path).",
     "<module>": "A framework module path.",
     "<api-key>": "API key for a third-party service.",
-    "<spn-user>": "A SECOND account name, distinct from <user> — the account being acted ON when <user> is the account acting."
+    "<spn-user>": "A SECOND account name, distinct from <user> — the account being acted ON when <user> is the account acting.",
+    "<subs-file>": "Path to a file of subdomains/hostnames, one per line.",
+    "<urls-file>": "Path to a file of URLs, one per line.",
+    "<js-file>": "Path to a JavaScript file, or a file listing JS URLs.",
+    "<resolvers>": "Path to a trusted DNS resolvers list (e.g. /usr/share/resolvers.txt).",
+    "<asn>": "An autonomous system number, e.g. AS15169.",
+    "<cidr>": "An IP range in CIDR notation, e.g. 10.0.0.0/24.",
+    "<org>": "An organisation / GitHub org name.",
+    "<bucket>": "A cloud storage bucket name.",
+    "<keyword>": "A base keyword/company name to derive cloud asset names from.",
+    "<token-file>": "Path to a file of API tokens, one per line.",
+    "<dorks-file>": "Path to a file of dork queries, one per line.",
+    "<path>": "A URL path component, e.g. /admin."
   },
   "tools": [
     {
@@ -2861,6 +2873,931 @@
         {"flag": "quiet", "what": "suppress the banner"},
         {"flag": "notcolor", "what": "no ANSI colour"},
         {"flag": "searchfast", "what": "faster, shallower file search"}
+      ]
+    },
+    {
+      "name": "trufflehog",
+      "category": "osint",
+      "purpose": "Hunt for verified leaked secrets — API keys, tokens, credentials — across git history, filesystems and CI, with live verification to cut false positives.",
+      "phases": [
+        "osint",
+        "recon"
+      ],
+      "techniques": [
+        "secret scanning",
+        "credential discovery",
+        "git history analysis"
+      ],
+      "docs": "https://github.com/trufflesecurity/trufflehog",
+      "templates": [
+        {
+          "label": "Scan a git repo (verified only)",
+          "template": "trufflehog git <url> --only-verified",
+          "note": "--only-verified drops unproven matches; start here to avoid noise."
+        },
+        {
+          "label": "Scan a GitHub org",
+          "template": "trufflehog github --org <org> --only-verified",
+          "note": "Needs a token in env (GITHUB_TOKEN) for private/rate-limited reads."
+        },
+        {
+          "label": "Scan a local filesystem path",
+          "template": "trufflehog filesystem <output> --only-verified",
+          "note": "Point at a cloned repo or a loot directory."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--only-verified",
+          "what": "keep only secrets confirmed live"
+        },
+        {
+          "flag": "--json",
+          "what": "machine-readable output"
+        },
+        {
+          "flag": "--org",
+          "what": "scan every repo in a GitHub org"
+        }
+      ]
+    },
+    {
+      "name": "msftrecon",
+      "category": "osint",
+      "purpose": "Unauthenticated Microsoft 365 / Entra ID (Azure AD) tenant recon — tenant ID, federation, domains and enabled services — from just a domain name.",
+      "phases": [
+        "osint",
+        "recon"
+      ],
+      "techniques": [
+        "cloud tenant enumeration",
+        "M365/Azure footprinting"
+      ],
+      "docs": "https://github.com/Arcanum-Sec/msftrecon",
+      "templates": [
+        {
+          "label": "Enumerate a tenant from a domain",
+          "template": "msftrecon -d <domain>",
+          "note": "Needs internet egress; maps a domain to its Entra tenant and services."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-d",
+          "what": "target domain"
+        },
+        {
+          "flag": "-o",
+          "what": "output file"
+        }
+      ]
+    },
+    {
+      "name": "github-subdomains",
+      "category": "osint",
+      "purpose": "Mine subdomains for a target from GitHub code search — a passive source that public DNS and CT logs miss.",
+      "phases": [
+        "recon",
+        "osint"
+      ],
+      "techniques": [
+        "passive subdomain enumeration",
+        "OSINT"
+      ],
+      "docs": "https://github.com/gwen001/github-subdomains",
+      "templates": [
+        {
+          "label": "Subdomains from GitHub code search",
+          "template": "github-subdomains -d <domain> -t <token-file> -o <output>",
+          "note": "Needs one or more GitHub tokens (-t file); results are best-effort by rate limit."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-d",
+          "what": "target domain"
+        },
+        {
+          "flag": "-t",
+          "what": "GitHub token file (one per line)"
+        },
+        {
+          "flag": "-raw",
+          "what": "plain host output"
+        }
+      ]
+    },
+    {
+      "name": "gitlab-subdomains",
+      "category": "osint",
+      "purpose": "Mine subdomains for a target from GitLab code search — the GitLab counterpart to github-subdomains.",
+      "phases": [
+        "recon",
+        "osint"
+      ],
+      "techniques": [
+        "passive subdomain enumeration",
+        "OSINT"
+      ],
+      "docs": "https://github.com/gwen001/gitlab-subdomains",
+      "templates": [
+        {
+          "label": "Subdomains from GitLab code search",
+          "template": "gitlab-subdomains -d <domain> -t <api-key>",
+          "note": "Needs a GitLab token; complements the GitHub source."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-d",
+          "what": "target domain"
+        },
+        {
+          "flag": "-t",
+          "what": "GitLab API token"
+        }
+      ]
+    },
+    {
+      "name": "dorks_hunter",
+      "category": "osint",
+      "purpose": "Run a curated set of Google dorks against a domain to surface exposed files, panels, logs and info leaks in one pass.",
+      "phases": [
+        "osint"
+      ],
+      "techniques": [
+        "google dorking",
+        "OSINT",
+        "exposure discovery"
+      ],
+      "docs": "https://github.com/six2dez/dorks_hunter",
+      "templates": [
+        {
+          "label": "Dork a domain",
+          "template": "dorks_hunter -d <domain> -o <output>",
+          "note": "Needs internet egress; results depend on search availability/rate limits."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-d",
+          "what": "target domain"
+        },
+        {
+          "flag": "-o",
+          "what": "output file"
+        }
+      ]
+    },
+    {
+      "name": "gitdorks_go",
+      "category": "osint",
+      "purpose": "Search GitHub with a dork list for secrets and sensitive references tied to a target — automated GitHub dorking.",
+      "phases": [
+        "osint"
+      ],
+      "techniques": [
+        "github dorking",
+        "secret discovery",
+        "OSINT"
+      ],
+      "docs": "https://github.com/damit5/gitdorks_go",
+      "templates": [
+        {
+          "label": "GitHub dork a target",
+          "template": "gitdorks_go -target <domain> -tf <token-file> -gd <dorks-file> -nws 20",
+          "note": "Needs GitHub token(s); -gd points at a dork list, -nws caps concurrency."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-target",
+          "what": "target org/domain keyword"
+        },
+        {
+          "flag": "-tf",
+          "what": "GitHub token file"
+        },
+        {
+          "flag": "-gd",
+          "what": "dork list file"
+        }
+      ]
+    },
+    {
+      "name": "gotator",
+      "category": "recon",
+      "purpose": "Generate DNS permutation candidates from known subdomains + a words list — the rule-based half of permutation enumeration.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "subdomain permutation",
+        "candidate generation"
+      ],
+      "docs": "https://github.com/Josue87/gotator",
+      "templates": [
+        {
+          "label": "Permute known subdomains",
+          "template": "gotator -sub <subs-file> -perm <wordlist> -depth 1 -numbers 3 -mindup -adv -md > <output>",
+          "note": "Feed the output into puredns to resolve; candidates are unresolved by design."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-depth",
+          "what": "permutation recursion depth"
+        },
+        {
+          "flag": "-numbers",
+          "what": "append/insert up to N numbers"
+        },
+        {
+          "flag": "-adv",
+          "what": "advanced permutations"
+        },
+        {
+          "flag": "-md",
+          "what": "use the words also as data (mix-in)"
+        }
+      ]
+    },
+    {
+      "name": "regulator",
+      "category": "recon",
+      "purpose": "Derive high-yield permutation rules from the subdomains you already found (learns the target's naming pattern) instead of a generic word list.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "subdomain permutation",
+        "pattern learning"
+      ],
+      "docs": "https://github.com/cramppet/regulator",
+      "templates": [
+        {
+          "label": "Learn rules + emit candidates",
+          "template": "regulator -t <domain> -f <subs-file> -o <output>",
+          "note": "Output is a candidate list — resolve it with puredns."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-t",
+          "what": "target apex domain"
+        },
+        {
+          "flag": "-f",
+          "what": "observed subdomains file"
+        },
+        {
+          "flag": "-o",
+          "what": "candidate output file"
+        }
+      ]
+    },
+    {
+      "name": "subwiz",
+      "category": "recon",
+      "purpose": "ML-based subdomain prediction: from the subdomains already found, a trained model proposes likely new ones — smarter than brute force, cheaper than a huge wordlist.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "subdomain prediction",
+        "ML permutation"
+      ],
+      "docs": "https://github.com/hadriansecurity/subwiz",
+      "templates": [
+        {
+          "label": "Predict new subdomains",
+          "template": "subwiz -i <subs-file> -o <output>",
+          "note": "Fetches its model at runtime, so it runs in the engagement/:kali sandboxes (which have egress) but NOT the airgapped lab; gotator/regulator cover permutations offline."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-i",
+          "what": "input observed subdomains"
+        },
+        {
+          "flag": "-o",
+          "what": "predicted output"
+        }
+      ]
+    },
+    {
+      "name": "puredns",
+      "category": "recon",
+      "purpose": "Resolve massive host lists fast and filter DNS wildcards accurately — the resolution backbone that turns permutation/brute candidates into real subdomains.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "DNS resolution",
+        "wildcard filtering",
+        "DNS bruteforce"
+      ],
+      "docs": "https://github.com/d3mondev/puredns",
+      "templates": [
+        {
+          "label": "Resolve a candidate list",
+          "template": "puredns resolve <subs-file> -r <resolvers> --write <output>",
+          "note": "Wildcard-filters as it resolves; pair with gotator/regulator output."
+        },
+        {
+          "label": "Bruteforce subdomains",
+          "template": "puredns bruteforce <wordlist> <domain> -r <resolvers> --write <output>",
+          "note": "Uses massdns under the hood; resolver validation needs egress."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-r",
+          "what": "trusted resolvers file"
+        },
+        {
+          "flag": "--write",
+          "what": "write resolved hosts"
+        },
+        {
+          "flag": "--wildcard-tests",
+          "what": "wildcard detection sensitivity"
+        }
+      ]
+    },
+    {
+      "name": "massdns",
+      "category": "recon",
+      "purpose": "Very high-throughput stub DNS resolver — the engine puredns drives, usable directly for bulk A/CNAME resolution.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "mass DNS resolution"
+      ],
+      "docs": "https://github.com/blechschmidt/massdns",
+      "templates": [
+        {
+          "label": "Bulk-resolve a host list",
+          "template": "massdns -r <resolvers> -t A -o S -w <output> <subs-file>",
+          "note": "-o S is simple text output; feed a wildcard-aware step afterwards."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-r",
+          "what": "resolvers file"
+        },
+        {
+          "flag": "-t",
+          "what": "record type"
+        },
+        {
+          "flag": "-o",
+          "what": "output format (S=simple)"
+        }
+      ]
+    },
+    {
+      "name": "dnsvalidator",
+      "category": "recon",
+      "purpose": "Build a list of DNS resolvers that actually return correct answers — the trusted-resolver input puredns/massdns depend on for clean results.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "resolver generation",
+        "DNS hygiene"
+      ],
+      "docs": "https://github.com/vortexau/dnsvalidator",
+      "templates": [
+        {
+          "label": "Generate a validated resolver list",
+          "template": "dnsvalidator -tL https://public-dns.info/nameservers.txt -threads 100 -o <output>",
+          "note": "Needs egress to validate; the baked /usr/share/resolvers.txt is the offline fallback in the lab."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-tL",
+          "what": "source resolver list URL"
+        },
+        {
+          "flag": "-threads",
+          "what": "validation concurrency"
+        },
+        {
+          "flag": "-o",
+          "what": "validated output file"
+        }
+      ]
+    },
+    {
+      "name": "asnmap",
+      "category": "recon",
+      "purpose": "Map an organisation or domain to its ASNs and the CIDR ranges they own — the first move for expanding scope on a wide target.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "ASN enumeration",
+        "scope expansion",
+        "CIDR discovery"
+      ],
+      "docs": "https://github.com/projectdiscovery/asnmap",
+      "templates": [
+        {
+          "label": "CIDRs owned by a domain",
+          "template": "asnmap -d <domain> -silent",
+          "note": "Only act on ranges inside the authorised scope — this widens what you can see, not what you may touch."
+        },
+        {
+          "label": "CIDRs for an ASN",
+          "template": "asnmap -a <asn> -silent",
+          "note": "PDCP_API_KEY improves coverage but is optional."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-d",
+          "what": "resolve a domain to ASNs/CIDRs"
+        },
+        {
+          "flag": "-a",
+          "what": "look up an ASN"
+        },
+        {
+          "flag": "-silent",
+          "what": "results only"
+        }
+      ]
+    },
+    {
+      "name": "mapcidr",
+      "category": "recon",
+      "purpose": "Expand, aggregate and slice CIDR ranges into host lists (and back) — the plumbing between ASN discovery and host-level scanning.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "CIDR expansion",
+        "IP list manipulation"
+      ],
+      "docs": "https://github.com/projectdiscovery/mapcidr",
+      "templates": [
+        {
+          "label": "Expand a CIDR to hosts",
+          "template": "mapcidr -cidr <cidr> -silent",
+          "note": "Pipe into a resolver/scanner; keep ranges scope-checked."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-cidr",
+          "what": "input range"
+        },
+        {
+          "flag": "-aggregate",
+          "what": "collapse to smallest set"
+        },
+        {
+          "flag": "-silent",
+          "what": "results only"
+        }
+      ]
+    },
+    {
+      "name": "tlsx",
+      "category": "recon",
+      "purpose": "Grab TLS certificate data (SANs, CN, issuer) at scale — a fast way to pull extra hostnames straight off the certificates a target serves.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "TLS certificate recon",
+        "subdomain discovery"
+      ],
+      "docs": "https://github.com/projectdiscovery/tlsx",
+      "templates": [
+        {
+          "label": "Pull SAN/CN names from hosts",
+          "template": "tlsx -l <subs-file> -san -cn -silent",
+          "note": "SAN entries often reveal sibling hostnames; feed them back into resolution."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-san",
+          "what": "subject alternative names"
+        },
+        {
+          "flag": "-cn",
+          "what": "common name"
+        },
+        {
+          "flag": "-silent",
+          "what": "results only"
+        }
+      ]
+    },
+    {
+      "name": "csprecon",
+      "category": "recon",
+      "purpose": "Extract hostnames from a target's Content-Security-Policy headers — a passive subdomain source hiding in plain sight in HTTP responses.",
+      "phases": [
+        "recon"
+      ],
+      "techniques": [
+        "CSP analysis",
+        "subdomain discovery"
+      ],
+      "docs": "https://github.com/edoardottt/csprecon",
+      "templates": [
+        {
+          "label": "Hosts from CSP headers",
+          "template": "csprecon -u <url> -d <domain>",
+          "note": "-d keeps results scoped to the target apex."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-u",
+          "what": "target URL"
+        },
+        {
+          "flag": "-d",
+          "what": "restrict to this domain"
+        }
+      ]
+    },
+    {
+      "name": "gf",
+      "category": "web",
+      "purpose": "Grep a URL list through curated pattern packs to triage vuln candidates (XSS/SSRF/SQLi/redirect/…) — turns a raw URL dump into a prioritised worklist.",
+      "phases": [
+        "web"
+      ],
+      "techniques": [
+        "URL triage",
+        "pattern matching",
+        "attack-surface prioritisation"
+      ],
+      "docs": "https://github.com/tomnomnom/gf",
+      "templates": [
+        {
+          "label": "Pull XSS candidate URLs",
+          "template": "cat <urls-file> | gf xss",
+          "note": "Relies on the gf-patterns baked into the image at ~/.gf; the pattern name selects the bug class."
+        },
+        {
+          "label": "Pull candidates for a bug class",
+          "template": "cat <urls-file> | gf <pattern>",
+          "note": "e.g. ssrf, sqli, redirect, lfi, rce — feed the hits into qsreplace + a targeted scanner."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-list",
+          "what": "list available patterns"
+        }
+      ]
+    },
+    {
+      "name": "qsreplace",
+      "category": "web",
+      "purpose": "Rewrite every query-string value in a URL list with a chosen value/payload — the glue that turns harvested URLs into a fuzzable payload set.",
+      "phases": [
+        "web"
+      ],
+      "techniques": [
+        "parameter fuzzing prep",
+        "payload injection"
+      ],
+      "docs": "https://github.com/tomnomnom/qsreplace",
+      "templates": [
+        {
+          "label": "Inject a payload into all params",
+          "template": "cat <urls-file> | qsreplace '<payload>'",
+          "note": "Pipe the result into a scanner (dalfox, nuclei -dast) — qsreplace itself only rewrites text."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-a",
+          "what": "append instead of replace"
+        }
+      ]
+    },
+    {
+      "name": "unfurl",
+      "category": "web",
+      "purpose": "Break URLs into their parts (domains, paths, keys, params) for sorting and dedup — a small but constant step in any URL-processing pipeline.",
+      "phases": [
+        "web",
+        "recon"
+      ],
+      "techniques": [
+        "URL parsing",
+        "attack-surface shaping"
+      ],
+      "docs": "https://github.com/tomnomnom/unfurl",
+      "templates": [
+        {
+          "label": "Extract unique param keys",
+          "template": "cat <urls-file> | unfurl keys",
+          "note": "Also: domains, paths, apexes, format — cheap building blocks."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-u",
+          "what": "unique output"
+        }
+      ]
+    },
+    {
+      "name": "jsluice",
+      "category": "web",
+      "purpose": "Parse JavaScript to extract endpoints, URLs and secrets that crawling alone misses — reads the JS instead of just listing it.",
+      "phases": [
+        "web"
+      ],
+      "techniques": [
+        "JavaScript analysis",
+        "endpoint discovery",
+        "secret discovery"
+      ],
+      "docs": "https://github.com/BishopFox/jsluice",
+      "templates": [
+        {
+          "label": "Extract endpoints from JS",
+          "template": "cat <js-file> | jsluice urls",
+          "note": "Finds fetch/XHR/route strings the DOM never renders."
+        },
+        {
+          "label": "Extract secrets from JS",
+          "template": "jsluice secrets <js-file>",
+          "note": "Flags API keys/tokens embedded in bundles."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "urls",
+          "what": "endpoint/URL extraction mode"
+        },
+        {
+          "flag": "secrets",
+          "what": "secret extraction mode"
+        }
+      ]
+    },
+    {
+      "name": "subjs",
+      "category": "web",
+      "purpose": "Discover the JavaScript files a set of pages loads — the fetch step that feeds jsluice/getjs.",
+      "phases": [
+        "web",
+        "recon"
+      ],
+      "techniques": [
+        "JavaScript discovery"
+      ],
+      "docs": "https://github.com/lc/subjs",
+      "templates": [
+        {
+          "label": "List JS URLs from pages",
+          "template": "cat <urls-file> | subjs",
+          "note": "Pipe the JS URLs into getjs (fetch) then jsluice (parse)."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-c",
+          "what": "concurrency"
+        }
+      ]
+    },
+    {
+      "name": "getjs",
+      "category": "web",
+      "purpose": "Fetch JavaScript files (including from a URL list) for offline analysis — the retrieval half of JS mining.",
+      "phases": [
+        "web"
+      ],
+      "techniques": [
+        "JavaScript discovery",
+        "content retrieval"
+      ],
+      "docs": "https://github.com/003random/getJS",
+      "templates": [
+        {
+          "label": "Fetch JS from a URL list",
+          "template": "getjs --input <urls-file> --complete",
+          "note": "--complete resolves relative script src to absolute URLs."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--input",
+          "what": "input URL list"
+        },
+        {
+          "flag": "--complete",
+          "what": "resolve relative to absolute URLs"
+        }
+      ]
+    },
+    {
+      "name": "commix",
+      "category": "web",
+      "purpose": "Detect and exploit OS command-injection in web parameters automatically.",
+      "phases": [
+        "exploitation",
+        "web"
+      ],
+      "techniques": [
+        "command injection"
+      ],
+      "docs": "https://github.com/commixproject/commix",
+      "templates": [
+        {
+          "label": "Test a parameter",
+          "template": "commix -u \"<url>?<param>=1\" --batch",
+          "note": "This exploits, not just tests — it correctly trips the executor's danger confirm."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--batch",
+          "what": "non-interactive defaults"
+        },
+        {
+          "flag": "--level",
+          "what": "test depth 1-3"
+        }
+      ]
+    },
+    {
+      "name": "SSTImap",
+      "category": "web",
+      "purpose": "Detect and exploit server-side template injection across many engines, with sandbox-escape payloads.",
+      "phases": [
+        "exploitation",
+        "web"
+      ],
+      "techniques": [
+        "server-side template injection"
+      ],
+      "docs": "https://github.com/vladko312/SSTImap",
+      "templates": [
+        {
+          "label": "Test a parameter for SSTI",
+          "template": "SSTImap -u \"<url>?<param>=*\"",
+          "note": "The * marks the injection point; escalates to RCE where the engine allows — danger-confirmed."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-u",
+          "what": "target URL"
+        },
+        {
+          "flag": "--os-cmd",
+          "what": "run an OS command if exploitable"
+        }
+      ]
+    },
+    {
+      "name": "nomore403",
+      "category": "web",
+      "purpose": "Attempt a battery of 403/401 access-control bypasses (header, path, method and case tricks) against a forbidden URL.",
+      "phases": [
+        "web"
+      ],
+      "techniques": [
+        "403 bypass",
+        "access-control bypass"
+      ],
+      "docs": "https://github.com/devploit/nomore403",
+      "templates": [
+        {
+          "label": "Bypass a forbidden path",
+          "template": "nomore403 -u <url>",
+          "note": "Complements the bypass-403 methodology; treat successes as leads to verify by hand."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-u",
+          "what": "target URL"
+        },
+        {
+          "flag": "-H",
+          "what": "add a custom header"
+        }
+      ]
+    },
+    {
+      "name": "crlfuzz",
+      "category": "web",
+      "purpose": "Fuzz for CRLF injection (header/response splitting) across a URL list at speed.",
+      "phases": [
+        "web"
+      ],
+      "techniques": [
+        "CRLF injection",
+        "header injection"
+      ],
+      "docs": "https://github.com/dwisiswant0/crlfuzz",
+      "templates": [
+        {
+          "label": "Scan a single URL",
+          "template": "crlfuzz -u <url>",
+          "note": "Pairs with the cmd-injection (commix) and SSTI (SSTImap) tools to round out the injection set."
+        },
+        {
+          "label": "Scan a URL list",
+          "template": "cat <urls-file> | crlfuzz",
+          "note": "Feed gf/qsreplace output straight in."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-u",
+          "what": "target URL"
+        },
+        {
+          "flag": "-c",
+          "what": "concurrency"
+        }
+      ]
+    },
+    {
+      "name": "s3scanner",
+      "category": "cloud",
+      "purpose": "Enumerate open/misconfigured object-storage buckets (S3 and compatible) and dump their permissions — external cloud recon, distinct from the posture scanners.",
+      "phases": [
+        "recon",
+        "osint"
+      ],
+      "techniques": [
+        "cloud bucket enumeration",
+        "storage misconfiguration"
+      ],
+      "docs": "https://github.com/sa7mon/S3Scanner",
+      "templates": [
+        {
+          "label": "Scan a named bucket",
+          "template": "s3scanner scan --bucket <bucket>",
+          "note": "Reports open/closed + which permissions are world-readable/writable."
+        },
+        {
+          "label": "Scan a bucket list",
+          "template": "s3scanner scan --bucket-file <subs-file>",
+          "note": "Derive candidate names from the target keyword first."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--bucket",
+          "what": "single bucket name"
+        },
+        {
+          "flag": "--bucket-file",
+          "what": "file of bucket names"
+        }
+      ]
+    },
+    {
+      "name": "cloud_enum",
+      "category": "cloud",
+      "purpose": "Enumerate public cloud assets across AWS, Azure and GCP (buckets, blobs, functions, apps) from a base keyword — multi-cloud external asset discovery.",
+      "phases": [
+        "recon",
+        "osint"
+      ],
+      "techniques": [
+        "cloud asset enumeration",
+        "multi-cloud recon"
+      ],
+      "docs": "https://github.com/initstring/cloud_enum",
+      "templates": [
+        {
+          "label": "Enumerate assets for a keyword",
+          "template": "cloud_enum -k <keyword>",
+          "note": "Needs egress; repeat -k for name variants (company, product, abbreviations)."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-k",
+          "what": "keyword to mutate into asset names"
+        },
+        {
+          "flag": "-l",
+          "what": "log output to file"
+        }
       ]
     }
   ]

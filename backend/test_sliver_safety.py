@@ -106,6 +106,96 @@ def _backend_py_files() -> list[Path]:
     )
 
 
+# --------------------------------------------------------------------------- #
+# main.py is allow-listed, but ONLY for its route functions
+# --------------------------------------------------------------------------- #
+# Allow-listing main.py was forced by the cockpit/arsenal decoupling rule (the routes cannot
+# live in cockpit/router.py). But main.py is WIDER than the router.py it replaced: it also
+# holds `import orchestrator` and the loop endpoint POST /sessions/{id}/loop/propose. Wiring
+# this surface into that endpoint — inside main.py — would be caught by no whole-tree scan,
+# which defeats the point of the human-only lock. So the allow-list is narrowed here: the
+# loop/propose/orchestrator surface of main.py, and everything it calls transitively inside
+# main.py, must not name this module.
+MAIN_PY = BACKEND / "main.py"
+_LOOP_SURFACE_RE = re.compile(r"loop|propose|orchestrat", re.I)
+
+
+def _body_without_docstring(node: ast.AST) -> list[ast.stmt]:
+    body = list(getattr(node, "body", []))
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+            and isinstance(body[0].value.value, str):
+        return body[1:]
+    return body
+
+
+def _loop_surface_functions() -> dict[str, ast.FunctionDef]:
+    """Every main.py function on the loop/propose/orchestrator surface, TRANSITIVELY.
+
+    Not just the endpoint body: a helper it calls is just as much a wiring point, so the set
+    is the closure over calls to main.py-local functions. Returns ``{name: node}``.
+    """
+    tree = ast.parse(MAIN_PY.read_text(encoding="utf-8"))
+    local: dict[str, ast.FunctionDef] = {
+        n.name: n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    surface = {n for n in local if _LOOP_SURFACE_RE.search(n)}
+    queue = list(surface)
+    while queue:
+        for callee in _call_names(local[queue.pop()]):
+            head = callee.split(".")[0]
+            if head in local and head not in surface:
+                surface.add(head)
+                queue.append(head)
+    return {n: local[n] for n in sorted(surface)}
+
+
+def _module_aliases_in_main(module_name: str) -> set[str]:
+    """The names main.py binds this cockpit module to (e.g. ``cockpit_sliver``)."""
+    tree = ast.parse(MAIN_PY.read_text(encoding="utf-8"))
+    aliases: set[str] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom):
+            for a in n.names:
+                if a.name == module_name:
+                    aliases.add(a.asname or a.name)
+        elif isinstance(n, ast.Import):
+            for a in n.names:
+                if a.name == module_name or a.name.endswith(f".{module_name}"):
+                    aliases.add(a.asname or a.name.split(".")[0])
+    return aliases
+
+
+def _loop_surface_offenders(module_name: str, patterns: list[str]) -> list[str]:
+    """``[(function, why)]`` for every loop-surface function in main.py that names the module.
+
+    Two independent detectors, because either alone has a hole: the ALIAS check catches
+    ``cockpit_sliver.anything`` (which the source regexes, written for other files, would miss
+    for a function name they do not list), and the REGEX check catches a fresh
+    ``from cockpit import sliver`` opened inside the function.
+    """
+    aliases = _module_aliases_in_main(module_name)
+    assert aliases, (
+        f"main.py no longer binds cockpit.{module_name} under any name — this check would "
+        "pass vacuously. Follow the rename."
+    )
+    offenders: list[str] = []
+    for name, node in _loop_surface_functions().items():
+        stmts = _body_without_docstring(node)
+        src = "\n".join(ast.unparse(s) for s in stmts)
+        used = {
+            n.id for s in stmts for n in ast.walk(s)
+            if isinstance(n, ast.Name) and n.id in aliases
+        }
+        if used:
+            offenders.append(f"{name}() references {sorted(used)}")
+        for pat in patterns:
+            if re.search(pat, src):
+                offenders.append(f"{name}() matches {pat!r}")
+    return offenders
+
+
 class _FakeCompleted:
     def __init__(self, argv, returncode=0, stdout="", stderr=""):
         self.args, self.returncode, self.stdout, self.stderr = argv, returncode, stdout, stderr
@@ -256,6 +346,36 @@ def test_no_orchestrator_or_agent_path_to_sliver() -> None:
         for attr in ("sliver", "start_server", "generate_implant", "ImplantRequest"):
             assert not hasattr(mod, attr), f"{name} must not expose {attr!r} — that is an agent path to C2"
     print(f"  {len(scanned)} modules scanned: ZERO orchestrator/agent/loop path to Sliver: PASS")
+
+
+def test_the_main_py_allow_list_stops_at_the_route_functions() -> None:
+    """main.py may name the Sliver module in its ROUTES — and nowhere near the loop endpoint.
+
+    This is the narrowing the whole-tree scan cannot do. main.py is allow-listed wholesale
+    above (the decoupling rule put the routes there), but main.py also holds
+    ``import orchestrator`` and ``POST /sessions/{id}/loop/propose``. A C2 server or an implant
+    build wired into the agent loop *from inside the allow-listed file* would otherwise be
+    invisible to every check in this suite.
+    """
+    surface = _loop_surface_functions()
+    # ANTI-VACUITY: the closure must actually contain the loop endpoint. If the endpoint is
+    # renamed out of the pattern, this fails loudly instead of scanning nothing.
+    assert "loop_propose" in surface, (
+        f"the loop endpoint is not in the scanned surface — got {sorted(surface)}. Renamed? "
+        "Widen _LOOP_SURFACE_RE; do not let this check go quiet."
+    )
+    assert len(surface) >= 2, sorted(surface)
+
+    offenders = _loop_surface_offenders("sliver", _REFERENCE_PATTERNS)
+    assert not offenders, (
+        "*** SLIVER IS WIRED INTO THE AGENT LOOP *** — main.py is allow-listed for its ROUTE "
+        f"functions only, never for the loop/propose/orchestrator surface: {offenders}. "
+        "The proposer must never be able to raise C2 or build an implant."
+    )
+    print(
+        f"  main.py's allow-list stops at the routes: {len(surface)} loop-surface functions, "
+        "none of which can reach Sliver: PASS"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -581,6 +701,7 @@ def test_http_routes_add_no_capability_and_stay_human_only() -> None:
 
 if __name__ == "__main__":
     test_no_orchestrator_or_agent_path_to_sliver()
+    test_the_main_py_allow_list_stops_at_the_route_functions()
     test_lifecycle_is_human_only_and_generation_is_gated_structurally()
     test_generate_delegates_to_the_real_gate_verbatim()
     test_refused_generate_is_scope_checked_and_produces_nothing()

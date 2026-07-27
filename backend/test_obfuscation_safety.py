@@ -99,6 +99,96 @@ def _call_names(node: ast.AST) -> set[str]:
     return {_dotted(n.func) for n in ast.walk(node) if isinstance(n, ast.Call)} - {""}
 
 
+# --------------------------------------------------------------------------- #
+# main.py is allow-listed, but ONLY for its route functions
+# --------------------------------------------------------------------------- #
+# Allow-listing main.py was forced by the cockpit/arsenal decoupling rule (the routes cannot
+# live in cockpit/router.py). But main.py is WIDER than the router.py it replaced: it also
+# holds `import orchestrator` and the loop endpoint POST /sessions/{id}/loop/propose. Wiring
+# this surface into that endpoint — inside main.py — would be caught by no whole-tree scan,
+# which defeats the point of the human-only lock. So the allow-list is narrowed here: the
+# loop/propose/orchestrator surface of main.py, and everything it calls transitively inside
+# main.py, must not name this module.
+MAIN_PY = BACKEND / "main.py"
+_LOOP_SURFACE_RE = re.compile(r"loop|propose|orchestrat", re.I)
+
+
+def _body_without_docstring(node: ast.AST) -> list[ast.stmt]:
+    body = list(getattr(node, "body", []))
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+            and isinstance(body[0].value.value, str):
+        return body[1:]
+    return body
+
+
+def _loop_surface_functions() -> dict[str, ast.FunctionDef]:
+    """Every main.py function on the loop/propose/orchestrator surface, TRANSITIVELY.
+
+    Not just the endpoint body: a helper it calls is just as much a wiring point, so the set
+    is the closure over calls to main.py-local functions. Returns ``{name: node}``.
+    """
+    tree = ast.parse(MAIN_PY.read_text(encoding="utf-8"))
+    local: dict[str, ast.FunctionDef] = {
+        n.name: n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    surface = {n for n in local if _LOOP_SURFACE_RE.search(n)}
+    queue = list(surface)
+    while queue:
+        for callee in _call_names(local[queue.pop()]):
+            head = callee.split(".")[0]
+            if head in local and head not in surface:
+                surface.add(head)
+                queue.append(head)
+    return {n: local[n] for n in sorted(surface)}
+
+
+def _module_aliases_in_main(module_name: str) -> set[str]:
+    """The names main.py binds this cockpit module to (e.g. ``cockpit_obfuscation``)."""
+    tree = ast.parse(MAIN_PY.read_text(encoding="utf-8"))
+    aliases: set[str] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom):
+            for a in n.names:
+                if a.name == module_name:
+                    aliases.add(a.asname or a.name)
+        elif isinstance(n, ast.Import):
+            for a in n.names:
+                if a.name == module_name or a.name.endswith(f".{module_name}"):
+                    aliases.add(a.asname or a.name.split(".")[0])
+    return aliases
+
+
+def _loop_surface_offenders(module_name: str, patterns: list[str]) -> list[str]:
+    """``[(function, why)]`` for every loop-surface function in main.py that names the module.
+
+    Two independent detectors, because either alone has a hole: the ALIAS check catches
+    ``cockpit_obfuscation.anything`` (which the source regexes, written for other files, would
+    miss for a function name they do not list), and the REGEX check catches a fresh
+    ``from cockpit import obfuscation`` opened inside the function.
+    """
+    aliases = _module_aliases_in_main(module_name)
+    assert aliases, (
+        f"main.py no longer binds cockpit.{module_name} under any name — this check would "
+        "pass vacuously. Follow the rename."
+    )
+    offenders: list[str] = []
+    for name, node in _loop_surface_functions().items():
+        stmts = _body_without_docstring(node)
+        src = "\n".join(ast.unparse(s) for s in stmts)
+        used = {
+            n.id for s in stmts for n in ast.walk(s)
+            if isinstance(n, ast.Name) and n.id in aliases
+        }
+        if used:
+            offenders.append(f"{name}() references {sorted(used)}")
+        for pat in patterns:
+            if re.search(pat, src):
+                offenders.append(f"{name}() matches {pat!r}")
+    return offenders
+
+
 # Both surfaces that can hold a listener/implant. The secret sweep runs over EVERY read route
 # under these, enumerated from the live router — not a hard-coded list of today's four.
 _EXPORT_PREFIXES = ("/api/obfuscation", "/api/sliver")
@@ -242,6 +332,36 @@ def test_no_orchestrator_or_agent_path_to_obfuscation() -> None:
                 f"{name} must not expose {attr!r} — that is an agent path to a covert channel"
             )
     print(f"  {len(scanned)} modules scanned: ZERO orchestrator/agent/loop path to the tunnel: PASS")
+
+
+def test_the_main_py_allow_list_stops_at_the_route_functions() -> None:
+    """main.py may name this module in its ROUTES — and nowhere near the loop endpoint.
+
+    This is the narrowing the whole-tree scan cannot do. main.py is allow-listed wholesale
+    above (the decoupling rule put the routes there), but main.py also holds
+    ``import orchestrator`` and ``POST /sessions/{id}/loop/propose``. A covert channel wired
+    into the agent loop *from inside the allow-listed file* would otherwise be invisible to
+    every check in this suite.
+    """
+    surface = _loop_surface_functions()
+    # ANTI-VACUITY: the closure must actually contain the loop endpoint. If the endpoint is
+    # renamed out of the pattern, this fails loudly instead of scanning nothing.
+    assert "loop_propose" in surface, (
+        f"the loop endpoint is not in the scanned surface — got {sorted(surface)}. Renamed? "
+        "Widen _LOOP_SURFACE_RE; do not let this check go quiet."
+    )
+    assert len(surface) >= 2, sorted(surface)
+
+    offenders = _loop_surface_offenders("obfuscation", _REFERENCE_PATTERNS)
+    assert not offenders, (
+        "*** THE DNS TUNNEL IS WIRED INTO THE AGENT LOOP *** — main.py is allow-listed for its "
+        f"ROUTE functions only, never for the loop/propose/orchestrator surface: {offenders}. "
+        "A covert channel an agent can raise is an autonomous covert channel."
+    )
+    print(
+        f"  main.py's allow-list stops at the routes: {len(surface)} loop-surface functions, "
+        "none of which can reach the tunnel: PASS"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -647,6 +767,7 @@ def test_http_routes_add_no_capability_and_stay_human_only() -> None:
 
 if __name__ == "__main__":
     test_no_orchestrator_or_agent_path_to_obfuscation()
+    test_the_main_py_allow_list_stops_at_the_route_functions()
     test_listener_lifecycle_is_human_only_and_carries_no_gate_fields()
     test_client_oneliner_is_pure_and_no_delivery_primitive_exists()
     test_zone_and_tunnel_net_survive_target_substitution()

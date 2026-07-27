@@ -308,30 +308,6 @@ def test_report_opsec_summary_is_opt_in() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 6c. every curated OPSEC note passes the honesty guard, over the whole catalog
-# --------------------------------------------------------------------------- #
-def test_every_curated_opsec_note_carries_the_honesty_marker() -> None:
-    """Every C.OPSEC entry passes the guard, and every persist_* (#3) spec has one (#4 backfill)."""
-    for key, note in C.OPSEC.items():
-        opsec = {
-            "grounded": True,
-            "ai_suggested": False,
-            "loud_because": note.loud_because,
-            "quieter": list(note.quieter),
-            "still_recorded": note.still_recorded,
-            "tradeoff": note.tradeoff,
-        }
-        R.assert_opsec_is_separate(opsec, f"OPSEC note {key!r}")
-    print(f"  all {len(C.OPSEC)} curated OPSEC notes carry the honesty marker: PASS")
-
-    persist_specs = [k for k in C.SPECS if k.startswith("persist_")]
-    assert persist_specs, "expected #3 persistence specs"
-    missing = [k for k in persist_specs if k not in C.OPSEC]
-    assert not missing, f"persistence specs with no OPSEC note (backfill incomplete): {missing}"
-    print(f"  all {len(persist_specs)} persistence specs carry an OPSEC note: PASS")
-
-
-# --------------------------------------------------------------------------- #
 # 7. knowledge consistency (offline half of pipeline/detection_sources.py)
 # --------------------------------------------------------------------------- #
 def test_knowledge_is_internally_consistent() -> None:
@@ -362,6 +338,5 @@ if __name__ == "__main__":
     test_report_detection_sections()
     test_grounded_opsec_channel()
     test_report_opsec_summary_is_opt_in()
-    test_every_curated_opsec_note_carries_the_honesty_marker()
     test_knowledge_is_internally_consistent()
     print("ALL detection-footprint tests pass")

@@ -298,6 +298,13 @@ def test_every_curated_opsec_note_carries_the_honesty_marker() -> None:
         )
     print(f"  all {len(C.OPSEC)} curated OPSEC notes carry still_recorded + pass the guard: PASS")
 
+    # #4 backfill completeness: every #3 persistence (TA0003) spec must have a note.
+    persist_specs = [k for k in C.SPECS if k.startswith("persist_")]
+    assert persist_specs, "expected #3 persistence specs"
+    missing = [k for k in persist_specs if k not in C.OPSEC]
+    assert not missing, f"persistence specs with no OPSEC note (backfill incomplete): {missing}"
+    print(f"  all {len(persist_specs)} persistence specs carry an OPSEC note: PASS")
+
 
 def test_opsec_guard_allows_prescriptive_evasion_with_honesty() -> None:
     """New contract (build #4, D-guard): prescriptive evasion — including in-process

@@ -82,20 +82,25 @@ class _Spy:
     project, so there is no monkeypatch fixture to lean on.
     """
 
-    def __init__(self, *, up=True, docker_missing=False, returncode=0):
+    def __init__(self, *, up=True, docker_missing=False, returncode=0, isolated=True):
         self.up = up
         self.docker_missing = docker_missing
         self.returncode = returncode
+        self.isolated = isolated
         self.popen_argv: list[str] | None = None
         self.run_argv: list[str] | None = None
         self.procs: list[_FakeProc] = []
         self.saved: list = []
+        # Loot directory names actually created — asserted EMPTY for lab builds, because the
+        # isolated lab sandbox has no /loot mount and must not mkdir a host directory.
+        self.loot_calls: list[str] = []
         self._orig = (
             S._container_running,
             S.subprocess.Popen,
             S.subprocess.run,
             S.runstore.save_run,
             S.loot.ensure,
+            EX.assert_isolation_proven,
         )
 
     def __enter__(self):
@@ -113,11 +118,22 @@ class _Spy:
             self.run_argv = argv
             return _FakeCompleted(argv, returncode=self.returncode, stdout="implant built")
 
+        def fake_ensure(name):
+            self.loot_calls.append(name)
+            return f"/loot/{name}"
+
+        def fake_isolation():
+            if not self.isolated:
+                from cockpit.sandbox import SandboxError
+
+                raise SandboxError("sandbox is attached to non-internal network(s)")
+
         S._container_running = lambda name: self.up
         S.subprocess.Popen = fake_popen
         S.subprocess.run = fake_run
         S.runstore.save_run = lambda rec: self.saved.append(rec)
-        S.loot.ensure = lambda name: f"/loot/{name}"
+        S.loot.ensure = fake_ensure
+        EX.assert_isolation_proven = fake_isolation
         return self
 
     def __exit__(self, *exc):
@@ -127,6 +143,7 @@ class _Spy:
             S.subprocess.run,
             S.runstore.save_run,
             S.loot.ensure,
+            EX.assert_isolation_proven,
         ) = self._orig
         S.reset()
         return False
@@ -309,6 +326,9 @@ def test_generate_uses_the_mode_container_and_records_a_run() -> None:
             save_path = argv[argv.index("--save") + 1]
             assert save_path.startswith(f"/loot/{eng.engagement_id}/"), save_path
             assert save_path == implant.artifact_path, implant.artifact_path
+            assert spy.loot_calls == [eng.engagement_id], (
+                f"an engagement build lands in ITS OWN loot directory, got {spy.loot_calls}"
+            )
             assert implant.run_id in save_path, "the artifact is named for its run (auditable)"
             # <listener> still verbatim in what actually ran.
             assert "<listener>" in argv and "scanme.nmap.org" == implant.target
@@ -331,6 +351,65 @@ def test_generate_uses_the_mode_container_and_records_a_run() -> None:
     finally:
         restore()
     print("  generate execs the MODE container, saves to loot, records the run: PASS")
+
+
+def test_lab_mode_generate_lands_outside_the_loot_tree() -> None:
+    """A LAB build execs the ISOLATED sandbox, which deliberately has NO /loot mount.
+
+    Pinned because getting this wrong is silent: the isolated lab sandbox has no loot
+    bind-mount (loot.py, "the one that deliberately does NOT"), so a ``--save /loot/…`` there
+    would fail every lab build AND mkdir a host directory nothing could ever populate. Lab
+    generation is kept WORKING rather than refused — the lab is the rehearsal surface, and
+    refusing it would push an operator's first implant build onto a real engagement — at the
+    cost that a lab artifact is container-local and not durable, like every other lab file.
+    """
+    with _Spy() as spy:
+        req = _req(engagement_id=None, target=config.LAB_TARGET_HOST)
+        assert S.validate_generate(req) is None, "an approved+acked lab build must clear"
+        implant = S.generate_implant(req)
+
+        argv = spy.run_argv
+        assert argv[:3] == ["docker", "exec", config.SANDBOX_CONTAINER], argv[:3]
+        assert config.ENGAGE_SANDBOX_CONTAINER not in argv, "a lab build must NOT reach engagement"
+        assert config.KALI_OPEN_CONTAINER not in argv, "a lab build must NOT reach the open box"
+
+        # The artifact is a BARE filename -> the image's own working directory.
+        save_path = argv[argv.index("--save") + 1]
+        assert save_path == f"implant-{implant.run_id}.exe", save_path
+        assert "/loot" not in " ".join(argv), (
+            "the isolated lab sandbox has no /loot mount — a /loot path would fail every build"
+        )
+        assert not spy.loot_calls, (
+            f"a lab build must NOT create a host loot directory, created: {spy.loot_calls}"
+        )
+        assert implant.mode == "lab" and implant.artifact_path == save_path
+        assert implant.container == config.SANDBOX_CONTAINER
+        assert "<listener>" in argv, "the listener passes through in lab mode too"
+
+        rec = spy.saved[-1]
+        assert rec.command == "sliver-generate" and rec.mode == "lab", rec
+        assert rec.target == config.LAB_TARGET_HOST, rec.target
+
+    # A lab build is still a LAB command: the isolation gate is the lab's real bound.
+    with _Spy(isolated=False) as spy:
+        req = _req(engagement_id=None, target=config.LAB_TARGET_HOST)
+        rejected = S.validate_generate(req)
+        assert rejected is not None and rejected.gate == "sandbox", rejected
+        raised = False
+        try:
+            S.generate_implant(req)
+        except SliverRefused as exc:
+            raised = True
+            assert exc.gate == "sandbox", exc.gate
+        assert raised, "a non-isolated lab sandbox MUST refuse to build an implant"
+        assert spy.run_argv is None and not spy.saved, "nothing runs when isolation fails"
+
+    # And the lab target-lock still applies: an off-lab target is refused.
+    with _Spy():
+        rejected = S.validate_generate(_req(engagement_id=None, target="evil.com"))
+        assert rejected is not None and rejected.gate == "target", rejected
+        assert "not the lab" in rejected.reason, rejected.reason
+    print("  lab build execs the isolated box, writes outside /loot, keeps its gates: PASS")
 
 
 def test_generate_reports_a_failed_build_without_raising() -> None:
@@ -542,6 +621,7 @@ if __name__ == "__main__":
     test_implant_fields_are_bounded_and_carry_no_container()
     test_generate_is_gated_and_scope_checked()
     test_generate_uses_the_mode_container_and_records_a_run()
+    test_lab_mode_generate_lands_outside_the_loot_tree()
     test_generate_reports_a_failed_build_without_raising()
     test_generate_refuses_when_docker_is_missing()
     test_server_lifecycle_records_a_run()

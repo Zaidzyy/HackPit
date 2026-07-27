@@ -128,6 +128,9 @@ echo "== Phase-4 pivot/tunnels (human-only lifecycle / pure rewrite-before-appro
 echo "== Phase-4 exam report templates (proof-flag capture / per-host table / CVSS 3.1 / template select) =="
 "$PY" test_report_templates.py
 
+echo "== Sliver C2 containment (human-only server lifecycle / GATED implant gen / <listener> verbatim) =="
+"$PY" test_sliver.py
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

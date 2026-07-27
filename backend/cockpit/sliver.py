@@ -55,8 +55,10 @@ CONTAINMENT, the rest of it:
       server) — never a request field. Neither request model has a container/sandbox field.
     * ``os`` / ``arch`` / ``format`` are validated against a FIXED SET, so nothing
       caller-supplied is interpolated into argv except the operator's own listener string.
-    * The artifact path is SERVER-CHOSEN: the run's loot directory plus a run-id-derived
-      filename. A caller cannot pick where the file lands.
+    * The artifact path is SERVER-CHOSEN — a run-id-derived filename placed by
+      ``loot.workdir_for`` (the engagement's loot tree in ENGAGEMENT mode; the container's
+      own default directory in LAB, which has no loot mount by design). A caller cannot
+      pick where the file lands.
     * Every start, stop and generate is recorded via ``runstore.save_run``.
     * :func:`_implant_argv` is PURE — argv construction, no execution, no I/O — so the UI
       can preview exactly what a build would run without running it.
@@ -231,7 +233,11 @@ class Implant(BaseModel):
     target: str
     mode: str = Field(description="lab | engagement — whichever the gates resolved.")
     container: str
-    artifact_path: str = Field(description="Container path of the artifact (in the loot dir).")
+    artifact_path: str = Field(
+        description="Where the artifact was written INSIDE the container: an absolute /loot "
+        "path in ENGAGEMENT mode, a bare filename (the image's default working directory) in "
+        "LAB, which has no loot mount by design and whose artifacts are not durable."
+    )
     argv: list[str] = Field(description="The exact argv that ran — auditable, never a shell.")
     exit_code: int | None = None
     detail: str = ""
@@ -453,29 +459,49 @@ def validate_generate(req: ImplantRequest) -> ExecRejected | None:
     return executor.validate_request(_gate_request(req))
 
 
-def _artifact_path(req: ImplantRequest, run_id: str) -> str:
-    """The SERVER-CHOSEN container path for this build's artifact.
+def _artifact_path(req: ImplantRequest, run_id: str, mode: str) -> str:
+    """The SERVER-CHOSEN output path for this build's artifact. Never caller-supplied.
 
-    Never caller-supplied: the run's loot directory (the engagement's, or the shared human
-    directory when there is no engagement) plus a run-id-derived filename, so an artifact is
-    always traceable to the record that authorised it.
+    The filename is always ``implant-<run_id>.<ext>``, so an artifact is traceable to the
+    record that authorised it. WHERE it lands is decided by :func:`loot.workdir_for` — the
+    same helper ``executor.iter_run`` uses to pick a run's working directory — so this
+    module cannot disagree with the rest of the cockpit about where loot goes:
+
+    ENGAGEMENT -> ``/loot/<engagement_id>/implant-….exe``. The engage sandbox bind-mounts
+        the host's engagements directory, so the artifact is durable and lands in the
+        engagement's own loot tree.
+
+    LAB -> a BARE RELATIVE FILENAME, i.e. the image's default working directory INSIDE the
+        container. The isolated lab sandbox deliberately has NO ``/loot`` mount (see
+        loot.py's "which sandboxes get it — and the one that deliberately does not"): giving
+        the egress-less box a writable host directory would widen its reach for no gain.
+        Writing ``--save /loot/…`` there would have failed every lab build outright, and
+        would have mkdir'd a host directory nothing could ever populate.
+
+        Lab generation is kept WORKING rather than refused on purpose: the lab is the
+        rehearsal surface. Refusing it would mean an operator's first-ever implant build
+        happens against a real engagement, which is the outcome the lab exists to prevent.
+        The trade-off is that a LAB artifact is NOT durable — it lives and dies with the
+        container, exactly like every other lab-mode file. That is the correct posture for a
+        practice beacon and matches what loot.py already says about lab output.
+
+    ``workdir_for`` swallows a bad loot name / unwritable directory and returns None, so a
+    loot problem degrades to the container-local path instead of dropping a build the human
+    already approved — the same "a loot directory is a convenience, never a gate" rule the
+    one-shot path follows.
     """
-    name = req.engagement_id or loot.KALI_DIRNAME
-    try:
-        base = loot.ensure(name)
-    except (loot.LootError, OSError) as exc:
-        raise SliverRefused(f"cannot prepare the loot directory: {exc}", gate="loot")
     ext = _FORMAT_EXT.get(req.fmt, "bin")
-    return f"{base}/implant-{run_id}.{ext}"
+    name = f"implant-{run_id}.{ext}"
+    workdir = loot.workdir_for(mode, req.engagement_id)
+    return f"{workdir}/{name}" if workdir else name
 
 
 def generate_implant(req: ImplantRequest) -> Implant:
     """Gate, then build ONE implant artifact in the mode's sandbox. Registers and returns it.
 
-    Raises :class:`SliverRefused` — having run NOTHING — if any gate refuses, if the loot
-    directory cannot be prepared, or if docker is unavailable. A build that RUNS but fails
-    (non-zero exit) is NOT a refusal: it is recorded with ``status='failed'`` and returned,
-    because a tool failure is not a safety event.
+    Raises :class:`SliverRefused` — having run NOTHING — if any gate refuses or if docker is
+    unavailable. A build that RUNS but fails (non-zero exit) is NOT a refusal: it is recorded
+    with ``status='failed'`` and returned, because a tool failure is not a safety event.
 
     This GENERATES ONLY. Delivering the artifact to a host and running it are separate,
     separately-approved concerns and are deferred.
@@ -491,7 +517,7 @@ def generate_implant(req: ImplantRequest) -> Implant:
         raise SliverRefused(str(exc), gate="engagement")
 
     run_id = uuid.uuid4().hex[:12]
-    artifact = _artifact_path(req, run_id)
+    artifact = _artifact_path(req, run_id, resolved.mode)
     started_at = _now()
     argv = [
         "docker", "exec", resolved.container,

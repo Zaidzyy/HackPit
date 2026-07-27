@@ -61,6 +61,7 @@ from cockpit import winprofiles as cockpit_winprofiles  # noqa: E402  (Windows t
 # any orchestrator/loop module: see the "Sliver C2 + DNS-tunnel obfuscation" section below.
 from cockpit import sliver as cockpit_sliver  # noqa: E402  (Sliver C2 — human-only + gated gen)
 from cockpit import obfuscation as cockpit_obfuscation  # noqa: E402  (DNS tunnel — human-only)
+from evasion import engine as evasion_engine  # noqa: E402  (generate-only artifact producer)
 import state as engagement_state  # noqa: E402
 from state import store as state_store  # noqa: E402
 from state import tasks as state_tasks  # noqa: E402
@@ -1726,3 +1727,74 @@ def obfuscation_stop_listener(lid: str) -> dict[str, Any]:
     except cockpit_obfuscation.ObfuscationRefused as exc:
         status = 404 if exc.gate == "unknown" else 409
         raise HTTPException(status_code=status, detail={"gate": exc.gate, "reason": exc.reason})
+
+
+# --------------------------------------------------------------------------- #
+# The bespoke evasion engine (build #4, item C)
+# --------------------------------------------------------------------------- #
+# GENERATE-ONLY. These two routes build an artifact and stop. There is deliberately NO route
+# that delivers or executes one — that is a separate, separately-approved concern and it is
+# not built. The orchestrator has no path here; a human calls these or nothing does.
+#
+# FORCED HONESTY: `EvasionResult` carries the blue-team footprint and the OPSEC note in the
+# SAME object as the artifact path, and both fields are required on the model. The UI cannot
+# render the artifact without also receiving what a defender would see — there is no flag,
+# query parameter or response shape that returns one without the other.
+def _evasion_http_error(exc: "evasion_engine.EvasionRefused") -> HTTPException:
+    """A gate refusal is 403 naming the gate; an inactive engagement is 409."""
+    status = 409 if exc.gate in {"engagement", "sandbox", "unavailable"} else 403
+    return HTTPException(status_code=status, detail={"gate": exc.gate, "reason": exc.reason})
+
+
+@app.get("/api/evasion/techniques")
+def evasion_techniques() -> dict[str, Any]:
+    """The techniques this engine can emit, each with the detection spec that describes it.
+
+    Read-only. Exposed so the panel can never offer a technique whose blue-view footprint
+    would not resolve at generate time.
+    """
+    return {"techniques": [{"technique": t, "detection_spec": k}
+                           for t, k in sorted(evasion_engine.TECHNIQUES.items())]}
+
+
+@app.post("/api/evasion/preview")
+def evasion_preview(req: evasion_engine.EvasionRequest = Body(...)) -> dict[str, Any]:
+    """PURE PREVIEW: the gate verdict and the honest footprint, building NOTHING.
+
+    Mirrors the Sliver preview route so the red-confirm is honest: the operator sees which
+    gate would refuse, AND the defender's view of what they are about to build, before they
+    approve it. A refusal is DATA (200 with ``rejected``), not an error.
+    """
+    rejected = evasion_engine.validate_build(req)
+    try:
+        footprint, opsec = evasion_engine._honest_footprint(req.techniques)
+    except evasion_engine.EvasionError as exc:
+        raise HTTPException(status_code=409, detail={"gate": "honesty", "reason": str(exc)})
+    return {
+        "rejected": None if rejected is None else rejected.model_dump(),
+        "footprint": footprint,
+        "opsec_note": opsec,
+    }
+
+
+@app.post("/api/evasion/generate", response_model=evasion_engine.EvasionResult)
+def evasion_generate(
+    req: evasion_engine.EvasionRequest = Body(...),
+) -> evasion_engine.EvasionResult:
+    """Build ONE evasion artifact — a GATED command that happens to produce a file.
+
+    Runs the REAL ``executor.validate_request`` first: 403 naming the gate on any refusal
+    (target/scope, approval, danger red-confirm, engagement, isolation) with NOTHING built.
+    A generator that runs and FAILS is not a refusal — it returns 200 with a non-zero
+    ``exit_code``, because a tool failure is not a safety event.
+
+    409 with ``gate='honesty'`` if the engine cannot produce the blue-view footprint for the
+    requested technique. That is the forced-honesty contract failing closed: no footprint,
+    no artifact.
+    """
+    try:
+        return evasion_engine.generate(req)
+    except evasion_engine.EvasionRefused as exc:
+        raise _evasion_http_error(exc)
+    except evasion_engine.EvasionError as exc:
+        raise HTTPException(status_code=409, detail={"gate": "honesty", "reason": str(exc)})

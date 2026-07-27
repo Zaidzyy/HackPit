@@ -1572,6 +1572,72 @@ export const generateImplant = (body: ImplantBody, signal?: AbortSignal) =>
 export const listImplants = (signal?: AbortSignal) =>
   getJSON<Implant[]>("/api/sliver/implants", signal);
 
+// --- the bespoke evasion engine (see backend/evasion/engine.py) ---
+// GENERATE-ONLY: there is no deploy or execute call here because the backend exposes no such
+// route. `footprint` and `opsec_note` are REQUIRED on the result — the UI cannot render an
+// artifact without also rendering what a defender would see. Do not make them optional.
+
+/** The blue-team view of an artifact. Never hidden, never collapsed away by default. */
+export type EvasionFootprint = {
+  activity: string;
+  blue_view: string;
+  why: string;
+  telemetry: string[];
+  loudness: { level: string; score: number; meaning: string; why: string };
+  techniques: { id: string; name: string; tactics: string[] }[];
+  spec_key?: string;
+};
+
+/** The operator-facing half. `still_recorded` is mandatory — that is the whole contract. */
+export type EvasionOpsecNote = {
+  loud_because: string;
+  quieter: string[];
+  still_recorded: string;
+  tradeoff: string;
+};
+
+export type EvasionResult = {
+  run_id: string;
+  artifact_path: string;
+  techniques: string[];
+  mode: string;
+  exit_code: number | null;
+  stdout: string;
+  stderr: string;
+  footprint: EvasionFootprint;
+  opsec_note: EvasionOpsecNote;
+  stub: string;
+};
+
+export type EvasionBody = {
+  payload_path: string;
+  target_os: string;
+  techniques: string[];
+  target?: string;
+  engagement_id?: string | null;
+  approved: boolean;
+  dangerous_ack: boolean;
+};
+
+/** Pure preview: which gate would refuse, plus the honest footprint — builds nothing. */
+export type EvasionPreview = {
+  rejected: { reason: string; gate: string; dangerous_flags?: string[] } | null;
+  footprint: EvasionFootprint;
+  opsec_note: EvasionOpsecNote;
+};
+
+export const listEvasionTechniques = (signal?: AbortSignal) =>
+  getJSON<{ techniques: { technique: string; detection_spec: string }[] }>(
+    "/api/evasion/techniques",
+    signal
+  );
+
+export const previewEvasion = (body: EvasionBody, signal?: AbortSignal) =>
+  postJSON<EvasionPreview>("/api/evasion/preview", body, signal);
+
+export const generateEvasion = (body: EvasionBody, signal?: AbortSignal) =>
+  postJSON<EvasionResult>("/api/evasion/generate", body, signal);
+
 export type ObfuscationStatus = {
   container: string;
   up: boolean;

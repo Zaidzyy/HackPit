@@ -75,6 +75,25 @@ def flags_in_args(args: list[str]) -> set[str]:
 # a false negative is a missed warning (the HUMAN approval is the real gate).
 # --------------------------------------------------------------------------- #
 
+def _tool_name(command: str) -> str:
+    """The normalised binary name every set below is matched against.
+
+    ONE normaliser for the whole heuristic. It used to be two: the AD sets stripped
+    ``.py``/``.exe``/``.ps1`` and the ``impacket-`` prefix, while the interpreter/exec/framework
+    sets matched a raw ``basename().lower()``. That asymmetry meant ``powershell.exe``,
+    ``python.exe``, ``nc.exe``, ``msfvenom.exe`` and even ``sliver-client.exe`` produced NO
+    reason at all — and ``.exe`` is the ordinary spelling on the WinRM transport, where the
+    same heuristic is the red-confirm. Normalising once, here, is the fix.
+
+    impacket ships the same script three ways (``secretsdump.py``, ``impacket-secretsdump``,
+    ``secretsdump``); all three collapse to the same name.
+    """
+    base = os.path.basename(str(command)).lower()
+    for suffix in (".py", ".exe", ".ps1"):
+        base = base.removesuffix(suffix)
+    return base.removeprefix("impacket-")
+
+
 # Language interpreters — the binary itself is the tell (it can run arbitrary code).
 _INTERPRETERS = frozenset({
     "python", "python2", "python3", "bash", "sh", "dash", "zsh", "ksh", "fish",
@@ -86,6 +105,10 @@ _EXEC_TOOLS = frozenset({"nc", "ncat", "netcat", "socat", "telnet", "rlwrap"})
 # Exploitation frameworks / payload generators.
 _FRAMEWORKS = frozenset({
     "msfconsole", "msfvenom", "msfcli", "meterpreter", "empire", "sliver",
+    # The aliases the catalog lists for msfconsole. An alias is a name the operator plausibly
+    # types as argv[0], so it has to carry the same verdict as the binary — an alias that does
+    # not match is precisely how `sliver` missed `sliver-client`.
+    "msf", "metasploit",
     # The Sliver binaries as they are actually invoked. `sliver` alone never matched
     # `sliver-client generate ...`, so an implant build would not have tripped the
     # red-confirm — the one gate that stops a beacon being built on a plain approval.
@@ -96,10 +119,57 @@ _FRAMEWORKS = frozenset({
     # plain approval with no red-confirm. They generate a runnable payload, which is exactly
     # what this set exists to flag. `scarecrow` is matched lowercased, as every entry is.
     "donut", "scarecrow",
-    "covenant", "cobaltstrike", "beacon", "chisel", "ligolo",
+    # Same class again: Invoke-Obfuscation takes a script and emits a runnable, obfuscated
+    # payload. It sat in the catalog (evasion) producing zero reasons while donut and ScareCrow
+    # — which do the identical job — both tripped the confirm.
+    "invoke-obfuscation",
+    "covenant", "cobaltstrike", "beacon",
 })
+# Covert channels and pivots — a tunnel is a C2 path and an exfil path in one, and it moves
+# arbitrary traffic to somewhere the operator has NOT been gated against. `chisel` and the
+# ligolo binaries used to live in _FRAMEWORKS with a "payload generator" label that was simply
+# untrue of them; the honest reason matters because the operator reads it.
+#
+# NOTE the ligolo entry: the set said `ligolo`, but the binary this repo actually runs is
+# `ligolo-proxy` (cockpit/tunnels.py builds `["ligolo-proxy", "-selfcert", ...]`). Exact-basename
+# matching meant the entry could never fire — the `sliver` vs `sliver-client` bug, repeated in a
+# set entry added after that bug was fixed. A name that can never match is worse than no entry:
+# it reads as coverage.
+_TUNNEL_TOOLS = frozenset({
+    "chisel", "ligolo-proxy", "ligolo-agent", "ligolo-ng",
+    # DNS tunnels — a full C2/exfil channel that survives egress filtering.
+    "dnscat2", "dnscat2-client", "dnscat2-server", "iodine", "iodined",
+    "ptunnel", "icmpsh", "gost",
+})
+# Tools whose entire purpose is turning a vulnerability into command execution or an interactive
+# shell ON the target. `weevely` also GENERATES the webshell it then drives, so it is a payload
+# generator and a shell client in one binary.
+_RCE_TOOLS = frozenset({
+    "commix", "sstimap", "tplmap", "weevely", "weevely3",
+})
+# Installs something that will execute a payload later, without the operator present.
+_PERSISTENCE_TOOLS = frozenset({"sharpersist"})
 # Flags that mean "run this inline code / command".
 _EVAL_FLAGS = frozenset({"-c", "-e", "--command", "--eval", "--exec", "-code"})
+# Argument shapes that turn an otherwise-clean tool into OS command execution or a file write
+# on the TARGET. Deliberately specific: `sqlmap --dbs` must stay clean (it is the ordinary
+# enumeration path and is regression-locked in test_cockpit.py) while `sqlmap --os-shell` — the
+# same binary, dropping to a shell on the database host — must not.
+_RCE_ARG_MARKERS = (
+    "--os-shell", "--os-cmd", "--os-pwn", "--os-bof", "--os-smbrelay",
+    "--file-write", "--file-dest", "xp_cmdshell",
+)
+# Per-tool flags that mean "run this command on the remote host". Keyed by tool because the
+# flag letters are not distinctive on their own: `ldapsearch -x` is simple authentication and
+# must stay clean (regression-locked in test_adorch_safety.py), while `netexec -x` is remote
+# command execution. Matched case-sensitively — netexec's -x (cmd) and -X (powershell) are
+# different flags.
+_TOOL_EXEC_FLAGS: dict[str, frozenset[str]] = {
+    "netexec": frozenset({"-x", "-X", "--exec-method"}),
+    "nxc": frozenset({"-x", "-X", "--exec-method"}),
+    "crackmapexec": frozenset({"-x", "-X", "--exec-method"}),
+    "cme": frozenset({"-x", "-X", "--exec-method"}),
+}
 # Substrings anywhere in the args that signal a reverse shell / code exec shape.
 _SHELL_MARKERS = (
     "/dev/tcp/", "/dev/udp/", "bash -i", "sh -i", "mkfifo", "/inet/tcp/",
@@ -122,14 +192,8 @@ _SHELL_MARKERS = (
 # `nxc --sam` (credential dump) trips, because a confirm that fires on everything is a confirm
 # the operator learns to click through — confirm fatigue is its own safety failure.
 # --------------------------------------------------------------------------- #
-def _ad_tool(command: str) -> str:
-    """Normalise an AD tool name. impacket ships the same script three ways
-    (``secretsdump.py``, ``impacket-secretsdump``, ``secretsdump``)."""
-    base = os.path.basename(str(command)).lower()
-    for suffix in (".py", ".exe", ".ps1"):
-        base = base.removesuffix(suffix)
-    return base.removeprefix("impacket-")
-
+# (the name normaliser these sets are matched against is :func:`_tool_name`, defined above —
+# it is now shared with the interpreter/exec/framework sets rather than being AD-only.)
 
 # Always credential theft — replicating, dumping or parsing secrets.
 _AD_CRED_DUMP = frozenset({
@@ -148,6 +212,10 @@ _AD_PS_WRITE = frozenset({
 _AD_REMOTE_EXEC = frozenset({
     "psexec", "wmiexec", "smbexec", "atexec", "dcomexec", "evil-winrm", "winrs",
     "smbclient-ng", "wmipersist",
+    # impacket's MSSQL client is the sibling of the four above: it authenticates to a database
+    # host and its catalogued path from there is `enable_xp_cmdshell`, i.e. OS command execution
+    # on that host. It produced no reason at all while psexec/wmiexec/smbexec all did.
+    "mssqlclient", "enable_xp_cmdshell",
 })
 # Always mutates the directory, mints credentials, or coerces/relays authentication.
 _AD_DIR_WRITE = frozenset({
@@ -174,7 +242,7 @@ _AD_WRITE_SUBCOMMANDS: dict[str, tuple[str, ...]] = {
 
 def _ad_abuse_reasons(command: str, args: list[str]) -> list[str]:
     """Reasons an AD-abuse command must demand the explicit confirm (empty if it need not)."""
-    base = _ad_tool(command)
+    base = _tool_name(command)
     blob = " ".join(str(a) for a in args).lower()
     reasons: list[str] = []
 
@@ -207,10 +275,19 @@ def dangerous_command_heuristic(command: str, args: list[str]) -> list[str]:
     ``dangerous_ack`` before running (it NEVER blocks outright). Over-inclusive best-effort
     — the human approval is the real gate, so gaps are expected. Flags: language interpreters
     (esp. with an eval flag), reverse-shell/exec tools (esp. nc/ncat/socat -e/-c), exploitation
-    frameworks, and reverse-shell/code-exec shapes anywhere in the args.
+    frameworks and payload generators, covert tunnels, vulnerability-to-shell tools,
+    persistence installers, AD abuse shapes, per-tool remote-exec flags, and
+    reverse-shell/code-exec shapes anywhere in the args.
+
+    The binary name is normalised ONCE, by :func:`_tool_name`, so a path prefix, a case
+    difference and a ``.py``/``.exe``/``.ps1`` suffix all resolve to the same entry. Every set
+    here is matched against that normalised name. The expected verdict for every tool in the
+    catalog is pinned by the catalog's own safety tests — a tool added there without an explicit
+    classification fails the suite, which is what stops this drifting again.
     """
     reasons: list[str] = []
-    cmd = os.path.basename(str(command)).lower()  # handles /usr/bin/python3, ./x
+    # /usr/bin/python3, ./x, powershell.exe, secretsdump.py — one normaliser for every set.
+    cmd = _tool_name(command)
     flags = flags_in_args(args)
     eval_flags = sorted(flags & _EVAL_FLAGS)
 
@@ -224,6 +301,17 @@ def dangerous_command_heuristic(command: str, args: list[str]) -> list[str]:
             reasons.append(f"{cmd}: raw network tool — can carry a reverse shell")
     if cmd in _FRAMEWORKS:
         reasons.append(f"{cmd}: exploitation framework / payload generator")
+    if cmd in _TUNNEL_TOOLS:
+        reasons.append(f"{cmd}: covert tunnel / C2 channel — carries arbitrary traffic")
+    if cmd in _RCE_TOOLS:
+        reasons.append(f"{cmd}: turns a vulnerability into command execution / a shell")
+    if cmd in _PERSISTENCE_TOOLS:
+        reasons.append(f"{cmd}: installs persistence that executes a payload")
+
+    # Argument shapes that turn an otherwise-clean tool into remote command execution.
+    exec_flags = sorted(flags & _TOOL_EXEC_FLAGS.get(cmd, frozenset()))
+    if exec_flags:
+        reasons.append(f"{cmd} {'/'.join(exec_flags)}: remote command execution on the target")
 
     # AD ABUSE — credential replication, remote exec on a domain host, directory writes.
     # Additive: it can only ever ADD reasons, so every command flagged before is still flagged.
@@ -234,6 +322,9 @@ def dangerous_command_heuristic(command: str, args: list[str]) -> list[str]:
     for marker in _SHELL_MARKERS:
         if marker in blob:
             reasons.append(f"reverse-shell / code-exec pattern: {marker!r}")
+    for marker in _RCE_ARG_MARKERS:
+        if marker in blob:
+            reasons.append(f"argument requests OS command execution / file write: {marker!r}")
 
     # de-dup, preserve order
     seen: set[str] = set()

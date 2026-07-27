@@ -25,6 +25,7 @@ import tokenize
 from pathlib import Path
 
 from arsenal import loader, planner
+from cockpit import allowlist
 
 _PKG = Path(__file__).parent / "arsenal"
 _SOURCES = sorted(_PKG.glob("*.py"))
@@ -141,12 +142,277 @@ def test_arsenal_command_still_clears_every_gate() -> None:
         "a catalogued tool pointed off-target must still be refused at the target gate"
     )
 
-    # a DANGEROUS catalogued invocation still needs the explicit red-confirm
+    # A DANGEROUS CATALOGUED invocation still needs the explicit red-confirm.
+    #
+    # This used to read `command="python3", args=["-c", "print(1)"]` and accept
+    # `gate in ("danger", "sandbox")`. python3 is NOT in tools.json, so the claim in this
+    # function's docstring — that a catalogued invocation gets no shortcut — was never actually
+    # exercised on the danger gate, and the "sandbox" alternative meant the assertion passed
+    # even when the danger gate did not fire at all. Both are fixed: a real catalogued tool,
+    # and only "danger" is accepted. The exhaustive per-tool version is below.
+    dangerous_tool = loader.load().get("weevely")
+    assert dangerous_tool is not None, "the catalog no longer has weevely — repoint this check"
     flagged = E.validate_request(
-        ExecRequest(command="python3", args=["-c", "print(1)", _LAB], approved=True)
+        ExecRequest(command=dangerous_tool.name, args=["generate", "pw", _LAB], approved=True)
     )
-    assert flagged is not None and flagged.gate in ("danger", "sandbox")
+    assert flagged is not None and flagged.gate == "danger", (
+        "a catalogued webshell generator approved WITHOUT the red-confirm must be refused at "
+        f"the danger gate — got {getattr(flagged, 'gate', None)}"
+    )
     print("  arsenal command: approval, target and danger gates all still fire: PASS")
+
+
+# --------------------------------------------------------------------------- #
+# 2b. THE DANGER VERDICT IS PINNED FOR EVERY CATALOGUED INVOCATION
+#
+# WHY THIS EXISTS. The check above was the only place that claimed to verify "a catalogued
+# dangerous invocation demands the red-confirm", and it tested `python3`, which is not in the
+# catalog. The assertion was permanently green while EIGHT catalogued tools that generate a
+# webshell, open a DNS C2 channel, tunnel arbitrary traffic, install persistence or drop to a
+# remote OS shell — weevely, dnscat2, iodine, commix, SSTImap, mssqlclient, SharPersist,
+# Invoke-Obfuscation — produced ZERO danger reasons. A plain `approved=true` built a webshell.
+#
+# Fixing those eight closes today's gap. This closes the CLASS: every tool name, every alias and
+# every template's argv[0] in tools.json must appear in exactly ONE bucket below. Add a tool
+# without a verdict and this test fails, naming it. There is no default.
+#
+# The buckets are a judgement about what the tool DOES, not about what the heuristic currently
+# returns — write the bucket first, then make the heuristic agree with it.
+# --------------------------------------------------------------------------- #
+
+# Dangerous by binary identity alone: it generates, delivers or executes a payload, opens a
+# shell, tunnels traffic, replicates credentials, or executes code on a remote host.
+_MUST_FIRE = frozenset({
+    # payload generators / C2 frameworks
+    "donut", "ScareCrow", "Invoke-Obfuscation", "msfvenom", "msfconsole", "msf", "metasploit",
+    "Sliver", "Empire",
+    # covert tunnels — a C2 path and an exfil path in one
+    "dnscat2", "dnscat2-client", "dnscat2-server", "iodine", "iodined",
+    # vulnerability -> command execution / interactive shell on the target
+    "commix", "SSTImap", "weevely", "weevely3",
+    # persistence that will execute a payload with no operator present
+    "SharPersist", "SharPersist.exe",
+    # remote code execution on a domain host
+    "psexec", "psexec.py", "impacket-psexec", "wmiexec", "wmiexec.py", "impacket-wmiexec",
+    "smbexec", "smbexec.py", "impacket-smbexec", "evil-winrm",
+    "mssqlclient", "mssqlclient.py", "impacket-mssqlclient", "enable_xp_cmdshell",
+    # credential replication / dumping
+    "mimikatz", "mimikatz.exe",
+    "secretsdump", "secretsdump.py", "impacket-secretsdump",
+    # coerces or relays authentication
+    "ntlmrelayx", "ntlmrelayx.py", "impacket-ntlmrelayx", "responder", "Responder.py",
+})
+
+# Clean by binary identity, and clean across every template the catalog ships for it. A confirm
+# that fires on everything is one the operator learns to click through, so recon, enumeration,
+# fuzzing, offline cracking and local binary analysis must stay quiet.
+_MUST_NOT_FIRE = frozenset({
+    # recon / discovery
+    "nmap", "masscan", "rustscan", "naabu", "amass", "subfinder", "assetfinder", "theHarvester",
+    "dnsx", "httpx", "dnsrecon", "shodan", "fierce", "gotator", "regulator", "subwiz", "puredns",
+    "massdns", "dnsvalidator", "asnmap", "mapcidr", "tlsx", "csprecon",
+    # web testing
+    "ffuf", "feroxbuster", "gobuster", "nuclei", "nikto", "sqlmap", "wpscan", "dalfox",
+    "whatweb", "arjun", "paramspider", "katana", "gau", "getallurls", "waybackurls", "dirsearch",
+    "wafw00f", "testssl", "testssl.sh", "jwt_tool", "jwt-tool", "jwt_tool.py", "wfuzz",
+    "hakrawler", "sslscan", "nomore403", "crlfuzz", "getjs", "jsluice", "subjs",
+    "gf", "qsreplace", "unfurl",
+    # pipeline heads the templates use — shell builtins, not tools
+    "cat", "echo",
+    # AD / network ENUMERATION — read-only. Regression-locked in test_adorch_safety.py: a
+    # confirm here would fire on almost every AD command and stop meaning anything.
+    "netexec", "nxc", "crackmapexec", "cme", "enum4linux", "enum4linux-ng", "smbmap",
+    "ldapsearch", "ldapdomaindump", "bloodhound", "bloodhound-python",
+    # Kerberos roasting / TGT request: retrieves crackable material, cracks nothing and
+    # executes nothing — same class as hashcat below, which is also clean.
+    "GetUserSPNs", "GetUserSPNs.py", "impacket-GetUserSPNs",
+    "GetNPUsers", "GetNPUsers.py", "impacket-GetNPUsers",
+    "getTGT", "getTGT.py", "impacket-getTGT",
+    # PowerView read-side. Its WRITE cmdlets (Set-DomainUserPassword, Add-DomainGroupMember,
+    # ...) are separately covered by allowlist._AD_PS_WRITE; `. .\PowerView.ps1` dot-sources the
+    # enumeration toolkit and is not itself a payload.
+    "powerview", "PowerView.ps1", ".", "Get-DomainUser", "Find-LocalAdminAccess",
+    "Find-InterestingDomainAcl",
+    # credential attack — online guessing and OFFLINE cracking. No code runs on the target.
+    "hydra", "kerbrute", "hashcat", "john", "jtr", "john the ripper", "ssh2john",
+    # cloud posture
+    "prowler", "scoutsuite", "scout", "trivy", "kube-hunter", "s3scanner", "cloud_enum",
+    # local binary analysis — operates on a file, not a host
+    "ghidra", "analyzeHeadless", "radare2", "r2", "gdb", "strings",
+    # local exploit-DB search
+    "searchsploit", "exploitdb",
+    # host enumeration scripts
+    "linpeas", "linpeas.sh", "winpeas", "winpeas.bat", "winPEAS.exe", "winPEASany",
+    "winPEASx64", "winPEASx64.exe", "winPEASx86",
+    # OSINT / secret scanning
+    "trufflehog", "msftrecon", "github-subdomains", "gitlab-subdomains", "dorks_hunter",
+    "gitdorks_go",
+})
+
+# The bare binary is deliberately CLEAN (it has a legitimate read-only mode that must not train
+# the operator to click through) but at least one catalogued template MUST fire, because that
+# template mutates the directory or mints credentials. Both halves are asserted.
+_ARGUMENT_DEPENDENT = frozenset({"certipy", "certipy-ad", "bloodyAD", "rubeus", "Rubeus.exe"})
+
+# NOT a binary: a subcommand typed inside an interactive console (the sliver client, the Empire
+# console, mimikatz, the impacket mssql shell). These never appear as argv[0] of a docker exec.
+# Excusing them is safe ONLY because the console itself is in _MUST_FIRE — which the test below
+# asserts, so this bucket cannot become a place to hide a real binary.
+_CONSOLE_SUBCOMMANDS: dict[str, str] = {
+    "generate": "Sliver", "mtls": "Sliver",
+    "usemodule": "Empire",
+    "sekurlsa::pth": "mimikatz", "kerberos::list": "mimikatz",
+    "enum_links": "mssqlclient.py",
+}
+
+
+def _catalog_invocations() -> dict[str, set[str]]:
+    """Every name a catalogued tool can be invoked as -> the tools that own it.
+
+    Tool name, every alias, and every template's argv[0] (basename'd, so `./linpeas.sh` is
+    keyed as `linpeas.sh`). This is the universe the buckets above must cover exactly.
+    """
+    import shlex
+
+    uni: dict[str, set[str]] = {}
+    for tool in loader.load().tools:
+        names = [tool.name, *tool.aliases]
+        for tpl in tool.templates:
+            try:
+                parts = shlex.split(tpl.template, posix=True)
+            except ValueError:  # an unbalanced quote in a template is a catalog bug, not ours
+                parts = tpl.template.split()
+            if parts:
+                names.append(parts[0].rsplit("/", 1)[-1].rsplit("\\", 1)[-1])
+        for name in names:
+            uni.setdefault(name, set()).add(tool.name)
+    return uni
+
+
+def test_every_catalogued_invocation_has_a_pinned_danger_verdict() -> None:
+    """No tool may enter the catalog without an explicit danger classification."""
+    uni = _catalog_invocations()
+    buckets = {
+        "_MUST_FIRE": _MUST_FIRE,
+        "_MUST_NOT_FIRE": _MUST_NOT_FIRE,
+        "_ARGUMENT_DEPENDENT": _ARGUMENT_DEPENDENT,
+        "_CONSOLE_SUBCOMMANDS": frozenset(_CONSOLE_SUBCOMMANDS),
+    }
+    classified: set[str] = set()
+    for label, bucket in buckets.items():
+        overlap = classified & bucket
+        assert not overlap, f"{label} double-classifies {sorted(overlap)}"
+        classified |= bucket
+
+    unclassified = sorted(set(uni) - classified)
+    assert not unclassified, (
+        "these catalogued invocations have NO danger verdict: "
+        f"{unclassified}\nAdd each to _MUST_FIRE, _MUST_NOT_FIRE, _ARGUMENT_DEPENDENT or "
+        "_CONSOLE_SUBCOMMANDS in test_arsenal_safety.py. Judge what the tool DOES: if it "
+        "generates/delivers/executes a payload, opens a shell, tunnels traffic or runs code on "
+        "a remote host it belongs in _MUST_FIRE — and allowlist.py must be taught its name as "
+        "it is ACTUALLY INVOKED (this is how `sliver` missed `sliver-client`)."
+    )
+
+    stale = sorted(classified - set(uni))
+    assert not stale, (
+        f"these names are pinned but no longer in the catalog: {stale}. Remove them, so the "
+        "table cannot rot into a list of things that no longer exist."
+    )
+    print(f"  all {len(uni)} catalogued invocation names carry a pinned danger verdict: PASS")
+
+
+def test_dangerous_catalogued_tools_demand_the_red_confirm() -> None:
+    """Every _MUST_FIRE name produces a reason AND is refused at the executor's danger gate.
+
+    Asserted through validate_request, not just the heuristic — the claim is about the GATE.
+    """
+    from cockpit import executor as E
+    from cockpit.models import ExecRequest
+
+    for name in sorted(_MUST_FIRE):
+        reasons = allowlist.dangerous_command_heuristic(name, [_LAB])
+        assert reasons, (
+            f"{name!r} generates/delivers/executes a payload, opens a shell, tunnels traffic or "
+            "runs code remotely, but produces NO danger reason — the red-confirm silently does "
+            "not fire and dangerous_ack is meaningless on that path. Teach allowlist.py the "
+            "name as it is ACTUALLY INVOKED."
+        )
+        rej = E.validate_request(ExecRequest(command=name, args=[_LAB], approved=True))
+        assert rej is not None and rej.gate == "danger", (
+            f"{name!r} approved WITHOUT dangerous_ack must be refused at the danger gate — got "
+            f"{getattr(rej, 'gate', None)}"
+        )
+    # Positive control: the regression names that shipped green must be in here, so this table
+    # can never be quietly emptied back to the state that hid them.
+    for name in ("weevely", "dnscat2-client", "iodine", "commix", "SSTImap", "SharPersist",
+                 "Invoke-Obfuscation", "mssqlclient.py", "donut", "ScareCrow"):
+        assert name in _MUST_FIRE, f"{name} was dropped from _MUST_FIRE — that is the bug returning"
+    print(f"  all {len(_MUST_FIRE)} dangerous catalogued invocations are refused without the "
+          "red-confirm: PASS")
+
+
+def test_benign_catalogued_tools_stay_clean() -> None:
+    """The other half of the claim: a confirm that fires on everything means nothing."""
+    noisy = []
+    for name in sorted(_MUST_NOT_FIRE):
+        reasons = allowlist.dangerous_command_heuristic(name, [_LAB])
+        if reasons:
+            noisy.append(f"{name}: {reasons}")
+    assert not noisy, (
+        "these read-only/enumeration tools now demand a red-confirm — confirm fatigue is its "
+        f"own safety failure:\n" + "\n".join(noisy)
+    )
+    print(f"  all {len(_MUST_NOT_FIRE)} benign catalogued invocations stay clean: PASS")
+
+
+def test_argument_dependent_tools_are_clean_bare_and_flagged_when_abusive() -> None:
+    """Bare binary quiet, abusive template loud. Both halves, or the classification is a lie."""
+    import shlex
+
+    uni = _catalog_invocations()
+    for name in sorted(_ARGUMENT_DEPENDENT):
+        assert not allowlist.dangerous_command_heuristic(name, [_LAB]), (
+            f"{name!r} is pinned argument-dependent but fires on the bare binary — either move "
+            "it to _MUST_FIRE or stop flagging its read-only mode"
+        )
+        owners = uni[name]
+        fired = []
+        for tool in loader.load().tools:
+            if tool.name not in owners:
+                continue
+            for tpl in tool.templates:
+                parts = shlex.split(tpl.template, posix=True)
+                if parts and allowlist.dangerous_command_heuristic(parts[0], parts[1:]):
+                    fired.append(tpl.template)
+        assert fired, (
+            f"{name!r} is pinned argument-dependent, but NOT ONE of its catalogued templates "
+            "trips the heuristic. Either its abusive templates are unflagged (a silent "
+            "missing red-confirm) or it belongs in _MUST_NOT_FIRE."
+        )
+    print(f"  all {len(_ARGUMENT_DEPENDENT)} argument-dependent tools: bare clean, abusive "
+          "template flagged: PASS")
+
+
+def test_console_subcommands_are_excused_only_when_their_console_is_flagged() -> None:
+    """The one bucket that excuses a name must not become a hiding place.
+
+    A subcommand is excused ONLY because the console binary hosting it is itself in _MUST_FIRE,
+    so reaching that subcommand already required clearing a red-confirm.
+    """
+    uni = _catalog_invocations()
+    for sub, owner in sorted(_CONSOLE_SUBCOMMANDS.items()):
+        assert sub in uni, f"{sub!r} is excused but is not in the catalog at all"
+        assert owner in uni[sub], (
+            f"{sub!r} is recorded as a subcommand of {owner!r}, but the catalog says it belongs "
+            f"to {sorted(uni[sub])}"
+        )
+        assert owner in _MUST_FIRE, (
+            f"{sub!r} is excused as a console subcommand of {owner!r} — but {owner!r} is not in "
+            "_MUST_FIRE, so nothing demands a red-confirm anywhere on that path"
+        )
+    print(f"  all {len(_CONSOLE_SUBCOMMANDS)} console subcommands are hosted by a flagged "
+          "console: PASS")
 
 
 def test_the_executor_knows_nothing_about_the_arsenal() -> None:
@@ -329,6 +595,11 @@ if __name__ == "__main__":
     test_arsenal_never_imports_the_executor()
     test_a_rendered_invocation_is_only_a_string()
     test_arsenal_command_still_clears_every_gate()
+    test_every_catalogued_invocation_has_a_pinned_danger_verdict()
+    test_dangerous_catalogued_tools_demand_the_red_confirm()
+    test_benign_catalogued_tools_stay_clean()
+    test_argument_dependent_tools_are_clean_bare_and_flagged_when_abusive()
+    test_console_subcommands_are_excused_only_when_their_console_is_flagged()
     test_the_executor_knows_nothing_about_the_arsenal()
     test_executor_gates_are_byte_for_byte_unchanged()
     test_no_template_can_smuggle_a_host()

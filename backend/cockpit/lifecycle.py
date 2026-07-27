@@ -272,6 +272,43 @@ def port_is_bound(container: str, port: int, proto: str) -> bool | None:
     return False
 
 
+def refresh_status(
+    watched: Watched | None,
+    current: str,
+    *,
+    container: str,
+    port: int | None = None,
+    proto: str = "tcp",
+) -> str:
+    """Re-observe a listener's status for a read-only listing. Returns the status to show.
+
+    *** OBSERVED ONCE IS NOT OBSERVED. *** :func:`observe` looks at a listener after a settle
+    window, and a server that has not bound its port yet is honestly reported ``starting``. Left
+    there, that verdict would be permanent: the list functions only ever demoted a status to
+    ``down``, so a listener that bound its port a second after the window closed stayed
+    ``starting`` for its whole life — and ``route_for`` will not route through a tunnel whose
+    bind is unconfirmed. The live-fire run hit exactly that on a freshly recreated container,
+    where ligolo took longer than the window to bind.
+
+    So the refresh moves in BOTH directions, and only ever on evidence:
+        process gone            -> "down"
+        "starting" + now bound  -> "listening"
+        anything else           -> unchanged
+
+    Only a ``starting`` listener is re-probed. A ``listening`` one is not, because that would
+    mean a ``docker exec`` per tunnel on every poll of the panel to re-confirm something already
+    confirmed; ``starting`` is a transient state and the probe ends with it.
+    """
+    if watched is None:
+        return current
+    if watched.proc.poll() is not None:
+        return "down"
+    if current == "starting" and port:
+        if port_is_bound(container, port, proto) is True:
+            return "listening"
+    return current
+
+
 def observe(
     watched: Watched,
     *,

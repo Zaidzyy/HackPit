@@ -517,12 +517,21 @@ def start_server(req: SliverServerRequest) -> SliverServer:
 
 
 def list_servers() -> list[SliverServer]:
-    """Every server this process knows about, refreshing liveness. Read-only."""
+    """Every server this process knows about, re-observing liveness. Read-only.
+
+    Both directions: a dead process becomes ``down``, and a ``starting`` daemon whose port has
+    since appeared becomes ``listening``. Demoting only would leave a daemon that bound just
+    after its settle window stuck on ``starting`` for its whole life.
+    """
     with _lock:
         live = list(_servers.values())
     for ls in live:
-        if ls.proc is not None and ls.proc.poll() is not None and ls.model.status != "down":
-            ls.model.status = "down"
+        if ls.model.status == "down":
+            continue
+        ls.model.status = lifecycle.refresh_status(
+            ls.watched, ls.model.status,
+            container=config.ENGAGE_SANDBOX_CONTAINER, port=ls.model.port, proto="tcp",
+        )
     return [ls.model for ls in live]
 
 

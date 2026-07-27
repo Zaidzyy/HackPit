@@ -424,12 +424,22 @@ def start_tunnel(req: TunnelStartRequest) -> Tunnel:
 
 
 def list_tunnels() -> list[Tunnel]:
-    """Every tunnel (starting/listening/down), refreshing liveness. Read-only."""
+    """Every tunnel (starting/listening/down), re-observing liveness. Read-only.
+
+    The refresh moves in BOTH directions: a dead process becomes ``down``, and a ``starting``
+    listener whose port has since appeared becomes ``listening``. It used to only demote, which
+    left a listener that bound just after its settle window stuck on ``starting`` — and
+    :func:`route_for` will not route through one of those.
+    """
     with _lock:
         live = list(_tunnels.values())
     for lt in live:
-        if lt.proc is not None and lt.proc.poll() is not None and lt.model.status != "down":
-            lt.model.status = "down"
+        if lt.model.status == "down":
+            continue
+        lt.model.status = lifecycle.refresh_status(
+            lt.watched, lt.model.status,
+            container=config.ENGAGE_SANDBOX_CONTAINER, port=lt.model.listen_port, proto="tcp",
+        )
     return [lt.model for lt in live]
 
 

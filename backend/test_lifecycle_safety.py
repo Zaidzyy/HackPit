@@ -27,6 +27,11 @@ file is the lock on that distinction:
      container — the live-fire run found stopped listeners still holding their ports, and the
      next start failing with EADDRINUSE. The reap is asserted to happen AND to be targeted at
      the listener's own argv rather than the tool in general.
+  7. THE STATUS IS RE-OBSERVED, IN BOTH DIRECTIONS. A `starting` listener that binds after its
+     settle window must be promoted to `listening` — the list functions used to only demote, so
+     such a listener stayed unusable for its whole life (`route_for` will not route through an
+     unconfirmed bind). The promotion carries negative controls: "not bound" and "could not
+     probe" must never promote.
 
 Hermetic: no Docker daemon and no network — `subprocess.Popen` / `subprocess.run` are
 monkeypatched by manual save/restore (this repo has NO pytest).
@@ -421,6 +426,60 @@ def test_exec_argv_forwards_stdin_only_when_asked() -> None:
     print("  `-i` is per-binary, keyword-only and never defaulted; exec_argv is pure: PASS")
 
 
+def test_status_refresh_moves_in_both_directions_and_only_on_evidence() -> None:
+    """A `starting` listener that later binds must become `listening` — and nothing else may move.
+
+    *** OBSERVED ONCE IS NOT OBSERVED. *** The list functions used to only DEMOTE, so a listener
+    that bound its port a moment after the settle window closed stayed `starting` for its whole
+    life — and `route_for` refuses to route through an unconfirmed bind, so the tunnel was
+    permanently unusable. The live-fire run hit this on a freshly recreated container.
+
+    The promotion is the interesting half, so it carries its own negative controls: a probe that
+    says "not bound" or "could not probe" must NOT promote, or the refresh would be laundering
+    an unknown into a confirmation — exactly what the settle-window observation exists to prevent.
+    """
+    cases = [
+        # (current, alive, probe) -> expected
+        ("starting", True, True, "listening"),   # the promotion
+        ("starting", True, False, "starting"),   # probed, not bound -> no promotion
+        ("starting", True, None, "starting"),    # could not probe -> NEVER a promotion
+        ("listening", True, False, "listening"),  # not re-probed; a confirmed bind stays
+        ("starting", False, True, "down"),       # a dead process outranks any probe
+        ("listening", False, True, "down"),
+    ]
+    for current, alive, probe, want in cases:
+        with _Spawn(bound=probe):
+            w = L.spawn_watched(["docker", "exec", "x"], interactive=False)
+            w.proc.alive = alive
+            got = L.refresh_status(w, current, container="c", port=1234, proto="tcp")
+            assert got == want, (
+                f"current={current!r} alive={alive} probe={probe!r} -> {got!r}, want {want!r}"
+            )
+            w.kill()
+
+    # A listener with no process handle is left exactly as it was — a missing handle is not
+    # evidence of anything, in either direction.
+    assert L.refresh_status(None, "listening", container="c", port=1) == "listening"
+    assert L.refresh_status(None, "starting", container="c", port=1) == "starting"
+
+    # And a `listening` listener is not re-probed at all: re-confirming a confirmed bind on every
+    # poll of the panel would be a `docker exec` per tunnel per refresh.
+    probes: list = []
+    with _Spawn():
+        orig = L.port_is_bound
+        try:
+            L.port_is_bound = lambda c, p, proto: probes.append((c, p)) or True
+            w = L.spawn_watched(["docker", "exec", "x"], interactive=False)
+            L.refresh_status(w, "listening", container="c", port=1234, proto="tcp")
+            assert not probes, f"a confirmed listener must not be re-probed, got {probes}"
+            L.refresh_status(w, "starting", container="c", port=1234, proto="tcp")
+            assert probes, "a starting listener MUST be re-probed, or it can never be promoted"
+            w.kill()
+        finally:
+            L.port_is_bound = orig
+    print("  status refresh promotes on a confirmed bind, demotes on death, else holds: PASS")
+
+
 def test_stopping_reaps_the_server_inside_the_container() -> None:
     """*** KILLING A `docker exec` CLIENT DOES NOT KILL WHAT IT STARTED. ***
 
@@ -508,6 +567,7 @@ if __name__ == "__main__":
     test_the_port_probe_is_read_only_and_fails_closed()
     test_a_dead_process_is_reported_dead_with_its_output()
     test_exec_argv_forwards_stdin_only_when_asked()
+    test_status_refresh_moves_in_both_directions_and_only_on_evidence()
     test_stopping_reaps_the_server_inside_the_container()
     test_output_is_drained_so_a_listener_cannot_wedge()
     print("ALL listener-lifecycle safety invariants hold")

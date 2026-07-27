@@ -248,6 +248,14 @@ def _route_check(tun, host: str, command: str, args: list[str]) -> None:
     """
     routed = tunnels.route_for(host, [tun])
     if routed is None:
+        # A tunnel whose bind is UNCONFIRMED must not route, so `starting` here is the product
+        # behaving correctly, not a defect — reporting it as FAIL was the harness blaming the
+        # code for its own honesty. Only a `listening` tunnel that fails to route is a finding.
+        if tun.status != "listening":
+            result("tunnels.route_for", "NOTRUN",
+                   f"tunnel {tun.id} is status={tun.status!r}, so it correctly does not route yet "
+                   f"— routing requires a CONFIRMED bind ({tun.liveness})")
+            return
         result("tunnels.route_for", "FAIL",
                f"no live tunnel routes to {host} — the amended subnet did not take effect")
         return

@@ -638,12 +638,21 @@ def start_listener(req: ObfuscationRequest) -> ObfuscationListener:
 
 
 def list_listeners() -> list[ObfuscationListener]:
-    """Every listener this process knows about, refreshing liveness. Read-only."""
+    """Every listener this process knows about, re-observing liveness. Read-only.
+
+    Both directions: a dead process becomes ``down``, and a ``starting`` listener whose UDP/53
+    bind has since appeared becomes ``listening``. Demoting only would leave a listener that
+    bound just after its settle window stuck on ``starting`` for its whole life.
+    """
     with _lock:
         live = list(_listeners.values())
     for ll in live:
-        if ll.proc is not None and ll.proc.poll() is not None and ll.model.status != "down":
-            ll.model.status = "down"
+        if ll.model.status == "down":
+            continue
+        ll.model.status = lifecycle.refresh_status(
+            ll.watched, ll.model.status,
+            container=config.ENGAGE_SANDBOX_CONTAINER, port=53, proto="udp",
+        )
     return [ll.model for ll in live]
 
 

@@ -45,16 +45,34 @@ is a C2 path and an exfil path in one, moving arbitrary traffic to somewhere the
 not been gated against — and it was raised by a plain POST. Human-only was the ONLY bound on
 it, which is strictly less than every other execution surface in the cockpit gets.
 
-Note this is deliberately NOT the D17 shape. For Sliver, C2 *lifecycle* is human-only while
-artifact *generation* is gated, because starting a listener that nothing has connected to yet
-is inert. That reasoning does not transfer: a pivot listener's whole purpose is to become a
-route into a network the scope gate has never seen, so it is gated like an execution, not
-treated as lifecycle.
+This was originally the exception to D17's split (C2 *lifecycle* human-only, artifact
+*generation* gated), on the grounds that starting a listener nothing has connected to yet is
+inert while a pivot listener's whole purpose is to become a route into a network the scope gate
+has never seen. Build #7 finished the job: the DNS-tunnel listener and the Sliver C2 server were
+both gated the same way, the first because I2's argument applied to it verbatim (a covert
+channel IS an exfil route) and the second because a Sliver daemon can bring up persisted
+listener jobs. All three lifecycle surfaces now require engagement + approval + red-confirm; the
+split that remains is the TARGET, which only implant generation has.
 
 
-Live pivoting is inherently untested without a real compromised host to connect back; the
-lifecycle, routing, one-liner generation and command rewriting are built and unit-tested, and
-the actual agent connect-back is deferred to a real engagement.
+THE LISTENER'S STATUS IS NOW OBSERVED, NOT ASSIGNED (build #7). ``start_tunnel`` used to set
+``status="listening"`` the instant ``Popen`` returned. For ligolo that was simply false:
+``ligolo-proxy`` is an interactive CONSOLE, and ``docker exec`` without ``-i`` hands it a closed
+stdin, so it printed its banner, read EOF and exited 0 — while the panel said the pivot was live.
+The start now goes through ``cockpit/lifecycle.py``, which gives a console binary a stdin that
+does not end, drains its output so it cannot wedge, and then LOOKS: a listener is reported
+``listening`` only once ``ss`` inside the container confirms the port is bound, ``starting`` if
+the process is up but the bind is unconfirmed, and a process that died is a REFUSAL — the caller
+is told nothing is listening rather than handed a fiction. See that module for why the stdin it
+holds open is a raw fd with no writer object attached.
+
+CHISEL IS A DAEMON, LIGOLO IS A CONSOLE, and that difference is load-bearing rather than
+cosmetic. chisel's server needs no stdin and completes a pivot end-to-end without one: the agent
+connects, a SOCKS5 proxy comes up on this box and ``wrap_command`` routes through it. ligolo
+routes at the interface, and selecting a session and typing ``start`` are CONSOLE commands —
+HackPit holds that console's stdin open so the proxy survives, but deliberately never types into
+it (that would be an unapproved command on a live C2 console). Completing a ligolo session is
+therefore the operator's own step, the same way the agent one-liner is.
 """
 
 from __future__ import annotations
@@ -68,7 +86,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field, field_validator
 
-from . import config
+from . import config, lifecycle
 
 # Bounds — a listener should not accumulate forever.
 MAX_LIVE_TUNNELS = int(__import__("os").environ.get("HACKPIT_MAX_TUNNELS", "4"))
@@ -148,9 +166,16 @@ class Tunnel(BaseModel):
     listen_port: int
     socks_port: int | None = None
     subnets: list[str] = Field(default_factory=list)
-    status: str = Field(description="starting | listening | down.")
+    status: str = Field(
+        description="starting | listening | down — OBSERVED after the settle window, never "
+        "assigned at spawn time. 'listening' means the port was confirmed bound inside the "
+        "container; 'starting' means the process is up but the bind is unconfirmed."
+    )
     agent_command: str = Field(description="The one-liner to paste on the compromised host.")
     setup_note: str = ""
+    liveness: str = Field(
+        "", description="What was actually observed about the server process and its port."
+    )
     started_at: str
     engagement_id: str | None = None
 
@@ -178,7 +203,15 @@ class TunnelRefused(RuntimeError):
 @dataclass
 class _LiveTunnel:
     model: Tunnel
-    proc: "subprocess.Popen[str] | None" = field(default=None)
+    watched: "lifecycle.Watched | None" = field(default=None)
+    # The server argv, kept so a stop can reap the process INSIDE the container. Killing the
+    # `docker exec` client does not stop what it started — see lifecycle.Watched.kill.
+    server_argv: list[str] = field(default_factory=list)
+
+    @property
+    def proc(self):
+        """The spawned server process, or None. Read-only view for liveness refresh."""
+        return self.watched.proc if self.watched is not None else None
 
 
 _tunnels: dict[str, _LiveTunnel] = {}
@@ -222,7 +255,10 @@ def _ligolo_plan(req: TunnelStartRequest) -> tuple[list[str], str, str, int | No
     note = (
         "Paste the agent line on the compromised host, then in the ligolo proxy console "
         "`session` → select it → `start`. ligolo routes at the INTERFACE (a `ligolo` tun), so "
-        f"add the route(s) on this box: {routes}. Commands then run UNWRAPPED — no proxychains."
+        f"add the route(s) on this box: {routes}. Commands then run UNWRAPPED — no proxychains. "
+        "NOTE: HackPit holds this console's stdin open so the proxy stays up, but never types "
+        "into it — `session`/`start` are yours to run on your own console. A pivot that must "
+        "complete without one wants kind='chisel', whose server needs no console at all."
     )
     return server_argv, agent, note, None
 
@@ -240,6 +276,16 @@ def server_argv_for(req: TunnelStartRequest) -> list[str]:
     """
     plan = _chisel_plan(req) if req.kind == "chisel" else _ligolo_plan(req)
     return list(plan[0])
+
+
+def needs_console_stdin(kind: str) -> bool:
+    """Does this tool's server need a stdin that never ends? PURE.
+
+    ``ligolo-proxy`` is an interactive console and dies on EOF; ``chisel server`` is a plain
+    daemon and needs no stdin at all. Least privilege per binary rather than one blanket default
+    — see cockpit/lifecycle.py.
+    """
+    return kind == "ligolo"
 
 
 def _gate_request(req: TunnelStartRequest) -> "ExecRequest":
@@ -343,22 +389,37 @@ def start_tunnel(req: TunnelStartRequest) -> Tunnel:
     tid = uuid.uuid4().hex[:12]
     # Through server_argv_for, NOT the local plan tuple: the argv that runs must be the argv
     # the gate above classified.
-    argv = ["docker", "exec", config.ENGAGE_SANDBOX_CONTAINER, *server_argv_for(req)]
+    interactive = needs_console_stdin(req.kind)
+    argv = lifecycle.exec_argv(
+        config.ENGAGE_SANDBOX_CONTAINER, server_argv_for(req), interactive=interactive
+    )
     try:
-        proc = subprocess.Popen(
-            argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True,
-        )
+        watched = lifecycle.spawn_watched(argv, interactive=interactive)
     except FileNotFoundError:
         raise TunnelRefused("docker CLI not found on PATH")
 
+    # *** LOOK BEFORE REPORTING. *** The status below is what was observed after the settle
+    # window, not what was assumed at spawn time. A listener that died is a refusal: the operator
+    # must not be handed a live-looking tunnel and an agent one-liner for a port with nothing
+    # behind it.
+    live = lifecycle.observe(
+        watched, container=config.ENGAGE_SANDBOX_CONTAINER, port=port, proto="tcp"
+    )
+    if not live.alive:
+        watched.kill()
+        raise TunnelRefused(
+            f"the {req.kind} listener did not stay up — {live.detail}", gate="unavailable"
+        )
+
     model = Tunnel(
         id=tid, kind=req.kind, routing=routing, lhost=req.lhost, listen_port=port,
-        socks_port=socks, subnets=list(req.subnets), status="listening",
-        agent_command=agent, setup_note=note, started_at=_now(), engagement_id=req.engagement_id,
+        socks_port=socks, subnets=list(req.subnets), status=live.status,
+        agent_command=agent, setup_note=note, liveness=live.detail,
+        started_at=_now(), engagement_id=req.engagement_id,
     )
     with _lock:
-        _tunnels[tid] = _LiveTunnel(model=model, proc=proc)
+        _tunnels[tid] = _LiveTunnel(model=model, watched=watched,
+                                    server_argv=server_argv_for(req))
     return model
 
 
@@ -384,11 +445,10 @@ def stop_tunnel(tid: str) -> Tunnel:
         lt = _tunnels.get(tid)
     if lt is None:
         raise TunnelRefused(f"no tunnel {tid}")
-    if lt.proc is not None:
-        try:
-            lt.proc.kill()
-        except Exception:
-            pass
+    if lt.watched is not None:
+        # EOF first (a console binary leaves politely), then kill the client, then reap the
+        # server inside the container — killing `docker exec` does not stop what it started.
+        lt.watched.kill(container=config.ENGAGE_SANDBOX_CONTAINER, server_argv=lt.server_argv)
     lt.model.status = "down"
     return lt.model
 
@@ -459,9 +519,7 @@ def status() -> dict:
 def reset() -> None:  # test helper
     with _lock:
         for lt in _tunnels.values():
-            if lt.proc is not None:
-                try:
-                    lt.proc.kill()
-                except Exception:
-                    pass
+            if lt.watched is not None:
+                lt.watched.kill(container=config.ENGAGE_SANDBOX_CONTAINER,
+                                server_argv=lt.server_argv)
         _tunnels.clear()

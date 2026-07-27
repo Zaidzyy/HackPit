@@ -243,13 +243,14 @@ def _validate_lab(request: ExecRequest) -> ExecRejected | None:
     # framework…) needs an EXPLICIT second confirm (dangerous_ack) on top of approval — so
     # arbitrary code / a shell can't be approved by accident, incl. an agent-proposed one.
     # NEVER blocks outright; requires the confirm. Over-inclusive assist — human is the gate.
+    # Called DIRECTLY, not through danger_reasons_for_mode(): that dispatcher reaches
+    # join_ps_command() on its windows branch, and test_winrm_safety asserts — statically, over
+    # the call graph — that the LAB validator can never reach the PowerShell derivation. Routing
+    # this through the dispatcher would make that control vacuous even though mode="lab" never
+    # takes the branch at runtime. Same function either way.
     dangerous = allowlist.dangerous_command_heuristic(request.command, request.args)
     if dangerous and not request.dangerous_ack:
-        return ExecRejected(
-            reason="this command is flagged dangerous — confirm to run: " + "; ".join(dangerous),
-            gate="danger",
-            dangerous_flags=dangerous,
-        )
+        return _danger_rejection(dangerous)
 
     try:
         assert_isolation_proven()
@@ -287,13 +288,10 @@ def _validate_engagement(request: ExecRequest, eng: EngagementRecord) -> ExecRej
             gate="approval",
         )
 
+    # Direct, for the same call-graph reason as _validate_lab above.
     dangerous = allowlist.dangerous_command_heuristic(request.command, request.args)
     if dangerous and not request.dangerous_ack:
-        return ExecRejected(
-            reason="this command is flagged dangerous — confirm to run: " + "; ".join(dangerous),
-            gate="danger",
-            dangerous_flags=dangerous,
-        )
+        return _danger_rejection(dangerous)
 
     return None
 
@@ -353,11 +351,7 @@ def _validate_windows(request: ExecRequest) -> ExecRejected | None:
 
     dangerous = windows_danger_reasons(request.command, list(request.args))
     if dangerous and not request.dangerous_ack:
-        return ExecRejected(
-            reason="this command is flagged dangerous — confirm to run: " + "; ".join(dangerous),
-            gate="danger",
-            dangerous_flags=dangerous,
-        )
+        return _danger_rejection(dangerous)
     return None
 
 
@@ -406,6 +400,44 @@ def windows_danger_reasons(command: str, args: list[Any]) -> list[str]:
         if reason not in reasons:
             reasons.append(reason)
     return reasons
+
+
+def danger_reasons_for_mode(mode: str, command: str, args: list[Any]) -> list[str]:
+    """Every reason THIS MODE's danger gate must demand the red-confirm (empty if none).
+
+    THE MODE DISPATCH, in one place, for :func:`iter_run`'s belt-and-suspenders re-check on the
+    prevalidated path — which knows only the resolved ``mode`` string, not which ``_validate_*``
+    branch a request would have taken.
+
+    WHY THE VALIDATORS DO NOT CALL THIS. They call their classifier directly and deliberately.
+    This dispatcher reaches :func:`join_ps_command` through its windows branch, and
+    test_winrm_safety asserts over the STATIC call graph that ``_validate_lab`` can never reach
+    the PowerShell derivation — that assertion is the positive control proving the reachability
+    check can fail at all. Wiring the docker-path validators through here would satisfy the
+    type checker and quietly empty that control, even though ``mode="lab"`` never takes the
+    windows branch at runtime. The classifier each side ends up calling is identical either
+    way; only the call graph differs, and the call graph is what the control reads.
+
+    The mode split is load-bearing, not cosmetic:
+      * ``windows``        — the whole joined string is a PowerShell PROGRAM, so it needs
+        :func:`windows_danger_reasons` (argv heuristic UNION whole-script heuristic). Reading
+        only ``argv[0]`` here is Critical 2 from the 2026-07-27 gate audit: the gate saw
+        ``Write-Host`` and the transport ran ``Write-Host go ; Invoke-Mimikatz``.
+      * ``lab`` / ``engagement`` — argv-style docker exec, so the argument STRUCTURE is what
+        matters and :func:`allowlist.dangerous_command_heuristic` is the right classifier.
+    """
+    if mode == "windows":
+        return windows_danger_reasons(command, list(args))
+    return list(allowlist.dangerous_command_heuristic(command, list(args)))
+
+
+def _danger_rejection(reasons: list[str]) -> ExecRejected:
+    """The ONE danger-gate rejection payload, so every path words it identically."""
+    return ExecRejected(
+        reason="this command is flagged dangerous — confirm to run: " + "; ".join(reasons),
+        gate="danger",
+        dangerous_flags=reasons,
+    )
 
 
 class EngagementInactive(RuntimeError):
@@ -488,6 +520,23 @@ def resolve_mode(request: ExecRequest) -> ResolvedMode:
     )
 
 
+def _danger_recheck(mode: str, request: ExecRequest) -> dict[str, Any] | None:
+    """The rejected EVENT a flagged-but-unacked command earns inside :func:`iter_run`, or None.
+
+    Mirrors the approval re-checks around it, and reuses :func:`danger_reasons_for_mode` so the
+    verdict is byte-identical to the one :func:`validate_request` reached for the same request.
+    """
+    dangerous = danger_reasons_for_mode(mode, request.command, request.args)
+    if not dangerous or request.dangerous_ack:
+        return None
+    return {
+        "type": "rejected",
+        "gate": "danger",
+        "reason": "this command is flagged dangerous — confirm to run: " + "; ".join(dangerous),
+        "dangerous_flags": dangerous,
+    }
+
+
 def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[str, Any]]:
     """Validate then stream a run as events.
 
@@ -496,8 +545,11 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
     caller (router) formats events for transport (SSE). Validation happens first, so a
     rejected request yields exactly one {type: rejected} event and nothing runs.
 
-    ``prevalidated=True`` skips the gate re-check when the caller (router) already ran
-    validate_request to decide the HTTP status.
+    ``prevalidated=True`` skips the full gate chain when the caller (router) already ran
+    validate_request to decide the HTTP status. It does NOT skip everything: the engagement
+    liveness check, the per-mode APPROVAL re-check and the per-mode DANGER re-check all run
+    regardless, so the two gates that are the sole floor on a real target cannot be lost by a
+    caller that forgets to validate first. Regression-locked in test_prevalidated_gates.py.
     """
     if not prevalidated:
         rejected = validate_request(request)
@@ -531,6 +583,10 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
                 "(approved=true) — the orchestrator proposes, it never auto-runs a WinRM command",
             }
             return
+        rejected = _danger_recheck(resolved.mode, request)
+        if rejected is not None:
+            yield rejected
+            return
         yield from _run_windows(request, resolved)
         return
 
@@ -550,6 +606,19 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
                 "(approved=true) — never hands-off / no batch approval on a real target",
             }
             return
+
+    # Belt-and-suspenders DANGER re-check (ALL THREE MODES — build #7). Same reasoning as the
+    # approval re-checks above, applied to the other gate that a prevalidated caller could
+    # skip. Nothing was exposed when this was added — the one prevalidated=True caller
+    # (cockpit/router.py) validates first — but the asymmetry was a trap for the SECOND
+    # caller: approval was re-checked here and danger was not, so a future caller that
+    # prevalidated a dangerous command would have run it with no red-confirm. Additive by
+    # construction: it can only ever ADD a rejection, and only for a command the same
+    # classifier validate_request uses already flags.
+    rejected = _danger_recheck(mode, request)
+    if rejected is not None:
+        yield rejected
+        return
 
     run_id = uuid.uuid4().hex[:12]
     started_at = _now()

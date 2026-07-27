@@ -382,8 +382,8 @@ RUN set -eux; \
     curl -fsSL -o /usr/local/bin/sliver-client \
         "https://github.com/BishopFox/sliver/releases/download/v${SLIVER_VERSION}/sliver-client_linux"; \
     chmod 0755 /usr/local/bin/sliver-server /usr/local/bin/sliver-client; \
-    /usr/local/bin/sliver-server version; \
-    /usr/local/bin/sliver-client version
+    /usr/local/bin/sliver-server version 2>&1 | grep -q "v${SLIVER_VERSION}"; \
+    /usr/local/bin/sliver-client version 2>&1 | grep -q "v${SLIVER_VERSION}"
 
 # dnscat2 — DNS-tunnelled channel. Client compiled from source; server is the shipped Ruby.
 # Wrapped as dnscat2-server / dnscat2-client to match backend/arsenal/tools.json.
@@ -391,17 +391,16 @@ RUN set -eux; \
 # without them dnscat2.rb dies on `require 'ecdsa'`. dnscat2.rb has no --help of its own, so
 # the gems are asserted DIRECTLY below; a missing gem fails the build rather than surfacing at
 # engagement time.
-#
-# NOT PINNED, and that is a known reproducibility gap (review finding M2, still open): this
-# clones master and resolves the four gems to whatever is current, so two builds of this
-# Dockerfile can differ. Sliver and ScareCrow below ARE pinned via ARG. Pinning these needs the
-# real upstream commit and gem versions resolved from the network — see
-# docker/pin-build4-versions.sh, which resolves them and rewrites this block in place.
+# Pinned by docker/pin-build4-versions.sh: dnscat2 has no release tags, so the client is
+# built from a fixed commit, and the four gems plus donut-shellcode carry exact versions.
+# Re-run that script to move the pins forward.
+ARG DNSCAT2_COMMIT=42f8d783488836c0e24ff25571684170be0a0cc2
 RUN set -eux; \
-    git clone --depth 1 https://github.com/iagox86/dnscat2.git /opt/dnscat2; \
+    git clone https://github.com/iagox86/dnscat2.git /opt/dnscat2; \
+    git -C /opt/dnscat2 checkout --detach "${DNSCAT2_COMMIT}"; \
     make -C /opt/dnscat2/client; \
     install -m 0755 /opt/dnscat2/client/dnscat /usr/local/bin/dnscat2-client; \
-    gem install --no-document trollop salsa20 sha3 ecdsa; \
+    gem install --no-document trollop:2.9.10 salsa20:0.1.3 sha3:2.2.4 ecdsa:1.2.0; \
     printf '%s\n' '#!/bin/sh' 'exec ruby /opt/dnscat2/server/dnscat2.rb "$@"' \
         > /usr/local/bin/dnscat2-server; \
     chmod 0755 /usr/local/bin/dnscat2-server; \
@@ -420,7 +419,7 @@ RUN set -eux; \
 # and its -i/-o/-a flags are what backend/arsenal/tools.json advertises.
 RUN set -eux; \
     python3 -m venv /opt/donut/venv; \
-    /opt/donut/venv/bin/pip install --no-cache-dir -q donut-shellcode; \
+    /opt/donut/venv/bin/pip install --no-cache-dir -q donut-shellcode==1.1; \
     /opt/donut/venv/bin/python -c "import donut; assert callable(donut.create)"; \
     printf '%s\n' \
         '#!/opt/donut/venv/bin/python' \
@@ -453,6 +452,22 @@ RUN set -eux; \
     rm -f /tmp/scarecrow; \
     /usr/local/bin/ScareCrow -h 2>&1 | grep -qi scarecrow
 
+# proxychains, pointed at the tunnel HackPit actually starts.
+#
+# Debian ships /etc/proxychains4.conf configured for Tor (`socks4 127.0.0.1 9050`). HackPit's
+# chisel plan brings up a reverse SOCKS5 on THIS box at 127.0.0.1:1080 (cockpit/tunnels.py,
+# CHISEL_SOCKS_PORT) and `wrap_command` rewrites a command to `proxychains -q …` on the strength
+# of that — so with the stock config the rewritten command the operator approves would quietly
+# try Tor and time out. Found by the live-fire run, which is exactly the class of gap a proof
+# harness exists to find: every unit test passed, and the shipped path could not work.
+#
+# The Tor line is replaced rather than appended to: proxychains reads the LAST [ProxyList]
+# section, and leaving 9050 in place makes the chain depend on ordering.
+RUN set -eux; \
+    sed -i 's|^socks4[[:space:]].*|socks5 127.0.0.1 1080|' /etc/proxychains4.conf; \
+    grep -q '^socks5 127.0.0.1 1080' /etc/proxychains4.conf; \
+    ! grep -q '^socks4' /etc/proxychains4.conf
+
 # One consolidated smoke test: the build FAILS if any advertised binary is missing OR broken.
 # A `command -v` check alone is not a smoke test — it passes for a binary that dies on its
 # first line. Neither is `tool -h | head -1`: a pipeline's status is the LAST command's, so
@@ -462,12 +477,22 @@ RUN set -eux; \
 # which fails on an empty or absent one. (dnscat2-server has no --help of its own, so its gems
 # are asserted directly; ScareCrow exits non-zero on -h by design, which grep does not care
 # about — grep sees the usage banner either way.)
+#
+# THE SLIVER PAIR MATCHES THE PINNED VERSION, NOT THE WORD "sliver" (build #7). Both were
+# checked with `grep -qi sliver` — and `sliver-server version` prints exactly
+# `v1.5.42 - <sha>`, which does not contain the string "sliver". That assertion could never
+# pass, so this layer could never build; the image in the registry predates the check. The
+# static test that guards this block (backend/test_evasion.py) reads the SHAPE of these lines
+# — `|| true`, `| head` — and cannot know whether a grep pattern actually matches, so only a
+# real build surfaced it. Matching "v${SLIVER_VERSION}" is strictly stronger than the name
+# would have been: it fails when the binary is missing, dies, or is not the version pinned
+# above.
 RUN set -eux; \
     for b in sliver-server sliver-client dnscat2-server dnscat2-client iodine iodined donut ScareCrow; do \
         command -v "$b" >/dev/null || { echo "MISSING: $b"; exit 1; }; \
     done; \
-    sliver-server version 2>&1 | grep -qi sliver; \
-    sliver-client version 2>&1 | grep -qi sliver; \
+    sliver-server version 2>&1 | grep -q "v${SLIVER_VERSION}"; \
+    sliver-client version 2>&1 | grep -q "v${SLIVER_VERSION}"; \
     dnscat2-client --help 2>&1 | grep -qi dnscat; \
     ruby -e "require 'ecdsa'; require 'salsa20'; require 'sha3'; require 'trollop'"; \
     iodine -h 2>&1 | grep -qi iodine; \

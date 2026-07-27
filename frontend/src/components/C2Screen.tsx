@@ -66,6 +66,10 @@ export function C2Screen() {
   const [target, setTarget] = useState("");
   const [preview, setPreview] = useState<ImplantPreview | null>(null);
   const [dangerReason, setDangerReason] = useState<string | null>(null);
+  // Both lifecycle starts are gated too (build #7), and each needs its OWN confirm state — one
+  // shared banner would let a confirm for the C2 server look like a confirm for the DNS tunnel.
+  const [serverDanger, setServerDanger] = useState<string | null>(null);
+  const [listenerDanger, setListenerDanger] = useState<string | null>(null);
   const [building, setBuilding] = useState(false);
 
   // --- dns tunnel form ---
@@ -112,22 +116,40 @@ export function C2Screen() {
     [ios, arch, fmt, transport, listener, target, engagementId]
   );
 
-  const startServer = useCallback(async () => {
-    if (startingServer) return;
-    setStartingServer(true);
-    setError(null);
-    try {
-      await startSliverServer({
-        port: port.trim() ? Number(port) : null,
-        engagement_id: engagementId.trim() || null,
-      });
-      refresh();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
-    } finally {
-      setStartingServer(false);
-    }
-  }, [port, engagementId, startingServer, refresh]);
+  /**
+   * Start the C2 server. GATED since build #7 — engagement + approval + red-confirm — so this
+   * follows the same two-step the implant build does: send with `dangerous_ack:false`, and if
+   * the danger gate refuses, show WHY and let the human re-send. The ack is never set on the
+   * first attempt, because a confirm the operator did not see is not a confirm.
+   */
+  const startServer = useCallback(
+    async (ack: boolean) => {
+      if (startingServer) return;
+      if (!engagementId.trim()) {
+        setError("a C2 server must name an engagement — it is engagement infrastructure");
+        return;
+      }
+      setStartingServer(true);
+      setError(null);
+      try {
+        await startSliverServer({
+          port: port.trim() ? Number(port) : null,
+          engagement_id: engagementId.trim(),
+          approved: true,
+          dangerous_ack: ack,
+        });
+        setServerDanger(null);
+        refresh();
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.message : String(e);
+        if (msg.startsWith("[danger]")) setServerDanger(msg.replace(/^\[danger\]\s*/, ""));
+        else setError(msg);
+      } finally {
+        setStartingServer(false);
+      }
+    },
+    [port, engagementId, startingServer, refresh]
+  );
 
   const stopServer = useCallback(
     async (sid: string) => {
@@ -175,25 +197,41 @@ export function C2Screen() {
     [implantBody, building, refresh]
   );
 
-  const startListener = useCallback(async () => {
-    if (!zone.trim() || startingListener) return;
-    setStartingListener(true);
-    setError(null);
-    try {
-      await startDnsListener({
-        kind,
-        zone: zone.trim(),
-        tunnel_net: tunnelNet.trim() || "10.99.53.1/24",
-        secret: secret.trim() || null,
-        engagement_id: engagementId.trim() || null,
-      });
-      refresh();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
-    } finally {
-      setStartingListener(false);
-    }
-  }, [kind, zone, tunnelNet, secret, engagementId, startingListener, refresh]);
+  /**
+   * Start the DNS-tunnel listener. GATED since build #7 for the reason I2 gated the pivot
+   * listener: this is the server end of a covert exfil channel. Same two-step red-confirm.
+   */
+  const startListener = useCallback(
+    async (ack: boolean) => {
+      if (!zone.trim() || startingListener) return;
+      if (!engagementId.trim()) {
+        setError("a DNS-tunnel listener must name an engagement — it is a route out of a real network");
+        return;
+      }
+      setStartingListener(true);
+      setError(null);
+      try {
+        await startDnsListener({
+          kind,
+          zone: zone.trim(),
+          tunnel_net: tunnelNet.trim() || "10.99.53.1/24",
+          secret: secret.trim() || null,
+          engagement_id: engagementId.trim(),
+          approved: true,
+          dangerous_ack: ack,
+        });
+        setListenerDanger(null);
+        refresh();
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.message : String(e);
+        if (msg.startsWith("[danger]")) setListenerDanger(msg.replace(/^\[danger\]\s*/, ""));
+        else setError(msg);
+      } finally {
+        setStartingListener(false);
+      }
+    },
+    [kind, zone, tunnelNet, secret, engagementId, startingListener, refresh]
+  );
 
   const stopListener = useCallback(
     async (lid: string) => {
@@ -257,13 +295,37 @@ export function C2Screen() {
             <input
               value={engagementId}
               onChange={(e) => setEngagementId(e.target.value)}
-              placeholder="engagement id (tags the audit trail; also picks the build mode)"
+              placeholder="engagement id (REQUIRED — attributes the server and picks the build mode)"
               aria-label="engagement id"
             />
-            <button type="button" onClick={startServer} disabled={startingServer}>
-              {startingServer ? "starting…" : "start server ▸"}
-            </button>
+            {!serverDanger && (
+              <button
+                type="button"
+                onClick={() => startServer(false)}
+                disabled={startingServer || !engagementId.trim()}
+              >
+                {startingServer ? "starting…" : "approve & start server ▸"}
+              </button>
+            )}
           </div>
+          {/* RED CONFIRM — the danger gate refused this start; re-confirm to proceed. */}
+          {serverDanger && (
+            <div className="hp-cs-danger" role="alert">
+              <b>This starts a live C2 server.</b>
+              <span className="hp-cs-danger-why">{serverDanger}</span>
+              <span className="hp-cs-danger-why">
+                Any listener jobs persisted in your Sliver config come up with the daemon.
+              </span>
+              <button
+                type="button"
+                className="hp-cs-confirm"
+                onClick={() => startServer(true)}
+                disabled={startingServer}
+              >
+                {startingServer ? "starting…" : "I understand — start it"}
+              </button>
+            </div>
+          )}
           {servers.length > 0 && (
             <ul className="hp-tn-list">
               {servers.map((s) => (
@@ -452,14 +514,35 @@ export function C2Screen() {
                 aria-label="tunnel net"
               />
             )}
-            <button
-              type="button"
-              onClick={startListener}
-              disabled={startingListener || !zone.trim()}
-            >
-              {startingListener ? "starting…" : "start listener ▸"}
-            </button>
+            {!listenerDanger && (
+              <button
+                type="button"
+                onClick={() => startListener(false)}
+                disabled={startingListener || !zone.trim() || !engagementId.trim()}
+              >
+                {startingListener ? "starting…" : "approve & start listener ▸"}
+              </button>
+            )}
           </div>
+          {/* RED CONFIRM — a DNS tunnel is a covert exfil channel; the gate refused. */}
+          {listenerDanger && (
+            <div className="hp-cs-danger" role="alert">
+              <b>This opens the server end of a covert channel out of a network.</b>
+              <span className="hp-cs-danger-why">{listenerDanger}</span>
+              <span className="hp-cs-danger-why">
+                The client half is yours to run BY HAND on the far side — HackPit never delivers
+                it.
+              </span>
+              <button
+                type="button"
+                className="hp-cs-confirm"
+                onClick={() => startListener(true)}
+                disabled={startingListener}
+              >
+                {startingListener ? "starting…" : "I understand — start it"}
+              </button>
+            </div>
+          )}
 
           {listeners.length > 0 && (
             <ul className="hp-tn-list">

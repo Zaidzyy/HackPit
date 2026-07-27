@@ -88,6 +88,12 @@ def test_run_is_locked_to_the_profile_host() -> None:
             args=["-ComputerName", "dc02.evil.local", "-ScriptBlock", "{whoami}"],
             windows_profile_id=p["profile_id"],
             approved=True,
+            # Invoke-Command IS flagged by the danger classifier, so the router would have
+            # demanded the red-confirm before ever setting prevalidated=True. Since build #7
+            # iter_run re-checks danger on that path too (test_prevalidated_gates.py), so the
+            # ack has to be here for this request to reach the transport at all — which is
+            # what this test is about: WHERE it lands, not whether it is gated.
+            dangerous_ack=True,
         )
         list(executor.iter_run(hostile, prevalidated=True))
         profile, _cmd, _t = env.calls[0]

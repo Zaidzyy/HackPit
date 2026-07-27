@@ -1,0 +1,111 @@
+# HackPit — LIVE-FIRE LAB (build #7).
+#
+# The controlled lab the live-fire proof drives. It exists so the C2 / pivot / DNS-tunnel
+# surfaces can be demonstrated END TO END against something real, without a third-party target
+# and without a public callback: every host here is ours and every network is `internal: true`.
+#
+# WHAT `internal: true` BUYS. Docker attaches no gateway to an internal bridge, so there is no
+# NAT and no route off it. A container whose ONLY network is internal cannot reach the internet
+# or the host — it can reach exactly the other containers on that bridge. That is what makes
+# "the implant called back" a safe thing to demonstrate: the beacon has nowhere else to go.
+#
+# THE ENGAGE SANDBOX IS NOT DECLARED HERE. It is a long-lived container from the main compose
+# file; live_fire_proof.sh attaches it to the lab networks with `docker network connect` and
+# detaches it on teardown. Attaching an internal network never REMOVES its open one — the
+# engage sandbox stays fully open, exactly as docker-compose.yml documents. The lab hosts are
+# the ones being contained, and they are contained by having no other network at all.
+#
+# Not started by `docker compose up` in normal use. Driven by:
+#   sh docker/proof/live_fire_proof.sh
+name: hackpit-livefire
+
+networks:
+  # C2: the implant host and the Sliver server. Internal — a beacon that calls back here has
+  # no path to anything else.
+  lf-c2:
+    driver: bridge
+    internal: true
+  # PIVOT (near side): where the ligolo agent runs. The engage sandbox joins this one, so the
+  # agent can reach the proxy listener.
+  lf-pivot:
+    driver: bridge
+    internal: true
+  # PIVOT (far side): the deep target. The engage sandbox is DELIBERATELY NOT attached — the
+  # whole point of the pivot proof is that this subnet is unreachable from the operator box
+  # except through the agent. If the proof could reach it without the tunnel, it would prove
+  # nothing.
+  lf-deep:
+    driver: bridge
+    internal: true
+  # DNS: the dnscat2 client host and the tunnel server.
+  #
+  # FIXED SUBNET, because the client has to be told its RESOLVER at compose time. A dnscat2
+  # server started for a zone is AUTHORITATIVE for that zone and NXDOMAINs anything else, so the
+  # only way to exercise it locally is the way it works in the field: the client queries its own
+  # configured resolver, and that resolver is the tunnel server. `/etc/resolv.conf` cannot be
+  # rewritten inside the lab hosts (cap_drop: ALL leaves it read-only, correctly), so the address
+  # has to be predictable — hence a pinned subnet here and a pinned `--ip` when live_fire_proof.sh
+  # attaches the engage sandbox.
+  lf-dns:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.77.53.0/24
+
+services:
+  # The "compromised host" the implant runs on. Same image as the sandboxes, so it has the
+  # tooling to report on its own reachability — which is how the containment half of the proof
+  # is taken (from INSIDE the contained host, not asserted from outside).
+  implant-host:
+    image: hackpit/kali-sandbox:m1
+    container_name: hackpit-lf-implant-host
+    hostname: lf-implant-host
+    networks: [lf-c2]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: ["sleep", "infinity"]
+
+  # The pivot host: a foot in both networks. This is the machine the operator has landed on and
+  # is tunnelling THROUGH. ligolo-agent needs no privileges — the tun interface lives on the
+  # proxy side, in the engage sandbox.
+  pivot-host:
+    image: hackpit/kali-sandbox:m1
+    container_name: hackpit-lf-pivot-host
+    hostname: lf-pivot-host
+    networks: [lf-pivot, lf-deep]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: ["sleep", "infinity"]
+
+  # The host that only exists on the far side of the pivot. Reaching THIS is the pivot proof.
+  # A plain HTTP server rather than a second Juice Shop: the claim is "traffic routed", and a
+  # 200 with a known body proves it without pulling another image.
+  deep-target:
+    image: hackpit/kali-sandbox:m1
+    container_name: hackpit-lf-deep-target
+    hostname: lf-deep-target
+    networks: [lf-deep]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: ["sh", "-c", "mkdir -p /tmp/deep && cd /tmp/deep && printf 'HACKPIT-DEEP-TARGET-OK\\n' > index.html && exec python3 -m http.server 8000 --bind 0.0.0.0"]
+
+  # The host that speaks dnscat2 to the tunnel server.
+  #
+  # ITS RESOLVER IS THE TUNNEL SERVER, which is the point rather than a shortcut. A DNS tunnel's
+  # whole claim is that the client never opens a direct connection to the operator at all — it
+  # asks its OWN resolver, and the query walks the DNS hierarchy to whoever is authoritative for
+  # the zone. In the field that walk ends at the operator's server because the zone is delegated
+  # to it. Here there is no public delegation and no root hierarchy, so the walk is collapsed to
+  # one hop: this host's resolver IS the authoritative server. Same client command, same
+  # resolver-mediated path, one fewer hop — and the missing hop is exactly what the
+  # "delegated-zone" NOTRUN in the proof output names.
+  dns-client:
+    image: hackpit/kali-sandbox:m1
+    container_name: hackpit-lf-dns-client
+    hostname: lf-dns-client
+    networks: [lf-dns]
+    dns: ["10.77.53.10"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: ["sleep", "infinity"]

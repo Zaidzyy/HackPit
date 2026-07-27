@@ -12,18 +12,22 @@ a behavioural one where it is about what actually happens:
      and adgraph/orchestrator.py, is scanned and must not name it. A C2 server an agent could
      raise is an autonomous C2; an implant an agent could build is an autonomous payload
      factory. Scanned WITH a positive control, so the scan cannot pass vacuously.
-  2. TWO FOOTINGS, NEVER COLLAPSED. The server lifecycle is HUMAN-ONLY and consults NO gate
-     (there is no target to gate — it is operator infrastructure); implant GENERATION runs the
-     REAL executor.validate_request and is scope-checked. Both halves asserted structurally
-     (AST call graph) and behaviourally (a spy on the real gate + the real refusals).
+  2. BOTH HALVES GATED; ONLY ONE HAS A TARGET. The server lifecycle and implant GENERATION both
+     run the REAL executor.validate_request — build #7 gated the lifecycle, which had been
+     ungated on a precedent (the pivot listener) that build #5's I2 finding overturned. What
+     stays split is the TARGET: a C2 server has none, so it is gated on engagement + approval +
+     red-confirm and NOT on a target-lock, while generation is scope-checked as well. Asserted
+     structurally (AST call graph) and behaviourally (a spy on the real gate + the real refusals).
   3. <listener> IS OPERATOR-SIDE AND IS NEVER TARGET-SUBSTITUTED. Proved structurally —
      _implant_argv's body never reads ``req.target`` at all — and behaviourally across every
      transport.
   4. EVERY ACTION IS AUDITED via runstore.save_run: start, stop and generate each land as a
      record; a REFUSED generate records nothing, because nothing ran.
-  5. IT CANNOT EXECUTE OR DELIVER WHAT IT BUILDS. The artifact path appears in argv only as
-     the operand of ``--save``, a generate runs exactly ONE subprocess, and no delivery
-     primitive (docker cp / psexec / smbclient / HTTP / SSH / stdin) exists in the module.
+  5. IT CANNOT EXECUTE OR DELIVER WHAT IT BUILDS. The artifact path appears only as the operand
+     of ``--save`` (in the console line) and of ``stat`` (in the read-back), a generate runs
+     exactly TWO subprocesses and BOTH are classified — one build, one read-only size probe —
+     and no delivery primitive (docker cp / psexec / smbclient / HTTP / SSH) exists in the
+     module.
   6. NO SHELL ANYWHERE; THE CONTAINER IS A CODE CONSTANT. No ``shell=True`` in any call (AST),
      no container/sandbox/output-path field on either request model, and a request that tries
      to smuggle one is ignored — the box still comes from the mode resolver.
@@ -48,7 +52,7 @@ from cockpit import executor as EX
 from cockpit import sliver as S
 from cockpit.models import ExecRejected, ExecRequest
 from cockpit.sliver import ImplantRequest, SliverRefused, SliverServerRequest
-from test_support import scans
+from test_support import listeners, scans
 
 BACKEND = Path(__file__).resolve().parent
 SLIVER_SRC = Path(S.__file__).read_text(encoding="utf-8")
@@ -220,40 +224,59 @@ class _FakeProc:
 class _Spy:
     """Swap subprocess / save_run / loot.ensure / the isolation proof for fakes."""
 
-    def __init__(self, *, up=True, returncode=0):
+    def __init__(self, *, up=True, returncode=0, artifact_size=14401536):
         self.up, self.returncode = up, returncode
-        self.popen_argv: list[str] | None = None
-        self.run_argv: list[str] | None = None
+        self.artifact_size = artifact_size
+        self.runs: list[list[str]] = []
         self.run_calls = 0
-        self.popen_calls = 0
         self.saved: list = []
+        # The server spawn lives in cockpit/lifecycle.py since build #7, so it is faked through
+        # the shared shim rather than here — faking S.subprocess.Popen would fake a call this
+        # module no longer makes, and every "a refusal spawns nothing" assertion would go vacuous.
+        self.spawn = listeners.FakeListenerSpawn()
         self._orig = (
-            S._container_running, S.subprocess.Popen, S.subprocess.run,
+            S._container_running, S.subprocess.run,
             S.runstore.save_run, S.loot.ensure, EX.assert_isolation_proven,
         )
 
-    def __enter__(self):
-        def fake_popen(argv, **kw):
-            self.popen_calls += 1
-            self.popen_argv = argv
-            return _FakeProc(argv)
+    @property
+    def popen_argv(self) -> list[str] | None:
+        return self.spawn.argv
 
+    @property
+    def popen_calls(self) -> int:
+        return len(self.spawn.spawns)
+
+    @property
+    def run_argv(self) -> list[str] | None:
+        """The BUILD's argv, not the `stat` read-back that follows it."""
+        for argv in self.runs:
+            if S.SLIVER_SERVER_BIN in argv:
+                return argv
+        return None
+
+    def __enter__(self):
         def fake_run(argv, **kw):
             self.run_calls += 1
-            self.run_argv = argv
+            self.runs.append(list(argv))
+            if "stat" in argv:
+                if self.artifact_size is None:
+                    return _FakeCompleted(argv, returncode=1, stdout="")
+                return _FakeCompleted(argv, returncode=0, stdout=f"{self.artifact_size}\n")
             return _FakeCompleted(argv, returncode=self.returncode, stdout="built")
 
         S._container_running = lambda name: self.up
-        S.subprocess.Popen = fake_popen
         S.subprocess.run = fake_run
         S.runstore.save_run = lambda rec: self.saved.append(rec)
         S.loot.ensure = lambda name: f"/loot/{name}"
         EX.assert_isolation_proven = lambda: None
+        self.spawn.__enter__()
         return self
 
     def __exit__(self, *exc):
+        self.spawn.__exit__(*exc)
         (
-            S._container_running, S.subprocess.Popen, S.subprocess.run,
+            S._container_running, S.subprocess.run,
             S.runstore.save_run, S.loot.ensure, EX.assert_isolation_proven,
         ) = self._orig
         S.reset()
@@ -405,24 +428,47 @@ def test_lifecycle_is_human_only_and_generation_is_gated_structurally() -> None:
         "validate_generate must delegate to the REAL executor gate, not reimplement one"
     )
 
-    for human_only in ("start_server", "stop_server", "list_servers"):
-        calls = _call_names(_fn(SLIVER_TREE, human_only))
+    # *** THE SPLIT MOVED IN BUILD #7, AND THIS TEST MOVED WITH IT. ***
+    #
+    # It used to assert that `start_server` consults NO gate — encoding D17's "lifecycle is
+    # ungated, generation is gated". That decision was reversed: the argument for leaving the
+    # lifecycle ungated was made by citing the pivot listener, which build #5's I2 finding had
+    # already tightened, and Sliver's config can PERSIST listener jobs that come up with the
+    # daemon. Both halves are gated now.
+    #
+    # What survives is the split that was always the real one: the SERVER HAS NO TARGET. It is
+    # gated on engagement + approval + red-confirm and NOT on a target-lock, because there is no
+    # target to lock; generation is gated on all four. A `target` field on the server request
+    # would be the collapse that matters — a scope gate firing on the operator's own box.
+    for still_human_only in ("stop_server", "list_servers"):
+        calls = _call_names(_fn(SLIVER_TREE, still_human_only))
         assert not (calls & gate_calls), (
-            f"{human_only} consults a gate ({sorted(calls & gate_calls)}) — the server "
-            "lifecycle is operator infrastructure with NO target, and collapsing the two "
-            "footings would mean either a gate that cannot be satisfied or a gated path that "
-            "an approval could widen"
+            f"{still_human_only} consults a gate ({sorted(calls & gate_calls)}) — stopping or "
+            "listening to your own servers is not an execution"
         )
 
-    # A gated command carries approval + red-confirm; operator infrastructure carries neither,
-    # because clicking Start IS the approval. Neither shape may drift into the other.
-    implant_fields = set(ImplantRequest.model_fields)
-    assert {"approved", "dangerous_ack"} <= implant_fields, implant_fields
-    server_fields = set(SliverServerRequest.model_fields)
-    assert not ({"approved", "dangerous_ack", "target"} & server_fields), (
-        f"SliverServerRequest must carry no gate fields and no target — got {sorted(server_fields)}"
+    start_calls = _call_names(_fn(SLIVER_TREE, "start_server"))
+    assert "validate_start" in start_calls, (
+        f"start_server must run the REAL gate before spawning; its calls are {sorted(start_calls)}"
     )
-    print("  lifecycle is ungated human-only; generation calls the REAL executor gate: PASS")
+    assert "executor.validate_request" in _call_names(_fn(SLIVER_TREE, "validate_start")), (
+        "validate_start must delegate to the REAL executor gate, not reimplement one"
+    )
+
+    implant_fields = set(ImplantRequest.model_fields)
+    assert {"approved", "dangerous_ack", "target"} <= implant_fields, implant_fields
+    server_fields = set(SliverServerRequest.model_fields)
+    assert {"approved", "dangerous_ack"} <= server_fields, (
+        f"SliverServerRequest must carry both gate fields — got {sorted(server_fields)}"
+    )
+    assert "target" not in server_fields, (
+        "a C2 server has NO target — a target field would mean a scope gate firing on the "
+        f"operator's own box, got {sorted(server_fields)}"
+    )
+    # Both default False, so a client that omits them is refused rather than allowed.
+    fresh = SliverServerRequest()
+    assert fresh.approved is False and fresh.dangerous_ack is False, fresh
+    print("  both halves call the REAL executor gate; only generation carries a target: PASS")
 
 
 def test_generate_delegates_to_the_real_gate_verbatim() -> None:
@@ -447,7 +493,13 @@ def test_generate_delegates_to_the_real_gate_verbatim() -> None:
     assert len(seen) == 1, f"validate_generate must call the real gate exactly once, got {len(seen)}"
     assert verdict is sentinel, "the executor's verdict must be returned unchanged (identity)"
     gated = seen[0]
-    assert isinstance(gated, ExecRequest) and gated.command == S.SLIVER_CLIENT_BIN, gated
+    # The gate must classify the binary that RUNS. A build starts `sliver-server` (which hosts
+    # the console that owns `generate`), not `sliver-client` — which has no such subcommand and
+    # which no build has ever started.
+    assert isinstance(gated, ExecRequest) and gated.command == S.SLIVER_SERVER_BIN, gated
+    assert gated.command == S._implant_argv(_req())[0], (
+        "the gated command must be argv[0] itself, not a constant that can drift from it"
+    )
     assert gated.approved is True and gated.dangerous_ack is True, gated
     # The gates see the REAL argv (superset: argv + the declared target), so nothing the build
     # would actually run is hidden from them.
@@ -552,7 +604,9 @@ def test_every_action_is_audited_via_save_run() -> None:
     restore = _patch_active(_engagement())
     try:
         with _Spy() as spy:
-            srv = S.start_server(SliverServerRequest(engagement_id="eng-slvsafe000"))
+            srv = S.start_server(SliverServerRequest(
+                engagement_id="eng-slvsafe000", approved=True, dangerous_ack=True,
+            ))
             assert len(spy.saved) == 1 and spy.saved[-1].run_id == srv.run_id
             assert spy.saved[-1].finished_at is None, "a live server has not finished"
 
@@ -600,18 +654,44 @@ def test_module_cannot_execute_or_deliver_the_artifact() -> None:
         with _Spy() as spy:
             implant = S.generate_implant(_req())
             argv = spy.run_argv
-            assert spy.run_calls == 1, (
-                f"a generate must run exactly ONE subprocess, ran {spy.run_calls} — a second "
-                "one would be the artifact being executed"
+
+            # *** A GENERATE NOW RUNS EXACTLY TWO SUBPROCESSES, AND BOTH ARE ENUMERATED. ***
+            # It used to be one, and "exactly one" was the whole invariant. Build #7 added a
+            # second — `stat` reading the artifact back, because the console exits 0 whether or
+            # not the build worked and the exit code cannot decide success. Relaxing the count
+            # without pinning WHAT the second call is would have thrown the invariant away, so
+            # every call is classified instead: one build, one read-only size probe, nothing else.
+            assert spy.run_calls == 2, (
+                f"a generate must run exactly TWO subprocesses (build + stat), ran "
+                f"{spy.run_calls} — anything more would be the artifact being executed"
             )
-            # The artifact path appears EXACTLY ONCE, and only as the operand of --save.
-            occurrences = [i for i, t in enumerate(argv) if t == implant.artifact_path]
-            assert len(occurrences) == 1, (occurrences, argv)
-            assert argv[occurrences[0] - 1] == "--save", (
-                f"the artifact path must only ever be the --save operand, got {argv}"
+            build, probe = spy.runs
+            assert build == argv and S.SLIVER_SERVER_BIN in build, build
+            assert probe[:3] == ["docker", "exec", implant.container], probe
+            assert probe[3:] == ["stat", "-c", "%s", implant.artifact_path], (
+                f"the second call must be a READ-ONLY size probe of the artifact, got {probe}"
             )
-            assert argv[0] == "docker" and argv[3] == S.SLIVER_CLIENT_BIN, argv
-            assert implant.artifact_path != argv[3], "the artifact must never be the executable"
+            assert probe[3] != implant.artifact_path, (
+                "the artifact must be `stat`'s OPERAND, never the program `stat` position — "
+                "reading a file is not running it"
+            )
+
+            # The artifact path never appears in the BUILD argv at all: it lives in the console
+            # line, which is written to stdin.
+            assert implant.artifact_path not in argv, argv
+            line = implant.console_line.split()
+            occurrences = [i for i, t in enumerate(line) if t == implant.artifact_path]
+            assert len(occurrences) == 1, (occurrences, line)
+            assert line[occurrences[0] - 1] == "--save", (
+                f"the artifact path must only ever be the --save operand, got {line}"
+            )
+            assert argv[0] == "docker" and argv[4] == S.SLIVER_SERVER_BIN, argv
+            assert implant.artifact_path != argv[4], "the artifact must never be the executable"
+
+            # The one thing written to the build's stdin is the console line. It must not be a
+            # channel for anything else — in particular it must never carry the artifact back in
+            # as something to run.
+            assert spy.spawn.argv is None, "a generate must not spawn a tracked listener"
     finally:
         restore()
     print("  the artifact is only ever WRITTEN — never executed, never delivered: PASS")
@@ -649,7 +729,9 @@ def test_no_shell_and_the_container_is_never_a_request_field() -> None:
     try:
         with _Spy() as spy:
             S.generate_implant(smuggled)
-            assert spy.run_argv[:3] == ["docker", "exec", config.ENGAGE_SANDBOX_CONTAINER], spy.run_argv
+            assert spy.run_argv[:4] == [
+                "docker", "exec", "-i", config.ENGAGE_SANDBOX_CONTAINER,
+            ], spy.run_argv
             assert config.KALI_OPEN_CONTAINER not in spy.run_argv, "must NOT reach the open :kali box"
             assert config.SANDBOX_CONTAINER not in spy.run_argv, "must NOT reach the isolated lab box"
     finally:
@@ -702,7 +784,9 @@ def test_http_routes_add_no_capability_and_stay_human_only() -> None:
             r = client.post("/api/sliver/implants", json=_req().model_dump())
             assert r.status_code == 200, r.text
             assert r.json()["mode"] == "engagement" and r.json()["listener"] == "<listener>"
-            assert spy.run_calls == 1 and len(spy.saved) == 1
+            # Two subprocesses: the build, then the read-only `stat` that decides generated vs
+            # failed (see test_module_cannot_execute_or_deliver_the_artifact for the breakdown).
+            assert spy.run_calls == 2 and len(spy.saved) == 1
     finally:
         restore()
     print(f"  {len(paths)} /api/sliver routes: gated stays gated, preview runs nothing: PASS")

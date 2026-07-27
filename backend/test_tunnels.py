@@ -26,27 +26,37 @@ from pathlib import Path
 from cockpit import config
 from cockpit import tunnels as T
 from cockpit.tunnels import Tunnel, TunnelRefused, TunnelStartRequest
-from test_support import scans
+from test_support import listeners, scans
 
 
 class _Spy:
-    def __init__(self, *, up=True):
+    """Hermetic start: the container is 'up' and the spawn goes through the shared shim.
+
+    The spawn moved into ``cockpit/lifecycle.py`` in build #7, so faking ``T.subprocess.Popen``
+    here would fake a call this module no longer makes — the fake would sit unused and every
+    "a refused start must never spawn" assertion would pass vacuously. It fakes the ONE place
+    the spawn actually lives instead; ``alive``/``bound`` let a test drive the observed outcome.
+    """
+
+    def __init__(self, *, up=True, alive=True, bound=True):
         self.up = up
-        self.popen_argv = None
-        self._orig = (T._container_running, T.subprocess.Popen)
+        self.spawn = listeners.FakeListenerSpawn(alive=alive, bound=bound)
+        self._orig = None
+
+    @property
+    def popen_argv(self):
+        """The argv that reached the spawn, or None if nothing spawned."""
+        return self.spawn.argv
 
     def __enter__(self):
+        self._orig = T._container_running
         T._container_running = lambda name: self.up
-
-        def fake_popen(argv, **kwargs):
-            self.popen_argv = argv
-            return types.SimpleNamespace(poll=lambda: None, kill=lambda: None)
-
-        T.subprocess.Popen = fake_popen
+        self.spawn.__enter__()
         return self
 
     def __exit__(self, *exc):
-        T._container_running, T.subprocess.Popen = self._orig
+        self.spawn.__exit__(*exc)
+        T._container_running = self._orig
 
 
 class _Engagement:
@@ -198,11 +208,76 @@ def test_the_gated_argv_is_the_argv_that_runs() -> None:
                                  engagement_id=eng_id, approved=True, dangerous_ack=True)
         gated = T.server_argv_for(req)
         T.start_tunnel(req)
-        assert spy.popen_argv[:3] == ["docker", "exec", config.ENGAGE_SANDBOX_CONTAINER]
-        assert spy.popen_argv[3:] == gated, (
-            f"the gate classified {gated} but Popen ran {spy.popen_argv[3:]}"
+        # ligolo is a console binary, so the exec carries `-i`; the container is still the
+        # hardcoded constant and the server tokens are still exactly what the gate classified.
+        assert spy.popen_argv[:4] == ["docker", "exec", "-i", config.ENGAGE_SANDBOX_CONTAINER], \
+            spy.popen_argv[:4]
+        assert spy.spawn.container_argv() == gated, (
+            f"the gate classified {gated} but the spawn ran {spy.spawn.container_argv()}"
         )
     print("  the argv the gate classified IS the argv that runs: PASS")
+
+
+def test_only_the_console_binary_gets_a_forwarded_stdin() -> None:
+    """`-i` is per-binary, and both halves of that claim are checked against the real spawn.
+
+    ligolo-proxy is an interactive console: without a stdin that stays open it reads EOF and
+    exits 0, which is exactly the bug where a dead process was reported as `listening`. chisel's
+    server is a plain daemon and needs no stdin at all, so it must NOT get one — least privilege
+    per binary rather than one blanket default.
+    """
+    for kind, want_i in (("ligolo", True), ("chisel", False)):
+        T.reset()
+        with _Spy() as spy, _Engagement() as eng_id:
+            T.start_tunnel(TunnelStartRequest(
+                kind=kind, lhost="10.8.0.2", engagement_id=eng_id,
+                approved=True, dangerous_ack=True,
+            ))
+            assert T.needs_console_stdin(kind) is want_i, kind
+            assert spy.spawn.interactive is want_i, (
+                f"{kind}: docker exec -i present={spy.spawn.interactive}, expected {want_i} "
+                f"(argv={spy.popen_argv[:4]})"
+            )
+            # The container process must never be handed a writer object either way.
+            assert spy.spawn.child_stdin is not None, "stdin must be explicitly chosen, not left open"
+    print("  only the console binary (ligolo) gets `docker exec -i`; chisel does not: PASS")
+
+
+def test_a_listener_that_dies_is_a_refusal_not_a_live_tunnel() -> None:
+    """*** THE BUILD #7 DEFECT, PINNED. ***
+
+    `status` used to be assigned at Popen time and never observed, so a ligolo-proxy that read
+    EOF and exited 0 came back as `status="listening"` with an agent one-liner for a port with
+    nothing behind it. A dead process must now REFUSE, and an unconfirmed bind must report
+    `starting` rather than claim a listener nobody looked at.
+    """
+    # 1. the process died -> refusal, nothing registered
+    T.reset()
+    with _Spy(alive=False) as spy, _Engagement() as eng_id:
+        req = TunnelStartRequest(kind="ligolo", lhost="10.8.0.2", engagement_id=eng_id,
+                                 approved=True, dangerous_ack=True)
+        raised = None
+        try:
+            T.start_tunnel(req)
+        except TunnelRefused as exc:
+            raised = exc
+        assert raised is not None, "a listener that exited immediately must REFUSE, not report up"
+        assert raised.gate == "unavailable", raised.gate
+        assert "did not stay up" in raised.reason, raised.reason
+        assert spy.spawn.spawned, "the refusal must come from OBSERVING the spawn, not skipping it"
+        assert not T.list_tunnels(), "a dead listener must not be registered as a tunnel"
+
+    # 2. alive but the bind is unconfirmed -> 'starting', never 'listening'
+    for bound, want in ((None, "starting"), (False, "starting"), (True, "listening")):
+        T.reset()
+        with _Spy(alive=True, bound=bound), _Engagement() as eng_id:
+            tun = T.start_tunnel(TunnelStartRequest(
+                kind="chisel", lhost="10.8.0.2", engagement_id=eng_id,
+                approved=True, dangerous_ack=True,
+            ))
+            assert tun.status == want, f"port probe {bound!r} -> status {tun.status!r}, want {want!r}"
+            assert tun.liveness, "the model must carry WHAT was observed, not just a verdict"
+    print("  a dead listener refuses; an unconfirmed bind is 'starting', not 'listening': PASS")
 
 
 def test_the_request_carries_the_gate_fields() -> None:
@@ -343,6 +418,8 @@ if __name__ == "__main__":
     test_starting_a_listener_needs_approval_and_the_red_confirm()
     test_both_tunnel_binaries_actually_trip_the_heuristic()
     test_the_gated_argv_is_the_argv_that_runs()
+    test_only_the_console_binary_gets_a_forwarded_stdin()
+    test_a_listener_that_dies_is_a_refusal_not_a_live_tunnel()
     test_the_request_carries_the_gate_fields()
     test_start_runs_in_engage_sandbox_hardcoded()
     test_refuses_when_sandbox_down_or_capped()

@@ -1575,16 +1575,21 @@ def sliver_list_servers() -> list[cockpit_sliver.SliverServer]:
 
 @app.post("/api/sliver/servers", response_model=cockpit_sliver.SliverServer)
 def sliver_start_server(
-    req: cockpit_sliver.SliverServerRequest | None = Body(default=None),
+    req: cockpit_sliver.SliverServerRequest = Body(...),
 ) -> cockpit_sliver.SliverServer:
-    """Start the operator's OWN Sliver server in the engage sandbox. *** HUMAN-ONLY. ***
+    """Start the operator's OWN Sliver server in the engage sandbox. *** HUMAN-ONLY *** + GATED.
 
-    No target, therefore no target gate: the daemon listens on the operator's box and touches
-    nothing belonging to the client. 409 if the sandbox is down, the live cap is hit, or the
-    docker CLI is missing — and in each case NOTHING runs.
+    403 naming the gate when the engagement, the approval or the red-confirm is missing —
+    NOTHING spawns. 409 if the sandbox is down, the live cap is hit, the docker CLI is missing,
+    or the daemon did not stay up.
+
+    THE BODY IS NOW REQUIRED. It used to default to an empty request, which after build #7's
+    gating would have meant "an omitted body is an unapproved start" — a 403 for a client that
+    sent nothing, instead of a clear 422 saying which fields a start needs. A gate should refuse
+    a request, not a blank.
     """
     try:
-        return cockpit_sliver.start_server(req or cockpit_sliver.SliverServerRequest())
+        return cockpit_sliver.start_server(req)
     except cockpit_sliver.SliverRefused as exc:
         raise _sliver_http_error(exc)
 
@@ -1662,6 +1667,10 @@ class ObfuscationListenerOut(BaseModel):
         "key MASKED. HackPit never delivers or executes it."
     )
     setup_note: str = ""
+    liveness: str = Field(
+        "", description="What was OBSERVED about the server process and its port after the "
+        "settle window — the evidence behind `status`, not a restatement of it."
+    )
     started_at: str
     stopped_at: str | None = None
     engagement_id: str | None = None
@@ -1686,6 +1695,23 @@ def _listener_public(lis: "cockpit_obfuscation.ObfuscationListener") -> dict[str
     return lis.model_dump(exclude={"secret"})
 
 
+def _obfuscation_http_error(exc: "cockpit_obfuscation.ObfuscationRefused") -> HTTPException:
+    """Map a DNS-tunnel refusal to a status code.
+
+    Same split the pivot listener uses, and for the same reason: a SAFETY refusal (engagement /
+    approval / danger) is **403** naming the gate and carrying the danger reasons so the UI can
+    render the red-confirm, while an AVAILABILITY problem (sandbox down, cap hit, the listener
+    did not stay up) is **409**. Collapsing the two would leave the panel unable to tell "you
+    must confirm this" from "the box is not there".
+    """
+    status = 404 if exc.gate == "unknown" else 409 if exc.gate in {"unavailable", "limit"} else 403
+    return HTTPException(status_code=status, detail={
+        "gate": exc.gate,
+        "reason": exc.reason,
+        "dangerous_flags": list(getattr(exc, "dangerous_flags", []) or []),
+    })
+
+
 @app.get("/api/obfuscation/status")
 def obfuscation_status() -> dict[str, Any]:
     """Engage-sandbox availability + live listener count. Read-only."""
@@ -1702,11 +1728,11 @@ def obfuscation_list_listeners() -> list[dict[str, Any]]:
 def obfuscation_start_listener(
     req: cockpit_obfuscation.ObfuscationRequest = Body(...),
 ) -> dict[str, Any]:
-    """Start a dnscat2/iodine listener in the engage sandbox. *** HUMAN-ONLY. ***
+    """Start a dnscat2/iodine listener in the engage sandbox. *** HUMAN-ONLY *** and GATED.
 
-    Operator infrastructure for a zone the OPERATOR owns and has had delegated — no target, so
-    no gate beyond a human clicking Start. 409 if the sandbox is down, the cap is hit or docker
-    is missing (nothing runs); 422 if the zone/secret/tunnel-net bounds reject the request.
+    403 naming the gate when the engagement, the approval or the red-confirm is missing —
+    NOTHING spawns. 409 if the sandbox is down, the cap is hit, docker is missing or the
+    listener did not stay up; 422 if the zone/secret/tunnel-net bounds reject the request.
 
     The response carries the CLIENT one-liner with the key masked. Carrying that line to the
     far side is the operator's own manual step — HackPit cannot reach a machine it has not
@@ -1715,8 +1741,7 @@ def obfuscation_start_listener(
     try:
         return _listener_public(cockpit_obfuscation.start_listener(req))
     except cockpit_obfuscation.ObfuscationRefused as exc:
-        status = 404 if exc.gate == "unknown" else 409
-        raise HTTPException(status_code=status, detail={"gate": exc.gate, "reason": exc.reason})
+        raise _obfuscation_http_error(exc)
 
 
 @app.delete("/api/obfuscation/listeners/{lid}", response_model=ObfuscationListenerOut)
@@ -1725,8 +1750,7 @@ def obfuscation_stop_listener(lid: str) -> dict[str, Any]:
     try:
         return _listener_public(cockpit_obfuscation.stop_listener(lid))
     except cockpit_obfuscation.ObfuscationRefused as exc:
-        status = 404 if exc.gate == "unknown" else 409
-        raise HTTPException(status_code=status, detail={"gate": exc.gate, "reason": exc.reason})
+        raise _obfuscation_http_error(exc)
 
 
 # --------------------------------------------------------------------------- #

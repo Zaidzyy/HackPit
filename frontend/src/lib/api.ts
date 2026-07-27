@@ -1406,6 +1406,8 @@ export type Tunnel = {
   /** The one-liner to paste on the compromised host. */
   agent_command: string;
   setup_note: string;
+  /** What was OBSERVED about the process and its port — the evidence behind `status`. */
+  liveness: string;
   started_at: string;
   engagement_id: string | null;
 };
@@ -1507,6 +1509,8 @@ export type SliverServer = {
   stopped_at: string | null;
   engagement_id: string | null;
   setup_note: string;
+  /** What was OBSERVED about the process and its port — the evidence behind `status`. */
+  liveness: string;
 };
 
 export type Implant = {
@@ -1557,8 +1561,20 @@ export const getSliverStatus = (signal?: AbortSignal) =>
 export const listSliverServers = (signal?: AbortSignal) =>
   getJSON<SliverServer[]>("/api/sliver/servers", signal);
 
+/**
+ * Start the operator's own Sliver C2 server. GATED since build #7: `engagement_id` is REQUIRED
+ * and both confirms must be explicit — the server used to be ungated on a precedent (the pivot
+ * listener) that build #5's I2 finding overturned, and Sliver's config can persist listener jobs
+ * that come up with the daemon. A 403 carries `{gate, reason}`; render the red-confirm from it
+ * rather than retrying with `dangerous_ack` set behind the operator's back.
+ */
 export const startSliverServer = (
-  body: { port?: number | null; engagement_id?: string | null },
+  body: {
+    port?: number | null;
+    engagement_id: string;
+    approved: boolean;
+    dangerous_ack: boolean;
+  },
   signal?: AbortSignal
 ) => postJSON<SliverServer>("/api/sliver/servers", body, signal);
 
@@ -1664,6 +1680,8 @@ export type DnsListener = {
   /** The CLIENT half, to run BY HAND on the far side. The pre-shared key is MASKED. */
   client_command: string;
   setup_note: string;
+  /** What was OBSERVED about the process and its port — the evidence behind `status`. */
+  liveness: string;
   started_at: string;
   stopped_at: string | null;
   engagement_id: string | null;
@@ -1675,13 +1693,22 @@ export const getObfuscationStatus = (signal?: AbortSignal) =>
 export const listDnsListeners = (signal?: AbortSignal) =>
   getJSON<DnsListener[]>("/api/obfuscation/listeners", signal);
 
+/**
+ * Start a DNS-tunnel listener. GATED since build #7: `engagement_id` is REQUIRED and both
+ * confirms must be explicit. A DNS tunnel is the server end of a covert exfil channel, which is
+ * exactly what I2 gated the pivot listener for. A 403 carries `{gate, reason, dangerous_flags}`
+ * — render the red-confirm from those flags; a 409 means the sandbox is down, the cap is hit, or
+ * the listener did not stay up.
+ */
 export const startDnsListener = (
   body: {
     kind: string;
     zone: string;
     tunnel_net?: string;
     secret?: string | null;
-    engagement_id?: string | null;
+    engagement_id: string;
+    approved: boolean;
+    dangerous_ack: boolean;
   },
   signal?: AbortSignal
 ) => postJSON<DnsListener>("/api/obfuscation/listeners", body, signal);

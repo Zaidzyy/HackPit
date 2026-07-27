@@ -11,10 +11,14 @@ actually happens:
      orchestrator.py / cockpit/executor.py / adgraph/orchestrator.py included, is scanned and
      must not name it. A covert channel an agent could raise is an autonomous covert channel.
      Scanned WITH a positive control, so the scan cannot pass vacuously.
-  2. THE LIFECYCLE IS HUMAN-ONLY AND UNGATED BY DESIGN. There is no target, so there is
-     nothing to scope-check: the AST call graph must show NO gate call in start/stop, and the
-     request must carry no approval/red-confirm/target field. (Contrast Sliver, whose implant
-     GENERATION is gated — that surface has an artifact aimed at someone else's machine.)
+  2. THE LIFECYCLE IS HUMAN-ONLY AND THE START IS GATED. Build #7 gated the start on
+     engagement + approval + red-confirm: this module had justified being ungated by citing the
+     pivot listener, a precedent build #5's I2 finding overturned, and I2's argument — a
+     listener whose purpose is to carry traffic out of a network the scope gate has never seen
+     is an execution, not a lifecycle no-op — applies to a covert DNS channel directly. What
+     stays true is that there is NO TARGET: no target-lock, no target/host field, and the
+     executor is reached through a FUNCTION-LOCAL import so no module attribute is left for
+     anything else to grab. stop/list remain ungated.
   3. *** THE CLIENT HALF IS NEVER DELIVERED. *** operator_oneliner is a pure string builder —
      asserted at the AST level (its only calls are list/string construction) — and the module
      contains NO delivery primitive at all: no file copy, no stdin pipe, no HTTP/SSH/SMB.
@@ -49,7 +53,7 @@ from cockpit import config
 from cockpit import executor as EX
 from cockpit import obfuscation as O
 from cockpit.obfuscation import ObfuscationRefused, ObfuscationRequest
-from test_support import scans
+from test_support import listeners, scans
 
 BACKEND = Path(__file__).resolve().parent
 OBF_SRC = Path(O.__file__).read_text(encoding="utf-8")
@@ -239,27 +243,61 @@ class _FakeProc:
         self._alive = False
 
 
+def _engagement():
+    """The engagement a gated start is attributed to. The DNS listener start is GATED since
+    build #7, so these tests need one to be ACTIVE — otherwise every start below would be
+    testing the engagement refusal instead of what it means to test."""
+    from cockpit.models import EngagementRecord
+
+    return EngagementRecord(
+        engagement_id="eng-obfsafe000",
+        target="scanme.nmap.org",
+        authorization="authorized test target",
+        active=True,
+        entered_at="2026-07-27T00:00:00+00:00",
+        scope="scanme.nmap.org",
+        scope_include=["scanme.nmap.org"],
+        allowed_hosts=["scanme.nmap.org"],
+    )
+
+
 class _Spy:
     def __init__(self, *, up=True):
         self.up = up
-        self.popen_argv: list[str] | None = None
-        self.popen_calls = 0
         self.saved: list = []
-        self._orig = (O._container_running, O.subprocess.Popen, O.runstore.save_run)
+        # The spawn moved into cockpit/lifecycle.py in build #7; faking O.subprocess.Popen would
+        # fake a call this module no longer makes.
+        self.spawn = listeners.FakeListenerSpawn()
+        self._orig = None
+        self._restore_eng = None
+
+    @property
+    def popen_argv(self) -> list[str] | None:
+        return self.spawn.argv
+
+    @property
+    def popen_calls(self) -> int:
+        return len(self.spawn.spawns)
 
     def __enter__(self):
-        def fake_popen(argv, **kw):
-            self.popen_calls += 1
-            self.popen_argv = argv
-            return _FakeProc(argv)
+        from cockpit import engagement as ENG
 
+        self._orig = (O._container_running, O.runstore.save_run)
         O._container_running = lambda name: self.up
-        O.subprocess.Popen = fake_popen
         O.runstore.save_run = lambda rec: self.saved.append(rec)
+        self.spawn.__enter__()
+
+        rec = _engagement()
+        orig_active = ENG.get_active
+        ENG.get_active = lambda eid: rec if eid == rec.engagement_id else None
+        self._restore_eng = lambda: setattr(ENG, "get_active", orig_active)
         return self
 
     def __exit__(self, *exc):
-        (O._container_running, O.subprocess.Popen, O.runstore.save_run) = self._orig
+        self.spawn.__exit__(*exc)
+        if self._restore_eng is not None:
+            self._restore_eng()
+        (O._container_running, O.runstore.save_run) = self._orig
         O.reset()
         return False
 
@@ -267,7 +305,7 @@ class _Spy:
 def _dnscat(**over) -> ObfuscationRequest:
     base = dict(
         kind="dnscat2", zone="tunnel.operator-owned.example", secret=SECRET,
-        engagement_id="eng-obfsafe000",
+        engagement_id="eng-obfsafe000", approved=True, dangerous_ack=True,
     )
     base.update(over)
     return ObfuscationRequest(**base)
@@ -277,6 +315,7 @@ def _iodine(**over) -> ObfuscationRequest:
     base = dict(
         kind="iodine", zone="t.operator-owned.example", secret=SECRET,
         tunnel_net="10.99.53.1/24", engagement_id="eng-obfsafe000",
+        approved=True, dangerous_ack=True,
     )
     base.update(over)
     return ObfuscationRequest(**base)
@@ -371,44 +410,85 @@ def test_the_main_py_allow_list_stops_at_the_route_functions() -> None:
 # 2. THE LIFECYCLE IS HUMAN-ONLY AND UNGATED BY DESIGN
 # --------------------------------------------------------------------------- #
 def test_listener_lifecycle_is_human_only_and_carries_no_gate_fields() -> None:
-    """A listener has no target, so there is nothing to gate — and nothing that could widen it."""
+    """The start is GATED (build #7); it still has no target, and still no route in from the loop.
+
+    *** THIS TEST USED TO ASSERT THE OPPOSITE, AND THAT IS THE FINDING. *** It pinned "the
+    lifecycle consults NO gate and the request carries NO approved/dangerous_ack", which encoded
+    a design decision the module justified by citing the pivot listener — a precedent build #5's
+    I2 finding had already overturned. A DNS-tunnel listener is the server end of a covert exfil
+    channel, so I2's argument applies to it directly and the start is now gated on engagement +
+    approval + red-confirm.
+
+    What did NOT change is the containment, and this test still pins all of it: the listener has
+    no target and no target-lock (there is nothing on the client's network to scope), the module
+    exposes no executor/orchestrator/kali handle, and the gate is reached through a
+    FUNCTION-LOCAL import so no module attribute exists for anything else to grab.
+    """
     gate_calls = {
         "executor.validate_request", "validate_request", "EX.validate_request",
         "executor.resolve_mode", "executor.iter_run",
     }
-    for human_only in ("start_listener", "stop_listener", "list_listeners"):
-        calls = _call_names(_fn(OBF_TREE, human_only))
+    # Stopping or listing your own listeners is not an execution — those stay ungated.
+    for still_ungated in ("stop_listener", "list_listeners"):
+        calls = _call_names(_fn(OBF_TREE, still_ungated))
         assert not (calls & gate_calls), (
-            f"{human_only} consults the executor ({sorted(calls & gate_calls)}) — the listener "
-            "is operator infrastructure with NO target; wiring it to the gated path would give "
-            "the executor (and therefore anything that can reach the executor) a route here"
+            f"{still_ungated} consults the executor ({sorted(calls & gate_calls)}) — stopping a "
+            "listener you started is not an action against anything"
         )
-    # What is actually BOUND, read off the import statements — so the module docstring's prose
-    # ("the executor must have NO path here") cannot trip this, and no spelling can slip past.
-    imported: set[str] = set()
-    for node in ast.walk(OBF_TREE):
+    # ...but the START must, and through the REAL gate rather than a local reimplementation.
+    start_calls = _call_names(_fn(OBF_TREE, "start_listener"))
+    assert "validate_start" in start_calls, (
+        f"start_listener must run the gate before spawning; its calls are {sorted(start_calls)}"
+    )
+    assert "executor.validate_request" in _call_names(_fn(OBF_TREE, "validate_start")), (
+        "validate_start must delegate to the REAL executor gate, not reimplement one"
+    )
+
+    # THE HANDLE, not the call: the executor is reached through a function-local import (the same
+    # shape tunnels.py uses), so nothing else in the process can pick `obfuscation.executor` up.
+    for attr in ("executor", "orchestrator", "validate_request", "iter_run", "run_kali"):
+        assert not hasattr(O, attr), (
+            f"obfuscation must not EXPOSE {attr!r} as a module attribute — the gate is reached "
+            "through a function-local import precisely so no handle is left lying around"
+        )
+
+    # What is actually BOUND at module level, read off the import statements. `executor` and
+    # `models` are permitted now (the gate needs them); the agent/loop/:kali side is not, and
+    # that is the half that was ever load-bearing.
+    module_level: set[str] = set()
+    for node in OBF_TREE.body:
         if isinstance(node, ast.Import):
-            imported |= {a.asname or a.name.split(".")[0] for a in node.names}
-            imported |= {a.name for a in node.names}
+            module_level |= {a.asname or a.name.split(".")[0] for a in node.names}
+            module_level |= {a.name for a in node.names}
         elif isinstance(node, ast.ImportFrom):
-            imported |= {a.asname or a.name for a in node.names}
-            imported.add(node.module or "")
+            module_level |= {a.asname or a.name for a in node.names}
+            module_level.add(node.module or "")
     for forbidden in ("executor", "orchestrator", "kali", "session", "cockpit.executor",
                       "adgraph", "agent"):
-        assert forbidden not in imported, (
-            f"obfuscation.py imports {forbidden!r} — it must have no handle on the executor, "
-            f"the agent/loop or the open :kali box. Imports: {sorted(imported)}"
+        assert forbidden not in module_level, (
+            f"obfuscation.py imports {forbidden!r} AT MODULE LEVEL — the agent/loop and :kali "
+            f"must have no handle here, and the gate is function-local. Imports: "
+            f"{sorted(module_level)}"
         )
-    for attr in ("executor", "orchestrator", "validate_request", "iter_run", "run_kali"):
-        assert not hasattr(O, attr), f"obfuscation must not expose {attr!r}"
 
     fields = set(ObfuscationRequest.model_fields)
-    for forbidden in ("approved", "dangerous_ack", "target", "host", "container", "sandbox"):
+    # The gate fields are now REQUIRED to exist...
+    assert {"approved", "dangerous_ack"} <= fields, (
+        f"the DNS listener start is gated — its request must carry both confirms, got "
+        f"{sorted(fields)}"
+    )
+    fresh = ObfuscationRequest(kind="dnscat2", zone="t.operator.example")
+    assert fresh.approved is False and fresh.dangerous_ack is False, (
+        "both must default False — a default of True would mean an omitted field silently "
+        "grants exactly what the field was added to require"
+    )
+    # ...and the target-shaped ones are still forbidden.
+    for forbidden in ("target", "host", "container", "sandbox"):
         assert forbidden not in fields, (
-            f"ObfuscationRequest.{forbidden} would give the lifecycle a target or a gate it must "
-            f"not have — got {sorted(fields)}"
+            f"ObfuscationRequest.{forbidden} would give the lifecycle a target it must not have "
+            f"— the zone is the OPERATOR's. Got {sorted(fields)}"
         )
-    print("  the listener lifecycle is ungated human-only and carries no target/gate field: PASS")
+    print("  the listener start is gated, has no target, and leaves no executor handle: PASS")
 
 
 # --------------------------------------------------------------------------- #
@@ -577,7 +657,9 @@ def test_no_shell_and_the_container_is_never_a_request_field() -> None:
     with _Spy() as spy:
         O.start_listener(smuggled)
         argv = spy.popen_argv
-        assert argv[:3] == ["docker", "exec", config.ENGAGE_SANDBOX_CONTAINER], argv
+        # `-i` because dnscat2-server is a console binary that dies on EOF; the container is
+        # still the hardcoded constant, which is what this test is about.
+        assert argv[:4] == ["docker", "exec", "-i", config.ENGAGE_SANDBOX_CONTAINER], argv
         assert config.KALI_OPEN_CONTAINER not in argv, "must NOT reach the open :kali box"
         assert config.SANDBOX_CONTAINER not in argv, "must NOT reach the isolated lab box"
         assert "sh" not in argv and "-c" not in argv, "the listener is argv-only (no shell)"
@@ -647,7 +729,7 @@ def test_the_masked_one_liner_is_authoritative_in_the_module() -> None:
         # THE CORRUPTION CASE. `operator` is a legal 8-char key AND a substring of the zone;
         # str.replace masking rendered `***-owned.example` here. Building cannot.
         lis = O.start_listener(
-            ObfuscationRequest(kind="dnscat2", zone="operator-owned.example", secret="operator")
+            _dnscat(zone="operator-owned.example", secret="operator")
         )
         assert lis.client_command == (
             f"{O.DNSCAT2_CLIENT_BIN} --secret={O.SECRET_MASK} operator-owned.example"

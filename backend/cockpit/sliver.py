@@ -6,16 +6,24 @@ things carry completely different risk, so this module keeps them on two differe
 footings and NEVER collapses them:
 
 SERVER LIFECYCLE — :func:`start_server` / :func:`stop_server` / :func:`list_servers`.
-    HUMAN-ONLY, no gate beyond "a human clicked Start". A C2 server is OPERATOR
-    INFRASTRUCTURE running on the operator's own box: it has no target, touches nothing
-    belonging to the client, and starting it is not an action against a system under test.
-    That is exactly the posture ``cockpit/tunnels.py`` gives a pivot listener, and this
-    mirrors it structurally — a hardcoded container, a liveness probe, a live cap, a
-    tracked process, a refusal that runs nothing. What makes it safe is the same thing
-    that makes the tunnel listener safe: the autonomous path has ZERO route here. A C2
-    server an agent could raise is an autonomous C2. Regression-locked by a source scan
+    HUMAN-ONLY *and* GATED: engagement + approval + red-confirm, through the REAL
+    ``executor.validate_request``, before anything spawns. A hardcoded container, a live
+    cap, a tracked process, a refusal that runs nothing.
+
+    The gate arrived in build #7. This surface used to be ungated on the grounds that a C2
+    server is operator infrastructure with no target — an argument it made by pointing at
+    the pivot listener, which build #5's I2 finding had since tightened. The argument is
+    stronger here than it was there (a Sliver daemon opens no channel toward anything under
+    test; the steps that do are separately gated) but it is not sufficient, because Sliver's
+    config can PERSIST listener jobs that come up with the daemon. See :func:`validate_start`.
+
+    Human-only remains the load-bearing property: the autonomous path has ZERO route here.
+    A C2 server an agent could raise is an autonomous C2. Regression-locked by a source scan
     over the whole backend tree (test_sliver.py::test_sliver_surface_is_human_only), the
-    same lock ``:kali``, the tunnels and live sessions have.
+    same lock ``:kali``, the tunnels and live sessions have. The gate is belt to that
+    suspenders.
+
+    Its status is OBSERVED, not assigned — see ``cockpit/lifecycle.py``.
 
 IMPLANT GENERATION — :func:`generate_implant`.
     A GATED COMMAND. It builds an :class:`ExecRequest` and runs the REAL
@@ -47,6 +55,21 @@ IMPLANT GENERATION — :func:`generate_implant`.
     REFUSED at the target gate. That is friction in the safe direction — the recommended
     shape is the ``<listener>`` placeholder, which names no host and passes cleanly.
 
+HOW A BUILD ACTUALLY RUNS, and why it is not a plain argv.
+    Sliver 1.5 has NO ``generate`` subcommand on either binary — ``generate`` is a command of
+    the interactive CONSOLE, which ``sliver-server`` hosts when run with no subcommand. The
+    build therefore runs ``docker exec -i <container> sliver-server`` (still an argv LIST) and
+    writes one ``generate …`` line to its stdin, followed by ``exit``. Verified against the
+    pinned 1.5.42 image: 16s, a 14 MB implant on disk.
+
+    Two consequences, both handled rather than hoped about:
+      * The console line is TEXT hitting Sliver's own flag parser, so ``listener`` — the only
+        free-form value in it — is pinned by ``_LISTENER_RE``, and the server-chosen artifact
+        path is checked whitespace-free. Nothing here reaches a shell: the argv is still a list.
+      * The console exits 0 whether or not the build inside it worked, so the exit code cannot
+        decide success. ``generated`` vs ``failed`` is decided by READING THE ARTIFACT BACK out
+        of the container (:func:`_artifact_size`).
+
 CONTAINMENT, the rest of it:
     * argv lists only, handed to subprocess as a list. Never a shell string, so no request
       value can ever reach a shell.
@@ -67,6 +90,7 @@ CONTAINMENT, the rest of it:
 from __future__ import annotations
 
 import os as _os
+import re
 import subprocess
 import threading
 import uuid
@@ -76,13 +100,28 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from . import config, executor, loot, runstore
+from . import config, executor, lifecycle, loot, runstore
 from .models import ExecRejected, ExecRequest, RunRecord
 
 # The two binaries, as they are named inside the sandbox image. Constants, never request
 # fields — the same discipline the container names get.
+#
+# GENERATION RUNS THROUGH sliver-server, NOT sliver-client, and that is not a preference.
+# In Sliver 1.5 `generate` is an INTERACTIVE CONSOLE command; neither binary has it as a
+# subcommand (`sliver-client --help` offers only completion/help/import/version). The console is
+# hosted by `sliver-server` run with no subcommand, so that is the binary a build actually
+# executes and therefore the binary the gate classifies. Both are in the C2 danger set, so the
+# red-confirm fires either way — but a gate must name the process that runs.
 SLIVER_SERVER_BIN = "sliver-server"
 SLIVER_CLIENT_BIN = "sliver-client"
+
+# The operator-side callback, bounded. A build is driven by writing a `generate …` line to the
+# Sliver CONSOLE, which parses it into tokens — so `listener` is the one free-form value that
+# reaches a parser, and an unbounded one could smuggle extra console flags after a space. Every
+# other interpolated value (os/arch/format/transport) comes from a fixed set, and the --save path
+# is server-chosen. Hostname/IP characters, an optional :port, IPv6 in brackets, or an
+# angle-bracket placeholder; no whitespace, and never a leading '-' so it cannot read as a flag.
+_LISTENER_RE = re.compile(r"^(?!-)[A-Za-z0-9._:\[\]<>-]{1,255}$")
 
 # The server's default daemon port (Sliver's own default multiplayer port).
 SLIVER_DEFAULT_PORT = 31337
@@ -116,10 +155,9 @@ def _now() -> str:
 class SliverServerRequest(BaseModel):
     """Start the operator's OWN Sliver server. NO container field — the box is a constant.
 
-    There is no target here BY DEFINITION: the server listens on the operator's sandbox and
-    nothing about starting it reaches a system under test. ``engagement_id`` only tags the
-    record so the server shows up in the right engagement's audit trail; it does not gate
-    anything and it cannot redirect where the server runs.
+    The daemon listens on the operator's own sandbox, so nothing here can redirect WHERE it
+    runs. ``engagement_id`` is no longer tagging-only: it is REQUIRED, and the start is gated —
+    see :func:`validate_start`.
     """
 
     port: int | None = Field(
@@ -127,7 +165,21 @@ class SliverServerRequest(BaseModel):
         description="Daemon port inside the engage sandbox. Omit for the Sliver default.",
     )
     engagement_id: str | None = Field(
-        None, description="Engagement to record this server against (tagging only — not a gate)."
+        None,
+        description="The engagement this C2 server belongs to. REQUIRED — a C2 daemon is "
+        "attributed and scoped like every other engagement action.",
+    )
+    # THE GATE FIELDS, the same shape the pivot listener got in I2. Both default False, so a
+    # client that omits them is REFUSED rather than allowed.
+    approved: bool = Field(
+        False,
+        description="Explicit human approval for starting this C2 server. Never defaulted true, "
+        "never batched.",
+    )
+    dangerous_ack: bool = Field(
+        False,
+        description="The explicit red-confirm. sliver-server is in the C2 danger set, so the "
+        "heuristic always flags it and this is always required.",
     )
 
 
@@ -135,7 +187,11 @@ class SliverServer(BaseModel):
     """One Sliver server this backend started. Operator infrastructure, not a target."""
 
     id: str
-    status: str = Field(description="listening | down.")
+    status: str = Field(
+        description="starting | listening | down — OBSERVED after the settle window, never "
+        "assigned at spawn time. 'listening' means the daemon port was confirmed bound inside "
+        "the container; 'starting' means the process is up but the bind is unconfirmed."
+    )
     container: str
     port: int
     run_id: str
@@ -143,6 +199,9 @@ class SliverServer(BaseModel):
     stopped_at: str | None = None
     engagement_id: str | None = None
     setup_note: str = ""
+    liveness: str = Field(
+        "", description="What was actually observed about the server process and its port."
+    )
 
 
 class ImplantRequest(BaseModel):
@@ -218,6 +277,18 @@ class ImplantRequest(BaseModel):
             raise ValueError(f"transport must be one of {tuple(LISTENER_FLAGS)}")
         return v
 
+    @field_validator("listener")
+    @classmethod
+    def _listener_ok(cls, v: str) -> str:
+        """Bound the ONE free-form value that reaches the Sliver console's parser."""
+        v = str(v).strip()
+        if not _LISTENER_RE.match(v):
+            raise ValueError(
+                "listener must be a bare host/IP with an optional :port (or a <placeholder>) — "
+                "no whitespace, no shell or console metacharacters, and it may not start with '-'"
+            )
+        return v
+
 
 class Implant(BaseModel):
     """One generated artifact. It exists on disk; nothing here delivers or runs it."""
@@ -239,6 +310,17 @@ class Implant(BaseModel):
         "LAB, which has no loot mount by design and whose artifacts are not durable."
     )
     argv: list[str] = Field(description="The exact argv that ran — auditable, never a shell.")
+    console_line: str = Field(
+        "",
+        description="The `generate` line driven into the Sliver console's stdin. Auditable, and "
+        "never a shell string — the argv above is still a list.",
+    )
+    size_bytes: int | None = Field(
+        None,
+        description="The artifact's size INSIDE the container, read back after the build. None "
+        "means nothing was written — which is what decides 'generated' vs 'failed', not the "
+        "console's exit code.",
+    )
     exit_code: int | None = None
     detail: str = ""
     generated_at: str
@@ -263,7 +345,15 @@ class SliverRefused(RuntimeError):
 class _LiveServer:
     model: SliverServer
     record: RunRecord
-    proc: "subprocess.Popen[str] | None" = field(default=None)
+    watched: "lifecycle.Watched | None" = field(default=None)
+    # The server argv, kept so a stop can reap the daemon INSIDE the container. Killing the
+    # `docker exec` client does not stop what it started — see lifecycle.Watched.kill.
+    server_argv: list[str] = field(default_factory=list)
+
+    @property
+    def proc(self):
+        """The spawned server process, or None. Read-only view for liveness refresh."""
+        return self.watched.proc if self.watched is not None else None
 
 
 _servers: dict[str, _LiveServer] = {}
@@ -294,16 +384,61 @@ def _save(record: RunRecord) -> None:
 # --------------------------------------------------------------------------- #
 # SERVER LIFECYCLE — *** HUMAN-ONLY ***. Operator infrastructure, no target.
 # --------------------------------------------------------------------------- #
-def start_server(req: SliverServerRequest) -> SliverServer:
-    """Start the operator's Sliver server in the ENGAGE sandbox. *** HUMAN-ONLY. ***
+def validate_start(req: SliverServerRequest) -> ExecRejected | None:
+    """The gate verdict for starting the C2 server, spawning nothing. PURE.
 
-    Clicking Start IS the approval: this runs the operator's own C2 daemon on the
-    operator's own sandbox, with no target, so no target-scope gate applies (the identical
-    reasoning the pivot-listener lifecycle uses). Refuses — running
-    nothing — if the sandbox is down, the live cap is hit, or the docker CLI is missing.
+    WHY THIS IS GATED AT ALL (build #7). The old posture was "clicking Start IS the approval",
+    justified by pointing at the pivot listener — and build #5's I2 finding then tightened the
+    pivot listener, leaving this citing a precedent that no longer existed.
+
+    Re-argued on its own terms, a Sliver daemon is genuinely WEAKER than a DNS or pivot listener:
+    starting it opens no channel toward anything under test. It binds a multiplayer port on the
+    operator's own sandbox for the operator's own console, and the steps that DO reach a target
+    — creating a listener, generating an implant, delivering it — are separate and separately
+    gated. That argument is real, and it is not quite sufficient: Sliver's server config can
+    PERSIST listener jobs, which come back up with the daemon. "Starting it is inert" is
+    therefore a property of a config file, not a property of this code, and a gate should not
+    rest on something this module cannot see.
+
+    So it is gated like the other two, with the engagement required for the same reason
+    ``tunnels.validate_start`` gives: without one the request resolves to LAB mode, whose
+    isolation gate proves the LAB sandbox is egress-less — a property of a container this daemon
+    does not run in.
+    """
+    if not req.engagement_id:
+        return ExecRejected(
+            reason="a Sliver C2 server must name an engagement — it is engagement "
+            "infrastructure, and its persisted listener jobs can come up with the daemon",
+            gate="engagement",
+        )
+    return executor.validate_request(
+        ExecRequest(
+            # The binary, which is what the danger heuristic reads. Its flags are a bind address
+            # and a port on the operator's own box — the same reasoning that keeps a listener's
+            # own socket out of every other gate surface in the cockpit.
+            command=SLIVER_SERVER_BIN,
+            args=[],
+            approved=req.approved,
+            dangerous_ack=req.dangerous_ack,
+            engagement_id=req.engagement_id,
+        )
+    )
+
+
+def start_server(req: SliverServerRequest) -> SliverServer:
+    """Start the operator's Sliver server in the ENGAGE sandbox. *** HUMAN-ONLY *** and GATED.
+
+    The real ``executor.validate_request`` runs FIRST (engagement + approval + red-confirm), so
+    an unapproved or un-red-confirmed start is refused with NOTHING spawned. Refuses — running
+    nothing — if the sandbox is down, the live cap is hit, the docker CLI is missing, or the
+    daemon does not stay up.
 
     The autonomous path must have NO route to this function; see the module docstring.
     """
+    rejected = validate_start(req)
+    if rejected is not None:
+        raise SliverRefused(rejected.reason, gate=rejected.gate)
+
     if not _container_running(config.ENGAGE_SANDBOX_CONTAINER):
         raise SliverRefused(
             f"engage sandbox '{config.ENGAGE_SANDBOX_CONTAINER}' is not running — bring the "
@@ -323,19 +458,33 @@ def start_server(req: SliverServerRequest) -> SliverServer:
     run_id = uuid.uuid4().hex[:12]
     started_at = _now()
     server_args = ["daemon", "-l", "0.0.0.0", "-p", str(port)]
-    argv = ["docker", "exec", config.ENGAGE_SANDBOX_CONTAINER, SLIVER_SERVER_BIN, *server_args]
+    # NO `-i` and no stdin pipe: `sliver-server daemon` is a real daemon, not a console, so it
+    # needs no stdin to survive (verified — it stays up on a closed stdin). Least privilege where
+    # the binary allows it; see cockpit/lifecycle.py for the two binaries that do need one.
+    argv = lifecycle.exec_argv(
+        config.ENGAGE_SANDBOX_CONTAINER, [SLIVER_SERVER_BIN, *server_args], interactive=False
+    )
 
     try:
-        proc = subprocess.Popen(
-            argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True,
-        )
+        watched = lifecycle.spawn_watched(argv, interactive=False)
     except FileNotFoundError:
         raise SliverRefused("docker CLI not found on PATH", gate="unavailable")
 
+    # *** LOOK BEFORE REPORTING. *** The status below is observed after the settle window, not
+    # assumed at spawn time.
+    live = lifecycle.observe(
+        watched, container=config.ENGAGE_SANDBOX_CONTAINER, port=port, proto="tcp"
+    )
+    if not live.alive:
+        watched.kill()
+        raise SliverRefused(
+            f"the Sliver server did not stay up — {live.detail}", gate="unavailable"
+        )
+
     model = SliverServer(
         id=sid,
-        status="listening",
+        status=live.status,
+        liveness=live.detail,
         container=config.ENGAGE_SANDBOX_CONTAINER,
         port=port,
         run_id=run_id,
@@ -355,13 +504,14 @@ def start_server(req: SliverServerRequest) -> SliverServer:
         # keeps the audit row honest instead of naming a system under test that was never
         # touched.
         target=config.ENGAGE_SANDBOX_CONTAINER,
-        approved=True,  # a human clicked Start; that IS the approval for operator infra
+        approved=True,  # it cleared the approval gate above
         mode="engagement",
         started_at=started_at,
         session_id=req.engagement_id,
     )
     with _lock:
-        _servers[sid] = _LiveServer(model=model, record=record, proc=proc)
+        _servers[sid] = _LiveServer(model=model, record=record, watched=watched,
+                                    server_argv=[SLIVER_SERVER_BIN, *server_args])
     _save(record)
     return model
 
@@ -394,11 +544,10 @@ def stop_server(sid: str) -> SliverServer:
         raise SliverRefused(f"no Sliver server {sid}", gate="unknown")
     if ls.model.status == "down":
         return ls.model
-    if ls.proc is not None:
-        try:
-            ls.proc.kill()
-        except Exception:  # pragma: no cover - already dead
-            pass
+    if ls.watched is not None:
+        # Kill the client, then reap the daemon inside the container — killing `docker exec`
+        # does not stop what it started.
+        ls.watched.kill(container=config.ENGAGE_SANDBOX_CONTAINER, server_argv=ls.server_argv)
     ls.model.status = "down"
     ls.model.stopped_at = _now()
     ls.record.finished_at = ls.model.stopped_at
@@ -411,11 +560,17 @@ def stop_server(sid: str) -> SliverServer:
 # IMPLANT GENERATION — a GATED command that happens to produce a file.
 # --------------------------------------------------------------------------- #
 def _implant_argv(req: ImplantRequest) -> list[str]:
-    """The `sliver-client generate` argv for this request. *** PURE. ***
+    """The binary + the `generate` tokens this build will run. *** PURE. ***
 
-    Builds a LIST of argv tokens and nothing else: no execution, no filesystem, no network,
+    Builds a LIST of tokens and nothing else: no execution, no filesystem, no network,
     no clock. Safe for the UI/preview path — the operator can see exactly what a build would
-    run before approving it.
+    run before approving it. It is ALSO the gate surface (see :func:`_gate_request`), so it must
+    keep naming every value a build interpolates, ``listener`` included.
+
+    Token 0 is ``sliver-server`` because that is the process a build actually starts. Sliver 1.5
+    has no ``generate`` SUBCOMMAND on either binary — ``generate`` is a CONSOLE command, and
+    ``sliver-server`` run with no subcommand is what hosts the console. Tokens 1.. are the
+    console line's own tokens, driven in over stdin by :func:`generate_console_line`.
 
     The ``--save`` path is deliberately NOT here: it is server-chosen per run (see
     :func:`generate_implant`), so keeping it out is what makes this function pure.
@@ -424,12 +579,63 @@ def _implant_argv(req: ImplantRequest) -> list[str]:
     to be scope-checked, never to become the implant's callback address.
     """
     return [
-        SLIVER_CLIENT_BIN, "generate",
+        SLIVER_SERVER_BIN, "generate",
         "--os", req.os,
         "--arch", req.arch,
         "--format", req.fmt,
         LISTENER_FLAGS[req.transport], req.listener,
     ]
+
+
+def generate_console_line(req: ImplantRequest, artifact: str) -> str:
+    """The exact line fed to the Sliver console's stdin to build this implant. *** PURE. ***
+
+    Sliver's console takes commands as TEXT, so this is the one place in the module where tokens
+    become a string. It is not a shell string and never reaches one: it is written to the stdin
+    of a ``docker exec`` whose argv is still a list, so no value here can reach ``/bin/sh``. What
+    it CAN reach is Sliver's own flag parser, which is why every interpolated value is bounded
+    before it arrives — os/arch/format/transport come from fixed sets, ``listener`` is pinned by
+    ``_LISTENER_RE``, and ``artifact`` is server-chosen.
+
+    ``artifact`` is CHECKED rather than trusted. It is built from a run id and a
+    ``loot.workdir_for`` directory derived from the engagement id, which IS caller-supplied; a
+    space anywhere in it would split into extra console tokens. Fail closed on a value that
+    cannot be rendered unambiguously instead of rendering it anyway.
+    """
+    if not artifact or artifact.split() != [artifact]:
+        raise SliverRefused(
+            f"refusing to build: the artifact path {artifact!r} contains whitespace and cannot "
+            "be passed to the Sliver console unambiguously",
+            gate="artifact",
+        )
+    return " ".join([*_implant_argv(req)[1:], "--save", artifact])
+
+
+def _artifact_size(container: str, path: str) -> int | None:
+    """The artifact's size in bytes INSIDE the container, or None if it is not there.
+
+    *** THE BUILD OUTCOME IS OBSERVED, NOT INFERRED FROM AN EXIT CODE. *** A piped console
+    session exits 0 whether or not the ``generate`` inside it succeeded — that exit code belongs
+    to the console, not to the build. Asking the filesystem whether the artifact exists is the
+    only honest test of "did this build produce anything", and it is the same discipline the
+    listener lifecycles now follow with their port probe.
+
+    ``stat`` rather than ``test -f``: ``test`` is a shell builtin in some images, and this argv
+    never goes through a shell.
+    """
+    try:
+        p = subprocess.run(
+            ["docker", "exec", container, "stat", "-c", "%s", path],
+            capture_output=True, text=True, timeout=30.0,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if p.returncode != 0:
+        return None
+    try:
+        return int((p.stdout or "").strip())
+    except ValueError:
+        return None
 
 
 def _gate_request(req: ImplantRequest) -> ExecRequest:
@@ -440,11 +646,17 @@ def _gate_request(req: ImplantRequest) -> ExecRequest:
     target was named" or add heuristic reasons — it can never mask a bad host sitting in
     the real args, which are still scanned and still rejected.
     """
-    args = [*_implant_argv(req)[1:]]
+    argv = _implant_argv(req)
+    args = [*argv[1:]]
     if req.target:
         args.append(req.target)
     return ExecRequest(
-        command=SLIVER_CLIENT_BIN,
+        # argv[0], not a separate constant: the gate must classify the binary that RUNS. When
+        # generation moved from `sliver-client generate` (which does not exist) to the console
+        # hosted by `sliver-server`, a hardcoded name here would have kept gating a process no
+        # build starts. Both names are in the C2 danger set, so the red-confirm is unaffected —
+        # but the audit row now names the truth.
+        command=argv[0],
         args=args,
         approved=req.approved,
         dangerous_ack=req.dangerous_ack,
@@ -519,15 +731,18 @@ def generate_implant(req: ImplantRequest) -> Implant:
     run_id = uuid.uuid4().hex[:12]
     artifact = _artifact_path(req, run_id, resolved.mode)
     started_at = _now()
-    argv = [
-        "docker", "exec", resolved.container,
-        *_implant_argv(req),
-        "--save", artifact,
-    ]
+    # THE BUILD IS DRIVEN INTO THE CONSOLE, because Sliver 1.5 has no `generate` subcommand.
+    # The argv stays a LIST (`docker exec -i <container> sliver-server`) and the console line
+    # goes in over stdin, followed by `exit` so the session ends when the build does rather than
+    # sitting on an open console.
+    console_line = generate_console_line(req, artifact)
+    argv = ["docker", "exec", "-i", resolved.container, SLIVER_SERVER_BIN]
+    console_input = f"{console_line}\nexit\n"
 
     try:
         proc = subprocess.run(
-            argv, capture_output=True, text=True, timeout=IMPLANT_BUILD_TIMEOUT_SECONDS,
+            argv, input=console_input, capture_output=True, text=True,
+            timeout=IMPLANT_BUILD_TIMEOUT_SECONDS,
         )
         exit_code: int | None = proc.returncode
         stdout, stderr = proc.stdout or "", proc.stderr or ""
@@ -538,10 +753,22 @@ def generate_implant(req: ImplantRequest) -> Implant:
         exit_code, stdout = None, ""
         stderr = detail = f"implant build timed out after {IMPLANT_BUILD_TIMEOUT_SECONDS}s"
 
+    # *** DID IT ACTUALLY BUILD? ASK THE FILESYSTEM. *** The console exits 0 whether the build
+    # inside it worked or not, so the exit code cannot decide this. An artifact that exists and
+    # is non-empty is the only evidence a build produced something.
+    size = _artifact_size(resolved.container, artifact) if exit_code is not None else None
+    built = bool(size)
+    if not built and not detail:
+        detail = (
+            f"the console session exited {exit_code} but no artifact was written to {artifact} "
+            f"— last console output: {(stdout or stderr).strip()[-400:] or '<none>'}"
+        )
+
     implant = Implant(
         id=uuid.uuid4().hex[:12],
         run_id=run_id,
-        status="generated" if exit_code == 0 else "failed",
+        status="generated" if built else "failed",
+        size_bytes=size,
         os=req.os,
         arch=req.arch,
         fmt=req.fmt,
@@ -552,6 +779,7 @@ def generate_implant(req: ImplantRequest) -> Implant:
         container=resolved.container,
         artifact_path=artifact,
         argv=list(argv),
+        console_line=console_line,
         exit_code=exit_code,
         detail=detail,
         generated_at=started_at,
@@ -611,10 +839,8 @@ def status() -> dict[str, Any]:
 def reset() -> None:  # test helper
     with _lock:
         for ls in _servers.values():
-            if ls.proc is not None:
-                try:
-                    ls.proc.kill()
-                except Exception:
-                    pass
+            if ls.watched is not None:
+                ls.watched.kill(container=config.ENGAGE_SANDBOX_CONTAINER,
+                                server_argv=ls.server_argv)
         _servers.clear()
         _implants.clear()

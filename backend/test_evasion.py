@@ -411,44 +411,53 @@ def test_the_image_smoke_tests_carry_a_status() -> None:
     print(f"  all {len(_BUILD4_BINARIES)} build-#4 smoke tests carry a real exit status: PASS")
 
 
-def test_the_image_layer_pins_what_it_can_and_declares_what_it_cannot() -> None:
-    """M2. Reproducibility. Sliver and ScareCrow are pinned; three installs are NOT.
+def test_the_image_layer_pins_every_build4_install() -> None:
+    """M2, CLOSED in build #7. Every build-#4 install is now pinned to an exact upstream value.
 
-    This does not assert full pinning, because it is not true yet — dnscat2 has no release tags
-    and the pins need values resolved from the network (docker/pin-build4-versions.sh does
-    that). What it DOES assert is that the unpinned set never grows silently, and that the gap
-    stays documented. Once the pin script has run, the known-unpinned markers disappear and the
-    first branch of each check takes over.
+    The earlier form of this test tolerated three unpinned installs and only asserted the gap
+    stayed *documented*, because pinning needs values resolved from the network
+    (docker/pin-build4-versions.sh). Those values are now in the Dockerfile, so the claim this
+    test makes is the stronger one: no build-#4 install resolves to "whatever is current".
+
+    Each entry carries BOTH forms deliberately. Asserting only that the pinned form is present
+    would pass on a half-applied pin that left the floating clone in place next to it — the
+    exact shape a re-run of the pin script against a drifted Dockerfile could produce.
     """
     body = _DOCKERFILE.read_text(encoding="utf-8")
 
-    for arg in ("SLIVER_VERSION", "SCARECROW_VERSION"):
+    # ARG-carried version pins. DNSCAT2_COMMIT joins the two release-binary pins: dnscat2 has
+    # no release tags at all, so a commit SHA is the only thing there is to pin it to.
+    for arg in ("SLIVER_VERSION", "SCARECROW_VERSION", "DNSCAT2_COMMIT"):
         assert re.search(rf"^ARG {arg}=\S+", body, re.M), f"{arg} must stay pinned to a version"
 
-    known_unpinned = {
+    # The SHA has to be a real 40-char object id, not a branch name someone typed into the ARG.
+    sha = re.search(r"^ARG DNSCAT2_COMMIT=(\S+)", body, re.M).group(1)
+    assert re.fullmatch(r"[0-9a-f]{40}", sha), \
+        f"DNSCAT2_COMMIT must be a full 40-char commit sha, got {sha!r}"
+
+    # (what, the floating form that must be GONE, the pinned form that must be PRESENT)
+    pinned = {
         "dnscat2": ("git clone --depth 1 https://github.com/iagox86", "checkout --detach"),
         "gems": ("gem install --no-document trollop salsa20 sha3 ecdsa", "trollop:"),
         "donut-shellcode": ("-q donut-shellcode;", "donut-shellcode=="),
     }
-    still_open = []
-    for what, (unpinned_form, pinned_form) in known_unpinned.items():
-        if pinned_form in body:
-            assert unpinned_form not in body, \
-                f"{what}: pinned and unpinned forms are BOTH present — a half-applied pin"
-            continue
-        assert unpinned_form in body, (
-            f"{what}: neither the known-unpinned form nor a pin is present — this install "
-            "changed shape; re-check whether it is reproducible")
-        still_open.append(what)
+    for what, (floating_form, pinned_form) in pinned.items():
+        assert pinned_form in body, f"{what}: the pin is gone — this install floats again"
+        assert floating_form not in body, \
+            f"{what}: pinned and floating forms are BOTH present — a half-applied pin"
 
-    if still_open:
-        assert "NOT PINNED" in body, \
-            "the unpinned installs are no longer declared as a known gap in the Dockerfile"
-        assert "pin-build4-versions.sh" in body, "the fix path must stay named in the Dockerfile"
-        assert (REPO / "docker" / "pin-build4-versions.sh").is_file(), \
-            "the Dockerfile points at a pin script that does not exist"
-    print(f"  2 pinned via ARG; {len(still_open)} declared-unpinned "
-          f"({', '.join(still_open) or 'none'}): PASS")
+    # Every pinned gem carries an explicit version, not just a colon.
+    gems = re.search(r"gem install --no-document (\S+ \S+ \S+ \S+);", body).group(1)
+    for spec in gems.split():
+        name, _, version = spec.partition(":")
+        assert version, f"gem {name} is not pinned to a version"
+
+    # The pin script stays reachable — it is how these values move forward.
+    assert (REPO / "docker" / "pin-build4-versions.sh").is_file(), \
+        "the pin script named in the Dockerfile does not exist"
+
+    print(f"  all {len(pinned)} build-#4 installs pinned + 3 ARG version pins, "
+          f"0 floating: PASS")
 
 
 if __name__ == "__main__":
@@ -470,5 +479,5 @@ if __name__ == "__main__":
     test_engagement_mode_with_no_target_is_permitted_by_design()
     test_a_failed_build_claims_no_artifact_path()
     test_the_image_smoke_tests_carry_a_status()
-    test_the_image_layer_pins_what_it_can_and_declares_what_it_cannot()
+    test_the_image_layer_pins_every_build4_install()
     print("ALL evasion functional tests pass")

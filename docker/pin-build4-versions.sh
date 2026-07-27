@@ -22,14 +22,24 @@ test -f "$DF" || { echo "FAIL: $DF not found"; exit 1; }
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "FAIL: need $1 on PATH"; exit 1; }; }
 need curl
-need python3
+
+# The interpreter. `python3` is NOT on PATH in this repo's Git Bash (only the backend venv is),
+# and the venv interpreter is also the one that survives longest when the environment starts
+# refusing commands — so prefer PATH, then fall back to the venv that the test suite already
+# uses. Resolved once here; every call below goes through "$PY".
+if command -v python3 >/dev/null 2>&1; then PY=python3
+elif [ -x "$ROOT/backend/.venv/Scripts/python.exe" ]; then PY="$ROOT/backend/.venv/Scripts/python.exe"
+elif [ -x "$ROOT/backend/.venv/bin/python" ]; then PY="$ROOT/backend/.venv/bin/python"
+elif command -v python >/dev/null 2>&1; then PY=python
+else echo "FAIL: need python3 (or the backend venv) on PATH"; exit 1; fi
+echo "interpreter: $PY"
 
 # --- resolve ----------------------------------------------------------------
 echo "resolving upstream versions..."
 
 DNSCAT2_COMMIT=$(curl -fsSL -H 'User-Agent: hackpit-pin' \
     'https://api.github.com/repos/iagox86/dnscat2/commits?per_page=1' \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["sha"])')
+    | "$PY" -c 'import json,sys; print(json.load(sys.stdin)[0]["sha"])')
 case "$DNSCAT2_COMMIT" in
     ????????????????????????????????????????) : ;;
     *) echo "FAIL: dnscat2 commit does not look like a 40-char sha: '$DNSCAT2_COMMIT'"; exit 1 ;;
@@ -37,7 +47,7 @@ esac
 
 gem_version() {
     curl -fsSL "https://rubygems.org/api/v1/gems/$1.json" \
-        | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])'
+        | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["version"])'
 }
 TROLLOP=$(gem_version trollop)
 SALSA20=$(gem_version salsa20)
@@ -45,7 +55,7 @@ SHA3=$(gem_version sha3)
 ECDSA=$(gem_version ecdsa)
 
 DONUT=$(curl -fsSL 'https://pypi.org/pypi/donut-shellcode/json' \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])')
+    | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])')
 
 for v in "$TROLLOP" "$SALSA20" "$SHA3" "$ECDSA" "$DONUT"; do
     test -n "$v" || { echo "FAIL: an upstream version resolved to empty"; exit 1; }
@@ -62,16 +72,16 @@ echo "  donut-shellcode $DONUT"
 # Every substitution below asserts it actually matched, so a Dockerfile that has drifted from
 # what this script expects fails loudly instead of being silently half-pinned.
 DNSCAT2_COMMIT="$DNSCAT2_COMMIT" TROLLOP="$TROLLOP" SALSA20="$SALSA20" SHA3="$SHA3" \
-ECDSA="$ECDSA" DONUT="$DONUT" DF="$DF" python3 - <<'PY'
+ECDSA="$ECDSA" DONUT="$DONUT" DF="$DF" "$PY" - <<'PY'
 import os, re, sys
 
 df = os.environ["DF"]
 src = open(df, encoding="utf-8").read()
 orig = src
 
-def sub(pattern, repl, what):
+def sub(pattern, repl, what, flags=0):
     global src
-    new, n = re.subn(pattern, repl, src, count=1)
+    new, n = re.subn(pattern, repl, src, count=1, flags=flags)
     if n != 1:
         sys.exit(f"FAIL: could not find the {what} line to pin "
                  f"(matched {n} times) — Dockerfile.sandbox has drifted; pin it by hand")
@@ -109,7 +119,9 @@ sub(r"#\n# NOT PINNED, and that is a known reproducibility gap \(review finding 
     "# Pinned by docker/pin-build4-versions.sh: dnscat2 has no release tags, so the client is\n"
     "# built from a fixed commit, and the four gems plus donut-shellcode carry exact versions.\n"
     "# Re-run that script to move the pins forward.\n",
-    "M2 comment")
+    # DOTALL: the M2 note is a MULTI-LINE comment block, so the `.*?` between its first and
+    # last line has to cross newlines. Without this flag it silently matched 0 times.
+    "M2 comment", flags=re.DOTALL)
 
 if src == orig:
     sys.exit("FAIL: nothing changed")
@@ -123,8 +135,11 @@ grep -q "^ARG DNSCAT2_COMMIT=" "$DF"       || { echo "FAIL: DNSCAT2_COMMIT ARG m
 grep -q 'checkout --detach' "$DF"          || { echo "FAIL: dnscat2 checkout missing"; exit 1; }
 grep -q 'trollop:' "$DF"                   || { echo "FAIL: gems not pinned"; exit 1; }
 grep -q 'donut-shellcode==' "$DF"          || { echo "FAIL: donut-shellcode not pinned"; exit 1; }
-grep -q 'git clone --depth 1 https://github.com/iagox86' "$DF" \
-    && { echo "FAIL: the unpinned shallow clone is still there"; exit 1; }
+# NOT `grep ... && { exit 1; }`: under `set -e` that construct exits 1 on the SUCCESS path,
+# because when grep finds nothing the whole && list returns grep's non-zero status.
+if grep -q 'git clone --depth 1 https://github.com/iagox86' "$DF"; then
+    echo "FAIL: the unpinned shallow clone is still there"; exit 1
+fi
 
 # The Dockerfile lint test in the suite asserts pinning + non-suppressed smoke tests.
 "$ROOT/backend/.venv/Scripts/python.exe" "$ROOT/backend/test_evasion.py" \

@@ -35,6 +35,9 @@ echo "== target-substitution polish (range rewrite / foreign-host flag / target-
 echo "== cockpit safety-layer tests (allowlist / target / approval / isolation / order) =="
 "$PY" test_cockpit.py
 
+echo "== prevalidated-path gate re-checks (approval AND danger re-checked in all 3 modes) =="
+"$PY" test_prevalidated_gates.py
+
 echo "== :kali containment tests (human-only / hardcoded-open-container / no-isolation-gate / audit) =="
 "$PY" test_kali.py
 
@@ -127,6 +130,9 @@ echo "== Phase-4 corpus ingest (additive/byte-preserving/idempotent; no_merge; w
 
 echo "== Phase-4 HTTP repeater (hardcoded container / argv-only / human-only / scope-checked) =="
 "$PY" test_repeater.py
+
+echo "== listener lifecycle SAFETY invariants (no stdin writer / status observed, never assigned) =="
+"$PY" test_lifecycle_safety.py
 
 echo "== Phase-4 pivot/tunnels (human-only lifecycle / pure rewrite-before-approval / scope-by-hand) =="
 "$PY" test_tunnels.py

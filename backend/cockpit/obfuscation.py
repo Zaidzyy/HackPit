@@ -11,22 +11,33 @@ A tunnel has TWO halves and they carry completely different risk. THIS MODULE OW
 ONE OF THEM:
 
 THE LISTENER (server) half — :func:`start_listener` / :func:`stop_listener` /
-    :func:`list_listeners`. *** HUMAN-ONLY. *** This is OPERATOR INFRASTRUCTURE: the
-    authoritative server for a zone the OPERATOR controls and has had delegated, running on
-    the OPERATOR's own sandbox. It has no target, it touches nothing belonging to the client,
-    and starting it is not an action against a system under test — so there is no gate beyond
-    "a human clicked Start". That is exactly the posture ``cockpit/tunnels.py`` gives a pivot
-    listener and ``cockpit/sliver.py`` gives a C2 server, and this mirrors them structurally:
-    a hardcoded container, a liveness probe, a live cap, a tracked process, a refusal that
-    runs nothing, every start and stop recorded.
+    :func:`list_listeners`. *** HUMAN-ONLY *** AND *** GATED ***: engagement + approval +
+    red-confirm, through the REAL ``executor.validate_request``, before anything is spawned.
+    It runs on the OPERATOR's own sandbox for a zone the OPERATOR controls, a hardcoded
+    container, a live cap, a tracked process, a refusal that runs nothing, every start and
+    stop recorded.
 
-    Deliberately NOT the gated-generation pattern. There is no ``executor.validate_request``
-    here and no red-confirm, because there is nothing to gate: no target, no argument aimed at
-    anyone's network. What makes it safe is the same thing that makes the pivot listener safe
-    — THE AUTONOMOUS PATH HAS ZERO ROUTE HERE. A covert channel an agent could raise is an
-    autonomous covert channel. Regression-locked by a source scan over the whole backend tree
+    WHY THIS IS GATED NOW (build #7). It used to be ungated, and the justification it gave was
+    "the identical reasoning the pivot-listener lifecycle uses". Build #5's I2 finding then
+    TIGHTENED the pivot listener to require engagement + approval + red-confirm — so this
+    module was left citing a precedent that no longer existed. The stale citation was the
+    smaller problem. The larger one is that I2's actual argument applies here with full force:
+
+        a pivot listener's whole purpose is to become a route into a network the scope gate
+        has never seen, so it is gated like an execution, not treated as lifecycle
+
+    A DNS-tunnel listener is the SERVER END OF A COVERT EXFIL CHANNEL. Its whole purpose is to
+    carry arbitrary traffic out of a network through that network's own resolvers, which is
+    the thing egress controls exist to stop. "No target" was true and beside the point, exactly
+    as it was for the pivot listener. ``dnscat2-server`` and ``iodined`` are both already in
+    ``allowlist._TUNNEL_TOOLS``, so the danger heuristic fires on the binary and the red-confirm
+    is always required — a covert channel cannot be raised by a plain POST or by accident.
+
+    Human-only remains true and is still the load-bearing property: THE AUTONOMOUS PATH HAS
+    ZERO ROUTE HERE. A covert channel an agent could raise is an autonomous covert channel.
+    Regression-locked by a source scan over the whole backend tree
     (test_obfuscation.py::test_obfuscation_surface_is_human_only), the same lock ``:kali``,
-    the tunnels, live sessions and Sliver have.
+    the tunnels, live sessions and Sliver have. The gate is belt to that suspenders.
 
 *** THE CLIENT half — :func:`operator_oneliner`. IT IS NEVER DELIVERED. ***
     The client runs on the FAR SIDE: a host the operator already has execution on. HackPit
@@ -72,6 +83,17 @@ THE PRE-SHARED KEY IS MASKED AT SOURCE, NOT AT THE EDGE.
     neither fault: the mask is placed where the key would have gone and touches nothing else,
     and no caller can opt out of it.
 
+THE LISTENER'S STATUS IS OBSERVED, NOT ASSIGNED (build #7). This module used to set
+``status="listening"`` the instant ``Popen`` returned, which for dnscat2 was false:
+``dnscat2-server`` is a Ruby CONSOLE, and ``docker exec`` without ``-i`` hands it a closed stdin,
+so it logged "Input thread is over" and exited — while the panel said a channel was up. The start
+now goes through ``cockpit/lifecycle.py``: a console binary gets a stdin that does not end, its
+output is drained so it cannot wedge, and the status is only what was LOOKED AT — ``listening``
+once ``ss`` inside the container confirms UDP/53 is bound, ``starting`` if the bind is
+unconfirmed, and a process that died is a refusal rather than a fiction. HackPit holds that
+console's stdin open and never types into it; see cockpit/lifecycle.py for why it is a raw fd
+with no writer object attached.
+
 The far-side client connect-back is inherently untestable without a real compromised host;
 the listener lifecycle, the argv and the one-liner are built and unit-tested, and the actual
 connect-back is the operator's manual step, exactly like the pivot tunnels' agent line.
@@ -91,7 +113,7 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from . import config, runstore
+from . import config, lifecycle, runstore
 from .models import RunRecord
 
 # The binaries, as spelled in the tool catalog (backend/arsenal/tools.json). Constants, never
@@ -144,10 +166,10 @@ def _now() -> str:
 class ObfuscationRequest(BaseModel):
     """Start a DNS-tunnel listener. NO container field — the box is a constant.
 
-    There is no target here BY DEFINITION: the server listens on the operator's own sandbox
-    for a zone the operator owns, and nothing about starting it reaches a system under test.
-    ``engagement_id`` only tags the record so the listener shows up in the right engagement's
-    audit trail; it does not gate anything and it cannot redirect where the server runs.
+    The server listens on the operator's own sandbox for a zone the operator owns, so nothing
+    here can redirect WHERE it runs. ``engagement_id`` is no longer tagging-only: a covert
+    channel is attributed and scoped like every other engagement action, and it is REQUIRED —
+    see :func:`validate_start`.
     """
 
     kind: str = Field("dnscat2", description=f"Tunnel server — one of {KINDS}.")
@@ -169,7 +191,24 @@ class ObfuscationRequest(BaseModel):
         "audit record.",
     )
     engagement_id: str | None = Field(
-        None, description="Engagement to record this listener against (tagging only — not a gate)."
+        None,
+        description="The engagement this covert channel belongs to. REQUIRED — a DNS tunnel is "
+        "a route out of a real network, so it is attributed and scoped like every other "
+        "engagement action.",
+    )
+    # THE GATE FIELDS, the same shape the pivot listener got in I2. Both default False, so a
+    # client that omits them is REFUSED rather than allowed — a default of True would mean an
+    # omitted field silently grants exactly what the field was added to require.
+    approved: bool = Field(
+        False,
+        description="Explicit human approval for starting this listener. Never defaulted true, "
+        "never batched — a covert channel is an execution, not a lifecycle no-op.",
+    )
+    dangerous_ack: bool = Field(
+        False,
+        description="The explicit red-confirm. dnscat2-server and iodined are both in the "
+        "covert-tunnel danger set, so the heuristic always flags them and this is always "
+        "required.",
     )
 
     @field_validator("kind")
@@ -233,7 +272,11 @@ class ObfuscationListener(BaseModel):
 
     id: str
     kind: str
-    status: str = Field(description="listening | down.")
+    status: str = Field(
+        description="starting | listening | down — OBSERVED after the settle window, never "
+        "assigned at spawn time. 'listening' means UDP/53 was confirmed bound inside the "
+        "container; 'starting' means the process is up but the bind is unconfirmed."
+    )
     container: str
     zone: str
     tunnel_net: str | None = None
@@ -250,18 +293,27 @@ class ObfuscationListener(BaseModel):
         "themselves). HackPit never delivers or executes it — see operator_oneliner.",
     )
     setup_note: str = ""
+    liveness: str = Field(
+        "", description="What was actually observed about the server process and its port."
+    )
     started_at: str
     stopped_at: str | None = None
     engagement_id: str | None = None
 
 
 class ObfuscationRefused(RuntimeError):
-    """Nothing started / nothing stopped. Carries the reason that refused it."""
+    """Nothing started / nothing stopped. Carries the reason that refused it.
 
-    def __init__(self, reason: str, gate: str = "obfuscation"):
+    ``dangerous_flags`` is populated when the danger gate refused, so the UI can render WHY
+    rather than a generic banner — the same discipline the tunnel and WinRM confirms follow.
+    """
+
+    def __init__(self, reason: str, gate: str = "obfuscation",
+                 dangerous_flags: list[str] | None = None):
         super().__init__(reason)
         self.reason = reason
         self.gate = gate
+        self.dangerous_flags = dangerous_flags or []
 
 
 # --------------------------------------------------------------------------- #
@@ -271,7 +323,15 @@ class ObfuscationRefused(RuntimeError):
 class _LiveListener:
     model: ObfuscationListener
     record: RunRecord
-    proc: "subprocess.Popen[str] | None" = field(default=None)
+    watched: "lifecycle.Watched | None" = field(default=None)
+    # The server argv, kept so a stop can reap the process INSIDE the container. Killing the
+    # `docker exec` client does not stop what it started — see lifecycle.Watched.kill.
+    server_argv: list[str] = field(default_factory=list)
+
+    @property
+    def proc(self):
+        """The spawned server process, or None. Read-only view for liveness refresh."""
+        return self.watched.proc if self.watched is not None else None
 
 
 _listeners: dict[str, _LiveListener] = {}
@@ -359,6 +419,16 @@ def _server_args(req: ObfuscationRequest) -> list[str]:
     ]
 
 
+def needs_console_stdin(kind: str) -> bool:
+    """Does this tool's server need a stdin that never ends? PURE.
+
+    ``dnscat2-server`` is a Ruby console and dies on EOF ("Input thread is over"); ``iodined -f``
+    is a plain foreground daemon and needs no stdin at all. Least privilege per binary rather
+    than one blanket default — see cockpit/lifecycle.py.
+    """
+    return kind == "dnscat2"
+
+
 def operator_oneliner(listener: ObfuscationListener) -> str:
     """The CLIENT half, as a STRING for the operator to run BY HAND on the far side.
 
@@ -406,21 +476,81 @@ def _setup_note(req: ObfuscationRequest) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# lifecycle — *** HUMAN-ONLY ***. Operator infrastructure, no target.
+# the gate — engagement + approval + the heuristic red-confirm, before anything spawns
+# --------------------------------------------------------------------------- #
+def _gate_request(req: ObfuscationRequest) -> "Any":
+    """The ExecRequest the real gates run against.
+
+    Surface: the SERVER BINARY, which is what drives the danger heuristic —
+    ``dnscat2-server`` and ``iodined`` are both in ``allowlist._TUNNEL_TOOLS``, so a listener
+    start always demands the red-confirm — plus the engagement.
+
+    THE SERVER'S OWN ARGUMENTS ARE DELIBERATELY NOT IN THE SURFACE, the same call
+    ``tunnels._gate_request`` documents at length. A tunnel server's arguments are the
+    operator's OWN zone, the operator's OWN private tunnel range and the operator's OWN
+    pre-shared key. None is a target; the scope extractor would read ``<tunnel-zone>`` or
+    ``10.99.53.1/24`` as a host and refuse the operator's own infrastructure, which teaches
+    nothing and trains a workaround. Two independent reasons make that safe rather than
+    convenient: the danger verdict comes from the BINARY, not the arguments, so the red-confirm
+    fires either way; and the pre-shared key must not be fed to a gate that records what it
+    classified — see the redaction discipline above.
+    """
+    from .models import ExecRequest
+
+    return ExecRequest(
+        command=_server_args(req)[0],
+        args=[],
+        approved=req.approved,
+        dangerous_ack=req.dangerous_ack,
+        engagement_id=req.engagement_id,
+    )
+
+
+def validate_start(req: ObfuscationRequest):
+    """The gate verdict for starting this listener, spawning nothing. PURE.
+
+    A DNS-TUNNEL LISTENER REQUIRES AN ENGAGEMENT, for the reason ``tunnels.validate_start``
+    gives: without one the request resolves to LAB mode, whose isolation gate proves the LAB
+    sandbox is egress-less — a property of a container this listener does not run in. Firing a
+    gate on an unrelated condition is its own kind of dishonesty. Engagement mode is the
+    coherent home: no isolation floor (correct — the channel is real), and the covert channel
+    is attributed to the engagement whose egress controls it exists to test.
+    """
+    from . import executor
+    from .models import ExecRejected
+
+    if not req.engagement_id:
+        return ExecRejected(
+            reason="a DNS-tunnel listener must name an engagement — it is the server end of a "
+            "covert channel out of a real network, so it is attributed and scoped like every "
+            "other engagement action",
+            gate="engagement",
+        )
+    return executor.validate_request(_gate_request(req))
+
+
+# --------------------------------------------------------------------------- #
+# lifecycle — *** HUMAN-ONLY *** and *** GATED ***.
 # --------------------------------------------------------------------------- #
 def start_listener(req: ObfuscationRequest) -> ObfuscationListener:
-    """Start a DNS-tunnel listener in the ENGAGE sandbox. *** HUMAN-ONLY. ***
+    """Start a DNS-tunnel listener in the ENGAGE sandbox. *** HUMAN-ONLY *** and *** GATED. ***
 
-    Clicking Start IS the approval: this runs the operator's own authoritative tunnel server
-    on the operator's own sandbox, for a zone the operator owns, with no target — so no
-    target-scope gate applies (the identical reasoning the pivot-listener and Sliver-server
-    lifecycles use). Refuses — running NOTHING — if the sandbox is down, the live cap is hit,
-    or the docker CLI is missing.
+    The real ``executor.validate_request`` runs FIRST (engagement + approval + red-confirm), so
+    an unapproved or un-red-confirmed start is refused with NOTHING spawned. Also refuses —
+    running NOTHING — if the sandbox is down, the live cap is hit, the docker CLI is missing, or
+    the server process does not stay up.
 
     Returns the listener with its ``client_command`` filled in. That string is for the human;
     nothing here ships it anywhere. The autonomous path must have NO route to this function;
     see the module docstring.
     """
+    rejected = validate_start(req)
+    if rejected is not None:
+        raise ObfuscationRefused(
+            rejected.reason, gate=rejected.gate,
+            dangerous_flags=list(getattr(rejected, "dangerous_flags", []) or []),
+        )
+
     if not _container_running(config.ENGAGE_SANDBOX_CONTAINER):
         raise ObfuscationRefused(
             f"engage sandbox '{config.ENGAGE_SANDBOX_CONTAINER}' is not running — bring the "
@@ -440,20 +570,34 @@ def start_listener(req: ObfuscationRequest) -> ObfuscationListener:
     run_id = uuid.uuid4().hex[:12]
     started_at = _now()
     server_args = _server_args(req)
-    argv = ["docker", "exec", config.ENGAGE_SANDBOX_CONTAINER, *server_args]
+    interactive = needs_console_stdin(req.kind)
+    argv = lifecycle.exec_argv(
+        config.ENGAGE_SANDBOX_CONTAINER, server_args, interactive=interactive
+    )
 
     try:
-        proc = subprocess.Popen(
-            argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True,
-        )
+        watched = lifecycle.spawn_watched(argv, interactive=interactive)
     except FileNotFoundError:
         raise ObfuscationRefused("docker CLI not found on PATH", gate="unavailable")
+
+    # *** LOOK BEFORE REPORTING. *** Both servers bind UDP/53 inside the sandbox; the status
+    # below is what was observed after the settle window, not what was assumed at spawn time. A
+    # listener that died is a refusal — the operator must not be handed a client one-liner for a
+    # channel that does not exist.
+    live = lifecycle.observe(
+        watched, container=config.ENGAGE_SANDBOX_CONTAINER, port=53, proto="udp"
+    )
+    if not live.alive:
+        watched.kill()
+        raise ObfuscationRefused(
+            f"the {req.kind} listener did not stay up — {live.detail}", gate="unavailable"
+        )
 
     model = ObfuscationListener(
         id=lid,
         kind=req.kind,
-        status="listening",
+        status=live.status,
+        liveness=live.detail,
         container=config.ENGAGE_SANDBOX_CONTAINER,
         zone=req.zone,
         tunnel_net=req.tunnel_net if req.kind == "iodine" else None,
@@ -481,13 +625,14 @@ def start_listener(req: ObfuscationRequest) -> ObfuscationListener:
         # keeps the audit row honest instead of naming a system under test that was never
         # touched.
         target=config.ENGAGE_SANDBOX_CONTAINER,
-        approved=True,  # a human clicked Start; that IS the approval for operator infra
+        approved=True,  # it cleared the approval gate above
         mode="engagement",
         started_at=started_at,
         session_id=req.engagement_id,
     )
     with _lock:
-        _listeners[lid] = _LiveListener(model=model, record=record, proc=proc)
+        _listeners[lid] = _LiveListener(model=model, record=record, watched=watched,
+                                        server_argv=list(server_args))
     _save(record)
     return model
 
@@ -520,11 +665,10 @@ def stop_listener(lid: str) -> ObfuscationListener:
         raise ObfuscationRefused(f"no DNS-tunnel listener {lid}", gate="unknown")
     if ll.model.status == "down":
         return ll.model
-    if ll.proc is not None:
-        try:
-            ll.proc.kill()
-        except Exception:  # pragma: no cover - already dead
-            pass
+    if ll.watched is not None:
+        # EOF first (a console binary leaves politely), then kill the client, then reap the
+        # server inside the container — killing `docker exec` does not stop what it started.
+        ll.watched.kill(container=config.ENGAGE_SANDBOX_CONTAINER, server_argv=ll.server_argv)
     ll.model.status = "down"
     ll.model.stopped_at = _now()
     ll.record.finished_at = ll.model.stopped_at
@@ -551,9 +695,7 @@ def status() -> dict[str, Any]:
 def reset() -> None:  # test helper
     with _lock:
         for ll in _listeners.values():
-            if ll.proc is not None:
-                try:
-                    ll.proc.kill()
-                except Exception:
-                    pass
+            if ll.watched is not None:
+                ll.watched.kill(container=config.ENGAGE_SANDBOX_CONTAINER,
+                                server_argv=ll.server_argv)
         _listeners.clear()

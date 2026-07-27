@@ -86,6 +86,11 @@ _EXEC_TOOLS = frozenset({"nc", "ncat", "netcat", "socat", "telnet", "rlwrap"})
 # Exploitation frameworks / payload generators.
 _FRAMEWORKS = frozenset({
     "msfconsole", "msfvenom", "msfcli", "meterpreter", "empire", "sliver",
+    # The Sliver binaries as they are actually invoked. `sliver` alone never matched
+    # `sliver-client generate ...`, so an implant build would not have tripped the
+    # red-confirm — the one gate that stops a beacon being built on a plain approval.
+    # Purely additive: this can only ever ADD reasons, never remove one.
+    "sliver-client", "sliver-server",
     "covenant", "cobaltstrike", "beacon", "chisel", "ligolo",
 })
 # Flags that mean "run this inline code / command".

@@ -57,6 +57,10 @@ from cockpit import engagement as cockpit_engagement  # noqa: E402
 from cockpit import reconcile as cockpit_reconcile  # noqa: E402
 from cockpit import loot as cockpit_loot  # noqa: E402
 from cockpit import winprofiles as cockpit_winprofiles  # noqa: E402  (Windows target store)
+# The two evasion/exfil surfaces. Their ROUTES live here, not in cockpit/router.py, and NOT in
+# any orchestrator/loop module: see the "Sliver C2 + DNS-tunnel obfuscation" section below.
+from cockpit import sliver as cockpit_sliver  # noqa: E402  (Sliver C2 — human-only + gated gen)
+from cockpit import obfuscation as cockpit_obfuscation  # noqa: E402  (DNS tunnel — human-only)
 import state as engagement_state  # noqa: E402
 from state import store as state_store  # noqa: E402
 from state import tasks as state_tasks  # noqa: E402
@@ -1513,3 +1517,208 @@ def session_chat(session_id: str, req: ChatIn = Body(...)) -> dict[str, Any]:
         "model_used": model_used,
         "ts": ts,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Sliver C2 + DNS-tunnel obfuscation — the HUMAN surface for two cockpit modules
+# --------------------------------------------------------------------------- #
+# WHY THESE ROUTES LIVE HERE AND NOWHERE ELSE
+# -------------------------------------------
+# Both surfaces are HUMAN-ONLY by construction: the orchestrator / loop / agent / executor /
+# adgraph packages have ZERO code path to either module, and that is regression-locked by a
+# source scan over the whole backend tree (test_sliver.py, test_obfuscation.py and the two
+# safety suites test_sliver_safety.py / test_obfuscation_safety.py). Those scans allow exactly
+# TWO files to reference each module: the module itself and *this file*. Putting the routes in
+# an orchestrator-reachable module would break the scan — deliberately, because a C2 server or
+# a covert channel an agent could raise is an autonomous C2 / an autonomous covert channel.
+#
+# The two footings, unchanged from the modules:
+#   SERVER / LISTENER LIFECYCLE  -> *** HUMAN-ONLY ***. A human clicking Start IS the approval:
+#       this is OPERATOR INFRASTRUCTURE on the operator's own sandbox, with no target. There is
+#       nothing to scope-check, so there is no gate and no red-confirm.
+#   IMPLANT GENERATION           -> a GATED COMMAND. POST /api/sliver/implants runs the REAL
+#       executor gates (target/scope -> approval -> heuristic danger -> isolation). A payload
+#       generator trips the heuristic, so ``dangerous_ack`` is required in practice. A refused
+#       build produces NOTHING and returns 403 naming the gate.
+#
+# *** THE SECRET NEVER CROSSES THIS BOUNDARY. *** ObfuscationListener carries the operator's
+# pre-shared tunnel key on the model (and embedded inside ``client_command``), because
+# start_listener has to hand it to the server process. The RunRecord redaction covers the audit
+# trail only — an HTTP route is a second, independent export path, so it gets its own redaction:
+# :class:`ObfuscationListenerOut` has no ``secret`` field at all AND the one-liner is masked on
+# the way out (see :func:`_listener_public`). The operator chose that key and knows it; HackPit
+# re-emits it nowhere. Pinned by test_obfuscation_safety.py::test_secret_never_crosses_the_http_boundary.
+#
+# NOTHING HERE DELIVERS ANYTHING. The Sliver routes generate an artifact and stop; the
+# obfuscation routes hand back a string the operator carries across BY HAND. There is no
+# delivery route, and there must never be one.
+
+
+def _sliver_http_error(exc: "cockpit_sliver.SliverRefused") -> HTTPException:
+    """Map a Sliver refusal to a status code. A GATE refusal is 403; availability is 409."""
+    status = 409 if exc.gate in {"unavailable", "limit"} else 404 if exc.gate == "unknown" else 403
+    return HTTPException(status_code=status, detail={"gate": exc.gate, "reason": exc.reason})
+
+
+@app.get("/api/sliver/status")
+def sliver_status() -> dict[str, Any]:
+    """Engage-sandbox availability + live/built counts — drives the panel banner. Read-only."""
+    return cockpit_sliver.status()
+
+
+@app.get("/api/sliver/servers", response_model=list[cockpit_sliver.SliverServer])
+def sliver_list_servers() -> list[cockpit_sliver.SliverServer]:
+    """Every Sliver server this backend started, with liveness refreshed. Read-only."""
+    return cockpit_sliver.list_servers()
+
+
+@app.post("/api/sliver/servers", response_model=cockpit_sliver.SliverServer)
+def sliver_start_server(
+    req: cockpit_sliver.SliverServerRequest | None = Body(default=None),
+) -> cockpit_sliver.SliverServer:
+    """Start the operator's OWN Sliver server in the engage sandbox. *** HUMAN-ONLY. ***
+
+    No target, therefore no target gate: the daemon listens on the operator's box and touches
+    nothing belonging to the client. 409 if the sandbox is down, the live cap is hit, or the
+    docker CLI is missing — and in each case NOTHING runs.
+    """
+    try:
+        return cockpit_sliver.start_server(req or cockpit_sliver.SliverServerRequest())
+    except cockpit_sliver.SliverRefused as exc:
+        raise _sliver_http_error(exc)
+
+
+@app.delete("/api/sliver/servers/{sid}", response_model=cockpit_sliver.SliverServer)
+def sliver_stop_server(sid: str) -> cockpit_sliver.SliverServer:
+    """Stop a Sliver server. *** HUMAN-ONLY. *** Idempotent; 404 on an unknown id."""
+    try:
+        return cockpit_sliver.stop_server(sid)
+    except cockpit_sliver.SliverRefused as exc:
+        raise _sliver_http_error(exc)
+
+
+@app.post("/api/sliver/implants/preview")
+def sliver_preview_implant(req: cockpit_sliver.ImplantRequest = Body(...)) -> dict[str, Any]:
+    """PURE PREVIEW: the exact argv a build would run, plus the gate verdict. Runs NOTHING.
+
+    This is what makes the red-confirm honest — the operator sees the literal argv and which
+    gate would refuse it BEFORE approving. ``_implant_argv`` does no I/O and no execution, and
+    ``validate_generate`` only evaluates gates. A refusal here is DATA (200 with
+    ``rejected``), not an error: the panel renders it next to the confirm button.
+    """
+    rejected = cockpit_sliver.validate_generate(req)
+    return {
+        "argv": cockpit_sliver._implant_argv(req),
+        "listener": req.listener,
+        "rejected": None if rejected is None else rejected.model_dump(),
+    }
+
+
+@app.post("/api/sliver/implants", response_model=cockpit_sliver.Implant)
+def sliver_generate_implant(req: cockpit_sliver.ImplantRequest = Body(...)) -> cockpit_sliver.Implant:
+    """Generate ONE implant artifact — a GATED command that happens to produce a file.
+
+    Runs the REAL ``executor.validate_request`` first. 403 naming the gate on any refusal
+    (target/scope, approval, danger red-confirm, engagement, isolation) with NOTHING built;
+    409 if docker is unavailable. A build that runs and FAILS is not a refusal — it comes back
+    200 with ``status='failed'``, because a tool failure is not a safety event.
+
+    IT ONLY GENERATES. Delivering the artifact to a host and executing it are separate,
+    separately-approved concerns and are DEFERRED — there is no route for either.
+    """
+    try:
+        return cockpit_sliver.generate_implant(req)
+    except cockpit_sliver.SliverRefused as exc:
+        raise _sliver_http_error(exc)
+
+
+@app.get("/api/sliver/implants", response_model=list[cockpit_sliver.Implant])
+def sliver_list_implants() -> list[cockpit_sliver.Implant]:
+    """Every implant built by this process, oldest first. Read-only."""
+    return cockpit_sliver.list_implants()
+
+
+class ObfuscationListenerOut(BaseModel):
+    """A DNS-tunnel listener AS THE HTTP BOUNDARY SEES IT — *** with no secret on it. ***
+
+    Deliberately NOT ``cockpit.obfuscation.ObfuscationListener``: that model carries the
+    operator's pre-shared tunnel key, because the module has to hand it to the server process.
+    This one has no ``secret`` field at all, and ``client_command`` arrives already masked
+    (:func:`_listener_public`), so the key cannot leave the process through an API response —
+    the same rule the RunRecord redaction enforces for the audit trail.
+    """
+
+    id: str
+    kind: str
+    status: str
+    container: str
+    zone: str
+    tunnel_net: str | None = None
+    run_id: str
+    client_command: str = Field(
+        "", description="The CLIENT half for the operator to run BY HAND, with the pre-shared "
+        "key MASKED. HackPit never delivers or executes it."
+    )
+    setup_note: str = ""
+    started_at: str
+    stopped_at: str | None = None
+    engagement_id: str | None = None
+
+
+def _listener_public(lis: "cockpit_obfuscation.ObfuscationListener") -> dict[str, Any]:
+    """The listener minus its secret, one-liner included but MASKED. *** THE BOUNDARY. ***
+
+    Two things happen here and both are load-bearing:
+      1. ``secret`` is dropped outright.
+      2. the key is masked INSIDE ``client_command`` — dropping the field alone would still
+         export the key, because the one-liner embeds it (``--secret=…`` / ``-P …``).
+    The operator supplied that key and knows it; the panel shows the shape of the line and
+    tells them to substitute it. Pinned by test_obfuscation_safety.py.
+    """
+    data = lis.model_dump(exclude={"secret"})
+    if lis.secret:
+        data["client_command"] = str(data.get("client_command") or "").replace(lis.secret, "***")
+    return data
+
+
+@app.get("/api/obfuscation/status")
+def obfuscation_status() -> dict[str, Any]:
+    """Engage-sandbox availability + live listener count. Read-only."""
+    return cockpit_obfuscation.status()
+
+
+@app.get("/api/obfuscation/listeners", response_model=list[ObfuscationListenerOut])
+def obfuscation_list_listeners() -> list[dict[str, Any]]:
+    """Every DNS-tunnel listener, secrets stripped. Read-only."""
+    return [_listener_public(l) for l in cockpit_obfuscation.list_listeners()]
+
+
+@app.post("/api/obfuscation/listeners", response_model=ObfuscationListenerOut)
+def obfuscation_start_listener(
+    req: cockpit_obfuscation.ObfuscationRequest = Body(...),
+) -> dict[str, Any]:
+    """Start a dnscat2/iodine listener in the engage sandbox. *** HUMAN-ONLY. ***
+
+    Operator infrastructure for a zone the OPERATOR owns and has had delegated — no target, so
+    no gate beyond a human clicking Start. 409 if the sandbox is down, the cap is hit or docker
+    is missing (nothing runs); 422 if the zone/secret/tunnel-net bounds reject the request.
+
+    The response carries the CLIENT one-liner with the key masked. Carrying that line to the
+    far side is the operator's own manual step — HackPit cannot reach a machine it has not
+    compromised, and there is no route here that tries.
+    """
+    try:
+        return _listener_public(cockpit_obfuscation.start_listener(req))
+    except cockpit_obfuscation.ObfuscationRefused as exc:
+        status = 404 if exc.gate == "unknown" else 409
+        raise HTTPException(status_code=status, detail={"gate": exc.gate, "reason": exc.reason})
+
+
+@app.delete("/api/obfuscation/listeners/{lid}", response_model=ObfuscationListenerOut)
+def obfuscation_stop_listener(lid: str) -> dict[str, Any]:
+    """Stop a DNS-tunnel listener. *** HUMAN-ONLY. *** Idempotent; 404 on an unknown id."""
+    try:
+        return _listener_public(cockpit_obfuscation.stop_listener(lid))
+    except cockpit_obfuscation.ObfuscationRefused as exc:
+        status = 404 if exc.gate == "unknown" else 409
+        raise HTTPException(status_code=status, detail={"gate": exc.gate, "reason": exc.reason})

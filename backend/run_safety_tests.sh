@@ -131,8 +131,14 @@ echo "== Phase-4 exam report templates (proof-flag capture / per-host table / CV
 echo "== Sliver C2 containment (human-only server lifecycle / GATED implant gen / <listener> verbatim) =="
 "$PY" test_sliver.py
 
+echo "== Sliver C2 SAFETY invariants (no agent path / gated-vs-human-only split / never executes what it builds) =="
+"$PY" test_sliver_safety.py
+
 echo "== DNS-tunnel obfuscation containment (human-only listener / client one-liner never delivered) =="
 "$PY" test_obfuscation.py
+
+echo "== DNS-tunnel SAFETY invariants (no agent path / one-liner never delivered / secret never crosses HTTP) =="
+"$PY" test_obfuscation_safety.py
 
 if [ "$1" = "--with-proof" ]; then
   echo

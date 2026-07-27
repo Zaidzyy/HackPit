@@ -513,14 +513,18 @@ def test_server_refuses_when_sandbox_down_or_capped() -> None:
 # 4. *** THE INVARIANT *** — the whole surface is HUMAN-ONLY.
 # --------------------------------------------------------------------------- #
 def test_sliver_surface_is_human_only() -> None:
-    """cockpit/sliver.py may be referenced ONLY by itself + cockpit/router.py.
+    """cockpit/sliver.py may be referenced ONLY by itself + main.py (the HTTP layer).
 
     THE LOAD-BEARING TEST. A C2 server an agent could raise is an autonomous C2, and an
     implant an agent could build is an autonomous payload factory. The orchestrator / agent /
     loop / executor / adgraph must have NO path here — the same rule :kali, the tunnels and
     live sessions have, scanned the same way, by RELATIVE PATH.
+
+    cockpit/router.py was allow-listed provisionally while the routes were unwritten; they
+    landed in main.py instead (the cockpit router keeps no handle on this surface), so the
+    allow-list is tightened back to the two files that actually reference it.
     """
-    allowed = {Path("cockpit/sliver.py"), Path("cockpit/router.py")}
+    allowed = {Path("cockpit/sliver.py"), Path("main.py")}
     patterns = [
         r"\bstart_server\b",
         r"\bgenerate_implant\b",

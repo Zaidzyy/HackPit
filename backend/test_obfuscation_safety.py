@@ -1,0 +1,524 @@
+"""SAFETY INVARIANTS for the DNS-tunnel obfuscation surface (cockpit/obfuscation.py + routes).
+
+test_obfuscation.py proves the surface BEHAVES correctly. This file is the CONTAINMENT LOCK:
+it asserts the structural properties that make that behaviour trustworthy, so a refactor that
+quietly re-wires them fails the build. Every invariant has a real assertion — structural
+(AST / source-scan) where the property is about code shape, behavioural where it is about what
+actually happens:
+
+  1. NO ORCHESTRATOR / AGENT / LOOP PATH. Exactly TWO files in the backend tree may reference
+     the module: itself and main.py (the HTTP layer — the HUMAN surface). Every other module,
+     orchestrator.py / cockpit/executor.py / adgraph/orchestrator.py included, is scanned and
+     must not name it. A covert channel an agent could raise is an autonomous covert channel.
+     Scanned WITH a positive control, so the scan cannot pass vacuously.
+  2. THE LIFECYCLE IS HUMAN-ONLY AND UNGATED BY DESIGN. There is no target, so there is
+     nothing to scope-check: the AST call graph must show NO gate call in start/stop, and the
+     request must carry no approval/red-confirm/target field. (Contrast Sliver, whose implant
+     GENERATION is gated — that surface has an artifact aimed at someone else's machine.)
+  3. *** THE CLIENT HALF IS NEVER DELIVERED. *** operator_oneliner is a pure string builder —
+     asserted at the AST level (its only calls are list/string construction) — and the module
+     contains NO delivery primitive at all: no file copy, no stdin pipe, no HTTP/SSH/SMB.
+  4. THE ZONE AND TUNNEL NET ARE OPERATOR-OWNED AND ARE NEVER TARGET-SUBSTITUTED. The request
+     has no target field, and the catalog's <tunnel-zone>/<tunnel-net> placeholders survive the
+     composer's real target-substitution pass untouched — the same property <listener> has.
+  5. EVERY ACTION IS AUDITED via runstore.save_run, with the operator's pre-shared key REDACTED
+     in the record.
+  6. NO SHELL ANYWHERE; THE CONTAINER IS A CODE CONSTANT a request cannot redirect.
+  7. *** THE SECRET NEVER CROSSES THE HTTP BOUNDARY. *** The listener model carries the
+     operator's tunnel key (start_listener has to hand it to the server process) AND embeds it
+     in ``client_command``. The RunRecord redaction covers the audit trail only; an HTTP route
+     is a SECOND, independent export path, so the response model has no ``secret`` field and
+     the one-liner is masked on the way out. Asserted against real HTTP response bodies.
+
+Hermetic: subprocess, the container liveness probe and runstore.save_run are monkeypatched by
+manual save/restore (this repo has NO pytest). No Docker daemon, no network, no DB writes.
+
+Run:  backend/.venv/Scripts/python.exe backend/test_obfuscation_safety.py
+"""
+from __future__ import annotations
+
+import ast
+import json
+import re
+from pathlib import Path
+
+from cockpit import config
+from cockpit import executor as EX
+from cockpit import obfuscation as O
+from cockpit.obfuscation import ObfuscationRefused, ObfuscationRequest
+
+BACKEND = Path(__file__).resolve().parent
+OBF_SRC = Path(O.__file__).read_text(encoding="utf-8")
+OBF_TREE = ast.parse(OBF_SRC)
+
+# The ONLY two files allowed to name the module: the module itself, and the HTTP layer.
+# cockpit/router.py is deliberately NOT here — the routes live in main.py, so the cockpit
+# router keeps no handle on this surface.
+ALLOWED_REFERENCES = {Path("cockpit/obfuscation.py"), Path("main.py")}
+
+_REFERENCE_PATTERNS = [
+    r"\bstart_listener\b",
+    r"\bstop_listener\b",
+    r"\boperator_oneliner\b",
+    r"\bfrom\s+\.obfuscation\b",
+    r"\bfrom\s+cockpit\.obfuscation\b",
+    r"\bimport\s+cockpit\.obfuscation\b",
+    r"\bfrom\s+cockpit\s+import\s+[^\n]*\bobfuscation\b",
+    r"\bfrom\s+\.\s+import\s+[^\n]*\bobfuscation\b",
+    r"\bcockpit\.obfuscation\b",
+]
+
+SECRET = "s3cr3t-tunnel-pw-DO-NOT-LEAK"
+
+
+# --------------------------------------------------------------------------- #
+# helpers — AST + hermetic fakes (manual save/restore; this repo has no pytest)
+# --------------------------------------------------------------------------- #
+def _fn(tree: ast.AST, name: str) -> ast.FunctionDef:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"{name}() has vanished from obfuscation.py — the lock cannot be evaluated")
+
+
+def _dotted(func: ast.AST) -> str:
+    parts: list[str] = []
+    cur = func
+    while isinstance(cur, ast.Attribute):
+        parts.append(cur.attr)
+        cur = cur.value
+    if isinstance(cur, ast.Name):
+        parts.append(cur.id)
+    return ".".join(reversed(parts))
+
+
+def _call_names(node: ast.AST) -> set[str]:
+    return {_dotted(n.func) for n in ast.walk(node) if isinstance(n, ast.Call)} - {""}
+
+
+def _backend_py_files() -> list[Path]:
+    skip = {".venv", "__pycache__", "node_modules", ".pytest_cache"}
+    return sorted(
+        p for p in BACKEND.rglob("*.py") if not (set(p.relative_to(BACKEND).parts) & skip)
+    )
+
+
+class _FakeProc:
+    def __init__(self, argv):
+        self.argv, self._alive = argv, True
+
+    def poll(self):
+        return None if self._alive else 0
+
+    def kill(self):
+        self._alive = False
+
+
+class _Spy:
+    def __init__(self, *, up=True):
+        self.up = up
+        self.popen_argv: list[str] | None = None
+        self.popen_calls = 0
+        self.saved: list = []
+        self._orig = (O._container_running, O.subprocess.Popen, O.runstore.save_run)
+
+    def __enter__(self):
+        def fake_popen(argv, **kw):
+            self.popen_calls += 1
+            self.popen_argv = argv
+            return _FakeProc(argv)
+
+        O._container_running = lambda name: self.up
+        O.subprocess.Popen = fake_popen
+        O.runstore.save_run = lambda rec: self.saved.append(rec)
+        return self
+
+    def __exit__(self, *exc):
+        (O._container_running, O.subprocess.Popen, O.runstore.save_run) = self._orig
+        O.reset()
+        return False
+
+
+def _dnscat(**over) -> ObfuscationRequest:
+    base = dict(
+        kind="dnscat2", zone="tunnel.operator-owned.example", secret=SECRET,
+        engagement_id="eng-obfsafe000",
+    )
+    base.update(over)
+    return ObfuscationRequest(**base)
+
+
+def _iodine(**over) -> ObfuscationRequest:
+    base = dict(
+        kind="iodine", zone="t.operator-owned.example", secret=SECRET,
+        tunnel_net="10.99.53.1/24", engagement_id="eng-obfsafe000",
+    )
+    base.update(over)
+    return ObfuscationRequest(**base)
+
+
+# --------------------------------------------------------------------------- #
+# 1. NO ORCHESTRATOR / AGENT / LOOP PATH
+# --------------------------------------------------------------------------- #
+def test_no_orchestrator_or_agent_path_to_obfuscation() -> None:
+    """EVERY backend module is scanned; only obfuscation.py + main.py may name this surface."""
+    scanned: list[Path] = []
+    offenders: list[str] = []
+    controls: dict[Path, list[str]] = {}
+
+    for f in _backend_py_files():
+        rel = Path(f.relative_to(BACKEND).as_posix())
+        text = f.read_text(encoding="utf-8", errors="ignore")
+        hits = [p for p in _REFERENCE_PATTERNS if re.search(p, text)]
+        if rel in ALLOWED_REFERENCES:
+            controls[rel] = hits
+            continue
+        scanned.append(rel)
+        if f.name.startswith("test_"):
+            continue
+        if hits:
+            offenders.append(f"{rel.as_posix()} ({', '.join(hits)})")
+
+    assert not offenders, (
+        "the DNS-tunnel surface must be HUMAN-ONLY — these modules can reach it: "
+        f"{offenders}. The orchestrator/agent/loop/executor must have NO path to a covert channel."
+    )
+
+    must_have_scanned = {
+        Path("orchestrator.py"), Path("cockpit/executor.py"), Path("cockpit/router.py"),
+        Path("adgraph/orchestrator.py"), Path("cockpit/session.py"), Path("cockpit/tunnels.py"),
+    }
+    missing = must_have_scanned - set(scanned)
+    assert not missing, f"the scan never reached the agent-path modules: {sorted(missing)}"
+    assert len(scanned) >= 40, f"only {len(scanned)} modules scanned — the sweep is too narrow"
+
+    for allowed in ALLOWED_REFERENCES:
+        assert controls.get(allowed), (
+            f"{allowed} no longer matches any reference pattern — the scan would now pass "
+            "vacuously. Update _REFERENCE_PATTERNS to follow the rename."
+        )
+
+    import orchestrator as ORCH
+    from adgraph import orchestrator as ADORCH
+
+    for mod, name in ((EX, "cockpit.executor"), (ORCH, "orchestrator"),
+                      (ADORCH, "adgraph.orchestrator")):
+        for attr in ("obfuscation", "start_listener", "operator_oneliner", "ObfuscationRequest"):
+            assert not hasattr(mod, attr), (
+                f"{name} must not expose {attr!r} — that is an agent path to a covert channel"
+            )
+    print(f"  {len(scanned)} modules scanned: ZERO orchestrator/agent/loop path to the tunnel: PASS")
+
+
+# --------------------------------------------------------------------------- #
+# 2. THE LIFECYCLE IS HUMAN-ONLY AND UNGATED BY DESIGN
+# --------------------------------------------------------------------------- #
+def test_listener_lifecycle_is_human_only_and_carries_no_gate_fields() -> None:
+    """A listener has no target, so there is nothing to gate — and nothing that could widen it."""
+    gate_calls = {
+        "executor.validate_request", "validate_request", "EX.validate_request",
+        "executor.resolve_mode", "executor.iter_run",
+    }
+    for human_only in ("start_listener", "stop_listener", "list_listeners"):
+        calls = _call_names(_fn(OBF_TREE, human_only))
+        assert not (calls & gate_calls), (
+            f"{human_only} consults the executor ({sorted(calls & gate_calls)}) — the listener "
+            "is operator infrastructure with NO target; wiring it to the gated path would give "
+            "the executor (and therefore anything that can reach the executor) a route here"
+        )
+    # What is actually BOUND, read off the import statements — so the module docstring's prose
+    # ("the executor must have NO path here") cannot trip this, and no spelling can slip past.
+    imported: set[str] = set()
+    for node in ast.walk(OBF_TREE):
+        if isinstance(node, ast.Import):
+            imported |= {a.asname or a.name.split(".")[0] for a in node.names}
+            imported |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            imported |= {a.asname or a.name for a in node.names}
+            imported.add(node.module or "")
+    for forbidden in ("executor", "orchestrator", "kali", "session", "cockpit.executor",
+                      "adgraph", "agent"):
+        assert forbidden not in imported, (
+            f"obfuscation.py imports {forbidden!r} — it must have no handle on the executor, "
+            f"the agent/loop or the open :kali box. Imports: {sorted(imported)}"
+        )
+    for attr in ("executor", "orchestrator", "validate_request", "iter_run", "run_kali"):
+        assert not hasattr(O, attr), f"obfuscation must not expose {attr!r}"
+
+    fields = set(ObfuscationRequest.model_fields)
+    for forbidden in ("approved", "dangerous_ack", "target", "host", "container", "sandbox"):
+        assert forbidden not in fields, (
+            f"ObfuscationRequest.{forbidden} would give the lifecycle a target or a gate it must "
+            f"not have — got {sorted(fields)}"
+        )
+    print("  the listener lifecycle is ungated human-only and carries no target/gate field: PASS")
+
+
+# --------------------------------------------------------------------------- #
+# 3. *** THE CLIENT HALF IS NEVER DELIVERED ***
+# --------------------------------------------------------------------------- #
+def test_client_oneliner_is_pure_and_no_delivery_primitive_exists() -> None:
+    """operator_oneliner builds a string and STOPS. Nothing in the module can ship it.
+
+    The AST half is the strong one: the function's only outgoing calls are list/string
+    construction, so it cannot acquire an I/O side effect without this test failing. The
+    source scan is the second half — the module must own no delivery primitive at all, because
+    the far side is a machine HackPit has not compromised and must not try to reach.
+    """
+    body = _fn(OBF_TREE, "operator_oneliner")
+    allowed_calls = {"parts.append", "join", "str", "format"}
+    actual = _call_names(body)
+    assert actual <= allowed_calls, (
+        f"operator_oneliner gained a call it must not have: {sorted(actual - allowed_calls)}. "
+        "It is a PURE string builder — no I/O, no clock, no subprocess, no delivery."
+    )
+    # It must not touch a module that could perform I/O, even indirectly.
+    for n in ast.walk(body):
+        if isinstance(n, ast.Name):
+            assert n.id not in {"subprocess", "os", "open", "socket", "requests", "shutil"}, (
+                f"operator_oneliner references {n.id!r} — it must build a string and nothing else"
+            )
+
+    for delivery in (
+        "docker cp", "write_stdin", "communicate(", "stdin=subprocess.PIPE", "scp ", "psexec",
+        "smbclient", "requests.", "urllib", "httpx", "socket.", "paramiko", "winrm",
+        "sendline", "os.system", "os.popen", "pty.spawn", "shutil.copy",
+    ):
+        assert delivery not in OBF_SRC, (
+            f"obfuscation.py must not be able to DELIVER the client half — found {delivery!r}"
+        )
+
+    # Behavioural: building the line starts nothing and records nothing.
+    with _Spy() as spy:
+        lis = O.start_listener(_dnscat())
+        assert spy.popen_calls == 1 and len(spy.saved) == 1
+        for _ in range(3):
+            line = O.operator_oneliner(lis)
+        assert spy.popen_calls == 1, "operator_oneliner must not spawn a process"
+        assert len(spy.saved) == 1, "operator_oneliner must not record anything"
+        assert line == lis.client_command, "the model echoes the SAME pure function's output"
+        assert line.startswith(O.DNSCAT2_CLIENT_BIN), line
+        assert O.DNSCAT2_SERVER_BIN not in line, "the one-liner is the CLIENT half"
+    print("  operator_oneliner is a PURE string builder; the module has no delivery path: PASS")
+
+
+# --------------------------------------------------------------------------- #
+# 4. THE ZONE / TUNNEL NET ARE OPERATOR-OWNED — NEVER TARGET-SUBSTITUTED
+# --------------------------------------------------------------------------- #
+def test_zone_and_tunnel_net_survive_target_substitution() -> None:
+    """The catalog placeholders are spelled so the composer's substitution CANNOT rewrite them.
+
+    This is the obfuscation twin of the ``<listener>`` invariant: pointing a tunnel at the
+    client's own zone (or handing the tunnel interface a range belonging to the engagement)
+    would be both useless and harmful. Run against the REAL substitution pass, not a copy.
+    """
+    import attack_path
+
+    target = "app.example.com"
+    for template in (
+        "dnscat2-server <tunnel-zone>",
+        "dnscat2-client <tunnel-zone>",
+        "iodined -f -c -P <password> <tunnel-net> <tunnel-zone>",
+        "iodine -f -P <password> <tunnel-zone>",
+    ):
+        out = attack_path.substitute_target(template, target, scope="10.0.0.0/24")
+        assert "<tunnel-zone>" in out, f"the composer rewrote the OPERATOR's zone: {out}"
+        if "<tunnel-net>" in template:
+            assert "<tunnel-net>" in out, f"the composer rewrote the tunnel's own range: {out}"
+        assert target not in out, f"the TARGET was substituted into a tunnel template: {out}"
+
+    # The module's own values come from the request and are echoed verbatim — no target exists
+    # here to substitute in the first place.
+    with _Spy() as spy:
+        lis = O.start_listener(_iodine(zone="t.operator-owned.example"))
+        assert lis.zone == "t.operator-owned.example"
+        assert lis.tunnel_net == "10.99.53.1/24"
+        assert "t.operator-owned.example" in spy.popen_argv, spy.popen_argv
+        # The tunnel interface's range must be private by construction.
+        for public in ("8.8.8.8/24", "1.1.1.1/32"):
+            raised = False
+            try:
+                ObfuscationRequest(kind="iodine", zone="t.example", secret="pw", tunnel_net=public)
+            except Exception:
+                raised = True
+            assert raised, f"a public tunnel_net ({public}) must be refused"
+    print("  <tunnel-zone>/<tunnel-net> survive the REAL target-substitution pass: PASS")
+
+
+# --------------------------------------------------------------------------- #
+# 5. EVERY ACTION IS AUDITED — WITH THE SECRET REDACTED
+# --------------------------------------------------------------------------- #
+def test_every_action_is_audited_with_the_secret_redacted() -> None:
+    assert "runstore.save_run" in _call_names(_fn(OBF_TREE, "_save")), (
+        "_save must persist through runstore.save_run — the single audit sink"
+    )
+    for audited in ("start_listener", "stop_listener"):
+        assert "_save" in _call_names(_fn(OBF_TREE, audited)), f"{audited} must record a run"
+    assert "_redacted" in _call_names(_fn(OBF_TREE, "start_listener")), (
+        "the run record must go through _redacted — the audit trail is not a key store"
+    )
+
+    with _Spy() as spy:
+        lis = O.start_listener(_iodine())
+        rec = spy.saved[-1]
+        assert rec.run_id == lis.run_id and rec.finished_at is None
+        assert rec.target == config.ENGAGE_SANDBOX_CONTAINER, (
+            "a listener has NO target — the audit row names the operator's own box"
+        )
+        blob = json.dumps(rec.model_dump(), default=str)
+        assert SECRET not in blob, f"the operator's tunnel key reached the run record: {rec.args}"
+        assert any("***" in a for a in rec.args), rec.args
+        # ...but the REAL key still reaches the server process, or the tunnel would not work.
+        assert SECRET in spy.popen_argv, "the real key must reach the server process"
+
+        O.stop_listener(lis.id)
+        closed = spy.saved[-1]
+        assert closed.run_id == lis.run_id and closed.finished_at is not None
+        assert SECRET not in json.dumps(closed.model_dump(), default=str)
+
+        n = len(spy.saved)
+        raised = False
+        try:
+            O.stop_listener("deadbeefdead")
+        except ObfuscationRefused as exc:
+            raised = True
+            assert exc.gate == "unknown", exc.gate
+        assert raised and len(spy.saved) == n, "a refusal is not a run — nothing may be recorded"
+    print("  start/stop are audited; the pre-shared key is REDACTED in every record: PASS")
+
+
+# --------------------------------------------------------------------------- #
+# 6. NO SHELL; THE CONTAINER IS A CODE CONSTANT
+# --------------------------------------------------------------------------- #
+def test_no_shell_and_the_container_is_never_a_request_field() -> None:
+    shell_kwargs = [
+        n for n in ast.walk(OBF_TREE)
+        if isinstance(n, ast.Call)
+        for kw in n.keywords
+        if kw.arg == "shell" and not (isinstance(kw.value, ast.Constant) and kw.value.value is False)
+    ]
+    assert not shell_kwargs, "obfuscation.py passes shell= to a subprocess call — argv lists only"
+    for banned in ("os.system", "os.popen", "sh -c", '"sh", "-c"', "'sh', '-c'"):
+        assert banned not in OBF_SRC, f"obfuscation.py must not contain {banned!r}"
+    assert "config.ENGAGE_SANDBOX_CONTAINER" in OBF_SRC, (
+        "the container must come from a CODE CONSTANT, never a request field"
+    )
+
+    # A smuggled container field is DROPPED, and the constant still decides where it runs.
+    smuggled = ObfuscationRequest.model_validate({
+        **_dnscat().model_dump(), "container": config.KALI_OPEN_CONTAINER, "sandbox": "evil",
+    })
+    assert not hasattr(smuggled, "container"), "an extra container field must not stick"
+    with _Spy() as spy:
+        O.start_listener(smuggled)
+        argv = spy.popen_argv
+        assert argv[:3] == ["docker", "exec", config.ENGAGE_SANDBOX_CONTAINER], argv
+        assert config.KALI_OPEN_CONTAINER not in argv, "must NOT reach the open :kali box"
+        assert config.SANDBOX_CONTAINER not in argv, "must NOT reach the isolated lab box"
+        assert "sh" not in argv and "-c" not in argv, "the listener is argv-only (no shell)"
+    print("  no shell; the container is a code constant a request cannot redirect: PASS")
+
+
+# --------------------------------------------------------------------------- #
+# 7. *** THE SECRET NEVER CROSSES THE HTTP BOUNDARY ***
+# --------------------------------------------------------------------------- #
+def test_secret_never_crosses_the_http_boundary() -> None:
+    """THE LOAD-BEARING ROUTE TEST. Adding an API is what creates the export path.
+
+    ObfuscationListener carries the operator's pre-shared key on the model AND embeds it in
+    ``client_command`` — start_listener has to hand the real key to the server process. The
+    RunRecord redaction covers the audit trail ONLY. So the HTTP boundary gets its own
+    redaction: a response model with no ``secret`` field, plus masking INSIDE the one-liner
+    (dropping the field alone would still export the key). Asserted against real response
+    bodies, on every route that can return a listener.
+    """
+    import main
+    from fastapi.testclient import TestClient
+
+    # The response model structurally cannot carry the key.
+    out_fields = set(main.ObfuscationListenerOut.model_fields)
+    assert "secret" not in out_fields, (
+        f"ObfuscationListenerOut must have NO secret field — got {sorted(out_fields)}"
+    )
+    assert "secret" in set(O.ObfuscationListener.model_fields), (
+        "the INTERNAL model is still expected to carry the key (the server process needs it) — "
+        "if that changed, this test is now checking the wrong boundary"
+    )
+
+    client = TestClient(main.app)
+    with _Spy() as spy:
+        for req in (_dnscat(), _iodine()):
+            payload = req.model_dump()
+            r = client.post("/api/obfuscation/listeners", json=payload)
+            assert r.status_code == 200, r.text
+            assert SECRET not in r.text, (
+                f"*** THE OPERATOR'S TUNNEL KEY LEAKED IN THE {req.kind} START RESPONSE *** "
+                f"{r.text}"
+            )
+            body = r.json()
+            assert "secret" not in body, body
+            assert "***" in body["client_command"], (
+                "the one-liner must arrive MASKED — it embeds the key verbatim internally"
+            )
+            # The line is still useful: the client binary and the operator's zone survive.
+            assert req.zone in body["client_command"], body["client_command"]
+
+            lid = body["id"]
+
+            # ...and on every other route that can return a listener.
+            r = client.get("/api/obfuscation/listeners")
+            assert r.status_code == 200 and SECRET not in r.text, r.text
+            r = client.get("/api/obfuscation/status")
+            assert r.status_code == 200 and SECRET not in r.text, r.text
+            r = client.delete(f"/api/obfuscation/listeners/{lid}")
+            assert r.status_code == 200, r.text
+            assert SECRET not in r.text, f"the key leaked in the STOP response: {r.text}"
+            assert r.json()["status"] == "down", r.text
+
+        # The key DID reach the server process and the internal model — only the wire is clean.
+        assert SECRET in spy.popen_argv, "the real key must still reach the server process"
+        assert any(SECRET in (l.secret or "") for l in O.list_listeners()), (
+            "the internal model must still hold the key; only the HTTP boundary strips it"
+        )
+        # And nothing about the export path is recorded with the key either.
+        assert SECRET not in json.dumps([r.model_dump() for r in spy.saved], default=str)
+
+    # An unknown id is a 404, not a leak-shaped 500.
+    r = client.delete("/api/obfuscation/listeners/deadbeefdead")
+    assert r.status_code == 404, r.text
+    print("  the pre-shared key never crosses the HTTP boundary (start/list/status/stop): PASS")
+
+
+def test_http_routes_add_no_capability_and_stay_human_only() -> None:
+    """The /api/obfuscation routes are a thin human surface — and none of them delivers."""
+    import main
+
+    paths = {
+        (r.path, m)
+        for r in main.app.routes
+        for m in (getattr(r, "methods", set()) or set())
+        if str(getattr(r, "path", "")).startswith("/api/obfuscation")
+    }
+    assert paths, "the /api/obfuscation routes are missing"
+    assert {m for _p, m in paths} <= {"GET", "POST", "DELETE"}, paths
+    for p, _m in paths:
+        assert not any(
+            bad in p for bad in ("deliver", "deploy", "upload", "exec", "run", "client-command",
+                                 "push", "send")
+        ), (
+            f"{p} looks like a delivery route — the client half is carried across BY HAND, and "
+            "there must be no endpoint that ships it"
+        )
+    print(f"  {len(paths)} /api/obfuscation routes, none of which can deliver anything: PASS")
+
+
+if __name__ == "__main__":
+    test_no_orchestrator_or_agent_path_to_obfuscation()
+    test_listener_lifecycle_is_human_only_and_carries_no_gate_fields()
+    test_client_oneliner_is_pure_and_no_delivery_primitive_exists()
+    test_zone_and_tunnel_net_survive_target_substitution()
+    test_every_action_is_audited_with_the_secret_redacted()
+    test_no_shell_and_the_container_is_never_a_request_field()
+    test_secret_never_crosses_the_http_boundary()
+    test_http_routes_add_no_capability_and_stay_human_only()
+    print("ALL DNS-tunnel obfuscation safety invariants hold")

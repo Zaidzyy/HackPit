@@ -257,7 +257,7 @@ These are not open work — they are the rules the project runs by, and building
     - **Run a generated artifact on a Windows box and watch the telemetry.** The evasion engine emits artifacts and the paired footprints claim specific Event IDs and Sysmon codes. Those claims are transcribed from ATT&CK v19.1 and SigmaHQ, not observed here. The honest version of this feature is only fully honest once someone detonates an artifact on an instrumented host and confirms the footprint matches what actually landed in the log. This is the natural pairing with the D9 Windows VM.
   None of this blocks the build shipping — the containment properties are what the test suite locks, and those are provable without live infrastructure. But the *efficacy* claims are, until then, documented rather than demonstrated, and this list should be worked through before build #4 is described as field-ready.
 - **An independent review of build #4's Tasks 8–13** — **DONE** (no longer outstanding). Run in a fresh session (the safety classifier had begun refusing subagent dispatch partway through the build, and it refuses on accumulated context). It found **no containment hole** — no agent path, no shell, the container never request-influenced, no delivery primitive — and five substantive defects, all fixed: a multi-technique request that built one artifact and described a different one; the T1690/T1685 mis-mapping above; two stub headers describing memory patching when the stubs are managed-reflection bypasses; a no-agent-path test whose positive control counted the wrong variable (99 files reported, 5 actually scanned); and a `_gate_request` comment asserting a scope-gate behaviour that does not hold. Plus seven minor items — an image smoke test that could not fail, unpinned installs, dead fields, weak assertions. Every fix carries a test that fails without it.
-- **Gate-integrity Criticals 2 and 3 — OUTSTANDING, and the highest-priority work in the project.** Planned as build #5 (`docs/superpowers/plans/2026-07-27-build5-gate-integrity.md`). **Critical 2** is the WinRM first-token classification, and it is the sharpest known hole in the tool: the red-confirm is defeated by moving a cmdlet one token to the right, on the one path that executes against a real domain-joined host under real credentials. **Critical 3** is the family of source-scan locks whose globs cover a fraction of the tree — the `:kali` human-only lock reaches 30 of 69 modules, the cockpit→arsenal lock 5 of 22 — so a planted violation in an unglobbed directory passes. The plan's third task is the one that matters longest: turning *a guard test must iterate real data, assert on what it actually checked, and prove it can fail* into a written repo convention, because every critical found so far reduces to a test that could not fail.
+- **Gate-integrity Criticals 2 and 3 — DONE (build #5, 2026-07-27).** Both closed; full detail in Part III. **Critical 2** (the WinRM first-token classification — the sharpest known hole in the tool, because it defeated the red-confirm by moving a cmdlet one token to the right on the one path that reaches a real domain-joined host) is fixed by classifying the whole joined PowerShell script, deliberately without parsing it, with the gate and the transport now deriving that string from one shared function. **Critical 3** (source-scan locks covering a fraction of the tree) is fixed by one shared scanner: whole-tree `rglob`, repo-relative allow-lists, an AST pass for indirection, and per-lock planted-violation controls — coverage per lock goes 30 of 69 modules to 67. The plan's third task, the one that matters longest, is written down in `backend/AGENTS.md`. **One item from the same audit remains open: `I2`, the ungated tunnel listener start** — `cockpit/tunnels.start_tunnel` reaches `subprocess.Popen` without `validate_request`, and `POST /cockpit/tunnels` has no `approved`/`dangerous_ack` field. It was outside build #5's scope.
 - **Pinning the build-#4 install layer** (audit M2) — three of five install paths are unpinned (`git clone` of dnscat2, four `gem install`s, `pip install donut-shellcode`). `docker/pin-build4-versions.sh` resolves the real values and rewrites the layer; a test fails if the unpinned set grows. Deliberately left unpinned rather than pinned to invented values.
     - **Still open from that review:** three installs in the build-#4 image layer (dnscat2's clone, four Ruby gems, `donut-shellcode`) remain **unpinned**, so the layer is not byte-reproducible. Pinning needs upstream values resolved from the network; `docker/pin-build4-versions.sh` resolves them and rewrites the layer in place. The gap is declared in the Dockerfile and asserted by `test_evasion.py`, which fails if the unpinned set grows.
 - **Kali VM as an execution target; HexStrike as an execution backend; risk-tiered / batch approval** — **rejected, not deferred** (D8, D5, §1.2).
@@ -473,13 +473,14 @@ deliberate violation for each. Seven silently failed to fire.** Full detail in
 2. **The WinRM transport classifies only the first token of what is a whole PowerShell script.**
    `executor.py` joins command+args and `run_ps()` executes the lot, so `;` and `|` are live
    separators: `Write-Host go ; Invoke-Mimikatz` is silent, while the same cmdlet as `argv[0]`
-   fires. **OUTSTANDING — build #5.** This is the most consequential finding of the whole review
-   cycle, because it executes on a real domain-joined host under real credentials.
+   fires. **FIXED — build #5 (see "Gate integrity — build #5" below).** This was the most
+   consequential finding of the whole review cycle, because it executes on a real domain-joined
+   host under real credentials.
 3. **The `:kali` human-only lock never opens 39 of 69 backend modules** — its scan globs only
    `backend/*.py` and `cockpit/*.py`. A planted `from cockpit.kali import run_kali` in
    `adgraph/orchestrator.py` passes. The same narrow glob was copied into the tunnels, repeater,
    terminal and WinRM locks, and the cockpit→arsenal lock covers 5 of 22 modules.
-   **OUTSTANDING — build #5.**
+   **FIXED — build #5 (see "Gate integrity — build #5" below).**
 
 **What Critical 1's fix actually changed**, because the shape matters more than the list. The
 `.exe`/`.py`/`.ps1` normalisation that the AD sets already did was **collapsed into one shared
@@ -500,19 +501,162 @@ correctly. Every critical in this audit, and two of the five findings in the Tas
 reduce to the same root cause: **a test that could not fail, or that tested a value the real system
 never produces.** That is what build #5's third task turns into a written repo convention.
 
+## Gate integrity — build #5 (2026-07-27)
+
+The audit's two remaining criticals, and the testing pattern that hid them. Plan:
+`docs/superpowers/plans/2026-07-27-build5-gate-integrity.md`.
+
+**Critical 2 — the WinRM danger gate read the first token of a whole PowerShell script.**
+`cockpit/executor.py` joins `command` + `args` into one string and the Windows transport hands
+that string to PowerShell, where `;`, `|` and newlines are live statement separators. The
+heuristic classified `basename(argv[0])` and scanned only the *args* for markers. So the gate
+was defeated by moving a cmdlet one token to the right, on the one path that executes against a
+real domain-joined host under real credentials:
+
+| Script | Before |
+|---|---|
+| `Write-Host go ; Invoke-Mimikatz -DumpCreds` | no reason, allowed |
+| `Get-DomainUser \| Set-DomainUserPassword` | no reason, allowed |
+| `IEX (New-Object Net.WebClient).DownloadString(...)` | no reason, allowed |
+| `Write-Host go` + newline + `Invoke-Mimikatz` | no reason, allowed |
+| `powershell -enc <base64>` | fired **by accident** — `-enc` splits into `-e`,`-n`,`-c` |
+
+All five became tests first, verbatim, and were confirmed failing before anything was written.
+
+**The fix shape, and why it is not a parser.** Four options were weighed; the choice was to
+**scan the whole joined string for every marker, wherever it appears**, and explicitly *not*
+attempt statement splitting. Correct PowerShell tokenising has to handle quoting, `$( )`
+subexpressions, the `&` call operator, backticks and line continuations — and **any parser
+written here becomes a new bypass surface, which is precisely the bug being fixed: the
+classifier's model of the input was narrower than the input.** Whole-string scanning has no
+"position" to exploit, and that is the property the first-token design lacked. The cost
+asymmetry settles it: this gate raises a **red-confirm, not a block**, so a false positive costs
+one click while a false negative runs Mimikatz on a domain controller.
+
+Two things a name-based scan cannot see were closed alongside it. **Download cradles** —
+`IEX (New-Object Net.WebClient).DownloadString(...)` never spells the payload's name anywhere,
+so the *cradle* is the marker. **Encoded commands** — `-enc` defeats every text scan by
+construction, so the payload is decoded and re-scanned, matching every PowerShell prefix of the
+flag rather than only the spellings a human types; a blob that will not decode is itself
+reported rather than passed.
+
+**The root-cause lock.** The bug was never only "the heuristic is too narrow". The string the
+gate classified and the string the transport executed were **built in two places**, and
+scanning a different string than the one that runs would have reproduced the bug somewhere new.
+Both now derive from `executor.join_ps_command()`, and a test asserts on the source —
+transitively, with a negative control — that they still do. The AD orchestrator's advisory
+pre-check was moved onto the same union, so the panel can no longer promise a confirm the gate
+would not require, or stay quiet where it would.
+
+**The false-positive cost, measured rather than promised** (plan Task 1 Step 6). Run across
+every AD/Windows template in `tools.json` and every command in the AD graph's edge definitions:
+**78 of 145 invocations in the full population (53%), and 27 of 43 in the WinRM-reachable subset
+(62%), now demand a confirm.** The second number is the one that matters — the catalog's Linux
+impacket invocations go through the docker path, which is untouched. Of those 27, **none is a
+false positive**: every one is a genuine destructive abuse (Set-DomainUserPassword,
+Add-DomainObjectAcl, Add-DomainGroupMember, Invoke-Mimikatz, SharPersist, Invoke-Obfuscation,
+Rubeus ptt, Set-DomainObjectOwner). Read-only enumeration stays silent — Rubeus kerberoast and
+asreproast, `Get-DomainUser -SPN`, `Find-InterestingDomainAcl`, `Find-LocalAdminAccess`,
+winPEAS, `Get-ADServiceAccount`, `Get-DomainObject` — and that half is pinned as a control,
+because a banner on ordinary enumeration is how an operator learns to click through the one that
+matters. The measurement also found **two real false negatives** the sets had missed:
+`Invoke-SQLOSCmd` (OS command execution on a SQL host) and `Enter-PSSession`/`New-PSSession` (a
+further hop out of an existing session). Both were catalogued; both were silent.
+
+Because whole-string scanning over-flags by design, **every reason names the marker it matched
+and the offset it matched at** — `powershell script: 'invoke-mimikatz' at offset 14 — dumps/
+replicates domain credentials`. A reason the operator can evaluate is a gate; a banner they
+cannot is decoration, and trading a silent bypass for a decorative one is not a fix.
+
+**Critical 3 — eleven source-scan locks, nine of them narrower than their own docstrings.** The
+`:kali` human-only lock is the entire reason the one deliberately-unbounded arbitrary-shell
+surface is considered safe. Its docstring said *scan the whole (non-venv) source tree*; it
+globbed `backend/*.py` plus `backend/cockpit/*.py`, which is **30 of 69 modules**, so all of
+`adgraph/`, `arsenal/`, `codescan/`, `detection/`, `evasion/`, `exploits/` and `state/` were
+never opened and a planted `from cockpit.kali import run_kali` in `adgraph/orchestrator.py` — a
+literal orchestrator module — shipped green. Three distinct defects, now fixed structurally in
+one shared `backend/test_support/scans.py` rather than by asking each suite to remember:
+
+1. **Narrow file selection** — an `rglob` over the whole backend. Coverage per lock goes 30 to
+   67 modules; there is no per-suite glob left to get wrong.
+2. **Basename allow-lists** — `{"router.py"}` matched against `f.name` exempted
+   `adgraph/router.py`, `detection/router.py`, `arsenal/router.py` and every other `router.py`
+   in the tree by accident. Allow-lists are now keyed on repo-relative POSIX paths only.
+3. **Four literal substrings** — an AST pass alongside them catches what the audit planted and
+   the old predicate missed: aliased imports, imports opened inside a function body,
+   `import_module("cockpit." + "kali")`, `getattr(m, "run_" + "kali")`, and f-strings with
+   constant parts.
+
+Prose is stripped so a module that *documents* a rule does not violate it — this is not
+hypothetical, documenting the Critical 2 fix tripped the WinRM lock — but ordinary string
+literals are deliberately **kept**, because a scanner that blanked every string would go blind
+to `import_module("cockpit.kali")`, which is the indirection the lock exists to catch.
+
+Two more locks were closed with it: the **cockpit→arsenal** lock checked a hardcoded list of
+five filenames while printing "the cockpit package has zero references to the arsenal" (the
+package has 22 modules, 17 of which post-date the invariant), and the **evasion agent-path**
+scan still filtered by *filename*, so `from evasion import engine` in `cockpit/executor.py`,
+`chat.py` or `adgraph/techniques.py` was never looked at. A module named something nobody
+predicted is exactly what a name filter cannot cover.
+
+**Widening the scans produced two false positives, and both were fixed in the predicate.**
+`cockpit/reconcile.py` "referenced the arsenal" — as a *parameter name*; it takes the loaded
+catalog as an opaque injected object precisely so it has no import-time dependency.
+`detection/{catalog,resolver,router}.py` and `report.py` "reached the evasion engine" — they are
+the *anti*-evasion guard, the code that refuses prescriptive evasion copy. Both locks now assert
+the claim the invariant actually makes (no import, in any form the AST can see). **Narrowing the
+file set to silence a false positive is how these guards got broken in the first place**, so
+that is written into the convention as a rule.
+
+**Task 3 — the convention, which is the part that outlasts both fixes.** Every critical in this
+audit, and two of build #4's five review findings, reduce to one root cause: a test that could
+not fail, or that tested a value the real system never produces. `test_arsenal_safety` claimed
+to verify that a catalogued dangerous invocation demands the red-confirm while testing
+`python3`, a command absent from the catalog it was guarding — one choice that hid eight tools.
+`backend/AGENTS.md` now carries the rule, with the five failures that produced it in a table:
+**a safety test must iterate real data, assert on what it actually checked, and prove it can
+fail.** Concretely — draw inputs from the real source of truth so a tool or module added
+tomorrow is covered by nobody remembering; assert on the *filtered* count, never files opened;
+and carry a planted-violation positive control in the same test. `test_scans.py` runs **first**
+in the suite for that reason: ten locks rest on the shared scanner, and it must demonstrate it
+catches a planted violation before any of them means anything.
+
+Sweeping for the *pattern* rather than the files the plan named found three more, none of which
+was in the task list. The **live-session stdin lock** — the load-bearing one, since anything
+able to type into an already-approved running session is executing un-gated commands — said "the
+whole source tree" and globbed three directories. `test_sliver_safety` and
+`test_obfuscation_safety`, the two suites the audit called correct, incremented their `scanned`
+counter *above* the `test_` skip, so their `>= 40` controls counted files opened rather than
+files judged. And re-running the audit's own probe list surfaced a real heuristic gap:
+`sekurlsa::pth ... /run:cmd.exe` as `argv[0]` fired only because `cmd.exe` happens to sit in its
+args (change it to `/run:powershell.exe` and it went silent), while `kerberos::list /export` —
+which writes every ticket in the session to disk — matched nothing at all.
+
+**What this build did not close.** The tunnel listener start (`I2`) still bypasses the executor
+entirely: `cockpit/tunnels.start_tunnel` runs `docker exec … ligolo-proxy …` through
+`subprocess.Popen` with no `validate_request` call, and `POST /cockpit/tunnels` carries no
+`approved` or `dangerous_ack` field. The *rewritten pivoted command* does go through the gated
+executor, as the module docstring says — but the listener start is the tunnel primitive, and it
+is ungated. It was outside this plan's scope and is carried forward as an open item. Also
+unchanged: `iter_run`'s prevalidated path re-checks approval but not danger (nothing is exposed
+today, because the single `prevalidated=True` caller validates first, but the asymmetry is the
+kind of thing a future caller trips over), and there is still no route-level authorisation on
+any of the 113 routes, which remains the known localhost-only posture rather than a new finding.
+
 ## Verification
 
-- **Hermetic safety suite** (`sh backend/run_safety_tests.sh`) — green after every phase, expanded across all five with `test_phase1_runtime`, `test_state`, `test_scope_hostcheck`, `test_credvault`, `test_corpora`, `test_detection`/`test_detection_safety` (OPSEC channel + blue-view-unchanged), `test_repeater`, `test_tunnels`, `test_report_templates`, persistent-shell containment tests in `test_kali`, Phase 5's `test_terminal` (PTY containment + the sentinel shell provably untouched) and `test_exploits` (version comparison, tiered ranking, executes-nothing), and the Windows backend's `test_winrm` + `test_winrm_safety` (host-locked / no gate bypass / secret never leaks / orchestrator can't auto-run WinRM) with the AD oracle extended to the native Windows variants, plus the post-assessment `test_search_ranking` (substance-gated tier boost + completeness nudge) and `test_codescan_rules` (8-language rule bundle + resolver), plus build #4's six new suites — `test_sliver`/`test_sliver_safety`, `test_obfuscation`/`test_obfuscation_safety` and `test_evasion`/`test_evasion_safety` (no agent path, gated-vs-human-only split preserved, `<listener>` never substituted, the tunnel key never crossing the HTTP boundary, the artifact never executed, and a negative control proving that stripping the OPSEC note makes the engine **refuse** rather than degrade). **42 test files, 446 checks, 0 failures.**
+- **Hermetic safety suite** (`sh backend/run_safety_tests.sh`) — green after every phase, expanded across all five with `test_phase1_runtime`, `test_state`, `test_scope_hostcheck`, `test_credvault`, `test_corpora`, `test_detection`/`test_detection_safety` (OPSEC channel + blue-view-unchanged), `test_repeater`, `test_tunnels`, `test_report_templates`, persistent-shell containment tests in `test_kali`, Phase 5's `test_terminal` (PTY containment + the sentinel shell provably untouched) and `test_exploits` (version comparison, tiered ranking, executes-nothing), and the Windows backend's `test_winrm` + `test_winrm_safety` (host-locked / no gate bypass / secret never leaks / orchestrator can't auto-run WinRM) with the AD oracle extended to the native Windows variants, plus the post-assessment `test_search_ranking` (substance-gated tier boost + completeness nudge) and `test_codescan_rules` (8-language rule bundle + resolver), plus build #4's six new suites — `test_sliver`/`test_sliver_safety`, `test_obfuscation`/`test_obfuscation_safety` and `test_evasion`/`test_evasion_safety` (no agent path, gated-vs-human-only split preserved, `<listener>` never substituted, the tunnel key never crossing the HTTP boundary, the artifact never executed, and a negative control proving that stripping the OPSEC note makes the engine **refuse** rather than degrade), plus build #5's `test_scans` — the shared source scanner's own regression file, which runs **first** in the suite and plants a violation of each shape (unscanned package, basename-exempted path, aliased import, in-function import, `import_module` string concatenation, f-string) into a temp tree to prove the scanner catches it before ten locks rest on it. **43 test files, 473 checks, 0 failures.**
+- **The audit's "probed and holds" list, re-run after build #5** — all 41 items still hold, including the `.exe` spellings from `I1`, the four gate orders, the no-silent-downgrade-to-lab path, and Critical 1's eight catalogued tools. The five demonstrated Critical 2 bypasses are all refused. The planted `from cockpit.kali import run_kali` in `adgraph/orchestrator.py` now **fails** the scan (verified against a temp mirror; the repo was never modified). Read-only enumeration — `nmap`, `sqlmap --dbs`, `netexec --shares`, `ldapsearch -x`, `hashcat`, `nuclei` — stays clean on both paths.
 - **Docker proofs** — `isolation_proof.sh` 4/4 (lab still cannot reach internet or host), `engage_open_proof.sh` 4/4 (engage has full reach).
 - **Browser** — every UI surface exercised against a live Ollama backend per the testing rule: the Phase-4 surfaces (payload-set arsenal rows, the OPSEC red-team channel, repeater send/replay/diff, tunnels route preview, exam report templates with the proof table) and the Phase-5 ones — `:terminal` running `top` and `vim` with live resize, `:exploits` resolving `vsftpd 2.3.4` to the backdoor exploit and its CVE, the state panel's per-service jump into it, and `/category/cloud` at 535 entries. **Windows targets** (`/windows`): profile create/list/test/delete and the AD-walk "run on" picker verified against the backend — the connectivity **test** and a live WinRM round-trip are deferred to a real VM (no Windows box exists yet), stated plainly rather than claimed.
 - **Frontend** — `tsc` clean, lint at the pre-existing baseline (11 errors + 1 warning, unchanged — verified by stashing the changes and re-running), `next build` exit 0 (routes include `/terminal`, `/exploits`, `/windows`).
 
 ## Status
 
-Build #4 (AV/EDR evasion + traffic obfuscation) is complete and verified: image `hackpit-kali:build4` builds with all eight new binaries smoke-tested by invocation, the full hermetic suite is green at 42 files / 446 checks, and the frontend builds clean. Tasks 8–13 have now had their independent review (see Part II) — no containment hole, five substantive defects fixed, each with a regression test. **Two caveats are carried forward as open items in Part II rather than papered over**, and build #4 should not be called field-ready until they close: the C2 and tunnel surfaces have never been run against a live beacon, a real delegated DNS zone, or an instrumented Windows host, so their *efficacy* claims are documented rather than demonstrated (the *containment* claims are what the suite locks, and those hold without live infrastructure); and three installs in the image layer are still unpinned, so that layer is not yet byte-reproducible.
+Build #4 (AV/EDR evasion + traffic obfuscation) is complete and verified: image `hackpit-kali:build4` builds with all eight new binaries smoke-tested by invocation, the full hermetic suite was green at 42 files / 446 checks at that point, and the frontend builds clean. Tasks 8–13 have now had their independent review (see Part II) — no containment hole, five substantive defects fixed, each with a regression test. **Two caveats are carried forward as open items in Part II rather than papered over**, and build #4 should not be called field-ready until they close: the C2 and tunnel surfaces have never been run against a live beacon, a real delegated DNS zone, or an instrumented Windows host, so their *efficacy* claims are documented rather than demonstrated (the *containment* claims are what the suite locks, and those hold without live infrastructure); and three installs in the image layer are still unpinned, so that layer is not yet byte-reproducible.
 
 A note the review sharpened, because it cuts against the instinct to trust the tooling: `pipeline/detection_sources.py --verify` reported **0 problems** throughout, including while `evasion_etw_blind` carried a technique id about shell history. It verifies that every id, name, tactic, log source and Sigma reference matches live upstream — it cannot verify that the technique chosen is the right one for the activity being described. A clean `--verify` is a check on transcription, not on judgement.
 
-Build #4 and gate-audit Critical 1 are **pushed** on `sandbox-kali-image` (through `4492fec`); the suite stands at 42 files / 459 checks / 0 failures. The next work is **build #5** — gate-integrity Criticals 2 and 3, above — and it should be treated as the priority, because Critical 2 is a red-confirm bypass on the path that reaches real domain-joined hosts.
+**Build #5 (gate integrity) is complete.** All three gate-audit criticals are now closed: Critical 1 in build #4's fix wave (`4492fec`), and Criticals 2 and 3 here. The suite stands at **43 files / 473 checks / 0 failures**, the frontend builds clean, and the audit's full "probed and holds" list was re-run with nothing regressed. What changed is not only two guards but the conditions under which a guard is allowed to be believed: `backend/AGENTS.md` now requires a safety test to iterate real data, assert on what it actually checked, and carry a demonstration that it can fail — and `test_scans.py` runs first in the suite to hold the shared scanner to that standard before ten locks depend on it. **One item from that audit stays open by scope**: `I2`, the ungated tunnel listener start, described at the end of the build #5 section. The remaining work is the deferred list in Part II — chiefly live-fire verification of the C2 and tunnel surfaces, and the three unpinned installs in the image layer.
 
 **All five phases are complete, and the Windows execution backend (D9) is now built** — the AD attack-path graph executes live over WinRM against an external VMware VM you run. The only remaining work is the deliberately deferred list in Part II — where the largest item, growing tier-1, is writing rather than building — plus the live-box verification of the WinRM driver, which waits on a VM being stood up.

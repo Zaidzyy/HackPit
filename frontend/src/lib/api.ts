@@ -1466,6 +1466,160 @@ export const addPivotSubnet = (
     signal
   );
 
+// --- Sliver C2 + DNS-tunnel obfuscation (see backend/cockpit/{sliver,obfuscation}.py) ---
+//
+// TWO FOOTINGS, never collapsed:
+//   SERVER / LISTENER LIFECYCLE -> HUMAN-ONLY. Operator infrastructure on the operator's own
+//     sandbox, with no target — clicking start IS the approval, so there is no gate.
+//   IMPLANT GENERATION          -> a GATED command. previewImplant is PURE (argv + the gate
+//     verdict, runs nothing); generateImplant runs the REAL executor gates and 403s naming the
+//     gate. A payload generator trips the danger heuristic, so the red-confirm is required.
+//
+// The routes live on the backend's main.py (NOT the cockpit router) precisely because both
+// surfaces are source-scan locked to "the module + the HTTP layer" — nothing autonomous may
+// reach them. Nothing here delivers anything: an implant is generated and left on disk, and a
+// tunnel's client one-liner is carried to the far side BY HAND.
+//
+// The DNS listener's pre-shared key NEVER crosses this boundary: the response model has no
+// secret field and `client_command` arrives with the key MASKED (`***`). Substitute your own.
+
+export type SliverStatus = {
+  container: string;
+  up: boolean;
+  live_servers: number;
+  max_live_servers: number;
+  implants: number;
+  detail: string;
+};
+
+export type SliverServer = {
+  id: string;
+  status: string;
+  container: string;
+  port: number;
+  run_id: string;
+  started_at: string;
+  stopped_at: string | null;
+  engagement_id: string | null;
+  setup_note: string;
+};
+
+export type Implant = {
+  id: string;
+  run_id: string;
+  status: string;
+  os: string;
+  arch: string;
+  fmt: string;
+  transport: string;
+  /** The OPERATOR's callback address, verbatim — never the engagement target. */
+  listener: string;
+  target: string;
+  mode: string;
+  container: string;
+  artifact_path: string;
+  argv: string[];
+  exit_code: number | null;
+  detail: string;
+  generated_at: string;
+  engagement_id: string | null;
+  session_id: string | null;
+  step_id: string | null;
+};
+
+export type ImplantBody = {
+  os: string;
+  arch: string;
+  fmt: string;
+  transport: string;
+  listener: string;
+  target: string;
+  engagement_id?: string | null;
+  approved: boolean;
+  dangerous_ack: boolean;
+};
+
+/** Pure preview: the exact argv a build WOULD run, plus which gate would refuse it. */
+export type ImplantPreview = {
+  argv: string[];
+  listener: string;
+  rejected: { reason: string; gate: string; dangerous_flags: string[] } | null;
+};
+
+export const getSliverStatus = (signal?: AbortSignal) =>
+  getJSON<SliverStatus>("/api/sliver/status", signal);
+
+export const listSliverServers = (signal?: AbortSignal) =>
+  getJSON<SliverServer[]>("/api/sliver/servers", signal);
+
+export const startSliverServer = (
+  body: { port?: number | null; engagement_id?: string | null },
+  signal?: AbortSignal
+) => postJSON<SliverServer>("/api/sliver/servers", body, signal);
+
+export const stopSliverServer = (sid: string, signal?: AbortSignal) =>
+  fetch(`${API_URL}/api/sliver/servers/${encodeURIComponent(sid)}`, {
+    method: "DELETE",
+    signal,
+  }).then((r) => r.json() as Promise<SliverServer>);
+
+export const previewImplant = (body: ImplantBody, signal?: AbortSignal) =>
+  postJSON<ImplantPreview>("/api/sliver/implants/preview", body, signal);
+
+export const generateImplant = (body: ImplantBody, signal?: AbortSignal) =>
+  postJSON<Implant>("/api/sliver/implants", body, signal);
+
+export const listImplants = (signal?: AbortSignal) =>
+  getJSON<Implant[]>("/api/sliver/implants", signal);
+
+export type ObfuscationStatus = {
+  container: string;
+  up: boolean;
+  live_listeners: number;
+  max_live_listeners: number;
+  detail: string;
+};
+
+export type DnsListener = {
+  id: string;
+  kind: string;
+  status: string;
+  container: string;
+  /** A zone the OPERATOR controls and has had delegated — never the target's. */
+  zone: string;
+  tunnel_net: string | null;
+  run_id: string;
+  /** The CLIENT half, to run BY HAND on the far side. The pre-shared key is MASKED. */
+  client_command: string;
+  setup_note: string;
+  started_at: string;
+  stopped_at: string | null;
+  engagement_id: string | null;
+};
+
+export const getObfuscationStatus = (signal?: AbortSignal) =>
+  getJSON<ObfuscationStatus>("/api/obfuscation/status", signal);
+
+export const listDnsListeners = (signal?: AbortSignal) =>
+  getJSON<DnsListener[]>("/api/obfuscation/listeners", signal);
+
+export const startDnsListener = (
+  body: {
+    kind: string;
+    zone: string;
+    tunnel_net?: string;
+    secret?: string | null;
+    engagement_id?: string | null;
+  },
+  signal?: AbortSignal
+) => postJSON<DnsListener>("/api/obfuscation/listeners", body, signal);
+
+export const stopDnsListener = (lid: string, signal?: AbortSignal) =>
+  fetch(`${API_URL}/api/obfuscation/listeners/${encodeURIComponent(lid)}`, {
+    method: "DELETE",
+    signal,
+  }).then((r) => r.json() as Promise<DnsListener>);
+
 // --- AD attack-path graph (see backend/adgraph) ---------------------------------
 // Read-only graph/parse/path/technique endpoints. Every abuse command a technique
 // returns is run ONLY through execCockpitStream (the gated executor) — approve-each,

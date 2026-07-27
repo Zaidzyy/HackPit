@@ -35,7 +35,6 @@
     "<cert>": "Path to a certificate / .pfx file.",
     "<keyfile>": "Path to a private key file.",
     "<query>": "A search term for a module/exploit/index lookup.",
-    "<payload>": "A payload name (e.g. a msfvenom/metasploit payload path).",
     "<module>": "A framework module path.",
     "<api-key>": "API key for a third-party service.",
     "<spn-user>": "A SECOND account name, distinct from <user> — the account being acted ON when <user> is the account acting.",
@@ -51,7 +50,7 @@
     "<token-file>": "Path to a file of API tokens, one per line.",
     "<dorks-file>": "Path to a file of dork queries, one per line.",
     "<path>": "A URL path component, e.g. /admin.",
-    "<payload>": "The command, script or implant to run when the persistence mechanism fires.",
+    "<payload>": "A payload: a msfvenom/metasploit payload name or path, or the command, script or implant to run when a persistence mechanism fires.",
     "<name>": "A name/identifier for the object being created (task, service, registry value, unit, shortcut).",
     "<tunnel-zone>": "A DNS zone the OPERATOR controls and has delegated to their own name server — the suffix a DNS tunnel encodes its traffic under. Deliberately not named <domain>: that spelling the composer's target substitution rewrites, and the tunnel's zone is yours, not the target's (same reason as <listener>).",
     "<tunnel-net>": "The point-to-point address (optionally with a netmask) the OPERATOR assigns to a tunnel interface, e.g. an unused private /27. Not spelled with ip/host for the same reason as <listener>: the tunnel's own network is never the target's."
@@ -3898,7 +3897,7 @@
     {
       "name": "Empire",
       "category": "persistence",
-      "purpose": "PowerShell/Python post-exploitation framework with a catalogue of persistence modules. Reference-only in HackPit: NOT installed — install and C2 wiring deferred to build #4, so reconcile shows it not-present and the planner will not propose it.",
+      "purpose": "PowerShell/Python post-exploitation framework with a catalogue of persistence modules. Reference-only in HackPit: NOT installed — catalogued so the planner can name it, but no install or C2 wiring is provided, so reconcile shows it not-present and the planner will not propose it.",
       "phases": [
         "command-and-control",
         "post-exploitation"
@@ -3913,7 +3912,7 @@
         {
           "label": "Select a persistence module (Empire client)",
           "template": "usemodule persistence/<technique>",
-          "note": "Run inside the Empire client. Reference-only — Empire is not installed (deferred to build #4)."
+          "note": "Run inside the Empire client. Reference-only — Empire is not installed; run it from your own host."
         }
       ],
       "flags": []

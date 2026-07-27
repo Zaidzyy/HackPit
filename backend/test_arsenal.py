@@ -19,6 +19,28 @@ def _load() -> loader.Arsenal:
 # --------------------------------------------------------------------------- #
 # 1. the catalog itself
 # --------------------------------------------------------------------------- #
+def test_no_duplicate_json_keys() -> None:
+    """A duplicated key is INVISIBLE to json.load — it silently keeps the last one.
+
+    `"<payload>"` was declared twice with different descriptions; the first was being
+    discarded on every parse, and any tool that round-tripped the catalog would have written
+    the loss back to disk. `object_pairs_hook` is the only way to see it.
+    """
+    dupes: list[str] = []
+
+    def _catch(pairs):
+        seen: set[str] = set()
+        for k, _v in pairs:
+            if k in seen:
+                dupes.append(k)
+            seen.add(k)
+        return dict(pairs)
+
+    json.loads(loader.CATALOG_PATH.read_text(encoding="utf-8"), object_pairs_hook=_catch)
+    assert not dupes, f"duplicate keys in tools.json (json.load silently drops all but the last): {dupes}"
+    print("  no duplicate keys anywhere in tools.json: PASS")
+
+
 def test_catalog_is_well_formed() -> None:
     raw = json.loads(loader.CATALOG_PATH.read_text(encoding="utf-8"))
     declared = set(raw["placeholders"])
@@ -295,6 +317,7 @@ def test_response_model_carries_platform_and_runs_here() -> None:
 
 
 if __name__ == "__main__":
+    test_no_duplicate_json_keys()
     test_catalog_is_well_formed()
     test_every_category_and_phase_is_covered()
     test_c2_and_evasion_tools_catalogued()

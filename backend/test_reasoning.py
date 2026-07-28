@@ -234,6 +234,35 @@ def test_fingerprint_retrieval_outranks_token_match() -> None:
     print("  2.7 retrieval: exact fingerprint outranks token matches: PASS")
 
 
+def test_fingerprint_range_alignment() -> None:
+    """The exploitation-writeup corpus is keyed by a STRUCTURED meta.fingerprint (service +
+    version_kind + versions, the CVE-index shape). Retrieval must range-match it: an in-range
+    version floats the writeup above token matches, and an OUT-OF-RANGE version does NOT match —
+    the version verdict outranks token similarity, so a wrong version can't ride the product name.
+    """
+    # a structured-fingerprint writeup + a same-product token-only page
+    apache_wu = {"title": "Apache 2.4.49 traversal writeup", "text": "path traversal rce",
+                 "meta": {"fingerprint": {"service": "apache", "version_kind": "exact",
+                                          "versions": ["2.4.49", "2.4.50"]}}}
+    apache_generic = {"title": "General Apache hardening", "text": "apache tuning notes"}
+    samba_wu = {"title": "Samba usermap writeup", "text": "command injection",
+                "meta": {"fingerprint": {"service": "samba", "version_kind": "range",
+                                         "versions": ["3.0.20", "3.0.26"]}}}
+    pool = [apache_generic, apache_wu, samba_wu]
+
+    # in-range exact -> the writeup leads, ahead of the generic token match
+    r = retrieval.rerank(pool, "apache/2.4.49")
+    assert r[0].entry is apache_wu and r[0].fingerprint_match, "in-range writeup must lead"
+    # OUT-OF-RANGE version -> the writeup is NOT a fingerprint match (does not wrongly match)
+    r = retrieval.rerank(pool, "apache/2.4.58")
+    apache_ranked = next(x for x in r if x.entry is apache_wu)
+    assert not apache_ranked.fingerprint_match, "2.4.58 is patched — must NOT match the 2.4.49/.50 writeup"
+    # range fingerprint: inside the [3.0.20, 3.0.26) window matches, outside does not
+    assert retrieval.rerank([samba_wu], "samba/3.0.25")[0].fingerprint_match
+    assert not retrieval.rerank([samba_wu], "samba/3.0.30")[0].fingerprint_match
+    print("  Task 4 alignment: fingerprint writeup range-matches; out-of-range does not: PASS")
+
+
 # --------------------------------------------------------------------------- #
 # 2.8 — model-tier routing (inert unless configured)
 # --------------------------------------------------------------------------- #
@@ -314,6 +343,7 @@ if __name__ == "__main__":
     test_critic_catches_version_mismatched_cve()
     test_specialist_routing()
     test_fingerprint_retrieval_outranks_token_match()
+    test_fingerprint_range_alignment()
     test_tiering_inert_by_default()
     test_webexploit_drafts_grounded_exploit()
     test_privesc_ingests_and_drafts()

@@ -17,11 +17,71 @@ Hermetic: llm.chat is monkeypatched, so no LLM/Docker. Run:  python test_loop.py
 """
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import llm
 import orchestrator as O
 from cockpit import config
+from test_support import scans
+
+# The PROPOSER PATH: orchestrator.py + every reasoning/ module (the deeper proposer, Task 2).
+# All of it SUGGESTS; none of it runs anything. This set is derived from the shared scanner's
+# whole-tree file list (never a hand-rolled glob — that convention is why the :kali lock broke),
+# filtered to the proposer path by repo-relative POSIX prefix.
+_PROPOSER_PREFIXES = ("orchestrator.py", "reasoning/")
+# Banned IMPORTS (subprocess/pty) and import-indirection (cockpit.kali/sandbox/...), caught by
+# the shared AST scanner. These are code shapes, never string text — so a drafted payload that
+# CONTAINS "os.system(...)" as literal exploit text is NOT a violation; a CALL to it is.
+_EXEC_AST_TARGETS = ["subprocess", "pty", "cockpit.kali", "cockpit.sandbox", "cockpit.jobs",
+                     "cockpit.terminal", "cockpit.tunnels", "cockpit.sliver", "cockpit.obfuscation"]
+# Execution PRIMITIVES detected as CALLS via AST (module.attr), so string literals never trip
+# them — the fix for the false positive a substring scan produces on payload-bearing modules.
+_EXEC_CALL_MODULES = {"subprocess", "os", "pty", "executor"}
+_EXEC_CALL_ATTRS = {"system", "popen", "run", "call", "check_output", "check_call",
+                    "spawn", "fork", "execl", "execv", "execve", "iter_run", "run_command"}
+# No way to approve many commands at once, anywhere in the proposer path or the frontier.
+_AUTO_APPROVE_FORBIDDEN = [
+    "approved=True", "approved = True", "auto_approve", "approve_all", "approve_many",
+    "batch_approve", "run_all", "run_chain", "autorun", "auto_run",
+]
+
+
+def _proposer_files() -> list[Path]:
+    return [p for p in scans.source_files() if scans.rel(p).startswith(_PROPOSER_PREFIXES)]
+
+
+def _dotted(node: ast.AST) -> str:
+    parts: list[str] = []
+    cur = node
+    while isinstance(cur, ast.Attribute):
+        parts.append(cur.attr)
+        cur = cur.value
+    if isinstance(cur, ast.Name):
+        parts.append(cur.id)
+    return ".".join(reversed(parts))
+
+
+def _exec_call_hits(raw: str) -> list[str]:
+    """Actual execution CALLS in this module — ``os.system(...)``, ``subprocess.run(...)``,
+    ``executor.iter_run(...)``, bare ``Popen(...)``, ``run_kali(...)`` — via AST, so a payload
+    STRING that merely contains those characters is never a hit."""
+    try:
+        tree = ast.parse(raw)
+    except SyntaxError:  # pragma: no cover
+        return []
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = _dotted(node.func)
+        last = callee.rsplit(".", 1)[-1]
+        parts = callee.split(".")
+        if last == "run_kali" or last == "Popen":
+            hits.append(f"{callee}() (line {node.lineno})")
+        elif len(parts) >= 2 and parts[-2] in _EXEC_CALL_MODULES and last in _EXEC_CALL_ATTRS:
+            hits.append(f"{callee}() (line {node.lineno})")
+    return hits
 
 PLAN = {
     "goal": "recon the lab web app",
@@ -76,6 +136,55 @@ def test_proposer_cannot_execute() -> None:
     # pre-check), never the exec/sandbox/runstore machinery.
     assert "from cockpit import allowlist, config, executor" in src
     print("  proposer cannot execute (no exec, no :kali path): PASS")
+
+
+def test_proposer_path_cannot_execute() -> None:
+    """EXTENSION of the L1 lock onto the whole reasoning package (Task 2 invariant 1).
+
+    orchestrator.py + every reasoning/ module must have NO execution path: no subprocess, no
+    Popen, no executor run methods, no :kali/sandbox — by substring AND by AST indirection (an
+    aliased import, an in-function import, ``import_module("cockpit."+"kali")``). Iterates the
+    real proposer-path files; asserts on what it CHECKED; carries a positive control.
+    """
+    offenders: list[str] = []
+    checked: list[str] = []
+    for path in _proposer_files():
+        raw = path.read_text(encoding="utf-8")
+        hits = scans.ast_reference_hits(raw, _EXEC_AST_TARGETS)  # banned imports + indirection
+        hits += _exec_call_hits(raw)                             # actual execution CALLS
+        checked.append(scans.rel(path))
+        if hits:
+            offenders.append(f"{scans.rel(path)} ({hits})")
+    assert not offenders, f"proposer path must not execute / reach :kali — found: {offenders}"
+    # assert on what was CHECKED, and that it is really the whole package (not a narrowed set)
+    assert "orchestrator.py" in checked, checked
+    reasoning_checked = [c for c in checked if c.startswith("reasoning/")]
+    assert len(reasoning_checked) >= 9, f"reasoning package under-scanned: {reasoning_checked}"
+    # POSITIVE CONTROL — the SAME predicates must fire on planted violations, or they prove nothing
+    assert _exec_call_hits("import subprocess\nx = subprocess.run(['id'])\n"), "call predicate cannot fail"
+    assert _exec_call_hits("y = os.system('id')\n"), "os.system predicate cannot fail"
+    assert scans.ast_reference_hits(
+        "import importlib\nm = importlib.import_module('cockpit.' + 'kali')\n", _EXEC_AST_TARGETS
+    ), "AST-indirection predicate cannot fail"
+    # and a payload STRING containing the same text is NOT a false positive
+    payload_src = "x = " + repr("run this: os.system(/bin/sh -p) and subprocess.run(id)") + "\n"
+    assert not _exec_call_hits(payload_src), "a payload string must not trip the call scan"
+    print(f"  proposer path (orchestrator + {len(reasoning_checked)} reasoning modules) cannot execute: PASS")
+
+
+def test_no_auto_or_batch_approve() -> None:
+    """No auto-approve / batch-approve / run-the-whole-chain anywhere in the proposer path or the
+    frontier (Task 2 invariant 2). A proposal is data; a human approves each command."""
+    offenders: list[str] = []
+    for path in _proposer_files():
+        code = scans.code_without_prose(path.read_text(encoding="utf-8"))
+        hits = [f for f in _AUTO_APPROVE_FORBIDDEN if f in code]
+        if hits:
+            offenders.append(f"{scans.rel(path)} ({hits})")
+    assert not offenders, f"the proposer path must never auto/batch-approve: {offenders}"
+    # positive control
+    assert any(f in "x = dict(approved=True)" for f in _AUTO_APPROVE_FORBIDDEN)
+    print("  no auto-approve / batch-approve in the proposer path or frontier: PASS")
 
 
 def test_lab_recon_proposal_passes_gate() -> None:
@@ -159,6 +268,8 @@ def test_done_and_empty_handled() -> None:
 
 if __name__ == "__main__":
     test_proposer_cannot_execute()
+    test_proposer_path_cannot_execute()
+    test_no_auto_or_batch_approve()
     test_lab_recon_proposal_passes_gate()
     test_non_lab_target_is_flagged()
     test_any_command_against_lab_passes_gate()

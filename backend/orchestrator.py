@@ -35,7 +35,16 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 import llm
+import reasoning
 from cockpit import allowlist, config, executor
+from reasoning import critic as _critic
+from reasoning import diagnosis as _diagnosis
+from reasoning import frontier as _frontier
+from reasoning import ledger as _ledger
+from reasoning import retrieval as _retrieval
+from reasoning import schema as _schema
+from reasoning import specialists as _specialists
+from reasoning import tiering as _tiering
 
 # How much of each prior run's output to feed back (keeps the prompt bounded).
 _RUN_OUTPUT_CHARS = 600
@@ -103,6 +112,7 @@ def _system_prompt(scope_ctx: ScopeContext | None = None) -> str:
         '"rationale": "<1-2 sentences: why this is the next step>", '
         '"step_id": "<the plan step id this realizes, or omit>"'
         + _TASK_OPS_CONTRACT
+        + _schema.SYSTEM_CONTRACT
     )
 
 
@@ -179,6 +189,7 @@ def _real_target_system_prompt(ctx: ScopeContext) -> str:
         + '"], "rationale": "<1-2 sentences: why this is the next step>", '
         '"step_id": "<the plan step id this realizes, or omit>"'
         + _TASK_OPS_CONTRACT
+        + _schema.SYSTEM_CONTRACT
     )
 
 
@@ -280,6 +291,53 @@ def _state_reference(session_id: str | None) -> str:
         return ""
 
 
+def _reasoning_reference(
+    runs: list[dict], avoid: list[str], session_id: str | None
+) -> str:
+    """The reasoning-copilot prompt blocks: the tried/failed ledger (2.1), a failure diagnosis
+    hint (2.4) and the candidate frontier (2.3), assembled in one place.
+
+    Best-effort and additive, exactly like :func:`_state_reference`: any failure (a table that
+    does not exist yet, an empty session) yields "", so the prompt is byte-for-byte what it was
+    before this package existed. None of these blocks executes anything — they are memory and
+    guidance the proposer reads.
+    """
+    parts: list[str] = []
+    try:
+        parts.append(_ledger.render(runs, avoid, session_id or ""))
+    except Exception:  # noqa: BLE001 - a reference block must never break the loop
+        pass
+    try:
+        parts.append(_diagnosis.advice(runs))
+    except Exception:  # noqa: BLE001
+        pass
+    if session_id:
+        try:
+            parts.append(_frontier.render(session_id))
+        except Exception:  # noqa: BLE001
+            pass
+    return "\n".join(p for p in parts if p)
+
+
+def _specialist_reference(session_id: str | None, runs: list[dict]) -> str:
+    """The domain-specialist framing (2.6) for the current situation. "" for the generalist."""
+    if not session_id:
+        return ""
+    try:
+        from state import store as state_store
+
+        state = state_store.load(session_id)
+        last_cmd = ""
+        if runs:
+            last = runs[-1]
+            last_cmd = " ".join(
+                [str(last.get("command") or ""), *[str(a) for a in (last.get("args") or [])]]
+            )
+        return _specialists.prompt_fragment(_specialists.route(state, last_cmd))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def build_user_prompt(
     plan: dict,
     runs: list[dict],
@@ -342,6 +400,14 @@ def build_user_prompt(
     else:
         lines.append("ALREADY RUN (results so far — adapt to these):")
     lines.append(digest)
+    # REASONING COPILOT — working memory (2.1), failure diagnosis (2.4) and the candidate
+    # frontier (2.3). Additive: empty for a fresh session, so the base prompt is unchanged.
+    reasoning_block = _reasoning_reference(runs, avoid or [], session_id)
+    if reasoning_block:
+        lines.append(reasoning_block)
+    specialist_block = _specialist_reference(session_id, runs)
+    if specialist_block:
+        lines.append(specialist_block)
     avoid = [a for a in (avoid or []) if a.strip()]
     if avoid:
         lines.append("")
@@ -399,6 +465,113 @@ def _coerce_args(raw: Any) -> list[str]:
     return []
 
 
+def _step_kind(session_id: str | None) -> str:
+    """Is the next step 'hard' (worth a bigger model tier, if configured) or 'routine'?
+
+    Hard once there is a foothold or a finding to exploit — that is where reasoning depth earns
+    its cost. Best-effort; 'routine' on any doubt keeps the default-cheap path.
+    """
+    if not session_id:
+        return "routine"
+    try:
+        from state import store as state_store
+
+        st = state_store.load(session_id)
+        if st.findings or st.credentials:
+            return "hard"
+    except Exception:  # noqa: BLE001
+        pass
+    return "routine"
+
+
+def _load_state(session_id: str | None):
+    from state import store as state_store
+
+    return state_store.load(session_id or "")
+
+
+def _exploit_index():
+    """The CVE->exploit index if it is loaded and ready, else None (critic skips CVE checks)."""
+    try:
+        from exploits import index as exploit_index
+
+        idx = exploit_index.get_index()
+        return idx if getattr(idx, "ready", False) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _review_proposal(proposal: dict[str, Any], session_id: str | None) -> dict[str, Any]:
+    """Critic pass (2.5): refute the proposal against state + the CVE index, and record a
+    confidently-mismatched lead as a dead end so the ledger stops it recurring."""
+    try:
+        state = _load_state(session_id)
+        crit = _critic.critique(proposal, state, _exploit_index())
+        if session_id and not crit.ok:
+            try:
+                _ledger.record_dead(
+                    session_id, proposal.get("command", ""), proposal.get("args", []),
+                    "; ".join(crit.concerns)[:300], source="critic",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        return crit.to_dict()
+    except Exception:  # noqa: BLE001 - the critic must never break the loop
+        return {"ok": True, "downrank": False, "confidence": 1.0, "concerns": [], "checks": []}
+
+
+def _route_domain(session_id: str | None, runs: list[dict]) -> str:
+    if not session_id:
+        return "generalist"
+    try:
+        last = runs[-1] if runs else {}
+        last_cmd = " ".join(
+            [str(last.get("command") or ""), *[str(a) for a in (last.get("args") or [])]]
+        )
+        return _specialists.route(_load_state(session_id), last_cmd).domain
+    except Exception:  # noqa: BLE001
+        return "generalist"
+
+
+def _update_frontier(
+    session_id: str | None, parsed: dict[str, Any], command: str, args: list[str]
+) -> dict[str, Any]:
+    """Persist candidate leads the model surfaced (2.3) and mark the pursued one. The frontier
+    holds UNTRIED leads a human may pivot to — it never runs or approves anything."""
+    if not session_id:
+        return {"open": 0, "pushed": 0}
+    try:
+        pushed = 0
+        leads: list[Any] = []
+        for c in parsed.get("candidates") or parsed.get("frontier") or []:
+            if not isinstance(c, dict):
+                continue
+            cmd = str(c.get("command") or "").strip()
+            if not cmd:
+                continue
+            try:
+                evid = float(c.get("evidence", 0.5) or 0.5)
+                payoff = float(c.get("payoff", 0.5) or 0.5)
+            except (TypeError, ValueError):
+                evid, payoff = 0.5, 0.5
+            leads.append(
+                _frontier.Lead(
+                    hypothesis=str(c.get("hypothesis") or ""),
+                    command=cmd,
+                    args=[str(a) for a in (c.get("args") or [])],
+                    evidence=evid,
+                    payoff=payoff,
+                    rationale=str(c.get("rationale") or ""),
+                )
+            )
+        if leads:
+            pushed = _frontier.push(session_id, leads)
+        _frontier.mark(session_id, command, args, "pursued")
+        return {"open": len(_frontier.open_leads(session_id)), "pushed": pushed}
+    except Exception:  # noqa: BLE001
+        return {"open": 0, "pushed": 0}
+
+
 def propose_next(
     plan: dict,
     runs: list[dict],
@@ -420,7 +593,10 @@ def propose_next(
     """
     system = _system_prompt(scope_ctx)
     user = build_user_prompt(plan, runs, avoid or [], scope_ctx, session_id)
-    raw = llm.chat(system, user, cfg, max_tokens=900)
+    # 2.8 model-tier routing — inert unless ``reasoning_tiers`` is configured, in which case a
+    # hard step (a foothold/finding to exploit) can be routed to a more capable model.
+    step_cfg = _tiering.select(cfg, _step_kind(session_id))
+    raw = llm.chat(system, user, step_cfg, max_tokens=900)
     parsed = llm.extract_json(raw)
     if not isinstance(parsed, dict):
         raise llm.LLMError("the model did not return a proposal object")
@@ -471,4 +647,16 @@ def propose_next(
         "gate_reason": gate_reason,
         "dangerous_flags": dangerous,
     }
+    # REASONING FIELDS (2.2): the hypothesis, expected signal and citations the model led with,
+    # plus whether they satisfy the invariant-3 schema gate. Additive — the command/args/gate
+    # fields above are unchanged, so every existing consumer keeps working.
+    proposal.update(_schema.normalize(parsed))
+    schema_ok, schema_problems = _schema.validate(proposal)
+    proposal["schema_valid"] = schema_ok
+    proposal["schema_problems"] = schema_problems
+    # CRITIC (2.5): refute-first review; SPECIALIST (2.6): which expert lens; FRONTIER (2.3):
+    # persist candidate leads + mark this one pursued. All read-only / propose-only.
+    proposal["critique"] = _review_proposal(proposal, session_id)
+    proposal["specialist"] = _route_domain(session_id, runs)
+    proposal["frontier"] = _update_frontier(session_id, parsed, command, args)
     return {"done": False, "proposal": proposal, "reason": None, "task_tree": tree_result}

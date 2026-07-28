@@ -337,11 +337,18 @@ def test_loop_may_propose_a_session_but_cannot_drive_one() -> None:
 
     proposal = out["proposal"]
     assert proposal is not None, "the loop may legitimately propose a listener"
-    # The proposal is INERT DATA: command/args/rationale + advisory gate info. It carries
-    # no live-session id and no stdin payload, so there is nothing for it to drive.
-    assert set(proposal) == {
-        "command", "args", "rationale", "step_id", "gate_ok", "gate_reason", "dangerous_flags"
-    }, f"a proposal must not gain session-driving fields, got {sorted(proposal)}"
+    # The proposal is INERT DATA: it carries the command/args/rationale + advisory gate info
+    # (and, since build #8, advisory REASONING fields — hypothesis/citations/critique/etc., which
+    # are data, not capability). What matters for THIS invariant is the negative: it carries no
+    # live-session id and no stdin payload, so there is nothing for it to drive. Asserting the
+    # ABSENCE of session-driving keys is the real predicate — an exact whitelist would forbid
+    # harmless advisory fields and break the moment the proposer got any richer.
+    assert {"command", "args", "rationale", "step_id", "gate_ok", "gate_reason",
+            "dangerous_flags"} <= set(proposal), sorted(proposal)
+    forbidden = {"session_id", "session", "stdin", "start", "approve", "approved", "run",
+                 "execute", "exec", "pid", "proc"}
+    assert not (forbidden & set(proposal)), \
+        f"a proposal must not gain session-driving fields, got {sorted(forbidden & set(proposal))}"
     assert proposal["dangerous_flags"], "a proposed listener must still be flagged dangerous"
     # And proposing it starts NOTHING — the registry is untouched.
     with S._registry_lock:

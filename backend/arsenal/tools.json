@@ -3860,6 +3860,7 @@
     },
     {
       "name": "Sliver",
+      "aliases": ["sliver-server", "sliver-client"],
       "category": "c2",
       "purpose": "Cross-platform adversary-emulation C2 framework (Bishop Fox): mTLS, HTTP(S), DNS and WireGuard listeners with per-OS implants, plus post-exploitation and persistence modules. Human-driven in HackPit — starting a listener and every implant action is its own approved step through the gated executor. Its sandbox-image install and the cockpit Sliver panel land in later tasks of this build; until they do, reconcile shows it not-present and the planner will not propose it.",
       "phases": [
@@ -3896,6 +3897,7 @@
     },
     {
       "name": "Empire",
+      "aliases": ["powershell-empire"],
       "category": "persistence",
       "purpose": "PowerShell/Python post-exploitation framework with a catalogue of persistence modules. Reference-only in HackPit: NOT installed — catalogued so the planner can name it, but no install or C2 wiring is provided, so reconcile shows it not-present and the planner will not propose it.",
       "phases": [

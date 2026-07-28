@@ -59,6 +59,12 @@ echo "== WinRM SAFETY invariants (host-locked / no gate bypass / secret never le
 echo "== orchestrator-loop tests (proposer cannot execute / no :kali path / gate pre-check) =="
 "$PY" test_loop.py
 
+echo "== reasoning copilot (ledger / hypothesis schema / frontier / diagnosis / critic / specialist / retrieval / tier) =="
+"$PY" test_reasoning.py
+
+echo "== substrate coverage (Task 1: landmine!=runs / real-catalog pipeline / static Dockerfile coverage) =="
+"$PY" test_substrate.py
+
 echo "== live-session tests (start is GATED / stdin HUMAN-ONLY / mode-bound / recorded) =="
 "$PY" test_session.py
 

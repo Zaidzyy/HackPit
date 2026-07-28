@@ -1,0 +1,1717 @@
+{
+  "container": "hackpit-kali-sandbox",
+  "summary": {
+    "catalogued": 110,
+    "linux_catalogued": 104,
+    "runs": 97,
+    "installed_no_run": 2,
+    "not_installed": 5,
+    "windows_only": 6,
+    "resolved_under_alias": 11,
+    "run_rate": 93.3
+  },
+  "tools": [
+    {
+      "name": "nmap",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "nmap"
+      ],
+      "installed": true,
+      "installed_as": "nmap",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "Nmap version 7.99 ( https://nmap.org )\nPlatform: x86_64-pc-linux-gnu\nCompiled with: liblua-5.4.8 openssl-3.6.3 libssh2-1.11.1 libz-1.3.1 libpcre2-10.46 libpcap-1.10.6 nmap-libdnet-1.18.0 ipv6\nCompiled without:\nAvailable nsock engines: epoll poll select"
+    },
+    {
+      "name": "masscan",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "masscan"
+      ],
+      "installed": true,
+      "installed_as": "masscan",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 1,
+      "reason": "",
+      "output_head": "\nMasscan version 1.3.2 ( https://github.com/robertdavidgraham/masscan )\nCompiled on: Jul 25 2024 16:44:22\nCompiler: gcc 14.1.0\nOS: Linux\nCPU: unknown (64 bits)\nGIT version: unknown"
+    },
+    {
+      "name": "amass",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "amass"
+      ],
+      "installed": true,
+      "installed_as": "amass",
+      "runs": false,
+      "probe_flag": "--version",
+      "exit_code": 1,
+      "reason": "no-new-privileges / setcap landmine (output: 'no new privileges')",
+      "output_head": "sudo: The \"no new privileges\" flag is set, which prevents sudo from running as root.\nsudo: If sudo is running in a container, you may need to adjust the container configuration to disable the flag."
+    },
+    {
+      "name": "subfinder",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "subfinder"
+      ],
+      "installed": true,
+      "installed_as": "subfinder",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "[\u001b[34mINF\u001b[0m] Current Version: v2.14.0\n[\u001b[34mINF\u001b[0m] Subfinder Config Directory: /home/sandbox/.config/subfinder"
+    },
+    {
+      "name": "assetfinder",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "assetfinder"
+      ],
+      "installed": true,
+      "installed_as": "assetfinder",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "flag provided but not defined: -version\nUsage of assetfinder:\n  -subs-only\n    \tOnly include subdomains of search domain"
+    },
+    {
+      "name": "theHarvester",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "theHarvester"
+      ],
+      "installed": true,
+      "installed_as": "theHarvester",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: theHarvester [-h] -d DOMAIN [-l LIMIT] [-S START] [-p] [-s]\n                    [--screenshot SCREENSHOT] [-e DNS_SERVER] [-t]\n                    [-r [DNS_RESOLVE]] [-n] [-c] [-f FILENAME] [-w WORDLIST]\n                    [-a] [-q] [-b SOURCE]\ntheHarvester: error: the following arguments are required: -d/--domain\nRead proxies.yaml from /etc/theHarvester/proxies.yaml\n*******************************************************************\n*  _   _                                            _ "
+    },
+    {
+      "name": "dnsx",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "dnsx"
+      ],
+      "installed": true,
+      "installed_as": "dnsx",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "\n      _             __  __\n   __| | _ __   ___ \\ \\/ /\n  / _' || '_ \\ / __| \\  / \n | (_| || | | |\\__ \\ /  \\ \n  \\__,_||_| |_||___//_/\\_\\\n\n\t\tprojectdiscovery.io\n\n[\u001b[34mINF\u001b[0m] Current Version: 1.2.3"
+    },
+    {
+      "name": "httpx",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "httpx"
+      ],
+      "installed": true,
+      "installed_as": "httpx",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "Usage: httpx [OPTIONS] URL\n\nError: No such option: --version (Possible options: --json, --no-verify, --verbose)"
+    },
+    {
+      "name": "ffuf",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "ffuf"
+      ],
+      "installed": true,
+      "installed_as": "ffuf",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "flag provided but not defined: -version\nFuzz Faster U Fool - v2.1.0\n\nHTTP OPTIONS:\n  -H                  Header `\"Name: Value\"`, separated by colon. Multiple -H flags are accepted.\n  -X                  HTTP method to use\n  -b                  Cookie data `\"NAME1=VALUE1; NAME2=VALUE2\"` for copy as curl functionality.\n  -cc                 Client cert for authentication. Client key needs to be defined as well for this to work\n  -ck                 Client key for authentication. Client certificate"
+    },
+    {
+      "name": "feroxbuster",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "feroxbuster"
+      ],
+      "installed": true,
+      "installed_as": "feroxbuster",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "feroxbuster 2.13.1"
+    },
+    {
+      "name": "gobuster",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "gobuster"
+      ],
+      "installed": true,
+      "installed_as": "gobuster",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "gobuster version 3.8.2\nBuild info:\ngo\tgo1.24.9\npath\tgithub.com/OJ/gobuster\nbuild\t-buildmode=exe\nbuild\t-compiler=gc\nbuild\t-trimpath=true\nbuild\tDefaultGODEBUG=asynctimerchan=1,gotestjsonbuildtext=1,gotypesalias=0,httpcookiemaxnum=0,httplaxcontentlength=1,httpmuxgo121=1,httpservecontentkeepheaders=1,multipathtcp=0,netedns0=0,panicnil=1,randseednop=0,rsa1024min=0,tls10server=1,tls3des=1,tlsmlkem=0,tlsrsakex=1,tlsunsafeekm=1,winreadlinkvolume=0,winsymlink=0,x509keypairleaf=0,x509negativeserial=1,x509"
+    },
+    {
+      "name": "nuclei",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "nuclei"
+      ],
+      "installed": true,
+      "installed_as": "nuclei",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "[\u001b[34mINF\u001b[0m] Nuclei Engine Version: v3.3.9\n[\u001b[34mINF\u001b[0m] Nuclei Config Directory: /home/sandbox/.config/nuclei\n[\u001b[34mINF\u001b[0m] Nuclei Cache Directory: /home/sandbox/.cache/nuclei\n[\u001b[34mINF\u001b[0m] PDCP Directory: /home/sandbox/.pdcp"
+    },
+    {
+      "name": "nikto",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "nikto"
+      ],
+      "installed": true,
+      "installed_as": "nikto",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "Unknown option: version\n\n   Options:\n       -Add-header         Add HTTP headers (can be used multiple times, one per header pair)\n       -ask+               Whether to ask about submitting updates\n                               yes   Ask about each (default)\n                               no    Don't ask, don't send\n                               auto  Don't ask, just send\n       -check6             Check if IPv6 is working (connects to ipv6.google.com or value set in nikto.conf)\n       -Cgidir"
+    },
+    {
+      "name": "sqlmap",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "sqlmap"
+      ],
+      "installed": true,
+      "installed_as": "sqlmap",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "1.10.6#stable"
+    },
+    {
+      "name": "wpscan",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "wpscan"
+      ],
+      "installed": true,
+      "installed_as": "wpscan",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "_______________________________________________________________\n         __          _______   _____\n         \\ \\        / /  __ \\ / ____|\n          \\ \\  /\\  / /| |__) | (___   ___  __ _ _ __ \u00ae\n           \\ \\/  \\/ / |  ___/ \\___ \\ / __|/ _` | '_ \\\n            \\  /\\  /  | |     ____) | (__| (_| | | | |\n             \\/  \\/   |_|    |_____/ \\___|\\__,_|_| |_|\n\n         WordPress Security Scanner by the WPScan Team\n                         Version 3.8.28\n                               \n       @_WPSc"
+    },
+    {
+      "name": "dalfox",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "dalfox"
+      ],
+      "installed": true,
+      "installed_as": "dalfox",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 1,
+      "reason": "",
+      "output_head": "Error: unknown flag: --version\nUsage:\n  dalfox [flags]\n  dalfox [command]\n\nAvailable Commands:\n  completion  Generate the autocompletion script for the specified shell\n  file        Use file mode(targets list or rawdata)\n  help        Help about any command\n  payload     Payload mode, make and enum payloads\n  pipe        Use pipeline mode\n  server      Start API Server\n  sxss        Use Stored XSS mode\n  url         Use single target mode\n  version     Show version\n\nFlags:\n  -b, --blind string  "
+    },
+    {
+      "name": "whatweb",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "whatweb"
+      ],
+      "installed": true,
+      "installed_as": "whatweb",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "WhatWeb version 0.6.4 ( https://morningstarsecurity.com/research/whatweb/ )"
+    },
+    {
+      "name": "netexec",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "netexec",
+        "nxc",
+        "crackmapexec",
+        "cme"
+      ],
+      "installed": true,
+      "installed_as": "netexec",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 1,
+      "reason": "",
+      "output_head": "1.5.1 - Yippie-Ki-Yay - Kali Linux - "
+    },
+    {
+      "name": "enum4linux-ng",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "enum4linux-ng",
+        "enum4linux"
+      ],
+      "installed": true,
+      "installed_as": "enum4linux-ng",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: enum4linux-ng [-h] [-A] [-As] [-U] [-G] [-Gm] [-S] [-C] [-P] [-O] [-L]\n                     [-I] [-R [BULK_SIZE]] [-N] [-w DOMAIN] [-u USER] [-p PW |\n                     -K TICKET_FILE | -H NTHASH] [--local-auth] [-d]\n                     [-k USERS] [-r RANGES] [-s SHARES_FILE] [-t TIMEOUT] [-v]\n                     [--keep] [-oJ OUT_JSON_FILE | -oY OUT_YAML_FILE |\n                     -oA OUT_FILE]\n                     host\nenum4linux-ng: error: the following arguments are required: hos"
+    },
+    {
+      "name": "smbmap",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "smbmap"
+      ],
+      "installed": true,
+      "installed_as": "smbmap",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: smbmap [-h] (-H HOST | --host-file FILE) [-u USERNAME] [-p PASSWORD |\n              --prompt] [-k] [--no-pass] [--dc-ip IP or Host] [-s SHARE]\n              [-d DOMAIN] [-P PORT] [-v] [--signing] [--admin] [--no-banner]\n              [--no-color] [--no-update] [--timeout SCAN_TIMEOUT] [-x COMMAND]\n              [--mode CMDMODE] [-L | -r [PATH]] [-g FILE | --csv FILE]\n              [--dir-only] [--no-write-check] [-q] [--depth DEPTH]\n              [--exclude SHARE [SHARE ...]] [-A PATTERN]"
+    },
+    {
+      "name": "kerbrute",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "kerbrute"
+      ],
+      "installed": true,
+      "installed_as": "kerbrute",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 1,
+      "reason": "",
+      "output_head": "\n    __             __               __     \n   / /_____  _____/ /_  _______  __/ /____ \n  / //_/ _ \\/ ___/ __ \\/ ___/ / / / __/ _ \\\n / ,< /  __/ /  / /_/ / /  / /_/ / /_/  __/\n/_/|_|\\___/_/  /_.___/_/   \\__,_/\\__/\\___/                                        \n\nVersion: v1.0.3 (9dad6e1) - 07/28/26 - Ronnie Flathers @ropnop\n\nError: unknown flag: --version\nUsage:\n  kerbrute [command]\n\nAvailable Commands:\n  bruteforce    Bruteforce username:password combos, from a file or stdin\n  bruteuser     Brute"
+    },
+    {
+      "name": "hydra",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "hydra"
+      ],
+      "installed": true,
+      "installed_as": "hydra",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 255,
+      "reason": "",
+      "output_head": "Hydra v9.7 (c) 2023 by van Hauser/THC & David Maciejak - Please do not use in military or secret service organizations, or for illegal purposes (this is non-binding, these *** ignore laws and ethics anyway).\n\nhydra: invalid option -- '-'"
+    },
+    {
+      "name": "ldapsearch",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "ldapsearch"
+      ],
+      "installed": true,
+      "installed_as": "ldapsearch",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 1,
+      "reason": "",
+      "output_head": "ldapsearch: invalid option -- '-'\nldapsearch: unrecognized option --\nusage: ldapsearch [options] [filter [attributes...]]\nwhere:\n  filter\tRFC 4515 compliant LDAP search filter\n  attributes\twhitespace-separated list of attribute descriptions\n    which may include:\n      1.1   no attributes\n      *     all user attributes\n      +     all operational attributes\nSearch options:\n  -a deref   one of never (default), always, search, or find\n  -A         retrieve attribute names only (no values)\n  -b ba"
+    },
+    {
+      "name": "bloodhound-python",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "bloodhound-python",
+        "bloodhound"
+      ],
+      "installed": true,
+      "installed_as": "bloodhound-python",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: bloodhound-python [-h] [-c COLLECTIONMETHOD] [-d DOMAIN] [-v]\n                         [-u USERNAME] [-p PASSWORD] [-k] [--hashes HASHES]\n                         [-no-pass] [-aesKey hex key]\n                         [--auth-method {auto,ntlm,kerberos}] [-ns NAMESERVER]\n                         [--dns-tcp] [--dns-timeout DNS_TIMEOUT] [-dc HOST]\n                         [-gc HOST] [-w WORKERS] [--exclude-dcs]\n                         [--disable-pooling] [--disable-autogc] [--zip]\n         "
+    },
+    {
+      "name": "hashcat",
+      "category": "credentials",
+      "platform": "",
+      "candidates": [
+        "hashcat"
+      ],
+      "installed": true,
+      "installed_as": "hashcat",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "v7.1.2"
+    },
+    {
+      "name": "john",
+      "category": "credentials",
+      "platform": "",
+      "candidates": [
+        "john",
+        "john the ripper",
+        "jtr"
+      ],
+      "installed": true,
+      "installed_as": "john",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 1,
+      "reason": "",
+      "output_head": "Unknown option: \"--version\""
+    },
+    {
+      "name": "prowler",
+      "category": "cloud",
+      "platform": "",
+      "candidates": [
+        "prowler"
+      ],
+      "installed": false,
+      "installed_as": "",
+      "runs": false,
+      "probe_flag": "",
+      "exit_code": null,
+      "reason": "not installed (no candidate binary resolved on PATH)",
+      "output_head": ""
+    },
+    {
+      "name": "scoutsuite",
+      "category": "cloud",
+      "platform": "",
+      "candidates": [
+        "scoutsuite"
+      ],
+      "installed": false,
+      "installed_as": "",
+      "runs": false,
+      "probe_flag": "",
+      "exit_code": null,
+      "reason": "not installed (no candidate binary resolved on PATH)",
+      "output_head": ""
+    },
+    {
+      "name": "trivy",
+      "category": "cloud",
+      "platform": "",
+      "candidates": [
+        "trivy"
+      ],
+      "installed": true,
+      "installed_as": "trivy",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "Version: dev"
+    },
+    {
+      "name": "kube-hunter",
+      "category": "cloud",
+      "platform": "",
+      "candidates": [
+        "kube-hunter"
+      ],
+      "installed": false,
+      "installed_as": "",
+      "runs": false,
+      "probe_flag": "",
+      "exit_code": null,
+      "reason": "not installed (no candidate binary resolved on PATH)",
+      "output_head": ""
+    },
+    {
+      "name": "ghidra",
+      "category": "binary",
+      "platform": "",
+      "candidates": [
+        "ghidra"
+      ],
+      "installed": false,
+      "installed_as": "",
+      "runs": false,
+      "probe_flag": "",
+      "exit_code": null,
+      "reason": "not installed (no candidate binary resolved on PATH)",
+      "output_head": ""
+    },
+    {
+      "name": "radare2",
+      "category": "binary",
+      "platform": "",
+      "candidates": [
+        "radare2",
+        "r2"
+      ],
+      "installed": true,
+      "installed_as": "radare2",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "Usage: r2 [-ACdfjLMnNqStuvwzX] [-P patch] [-p prj] [-a arch] [-b bits] [-c cmd]\n          [-s addr] [-B baddr] [-m maddr] [-i script] [-e k=v] file|pid|-|--|=\n --           run radare2 without opening any file\n -            same as 'r2 malloc://512'\n =            read file from stdin (use -i and -c to run cmds)\n -=           perform !=! command to run all commands remotely\n -0           print \\x00 after init and every command\n -1           redirect stderr to stdout\n -2           close stderr fil"
+    },
+    {
+      "name": "gdb",
+      "category": "binary",
+      "platform": "",
+      "candidates": [
+        "gdb"
+      ],
+      "installed": true,
+      "installed_as": "gdb",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "GNU gdb (Debian 17.2-1+b1) 17.2\nCopyright (C) 2025 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law."
+    },
+    {
+      "name": "strings",
+      "category": "binary",
+      "platform": "",
+      "candidates": [
+        "strings"
+      ],
+      "installed": true,
+      "installed_as": "strings",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "GNU strings (GNU Binutils for Debian) 2.46.90.20260712\nCopyright (C) 2026 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty."
+    },
+    {
+      "name": "GetUserSPNs.py",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "GetUserSPNs.py",
+        "impacket-GetUserSPNs",
+        "GetUserSPNs"
+      ],
+      "installed": true,
+      "installed_as": "impacket-GetUserSPNs",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: GetUserSPNs.py [-h] [-target-domain TARGET_DOMAIN]\n                      [-no-preauth NO_PREAUTH] [-stealth] [-machine-only]\n                      [-usersfile USERSFILE] [-request]\n                      [-request-user username | -request-machine machinename]\n                      [-save] [-outputfile OUTPUTFILE] [-ts] [-debug]\n                      [-hashes LMHASH:NTHASH] [-no-pass] [-k]\n                      [-aesKey hex key] [-dc-ip ip address]\n                      [-dc-host hostname]\n"
+    },
+    {
+      "name": "GetNPUsers.py",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "GetNPUsers.py",
+        "impacket-GetNPUsers",
+        "GetNPUsers"
+      ],
+      "installed": true,
+      "installed_as": "impacket-GetNPUsers",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: GetNPUsers.py [-h] [-request] [-outputfile OUTPUTFILE]\n                     [-format {hashcat,john}] [-usersfile USERSFILE] [-ts]\n                     [-debug] [-hashes LMHASH:NTHASH] [-no-pass] [-k]\n                     [-aesKey hex key] [-dc-ip ip address] [-dc-host hostname]\n                     target\nGetNPUsers.py: error: the following arguments are required: target\nImpacket v0.14.0.dev0 - Copyright Fortra, LLC and its affiliated companies "
+    },
+    {
+      "name": "secretsdump.py",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "secretsdump.py",
+        "impacket-secretsdump",
+        "secretsdump"
+      ],
+      "installed": true,
+      "installed_as": "impacket-secretsdump",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: secretsdump.py [-h] [-ts] [-debug] [-system SYSTEM] [-bootkey BOOTKEY]\n                      [-security SECURITY] [-sam SAM] [-ntds NTDS]\n                      [-resumefile RESUMEFILE] [-skip-sam] [-skip-security]\n                      [-outputfile OUTPUTFILE] [-use-vss] [-rodcNo RODCNO]\n                      [-rodcKey RODCKEY] [-use-keylist]\n                      [-exec-method [{smbexec,wmiexec,mmcexec}]]\n                      [-use-remoteSSWMI] [-use-remoteSSWMI-NTDS]\n                  "
+    },
+    {
+      "name": "psexec.py",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "psexec.py",
+        "impacket-psexec",
+        "psexec"
+      ],
+      "installed": true,
+      "installed_as": "impacket-psexec",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: psexec.py [-h] [-c pathname] [-path PATH] [-file FILE] [-ts] [-debug]\n                 [-codec CODEC] [-hashes LMHASH:NTHASH] [-no-pass] [-k]\n                 [-aesKey hex key] [-keytab KEYTAB] [-dc-ip ip address]\n                 [-target-ip ip address] [-port [destination port]]\n                 [-service-name service_name]\n                 [-remote-binary-name remote_binary_name]\n                 target [command ...]\npsexec.py: error: the following arguments are required: target\nImpack"
+    },
+    {
+      "name": "wmiexec.py",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "wmiexec.py",
+        "impacket-wmiexec",
+        "wmiexec"
+      ],
+      "installed": true,
+      "installed_as": "impacket-wmiexec",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: wmiexec.py [-h] [-share SHARE] [-nooutput] [-ts] [-silentcommand]\n                  [-debug] [-codec CODEC] [-shell-type {cmd,powershell}]\n                  [-com-version MAJOR_VERSION:MINOR_VERSION]\n                  [-hashes LMHASH:NTHASH] [-no-pass] [-k] [-aesKey hex key]\n                  [-dc-ip ip address] [-target-ip ip address] [-A authfile]\n                  [-keytab KEYTAB]\n                  target [command ...]\nwmiexec.py: error: the following arguments are required: target\nImp"
+    },
+    {
+      "name": "smbexec.py",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "smbexec.py",
+        "impacket-smbexec",
+        "smbexec"
+      ],
+      "installed": true,
+      "installed_as": "impacket-smbexec",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: smbexec.py [-h] [-share SHARE] [-mode {SERVER,SHARE}] [-ts] [-debug]\n                  [-codec CODEC] [-shell-type {cmd,powershell}]\n                  [-dc-ip ip address] [-target-ip ip address]\n                  [-port [destination port]] [-service-name service_name]\n                  [-hashes LMHASH:NTHASH] [-no-pass] [-k] [-aesKey hex key]\n                  [-keytab KEYTAB]\n                  target\nsmbexec.py: error: the following arguments are required: target\nImpacket v0.14.0.dev0 - "
+    },
+    {
+      "name": "ntlmrelayx.py",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "ntlmrelayx.py",
+        "impacket-ntlmrelayx",
+        "ntlmrelayx"
+      ],
+      "installed": true,
+      "installed_as": "impacket-ntlmrelayx",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: ntlmrelayx.py [-h] [-ts] [-debug] [-t TARGET] [-tf TARGETSFILE] [-w]\n                     [-i] [-ip INTERFACE_IP] [--no-smb-server]\n                     [--no-http-server] [--no-wcf-server] [--no-raw-server]\n                     [--no-rpc-server] [--no-winrm-server]\n                     [--smb-port SMB_PORT] [--http-port HTTP_PORT]\n                     [--wcf-port WCF_PORT] [--raw-port RAW_PORT]\n                     [--rpc-port RPC_PORT] [--no-multirelay] [--keep-relaying]\n               "
+    },
+    {
+      "name": "mssqlclient.py",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "mssqlclient.py",
+        "impacket-mssqlclient",
+        "mssqlclient"
+      ],
+      "installed": true,
+      "installed_as": "impacket-mssqlclient",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: mssqlclient.py [-h] [-db DB] [-windows-auth] [-debug] [-ts] [-show]\n                      [-command [COMMAND ...]] [-file FILE]\n                      [--host-name HOST_NAME] [--app-name APP_NAME]\n                      [-hashes LMHASH:NTHASH] [-no-pass] [-k]\n                      [-aesKey hex key] [-dc-ip ip address]\n                      [-target-ip ip address] [-port PORT]\n                      target\nmssqlclient.py: error: the following arguments are required: target\nImpacket v0.14.0.de"
+    },
+    {
+      "name": "getTGT.py",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "getTGT.py",
+        "impacket-getTGT",
+        "getTGT"
+      ],
+      "installed": true,
+      "installed_as": "impacket-getTGT",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: getTGT.py [-h] [-ts] [-debug] [-hashes LMHASH:NTHASH] [-no-pass] [-k]\n                 [-aesKey hex key] [-dc-ip ip address] [-service SPN]\n                 [-principalType [PRINCIPALTYPE]]\n                 identity\ngetTGT.py: error: the following arguments are required: identity\nImpacket v0.14.0.dev0 - Copyright Fortra, LLC and its affiliated companies "
+    },
+    {
+      "name": "certipy",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "certipy",
+        "certipy-ad"
+      ],
+      "installed": true,
+      "installed_as": "certipy",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "Certipy v5.1.0 - by Oliver Lyak (ly4k)"
+    },
+    {
+      "name": "evil-winrm",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "evil-winrm"
+      ],
+      "installed": true,
+      "installed_as": "evil-winrm",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": ""
+    },
+    {
+      "name": "rubeus",
+      "category": "network-ad",
+      "platform": "windows",
+      "candidates": [
+        "rubeus",
+        "Rubeus.exe"
+      ],
+      "installed": false,
+      "installed_as": "",
+      "runs": false,
+      "probe_flag": "",
+      "exit_code": null,
+      "reason": "windows-only tool \u2014 not applicable to the Linux sandbox",
+      "output_head": ""
+    },
+    {
+      "name": "ldapdomaindump",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "ldapdomaindump"
+      ],
+      "installed": true,
+      "installed_as": "ldapdomaindump",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: ldapdomaindump [-h] [-u USERNAME] [-p PASSWORD] [-at {NTLM,SIMPLE}]\n                      [-o DIRECTORY] [--no-html] [--no-json] [--no-grep]\n                      [--grouped-json] [-d DELIMITER] [-r] [-n DNS_SERVER]\n                      [-m]\n                      HOSTNAME\nldapdomaindump: error: the following arguments are required: HOSTNAME"
+    },
+    {
+      "name": "bloodyAD",
+      "category": "network-ad",
+      "platform": "",
+      "candidates": [
+        "bloodyAD"
+      ],
+      "installed": true,
+      "installed_as": "bloodyAD",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: bloodyAD [-h] [-d DOMAIN] [-u USERNAME] [-p PASSWORD]\n                [-k [KERBEROS ...]] [-f {b64,hex,aes,rc4,default}]\n                [-c [CERTIFICATE]] [-s] -H HOST [-i DC_IP] [--dns DNS]\n                [-t TIMEOUT] [--gc] [-v {QUIET,INFO,DEBUG,TRACE}] [--json]\n                {add,get,msldap,remove,set} ...\nbloodyAD: error: the following arguments are required: -H/--host"
+    },
+    {
+      "name": "powerview",
+      "category": "network-ad",
+      "platform": "windows",
+      "candidates": [
+        "powerview",
+        "PowerView.ps1"
+      ],
+      "installed": false,
+      "installed_as": "",
+      "runs": false,
+      "probe_flag": "",
+      "exit_code": null,
+      "reason": "windows-only tool \u2014 not applicable to the Linux sandbox",
+      "output_head": ""
+    },
+    {
+      "name": "responder",
+      "category": "credentials",
+      "platform": "",
+      "candidates": [
+        "responder",
+        "Responder.py"
+      ],
+      "installed": true,
+      "installed_as": "responder",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "                                         __\n  .----.-----.-----.-----.-----.-----.--|  |.-----.----.\n  |   _|  -__|__ --|  _  |  _  |     |  _  ||  -__|   _|\n  |__| |_____|_____|   __|_____|__|__|_____||_____|__|\n                   |__|\n\nResponder 3.2.2.0"
+    },
+    {
+      "name": "mimikatz",
+      "category": "credentials",
+      "platform": "windows",
+      "candidates": [
+        "mimikatz",
+        "mimikatz.exe"
+      ],
+      "installed": false,
+      "installed_as": "",
+      "runs": false,
+      "probe_flag": "",
+      "exit_code": null,
+      "reason": "windows-only tool \u2014 not applicable to the Linux sandbox",
+      "output_head": ""
+    },
+    {
+      "name": "arjun",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "arjun"
+      ],
+      "installed": true,
+      "installed_as": "arjun",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: arjun [-h] [-u URL] [-o JSON_FILE] [-oT TEXT_FILE] [-oB [BURP_PROXY]]\n             [-d DELAY] [-t THREADS] [-w WORDLIST] [-m METHOD]\n             [-i [IMPORT_FILE]] [-T TIMEOUT] [-c CHUNKS] [-q]\n             [--rate-limit RATE_LIMIT] [--headers [HEADERS]]\n             [--passive [PASSIVE]] [--stable] [--include INCLUDE]\n             [--disable-redirects] [--casing CASING]\narjun: error: unrecognized arguments: --version"
+    },
+    {
+      "name": "paramspider",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "paramspider"
+      ],
+      "installed": true,
+      "installed_as": "paramspider",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "\n           \n                                      _    __       \n   ___  ___ ________ ___ _  ___ ___  (_)__/ /__ ____\n  / _ \\/ _ `/ __/ _ `/  ' \\(_-</ _ \\/ / _  / -_) __/\n / .__/\\_,_/_/  \\_,_/_/_/_/___/ .__/_/\\_,_/\\__/_/   \n/_/                          /_/                    \n\n                              with <3 by @0xasm0d3us           \n    \nusage: paramspider [-h] [-d DOMAIN] [-l LIST] [-s] [--proxy PROXY]\n                   [-p PLACEHOLDER]\nparamspider: error: unrecognized arguments: --ver"
+    },
+    {
+      "name": "katana",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "katana"
+      ],
+      "installed": true,
+      "installed_as": "katana",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "\n   __        __                \n  / /_____ _/ /____ ____  ___ _\n /  '_/ _  / __/ _  / _ \\/ _  /\n/_/\\_\\\\_,_/\\__/\\_,_/_//_/\\_,_/\t\t\t\t\t\t\t \n\n\t\tprojectdiscovery.io\n\n[\u001b[34mINF\u001b[0m] Current version: v1.1.0"
+    },
+    {
+      "name": "gau",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "gau",
+        "getallurls"
+      ],
+      "installed": true,
+      "installed_as": "gau",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "gau version: 2.2.4"
+    },
+    {
+      "name": "waybackurls",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "waybackurls"
+      ],
+      "installed": true,
+      "installed_as": "waybackurls",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "flag provided but not defined: -version\nUsage of waybackurls:\n  -dates\n    \tshow date of fetch in the first column\n  -get-versions\n    \tlist URLs for crawled versions of input URL(s)\n  -no-subs\n    \tdon't include subdomains of the target domain"
+    },
+    {
+      "name": "dirsearch",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "dirsearch"
+      ],
+      "installed": true,
+      "installed_as": "dirsearch",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "/usr/lib/python3/dist-packages/dirsearch/dirsearch.py:23: DeprecationWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html\n  from pkg_resources import DistributionNotFound, VersionConflict\ndirsearch v0.4.3"
+    },
+    {
+      "name": "wafw00f",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "wafw00f"
+      ],
+      "installed": true,
+      "installed_as": "wafw00f",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "\n                   \u001b[1;97m______\n                  \u001b[1;97m/      \\\n                 \u001b[1;97m(  Woof! )\n                  \u001b[1;97m\\  ____/                      \u001b[1;91m)\n                  \u001b[1;97m,,                           \u001b[1;91m) (\u001b[1;93m_\n             \u001b[1;93m.-. \u001b[1;97m-    \u001b[1;92m_______                 \u001b[1;91m( \u001b[1;93m|__|\n            \u001b[1;93m()``; \u001b[1;92m|==|_______)                \u001b[1;91m.)\u001b[1;93m|__|\n            \u001b[1;93m/ ('        \u001b[1;92m/|\\                  \u001b[1;91m(  \u001b[1;93m|__|\n        \u001b["
+    },
+    {
+      "name": "testssl.sh",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "testssl.sh",
+        "testssl"
+      ],
+      "installed": true,
+      "installed_as": "testssl.sh",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "\n\u001b[1m\n#####################################################################\u001b[m\n  \u001b[1mtestssl.sh\u001b[m version \u001b[1m3.2.2\u001b[m from \u001b[1mhttps://testssl.sh/\u001b[m\n\u001b[1m\n  This program is free software. Distribution and modification under\n  GPLv2 permitted. USAGE w/o ANY WARRANTY. USE IT AT YOUR OWN RISK!\u001b[m\n\n  Please file bugs @ \u001b[1mhttps://testssl.sh/bugs/\u001b[m\n\u001b[1m#####################################################################\u001b[m\n\n  Using \u001b[3mOpenSSL 3.6.3 (Jun 13 2026)\u001b[m  [~96 ciphers]\n  on hackpit-"
+    },
+    {
+      "name": "jwt_tool",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "jwt_tool",
+        "jwt-tool",
+        "jwt_tool.py"
+      ],
+      "installed": true,
+      "installed_as": "jwt_tool",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "/opt/jwt_tool/jwt_tool.py:187: SyntaxWarning: invalid escape sequence '\\/'\n  if re.search('eyJ[A-Za-z0-9_\\/+-]*\\.eyJ[A-Za-z0-9_\\/+-]*\\.[A-Za-z0-9._\\/+-]*', item):\n/opt/jwt_tool/jwt_tool.py:200: SyntaxWarning: invalid escape sequence '\\/'\n  p = re.compile('eyJ[A-Za-z0-9_\\/+-]*\\.eyJ[A-Za-z0-9_\\/+-]*\\.[A-Za-z0-9._\\/+-]*')\n/opt/jwt_tool/jwt_tool.py:1350: SyntaxWarning: invalid escape sequence '\\/'\n  qOutput = re.sub(' - eyJ[A-Za-z0-9_\\/+-]*\\.eyJ[A-Za-z0-9_\\/+-]*\\.[A-Za-z0-9._\\/+-]*', '', qResult)\n/o"
+    },
+    {
+      "name": "wfuzz",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "wfuzz"
+      ],
+      "installed": true,
+      "installed_as": "wfuzz",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": " /usr/lib/python3/dist-packages/wfuzz/__init__.py:34: UserWarning:Pycurl is not compiled against Openssl. Wfuzz might not work correctly when fuzzing SSL sites. Check Wfuzz's documentation for more information.\ndefault\ndefault\n3.1.0"
+    },
+    {
+      "name": "hakrawler",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "hakrawler"
+      ],
+      "installed": true,
+      "installed_as": "hakrawler",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "flag provided but not defined: -version\nUsage of hakrawler:\n  -d int\n    \tDepth to crawl. (default 2)\n  -h string\n    \tCustom headers separated by two semi-colons. E.g. -h \"Cookie: foo=bar;;Referer: http://example.com/\" \n  -insecure\n    \tDisable TLS verification.\n  -json\n    \tOutput as JSON.\n  -proxy string\n    \tProxy URL. E.g. -proxy http://127.0.0.1:8080\n  -s\tShow the source of URL based on where it was found. E.g. href, form, script, etc.\n  -size int\n    \tPage size limit, in KB. (default -1)\n"
+    },
+    {
+      "name": "sslscan",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "sslscan"
+      ],
+      "installed": true,
+      "installed_as": "sslscan",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "\u001b[1;34m\t\t2.1.5\n\t\tOpenSSL 3.6.3 9 Jun 2026\n\u001b[0m"
+    },
+    {
+      "name": "rustscan",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "rustscan"
+      ],
+      "installed": true,
+      "installed_as": "rustscan",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "rustscan 2.4.1"
+    },
+    {
+      "name": "naabu",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "naabu"
+      ],
+      "installed": true,
+      "installed_as": "naabu",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "\n                  __\n  ___  ___  ___ _/ /  __ __\n / _ \\/ _ \\/ _ \\/ _ \\/ // /\n/_//_/\\_,_/\\_,_/_.__/\\_,_/\n\n\t\tprojectdiscovery.io\n\n[\u001b[34mINF\u001b[0m] Current Version: 2.6.1"
+    },
+    {
+      "name": "dnsrecon",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "dnsrecon"
+      ],
+      "installed": true,
+      "installed_as": "dnsrecon",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "2026-07-28T11:01:48.842964+0000 INFO DNSRecon version 1.6.0 https://www.darkoperator.com"
+    },
+    {
+      "name": "shodan",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "shodan"
+      ],
+      "installed": true,
+      "installed_as": "shodan",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "Usage: shodan [OPTIONS] COMMAND [ARGS]...\nTry 'shodan -h' for help.\n\nError: No such option: --version"
+    },
+    {
+      "name": "fierce",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "fierce"
+      ],
+      "installed": true,
+      "installed_as": "fierce",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: fierce [-h] [--domain DOMAIN] [--connect] [--wide]\n              [--traverse TRAVERSE] [--search SEARCH [SEARCH ...]]\n              [--range RANGE] [--delay DELAY]\n              [--subdomains SUBDOMAINS [SUBDOMAINS ...] |\n              --subdomain-file SUBDOMAIN_FILE]\n              [--dns-servers DNS_SERVERS [DNS_SERVERS ...] |\n              --dns-file DNS_FILE] [--tcp]\nfierce: error: unrecognized arguments: --version"
+    },
+    {
+      "name": "msfconsole",
+      "category": "exploitation",
+      "platform": "",
+      "candidates": [
+        "msfconsole",
+        "metasploit",
+        "msf"
+      ],
+      "installed": true,
+      "installed_as": "msfconsole",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "Framework Version: 6.4.135-dev"
+    },
+    {
+      "name": "msfvenom",
+      "category": "exploitation",
+      "platform": "",
+      "candidates": [
+        "msfvenom"
+      ],
+      "installed": true,
+      "installed_as": "msfvenom",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 1,
+      "reason": "",
+      "output_head": "msfvenom: version unknown"
+    },
+    {
+      "name": "searchsploit",
+      "category": "exploitation",
+      "platform": "",
+      "candidates": [
+        "searchsploit",
+        "exploitdb"
+      ],
+      "installed": true,
+      "installed_as": "searchsploit",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "/usr/bin/searchsploit: illegal option -- -\n  Usage: searchsploit [options] term1 [term2] ... [termN]\n\n==========\n Examples \n==========\n  searchsploit afd windows local\n  searchsploit -t oracle windows\n  searchsploit -p 39446\n  searchsploit linux kernel 3.2 --exclude=\"(PoC)|/dos/\"\n  searchsploit -s Apache Struts 2.0.0\n  searchsploit linux reverse password\n  searchsploit -j 55555 | jq\n  searchsploit --cve 2021-44228\n\n  For more examples, see the manual: https://www.exploit-db.com/searchsploit\n\n==="
+    },
+    {
+      "name": "linpeas",
+      "category": "privesc",
+      "platform": "",
+      "candidates": [
+        "linpeas",
+        "linpeas.sh"
+      ],
+      "installed": true,
+      "installed_as": "linpeas",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "\n> \u001b[1;4mpeass\u001b[0m ~ \u001b[3mPrivilege Escalation Awesome Scripts SUITE\u001b[0m\n\n/usr/share/peass/linpeas\n\u251c\u2500\u2500 linpeas.sh\n\u251c\u2500\u2500 linpeas_darwin_amd64\n\u251c\u2500\u2500 linpeas_darwin_arm64\n\u251c\u2500\u2500 linpeas_fat.sh\n\u251c\u2500\u2500 linpeas_linux_386\n\u251c\u2500\u2500 linpeas_linux_amd64\n\u251c\u2500\u2500 linpeas_linux_arm\n\u251c\u2500\u2500 linpeas_linux_arm64\n\u2514\u2500\u2500 linpeas_small.sh\nbash: cannot set terminal process group (4347): Inappropriate ioctl for device\nbash: no job control in this shell\nsandbox@hackpit-kali-sandbox:/usr/sha"
+    },
+    {
+      "name": "winpeas",
+      "category": "privesc",
+      "platform": "windows",
+      "candidates": [
+        "winpeas",
+        "winPEASx64",
+        "winPEASx86",
+        "winPEASany",
+        "winPEAS.exe",
+        "winpeas.bat"
+      ],
+      "installed": false,
+      "installed_as": "",
+      "runs": false,
+      "probe_flag": "",
+      "exit_code": null,
+      "reason": "windows-only tool \u2014 not applicable to the Linux sandbox",
+      "output_head": ""
+    },
+    {
+      "name": "trufflehog",
+      "category": "osint",
+      "platform": "",
+      "candidates": [
+        "trufflehog"
+      ],
+      "installed": true,
+      "installed_as": "trufflehog",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "trufflehog 3.96.0"
+    },
+    {
+      "name": "msftrecon",
+      "category": "osint",
+      "platform": "",
+      "candidates": [
+        "msftrecon"
+      ],
+      "installed": true,
+      "installed_as": "msftrecon",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: msftrecon [-h] -d DOMAIN [-j] [--gov] [--cn] [--debug]\nmsftrecon: error: the following arguments are required: -d/--domain"
+    },
+    {
+      "name": "github-subdomains",
+      "category": "osint",
+      "platform": "",
+      "candidates": [
+        "github-subdomains"
+      ],
+      "installed": true,
+      "installed_as": "github-subdomains",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "flag provided but not defined: -version\nUsage of github-subdomains:\n  -d string\n    \tdomain you are looking for (required)\n  -e\textended mode, also look for <dummy>example.com\n  -k\texit the program when all tokens have been disabled\n  -o string\n    \toutput file, default: <domain>.txt\n  -q\tquick mode, avoid extra searches with languages and noise added\n  -raw\n    \traw output\n  -t string\n    \tgithub token (required), can be:\n    \t  \u2022 a single token\n    \t  \u2022 a list of tokens separated by comma\n"
+    },
+    {
+      "name": "gitlab-subdomains",
+      "category": "osint",
+      "platform": "",
+      "candidates": [
+        "gitlab-subdomains"
+      ],
+      "installed": true,
+      "installed_as": "gitlab-subdomains",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "flag provided but not defined: -version\nUsage of gitlab-subdomains:\n  -d string\n    \tdomain you are looking for (required)\n  -debug\n    \tdebug mode\n  -e\textended mode, also look for <dummy>example.com\n  -t string\n    \tgitlab token (required), can be:\n    \t  \u2022 a single token\n    \t  \u2022 a list of tokens separated by comma\n    \t  \u2022 a file (.tokens) containing 1 token per line\n    \tif the options is not provided, the environment variable GITLAB_TOKEN is readed, it can be:\n    \t  \u2022 a single tok"
+    },
+    {
+      "name": "dorks_hunter",
+      "category": "osint",
+      "platform": "",
+      "candidates": [
+        "dorks_hunter"
+      ],
+      "installed": true,
+      "installed_as": "dorks_hunter",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: dorks_hunter.py [-h] --domain DOMAIN [--output OUTPUT]\ndorks_hunter.py: error: the following arguments are required: --domain/-d"
+    },
+    {
+      "name": "gitdorks_go",
+      "category": "osint",
+      "platform": "",
+      "candidates": [
+        "gitdorks_go"
+      ],
+      "installed": true,
+      "installed_as": "gitdorks_go",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "flag provided but not defined: -version\n\n ____    __  __  __  __  ____  ___ \n(  _ \\  /. |(  \\/  )/  )(_  _)/ __)\n )(_) )(_  _))    (  )(   )(  \\__ \\\n(____/   (_)(_/\\/\\_)(__) (__) (___/\n\n                       v 0.1\nUsage of gitdorks_go:\n  -ew int\n    \thow many seconds does each request should wait ?\n  -gd string\n    \tgithub dorks file path\n  -gk string\n    \tgithub search keyword\n  -nw\n    \tif get github api rate limited, need wait ? (default true)\n  -nws int\n    \thow many seconds does it wait ea"
+    },
+    {
+      "name": "gotator",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "gotator"
+      ],
+      "installed": true,
+      "installed_as": "gotator",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "1.1"
+    },
+    {
+      "name": "regulator",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "regulator"
+      ],
+      "installed": true,
+      "installed_as": "regulator",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 1,
+      "reason": "",
+      "output_head": "/opt/regulator/main.py:307: SyntaxWarning: invalid escape sequence '\\.'\n  replaced = sorted(set(map(lambda line: re.sub('\\.{2,}', '.', line) ,handle.readlines())))\nTraceback (most recent call last):\n  File \"/opt/regulator/main.py\", line 313, in <module>\n    main()\n    ~~~~^^\n  File \"/opt/regulator/main.py\", line 193, in main\n    logging.basicConfig(format='%(asctime)-15s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO, filename=LOGFILE_NAME, filemode='a')\n    ~~~~~~~~~~~~~~~~~~~^^^"
+    },
+    {
+      "name": "subwiz",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "subwiz"
+      ],
+      "installed": false,
+      "installed_as": "",
+      "runs": false,
+      "probe_flag": "",
+      "exit_code": null,
+      "reason": "not installed (no candidate binary resolved on PATH)",
+      "output_head": ""
+    },
+    {
+      "name": "puredns",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "puredns"
+      ],
+      "installed": true,
+      "installed_as": "puredns",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "puredns version v2.1.1"
+    },
+    {
+      "name": "massdns",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "massdns"
+      ],
+      "installed": true,
+      "installed_as": "massdns",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "massdns "
+    },
+    {
+      "name": "dnsvalidator",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "dnsvalidator"
+      ],
+      "installed": true,
+      "installed_as": "dnsvalidator",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: dnsvalidator [-h] [-t TARGET | -tL TARGET_LIST] [-e EXCLUSION |\n                    -eL EXCLUSIONS_LIST] [-o OUTPUT] [-r ROOTDOMAIN]\n                    [-q QUERY] [-threads THREADS] [-timeout TIMEOUT]\n                    [--no-color] [-v | --silent]\ndnsvalidator: error: Tried to fetch https://public-dns.info/nameservers.txt but got <class 'requests.exceptions.ConnectionError'> are you sure this is a valid URL?"
+    },
+    {
+      "name": "asnmap",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "asnmap"
+      ],
+      "installed": true,
+      "installed_as": "asnmap",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "[\u001b[34mINF\u001b[0m] Current Version: v1.1.1"
+    },
+    {
+      "name": "mapcidr",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "mapcidr"
+      ],
+      "installed": true,
+      "installed_as": "mapcidr",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "\n                   ____________  ___    \n  __ _  ___ ____  / ___/  _/ _ \\/ _ \\   \n /  ' \\/ _ '/ _ \\/ /___/ // // / , _/   \n/_/_/_/\\_,_/ .__/\\___/___/____/_/|_|\n          /_/                                                     \t \n\n\t\tprojectdiscovery.io\n\n[\u001b[34mINF\u001b[0m] Current Version: v1.1.97"
+    },
+    {
+      "name": "tlsx",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "tlsx"
+      ],
+      "installed": true,
+      "installed_as": "tlsx",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "  \n\n  _____ _    _____  __\n |_   _| |  / __\\ \\/ /\n   | | | |__\\__ \\>  < \n   |_| |____|___/_/\\_\\\tv1.2.2\n\n\t\tprojectdiscovery.io\n\n[\u001b[34mINF\u001b[0m] Current version: v1.2.2"
+    },
+    {
+      "name": "csprecon",
+      "category": "recon",
+      "platform": "",
+      "candidates": [
+        "csprecon"
+      ],
+      "installed": true,
+      "installed_as": "csprecon",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "flag provided but not defined: -version"
+    },
+    {
+      "name": "gf",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "gf"
+      ],
+      "installed": true,
+      "installed_as": "gf",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "flag provided but not defined: -version\nUsage of gf:\n  -dump\n    \tprints the grep command rather than executing it\n  -list\n    \tlist available patterns\n  -save\n    \tsave a pattern (e.g: gf -save pat-name -Hnri 'search-pattern')"
+    },
+    {
+      "name": "qsreplace",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "qsreplace"
+      ],
+      "installed": true,
+      "installed_as": "qsreplace",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "flag provided but not defined: -version\nUsage of qsreplace:\n  -a\tAppend the value instead of replacing it\n  -ignore-path\n    \tIgnore the path when considering what constitutes a duplicate"
+    },
+    {
+      "name": "unfurl",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "unfurl"
+      ],
+      "installed": true,
+      "installed_as": "unfurl",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "flag provided but not defined: -version\nFormat URLs provided on stdin\n\nUsage:\n  unfurl [OPTIONS] [MODE] [FORMATSTRING]\n\nOptions:\n  -u, --unique   Only output unique values\n  -v, --verbose  Verbose mode (output URL parse errors)\n\nModes:\n  keys     Keys from the query string (one per line)\n  values   Values from the query string (one per line)\n  keypairs Key=value pairs from the query string (one per line)\n  domains  The hostname (e.g. sub.example.com)\n  paths    The request path (e.g. /users)\n  a"
+    },
+    {
+      "name": "jsluice",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "jsluice"
+      ],
+      "installed": true,
+      "installed_as": "jsluice",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "unknown flag: --version\njsluice - Extract URLs, paths, and secrets from JavaScript files\n\nUsage:\n  jsluice <mode> [options] [file...]\n\nModes:\n  urls      Extract URLs and paths\n  secrets   Extract secrets and other interesting bits\n  tree      Print syntax trees for input files\n  query     Run tree-sitter a query against input files\n  format    Format JavaScript source using jsbeautifier-go\n\nGlobal options:\n  -c, --concurrency int        Number of files to process concurrently (default 1)\n  -C, "
+    },
+    {
+      "name": "subjs",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "subjs"
+      ],
+      "installed": true,
+      "installed_as": "subjs",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "subjs version: 1.0.1"
+    },
+    {
+      "name": "getjs",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "getjs"
+      ],
+      "installed": true,
+      "installed_as": "getjs",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "flag provided but not defined: -version\nUsage of getjs:\n  -complete\n    \tComplete/Autofil relative URLs by adding the current origin.\n  -header value\n    \tThe optional request headers to add to the requests. This flag can be used multiple times with a new header each time.\n  -input value\n    \tThe optional URLs input files. Each URL should be on a new line in plain text format. This flag can be used multiple times with different files.\n  -method string\n    \tThe request method that should be used "
+    },
+    {
+      "name": "commix",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "commix"
+      ],
+      "installed": true,
+      "installed_as": "commix",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "v4.1"
+    },
+    {
+      "name": "SSTImap",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "SSTImap"
+      ],
+      "installed": true,
+      "installed_as": "SSTImap",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "SSTImap version 1.3.3.7"
+    },
+    {
+      "name": "nomore403",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "nomore403"
+      ],
+      "installed": true,
+      "installed_as": "nomore403",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "nomore403 version dev (built unknown)"
+    },
+    {
+      "name": "crlfuzz",
+      "category": "web",
+      "platform": "",
+      "candidates": [
+        "crlfuzz"
+      ],
+      "installed": true,
+      "installed_as": "crlfuzz",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "CRLFuzz 1.4.0"
+    },
+    {
+      "name": "s3scanner",
+      "category": "cloud",
+      "platform": "",
+      "candidates": [
+        "s3scanner"
+      ],
+      "installed": true,
+      "installed_as": "s3scanner",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "dev"
+    },
+    {
+      "name": "cloud_enum",
+      "category": "cloud",
+      "platform": "",
+      "candidates": [
+        "cloud_enum"
+      ],
+      "installed": true,
+      "installed_as": "cloud_enum",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "[!] Please pip install requirements.txt."
+    },
+    {
+      "name": "SharPersist",
+      "category": "persistence",
+      "platform": "windows",
+      "candidates": [
+        "SharPersist",
+        "SharPersist.exe"
+      ],
+      "installed": false,
+      "installed_as": "",
+      "runs": false,
+      "probe_flag": "",
+      "exit_code": null,
+      "reason": "windows-only tool \u2014 not applicable to the Linux sandbox",
+      "output_head": ""
+    },
+    {
+      "name": "Sliver",
+      "category": "c2",
+      "platform": "",
+      "candidates": [
+        "Sliver",
+        "sliver-server",
+        "sliver-client"
+      ],
+      "installed": true,
+      "installed_as": "sliver-server",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 1,
+      "reason": "",
+      "output_head": "Error: unknown flag: --version\nUsage:\n  sliver-server [flags]\n  sliver-server [command]\n\nAvailable Commands:\n  builder     Start the process as an external builder\n  completion  Generate the autocompletion script for the specified shell\n  daemon      Force start server in daemon mode\n  export-ca   Export certificate authority\n  help        Help about any command\n  import-ca   Import certificate authority\n  operator    Generate operator configuration files\n  unpack      Unpack assets and exit\n  v"
+    },
+    {
+      "name": "Empire",
+      "category": "persistence",
+      "platform": "",
+      "candidates": [
+        "Empire",
+        "powershell-empire"
+      ],
+      "installed": true,
+      "installed_as": "powershell-empire",
+      "runs": false,
+      "probe_flag": "--version",
+      "exit_code": 1,
+      "reason": "no-new-privileges / setcap landmine (output: 'no new privileges')",
+      "output_head": "sudo: The \"no new privileges\" flag is set, which prevents sudo from running as root.\nsudo: If sudo is running in a container, you may need to adjust the container configuration to disable the flag."
+    },
+    {
+      "name": "weevely",
+      "category": "persistence",
+      "platform": "",
+      "candidates": [
+        "weevely",
+        "weevely3"
+      ],
+      "installed": true,
+      "installed_as": "weevely",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 1,
+      "reason": "",
+      "output_head": "\n[+] weevely 4.0.1\n[!] Error: the following arguments are required: url, password\n\n[+] Run terminal or command on the target\n    weevely <URL> <password> [cmd]\n\n[+] Recover an existing session\n    weevely session <path> [cmd]\n\n[+] Generate new agent\n    weevely generate <password> <path>\n\nTraceback (most recent call last):\n  File \"/usr/lib/python3.13/argparse.py\", line 1979, in _parse_known_args2\n    namespace, args = self._parse_known_args(args, namespace, intermixed)\n                      ~~~~"
+    },
+    {
+      "name": "dnscat2",
+      "category": "evasion",
+      "platform": "",
+      "candidates": [
+        "dnscat2",
+        "dnscat2-server",
+        "dnscat2-client"
+      ],
+      "installed": true,
+      "installed_as": "dnscat2-server",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 0,
+      "reason": "",
+      "output_head": "[DEPRECATION] The trollop gem has been renamed to optimist and will no longer be supported. Please switch to optimist as soon as possible.\n\nNew window created: 0\nNew window created: crypto-debug\ndnscat2 v0.07 (server)"
+    },
+    {
+      "name": "iodine",
+      "category": "evasion",
+      "platform": "",
+      "candidates": [
+        "iodine",
+        "iodined"
+      ],
+      "installed": true,
+      "installed_as": "iodine",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "iodine: invalid option -- '-'\nUsage: iodine [-v] [-h] [-f] [-r] [-u user] [-t chrootdir] [-d device] [-P password] [-m maxfragsize] [-M maxlen] [-T type] [-O enc] [-L 0|1] [-I sec] [-z context] [-F pidfile] [nameserver] topdomain"
+    },
+    {
+      "name": "donut",
+      "category": "evasion",
+      "platform": "",
+      "candidates": [
+        "donut"
+      ],
+      "installed": true,
+      "installed_as": "donut",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": "usage: donut [-h] -i INPUT [-o OUTPUT] [-a {1,2,3}] [-p PARAMS]\ndonut: error: the following arguments are required: -i/--input"
+    },
+    {
+      "name": "ScareCrow",
+      "category": "evasion",
+      "platform": "",
+      "candidates": [
+        "ScareCrow"
+      ],
+      "installed": true,
+      "installed_as": "ScareCrow",
+      "runs": true,
+      "probe_flag": "--version",
+      "exit_code": 2,
+      "reason": "",
+      "output_head": " \n  _________                           _________                       \n /   _____/ ____ _____ _______   ____ \\_   ___ \\_______  ______  _  __\n \\_____  \\_/ ___\\\\__  \\\\_  __ \\_/ __ \\/    \\  \\/\\_  __ \\/  _ \\ \\/ \\/ /\n /        \\  \\___ / __ \\|  | \\/\\  ___/\\     \\____|  | \\(  <_> )     / \n/_______  /\\___  >____  /__|    \\___  >\\______  /|__|   \\____/ \\/\\_/  \n\t\\/     \\/     \\/            \\/        \\/                      \n\t\t\t\t\t\t\t(@Tyl0us)\n\t\u201cFear, you must understand is more than a mere obstacle. \n\t"
+    },
+    {
+      "name": "Invoke-Obfuscation",
+      "category": "evasion",
+      "platform": "windows",
+      "candidates": [
+        "Invoke-Obfuscation"
+      ],
+      "installed": false,
+      "installed_as": "",
+      "runs": false,
+      "probe_flag": "",
+      "exit_code": null,
+      "reason": "windows-only tool \u2014 not applicable to the Linux sandbox",
+      "output_head": ""
+    }
+  ]
+}

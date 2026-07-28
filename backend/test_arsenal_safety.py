@@ -187,6 +187,11 @@ _MUST_FIRE = frozenset({
     # payload generators / C2 frameworks
     "donut", "ScareCrow", "Invoke-Obfuscation", "msfvenom", "msfconsole", "msf", "metasploit",
     "Sliver", "Empire",
+    # the real sandbox binaries these two frameworks install under (the substrate probe in
+    # build #8 surfaced that `Sliver`/`Empire` resolve as `sliver-server`/`sliver-client`/
+    # `powershell-empire`). Each is a full C2 / persistence framework that runs agents on remote
+    # hosts, so each must demand the red-confirm as it is ACTUALLY invoked.
+    "sliver-server", "sliver-client", "powershell-empire",
     # covert tunnels — a C2 path and an exfil path in one
     "dnscat2", "dnscat2-client", "dnscat2-server", "iodine", "iodined",
     # vulnerability -> command execution / interactive shell on the target

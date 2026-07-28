@@ -50,6 +50,7 @@ import attack_path  # noqa: E402
 import chat as chat_assistant  # noqa: E402  (backend/chat.py — engagement assistant)
 import llm  # noqa: E402
 import orchestrator  # noqa: E402  (backend/orchestrator.py — the loop's propose step)
+import reasoning  # noqa: E402  (backend/reasoning/ — deeper proposer; propose-only, no exec)
 import report as report_gen  # noqa: E402  (backend/report.py — LLM report drafting)
 import sessions as sessions_db  # noqa: E402  (backend/sessions.py — SQLite store)
 from cockpit import runstore as cockpit_runstore  # noqa: E402
@@ -311,6 +312,9 @@ async def lifespan(app: FastAPI):
     # task tree share it too. This is what the orchestrator reasons over instead of
     # re-reading stdout tails.
     engagement_state.init_db()
+    # reasoning copilot — the tried/failed ledger's dead-lead table and the candidate frontier
+    # share the same file. Propose-only: these are the proposer's memory, never an exec path.
+    reasoning.init_db()
     # :code scan — hand the KB to the SAST panel so a finding can point at the technique
     # behind it. Optional by design: with no KB the scan runs identically, just unlinked.
     set_codescan_kb(
@@ -925,6 +929,32 @@ class LoopProposal(BaseModel):
         "non-empty the UI shows them RED and approve requires an explicit confirmation; "
         "the executor's danger gate re-checks this at run time.",
     )
+    # --- reasoning copilot (Task 2) — advisory only; the proposal still runs nothing --- #
+    hypothesis: str = Field("", description="What the proposer believes it is testing (2.2).")
+    expected_signal: str = Field(
+        "", description="What output would confirm or refute the hypothesis (2.2)."
+    )
+    citations: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="KB entry ids + state facts the proposal rests on (invariant 3).",
+    )
+    schema_valid: bool = Field(
+        True, description="Does the proposal carry hypothesis + expected_signal + citations?"
+    )
+    schema_problems: list[str] = Field(
+        default_factory=list, description="Why the reasoning schema check failed, if it did."
+    )
+    critique: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The skeptic pass (2.5): ok / downrank / confidence / concerns / checks.",
+    )
+    specialist: str = Field(
+        "generalist", description="The domain lens this situation routed to (2.6)."
+    )
+    frontier: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Candidate-frontier state (2.3): open lead count + how many were just pushed.",
+    )
 
 
 class LoopProposeOut(BaseModel):
@@ -1484,6 +1514,65 @@ def loop_propose(session_id: str, req: LoopProposeIn = Body(default=None)) -> di
         )
     except llm.LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
+
+
+# --- Task 3 / Task 4: web-exploit + privesc drafting (propose/ground only; human fires) ---
+class WebExploitIn(BaseModel):
+    """Draft the concrete exploit for a web finding. The finding is passed by fingerprint (pulled
+    from state) or inline. NOTHING is sent — the draft goes to the human to fire."""
+
+    fingerprint: str | None = Field(None, description="Fingerprint of a finding already in state.")
+    finding: dict[str, Any] | None = Field(
+        None, description="Inline finding {title, target, reference, params} when not in state yet."
+    )
+
+
+@app.post("/sessions/{session_id}/webexploit/draft")
+def webexploit_draft(session_id: str, req: WebExploitIn = Body(...)) -> dict[str, Any]:
+    """Task 3 — draft the real exploit (sqlmap / SSRF probe / IDOR / param-pollution) for a web
+    finding, grounded in the bug-bounty KB, for the human to fire through the repeater/executor.
+
+    Propose/ground/generate only: this returns a DRAFT (data). It never sends a request and never
+    runs a command — the human fires the drafted step through the already-gated surface, where
+    scope + approval + danger are re-checked.
+    """
+    finding = req.finding
+    if finding is None and req.fingerprint:
+        finding = next(
+            (
+                {**vars(f), "fingerprint": f.fingerprint()}
+                for f in state_store.load(session_id).findings
+                if f.fingerprint() == req.fingerprint
+            ),
+            None,
+        )
+    if not finding:
+        raise HTTPException(status_code=404, detail="no such finding (pass a fingerprint in state or an inline finding)")
+    state = state_store.load(session_id)
+    draft = reasoning.webexploit.draft_exploit(
+        finding, state, lambda q: _resilient_search(q, 3, "hybrid")
+    )
+    return draft.to_dict()
+
+
+class PrivescIngestIn(BaseModel):
+    """Paste linpeas / winpeas (or equivalent) output; get the identified vectors + drafted step."""
+
+    output: str = Field(..., description="Raw linpeas/winpeas output pasted from the foothold.")
+
+
+@app.post("/sessions/{session_id}/privesc/ingest")
+def privesc_ingest(session_id: str, req: PrivescIngestIn = Body(...)) -> dict[str, Any]:
+    """Task 4 — ingest linpeas/winpeas output, identify the privesc vectors, and draft the
+    escalation for the strongest one, grounded in the KB + state.
+
+    Propose/ground/draft only. The drafted step is returned as data for the human to approve and
+    run on the foothold — execution stays human-approved.
+    """
+    state = state_store.load(session_id)
+    return reasoning.privesc.ingest_and_propose(
+        req.output, state, lambda q: _resilient_search(q, 3, "hybrid")
+    )
 
 
 @app.post("/sessions/{session_id}/chat", response_model=ChatOut)

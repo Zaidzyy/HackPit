@@ -315,6 +315,14 @@ async def lifespan(app: FastAPI):
     # reasoning copilot — the tried/failed ledger's dead-lead table and the candidate frontier
     # share the same file. Propose-only: these are the proposer's memory, never an exec path.
     reasoning.init_db()
+    # 2.7 — wire the KB retriever so the loop's fingerprint block can surface case-based
+    # exploitation writeups for the exact service+version in state. get_entry hydrates the full
+    # entry (the search index is lightweight) so the structured fingerprint's version RANGE
+    # matches. Read-only: retrieves, never runs.
+    orchestrator.set_kb_retriever(
+        lambda q: _resilient_search(q, 5, "hybrid"),
+        lambda eid: STATE.by_id.get(eid) if eid else None,
+    )
     # :code scan — hand the KB to the SAST panel so a finding can point at the technique
     # behind it. Optional by design: with no KB the scan runs identically, just unlinked.
     set_codescan_kb(

@@ -46,6 +46,28 @@ from reasoning import schema as _schema
 from reasoning import specialists as _specialists
 from reasoning import tiering as _tiering
 
+# KB RETRIEVER — injected by main.py at startup (dependency injection, like the AD scope
+# resolver and the arsenal catalog). It stays None in the hermetic tests, which makes the
+# fingerprint block "" and the prompt byte-for-byte what it was without it. Both are READ-ONLY
+# callables: a KB search and a full-entry lookup by id. Neither runs anything.
+_KB_SEARCH: Callable[[str], list[Any]] | None = None
+_KB_GET_ENTRY: Callable[[str], Any] | None = None
+
+
+def set_kb_retriever(
+    search: Callable[[str], list[Any]] | None,
+    get_entry: Callable[[str], Any] | None = None,
+) -> None:
+    """Wire the KB search + full-entry lookup the fingerprint block (2.7) retrieves through.
+
+    ``search`` takes a query string and returns KB result rows; ``get_entry`` maps a result id to
+    its full entry so the structured ``meta.fingerprint`` (which the lightweight search index does
+    not carry) is available to the version-range match. Both are read-only."""
+    global _KB_SEARCH, _KB_GET_ENTRY
+    _KB_SEARCH = search
+    _KB_GET_ENTRY = get_entry
+
+
 # How much of each prior run's output to feed back (keeps the prompt bounded).
 _RUN_OUTPUT_CHARS = 600
 _MAX_RUNS_FED = 12
@@ -338,6 +360,60 @@ def _specialist_reference(session_id: str | None, runs: list[dict]) -> str:
         return ""
 
 
+_MAX_FP_SERVICES = 4
+_MAX_FP_ENTRIES = 2
+
+
+def _fingerprint_reference(session_id: str | None) -> str:
+    """Case-based KB writeups (2.7) for the fingerprinted services in state.
+
+    For each discovered service that carries a version, retrieve the exploitation-writeup entries
+    whose service+version fingerprint MATCHES — by the version verdict, not a keyword hit — and
+    offer them as "this exact stack is commonly solved via X" grounding. Best-effort and additive:
+    no retriever wired (the hermetic tests), no versioned services, or any failure yields "", so
+    the prompt is byte-for-byte what it was without this block. Read-only: it retrieves, never runs.
+    """
+    if not session_id or _KB_SEARCH is None:
+        return ""
+    try:
+        state = _load_state(session_id)
+        seen: set[str] = set()
+        lines: list[str] = []
+        for svc in state.services:
+            version = (getattr(svc, "version", "") or "").strip()
+            product = (getattr(svc, "product", "") or getattr(svc, "name", "") or "").strip()
+            if not (version and product):
+                continue
+            key = f"{product}/{version}".lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            hits = _retrieval.retrieve(
+                svc, _KB_SEARCH, limit=_MAX_FP_ENTRIES, get_entry=_KB_GET_ENTRY
+            )
+            for h in hits:
+                if not h.fingerprint_match:
+                    continue
+                entry = h.entry
+                eid = entry.get("id") if isinstance(entry, dict) else getattr(entry, "id", "")
+                title = entry.get("title") if isinstance(entry, dict) else getattr(entry, "title", "")
+                meta = (entry.get("meta") if isinstance(entry, dict) else getattr(entry, "meta", {})) or {}
+                solved = (meta.get("fingerprint") or {}).get("solved_via") or ""
+                lines.append(f"  - {product} {version} -> {title} [{eid}]" + (f": {solved}" if solved else ""))
+            if len(seen) >= _MAX_FP_SERVICES:
+                break
+        if not lines:
+            return ""
+        header = (
+            "\nFINGERPRINT-MATCHED WRITEUPS — case-based KB material for the exact service+version "
+            "you have observed (matched by the version verdict, not keywords). Treat these as "
+            "'this stack is commonly solved via X' leads; cite the entry id if you act on one:"
+        )
+        return "\n".join([header, *lines[: _MAX_FP_SERVICES * _MAX_FP_ENTRIES]])
+    except Exception:  # noqa: BLE001 - a reference block must never break the loop
+        return ""
+
+
 def build_user_prompt(
     plan: dict,
     runs: list[dict],
@@ -408,6 +484,10 @@ def build_user_prompt(
     specialist_block = _specialist_reference(session_id, runs)
     if specialist_block:
         lines.append(specialist_block)
+    # 2.7 — case-based KB writeups for the exact service+version fingerprints in state.
+    fingerprint_block = _fingerprint_reference(session_id)
+    if fingerprint_block:
+        lines.append(fingerprint_block)
     avoid = [a for a in (avoid or []) if a.strip()]
     if avoid:
         lines.append("")

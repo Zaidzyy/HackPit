@@ -266,6 +266,37 @@ def test_fingerprint_range_alignment() -> None:
 # --------------------------------------------------------------------------- #
 # 2.8 — model-tier routing (inert unless configured)
 # --------------------------------------------------------------------------- #
+def test_fingerprint_block_wires_into_prompt() -> None:
+    """2.7 END-TO-END: with the KB retriever wired, a fingerprinted service in state surfaces its
+    case-based writeup in the proposer prompt; with no retriever wired, the block is empty (the
+    prompt is byte-for-byte what it was). The search index is lightweight (no meta) and get_entry
+    hydrates the full entry, so the structured version match still fires."""
+    import orchestrator as O
+
+    entry = {
+        "id": "exploit-writeup-vsftpd-2.3.4-backdoor", "title": "vsftpd 2.3.4 backdoor",
+        "meta": {"fingerprint": {"service": "vsftpd", "version_kind": "exact",
+                                 "versions": ["2.3.4"], "solved_via": "trigger the :) backdoor"}},
+    }
+    fake_search = lambda q: [{"id": entry["id"], "title": entry["title"]}]   # lightweight, no meta
+    fake_get = lambda eid: entry if eid == entry["id"] else None
+    state = StateSummary(services=[Service(SID, "h", 21, name="ftp", product="vsftpd", version="2.3.4")])
+    orig = O._load_state
+    try:
+        O._load_state = lambda sid: state
+        O.set_kb_retriever(fake_search, fake_get)
+        block = O._fingerprint_reference("sess-x")
+        assert "FINGERPRINT-MATCHED" in block and "vsftpd 2.3.4" in block, block
+        assert entry["id"] in block and "trigger the :) backdoor" in block
+        # no retriever wired -> empty, prompt unchanged (the hermetic default)
+        O.set_kb_retriever(None, None)
+        assert O._fingerprint_reference("sess-x") == ""
+    finally:
+        O._load_state = orig
+        O.set_kb_retriever(None, None)
+    print("  2.7 wiring: fingerprint writeups surface in the prompt when the retriever is set: PASS")
+
+
 def test_tiering_inert_by_default() -> None:
     base = {"model": "local", "num_predict": 500}
     assert tiering.select(base, "hard") is base, "no tiers configured -> cfg returned UNCHANGED"
@@ -344,6 +375,7 @@ if __name__ == "__main__":
     test_specialist_routing()
     test_fingerprint_retrieval_outranks_token_match()
     test_fingerprint_range_alignment()
+    test_fingerprint_block_wires_into_prompt()
     test_tiering_inert_by_default()
     test_webexploit_drafts_grounded_exploit()
     test_privesc_ingests_and_drafts()

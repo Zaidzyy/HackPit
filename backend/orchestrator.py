@@ -502,20 +502,18 @@ def _exploit_index():
 
 
 def _review_proposal(proposal: dict[str, Any], session_id: str | None) -> dict[str, Any]:
-    """Critic pass (2.5): refute the proposal against state + the CVE index, and record a
-    confidently-mismatched lead as a dead end so the ledger stops it recurring."""
+    """Critic pass (2.5): refute the proposal against state + the CVE index.
+
+    ADVISORY ONLY — it downranks and flags, it never suppresses. A refuted proposal (e.g. a
+    version-mismatched CVE) is surfaced with its concerns and a lowered confidence so the human
+    sees it is shaky, but it is NOT recorded as a dead lead, so the proposer stays free to raise
+    it again. The human decides; the critic only advises. (The persisted dead-lead path in
+    ledger.record_dead exists for an explicit operator/critic ruling, and is intentionally not
+    invoked here.)
+    """
     try:
         state = _load_state(session_id)
-        crit = _critic.critique(proposal, state, _exploit_index())
-        if session_id and not crit.ok:
-            try:
-                _ledger.record_dead(
-                    session_id, proposal.get("command", ""), proposal.get("args", []),
-                    "; ".join(crit.concerns)[:300], source="critic",
-                )
-            except Exception:  # noqa: BLE001
-                pass
-        return crit.to_dict()
+        return _critic.critique(proposal, state, _exploit_index()).to_dict()
     except Exception:  # noqa: BLE001 - the critic must never break the loop
         return {"ok": True, "downrank": False, "confidence": 1.0, "concerns": [], "checks": []}
 

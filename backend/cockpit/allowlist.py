@@ -148,7 +148,44 @@ _TUNNEL_TOOLS = frozenset({
     # DNS tunnels — a full C2/exfil channel that survives egress filtering.
     "dnscat2", "dnscat2-client", "dnscat2-server", "iodine", "iodined",
     "ptunnel", "icmpsh", "gost",
+    # sshuttle needs no agent and no listener — just SSH credentials — which makes it the
+    # QUIETEST way to put a whole subnet inside reach, not a lesser one. It belongs here on
+    # what it DOES (moves arbitrary traffic into a network the operator has not been gated
+    # against), which is the same test chisel and ligolo are held to.
+    "sshuttle",
 })
+# Wrappers that execute ANOTHER program: the danger is the program, not the wrapper. Left
+# unhandled, `proxychains -q weevely ...` produced ZERO reasons while bare `weevely` produced
+# one — routing a command through a tunnel silently stripped its red-confirm, and
+# cockpit/tunnels.py's wrap_command builds exactly that argv (`proxychains -q <cmd> <args>`) for
+# the human to approve. The fix is in the PREDICATE: unwrap, then classify the inner command.
+_PROXY_WRAPPERS = frozenset({"proxychains", "proxychains4", "proxychains-ng"})
+# Wrapper flags to step over while looking for the inner command. `-f` takes a config path, so
+# its VALUE must be skipped too or the config file would be read as the command.
+_WRAPPER_VALUE_FLAGS = frozenset({"-f", "--config"})
+
+
+def _unwrap_wrapper(cmd: str, args: list[str]) -> tuple[str, list[str]] | None:
+    """(inner_command, inner_args) if ``cmd`` is a wrapper that runs another program.
+
+    Returns None when it is not a wrapper, or when no inner command follows (a bare
+    ``proxychains`` runs nothing and is correctly clean).
+    """
+    if cmd not in _PROXY_WRAPPERS:
+        return None
+    i = 0
+    while i < len(args):
+        a = str(args[i])
+        if a in _WRAPPER_VALUE_FLAGS:
+            i += 2
+            continue
+        if a.startswith("-"):
+            i += 1
+            continue
+        return a, [str(x) for x in args[i + 1:]]
+    return None
+
+
 # Tools whose entire purpose is turning a vulnerability into command execution or an interactive
 # shell ON the target. `weevely` also GENERATES the webshell it then drives, so it is a payload
 # generator and a shell client in one binary.
@@ -292,10 +329,31 @@ def dangerous_command_heuristic(command: str, args: list[str]) -> list[str]:
     here is matched against that normalised name. The expected verdict for every tool in the
     catalog is pinned by the catalog's own safety tests — a tool added there without an explicit
     classification fails the suite, which is what stops this drifting again.
+
+    A proxychains-style WRAPPER is unwrapped first and the inner command is classified in its
+    place, because the wrapper is not what runs. The signature stays ``(command, args)`` —
+    test_winrm_safety pins it, so the unwrap is a bounded loop, not a recursion parameter.
     """
     reasons: list[str] = []
     # /usr/bin/python3, ./x, powershell.exe, secretsdump.py — one normaliser for every set.
     cmd = _tool_name(command)
+
+    # A wrapper carries no payload of its own; the command it RUNS does. Peel the wrappers off
+    # and classify what is actually executed, keeping the wrapper visible in the reason so the
+    # operator reads "through proxychains: weevely: turns a vulnerability into ..." rather than
+    # nothing at all. Bounded, because `proxychains proxychains ...` is a legal argv.
+    prefix: list[str] = []
+    for _ in range(3):
+        inner = _unwrap_wrapper(cmd, args)
+        if inner is None:
+            break
+        prefix.append(cmd)
+        # `command` moves too: _ad_abuse_reasons does its own normalising and must see the
+        # command that actually RUNS, or `proxychains secretsdump.py` loses its AD verdict.
+        command, args = inner
+        cmd = _tool_name(command)
+    lead = "".join(f"through {p}: " for p in prefix)
+
     flags = flags_in_args(args)
     eval_flags = sorted(flags & _EVAL_FLAGS)
 
@@ -334,13 +392,14 @@ def dangerous_command_heuristic(command: str, args: list[str]) -> list[str]:
         if marker in blob:
             reasons.append(f"argument requests OS command execution / file write: {marker!r}")
 
-    # de-dup, preserve order
+    # de-dup, preserve order. `lead` names any wrapper that was peeled off, so the reason the
+    # operator reads matches the argv they are approving.
     seen: set[str] = set()
     out: list[str] = []
     for r in reasons:
         if r not in seen:
             seen.add(r)
-            out.append(r)
+            out.append(lead + r)
     return out
 
 

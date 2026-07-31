@@ -291,7 +291,7 @@ reconFTW (six2dez, MIT) was reviewed for what HackPit's *recon* was missing — 
 
 Branch `sandbox-kali-image`. Full hermetic safety suite green throughout (36 test files); both Docker proofs 4/4 (lab still egress-less; engage fully open); browser-verified with Ollama (`qwen3:8b`).
 
-## Decisions taken (D1–D21)
+## Decisions taken (D1–D22)
 
 Every decision that drove the build. D1/D3/D4/D6/D7 were the Phase-1 build; D9 was a standing accepted gap that is **now built** (the Windows execution backend); D2/D5/D8 are standing policy (Part II); D10/D11/D12 were Phase-4 work, now built; D13 is this document; D14/D15 shaped Phase 5; **D16/D17 are build #4** — D16 amends D10 and is the one policy reversal in the project's history.
 
@@ -315,6 +315,8 @@ Every decision that drove the build. D1/D3/D4/D6/D7 were the Phase-1 build; D9 w
 - **D20 — Operator identity is configuration, never a constant.** This repo is public, and a real name, email or OSID written into source is in the public git history permanently. Identity therefore lives in a gitignored `backend/operator.json` with env overrides, read through two deliberately separate accessors: `public_profile()` (name + handle) for the browser, `report_identity()` (adds OSID / handle / contact) for a report handed to an examiner. A page has no use for an OSID, so it never receives one. The report block is *spliced by code*, never prompted for — handing the model a real name or an OSID invites it to transcribe or invent one. *Built (build #11).*
 
 - **D21 — A source is DISTILLED into the KB, never parroted into it, and a source that teaches something wrongly is rewritten or dropped.** Set while folding in the first external corpus of live-hunting transcripts. Three rules came out of it and now govern every enrichment batch. (a) **Check before writing:** every candidate technique is grepped against the whole KB first, and anything already covered is skipped and reported as skipped — that batch added 13 entries while deliberately re-ingesting nothing of the 24 existing Java-deserialization, 19 cache-poisoning, 11 open-redirect/OAuth or 3 mass-assignment rows. (b) **Zero is a valid result:** a source that yields nothing is reported as yielding nothing, because a batch padded to look productive is worse than a small one. (c) **Correctness outranks fidelity to the source:** the corpus taught "price tampering" while conflating it with bounty manipulation and discussing selling exploits instead of reporting them; the concept was kept and rewritten from scratch, and that framing was not carried across. *Applied (KB enrichment, 2026-07-31).*
+
+- **D22 — A command is gated on what it RUNS, not on what it is named.** Set while cataloguing the pivot tools. The danger heuristic classified `argv[0]` and stopped there, so `weevely` demanded the red-confirm and `proxychains -q weevely …` demanded nothing — while `cockpit/tunnels.py` builds exactly that argv for the operator to approve. The consequence was precisely inverted: **routing a command through a tunnel made its gate weaker, so the further into a network you reached, the less the confirm applied.** The rule now is that a wrapper is peeled off and the command that actually executes is what gets classified, with the wrapper named in the reason so the warning still matches the argv on screen. The corollary is the part worth keeping: a catalogued entry is classified by **what it does**, which is why `proxychains` is clean (it routes; it carries nothing) while `sshuttle` sits beside chisel and ligolo (it needs no agent and no listener, which makes it the quietest way to put a subnet inside reach — not the least dangerous one). *Built (KB repo batch, 2026-08-01), regression-locked through `validate_request` rather than through the predicate, with both halves asserted: the wrapped dangerous command must fire, and a wrapped benign one must stay silent.*
 
 ## Phase 1 — reach a real target
 
@@ -866,6 +868,7 @@ Three properties matter and each is verified:
 - **The launcher, verified against real state rather than a mock** (build #11) — the status rail was exercised in both directions on the same page with no code change: with Docker down it reported `sandbox stack down` with **7 tiles dimmed and 7 `stack down` markers**; after `docker compose up -d` it reported `up · engage up` with **0 dimmed and 7 `needs the stack`**. The freshly created networks were re-checked against the isolation floor — `assert_isolation_proven()` passes and `hackpit-isolated` is `internal=true` while `hackpit-open` and `hackpit-engage` are deliberately not. 4 bands, 15 surface tiles and 30 category cards render live.
 - **Operator identity, checked against git itself** (build #11) — `test_operator.py` asserts `backend/operator.json` is ignored by asking `git check-ignore` rather than by reading the ignore file and trusting the pattern, and carries a control proving the predicate can answer "no" for a tracked file. The staged diff was grepped for the real name and identifiers before committing; only synthetic fixtures remained.
 - **KB enrichment, measured rather than asserted** (2026-07-31) — the first external-corpus batch is verified four ways instead of by row count: **per-source counts diffed before and after** (2,699 → 2,712, every other source byte-for-byte unchanged), the KB file confirmed to still exist afterwards (Defender has deleted it before), **6 of 7 natural-language retrieval probes returning the new entry at rank 1**, and the full safety suite at 52 files. A first suite run aborted at `test_corpora.py` and passed on re-run and standalone; the cause is environmental and is recorded rather than hidden — `pipeline/ingest_corpora.py:139` shells to `git show HEAD:<file>` expressly "to recover AV-locked / dehydrated files", and rewriting the 22 MB `entries.jsonl` triggers a Defender sweep that briefly locks corpus sidecars.
+- **KB enrichment batch 2 — 24 cert/CTF/pentest repos** (2026-08-01) — verified the same four ways, and the numbers are small on purpose. **Per-source counts diffed before and after**: 2,712 → 2,714, all 22 sources still present and every one of the other 21 unchanged to the row; `pivoting` 6 → 8. The KB file, `embeddings.npy` and `ids.json` all confirmed present afterwards (22,487,315 bytes; Defender has deleted the KB before, so it is backed up first and re-checked after). **Retrieval: 6 of 6 natural-language probes surfaced a new entry in the top 5, four of them at rank 1** — including the ones a command reference cannot answer ("the second pivot host cannot reach my attacking machine, how do I get a shell back", "why does nmap find nothing through proxychains"). Full hermetic suite green at **52 files, every one exit 0**; `test_corpora.py` aborted the first run and passed standalone and on re-run, the documented Defender/sidecar flake, recorded rather than hidden. Saturation was measured rather than asserted: 308 terms appear in ≥3 repo files and never in the KB, and all 308 are URL slugs, hostnames, playlist IDs, filenames or typos. Arsenal: 110 → 115 tools, all 188 catalogued invocation names carrying a pinned danger verdict, all 286 templates across 115 tools rendering target-faithfully with no foreign host. All five new binaries were confirmed **present and runnable inside the live sandbox image** before being catalogued, rather than assumed from the Dockerfile. All 1.6 GB of clones deleted afterwards, with `git status` confirming the manifest is the only thing in `sources/` that git can see.
 
 ## Status
 
@@ -888,6 +891,8 @@ The follow-on the build flagged is now **landed**: the **KB exploitation-writeup
 **Build #9 (the Windows/AD path, driven live against a real domain) is complete.** It is the build that moved the Windows/AD path from "built and locked hermetically" to "demonstrated live," and — like build #7 before it — its lasting value was as much in what a real target exposed as in what it confirmed. It confirmed a great deal: a WinRM round-trip locked to the profile host, the whole-script danger classifier firing on real input, real BloodHound collection parsing into the typed graph, and a real DCSync returning `krbtgt` through the red-confirm with loot ingesting into state — the gates holding at every step, on real input, 45 passed / 0 failed / 3 not-run. It also found **four defects the green hermetic suite could not see, every one a place where two halves of the codebase agreed in a test and disagreed against a real domain**: a domain credential persisted into the run record (and thence into the LLM proposer context), impacket loot ingesting as nothing because the catalog and the parser spelled the tool differently, the KB grounder arming an inherited-rights edge with a destructive command, and a failure classifier that misdiagnosed the collector's FQDN error. All four are fixed and regression-locked; the suite stands at **48 files / 529 checks / 0 failures**. Task 5 was the first time the detection describe-side was checked against real telemetry rather than documentation — it confirmed DCSync's high-fidelity 4662 signal and corrected two catalog claims the DC's own Event Log contradicted. What stays not-run is stated plainly and not folded into the pass: a full Windows-target C2 callback (a routable listener the sandbox does not expose by choice), and the native-tooling abuse variants (offensive tooling on a bare DC, out of scope). The durable lesson repeats build #7's in a new domain: **a live target is the only thing that finds the bugs that live between two components that were each tested alone.**
 
 **Build #10 (the opt-in C2 exposure override, and an honest NOT-RUN) — complete.** Build #9's Task 4 recorded a Windows-target C2 callback as NOT-RUN for one concrete reason: the Sliver/tunnel listener lives in `hackpit-engage-sandbox`, which by standing invariant publishes no ports, so the lab DC had no route to it. Build #10 supplies exactly that missing route **without widening the default posture**: `docker/proof/c2-lab.yml`, an opt-in compose override that publishes a single port — `192.168.13.1:53/udp`, the iodine tunnel server's DNS port bound to the one host interface (VMnet8) the lab DC can reach — and nothing else, never a wildcard. It is never applied by the documented bring-up; `backend/test_exposure_safety.py` locks three invariants (default compose publishes nothing, every override port names a literal host IP, nothing composes it in implicitly) and plants a violation to prove the scan can fail. The override is not only built but **demonstrated live** — the exposure came up on `192.168.13.1:53/udp` and tore down cleanly. On it sits a gated C2/AD proof harness (`docker/proof/c2_0{1..4}_*.sh` + `c2_lab_proof.sh` orchestrator + in-process driver) built on build #7's discipline: offensive command strings are never inlined — they are operator-supplied paste values read by file path, and an empty value reports **NOT-RUN**, never a fake pass. The four offensive proofs it drives — staging the tunnel client on the DC, the iodine DNS tunnel, a Sliver beacon over it, and a native DCSync behind a scoped Defender **exclusion** (not a real-time-protection toggle) removed in a `trap` guard — are **NOT-RUN**: harness-ready but requiring operator-supplied commands that were deliberately not filled, recorded as such rather than folded into a pass. A final hardening pass closed the build's engineering items and corrected one of its own claims: the suspected `run_safety_tests.sh` gating hole did **not** exist (`set -e` has been in the committed runner all along, and a planted failure was verified to abort it), while the failing `nc` danger-gate test turned out to be an environment leak rather than an over-block — the one test in `test_session.py` that called the gates outside the hermetic fixture, so it reached a live Docker probe. Both are now fixed and the runner additionally checks every test's exit code explicitly. The build also added a read-only DC prerequisite probe and a harness-honesty regression test, and that test immediately caught a real defect: three of the four proof scripts' `[[PASTE]]` slots were not actually empty, so an unfilled proof was one WinRM round-trip away from being scored as a genuine attempt. Suite: **538 checks across 50 files, green**. The four offensive proofs remain **NOT-RUN**.
+
+**KB enrichment batch 2 (24 cert/CTF/pentest repos) — complete, and its honest result is two entries.** 24 repositories cloned, **22 yielded nothing**, one produced both entries. Under D21 that is the process working: the KB was already saturated in what these repos cover, and 308 candidate "new" terms turned out to be URL slugs and filenames rather than techniques. The batch's scoping prediction was **wrong in a way worth recording** — CPENT was expected to carry IoT and ICS/SCADA and carries neither; across all 24 repos exactly one file mentions ICS vocabulary and it is a CTF challenge named "Scada" that is really Jinja2 SSTI. `iot` (2) and `phishing` (1) remain the thinnest KB categories and now have a *reason* attached: exam notes are the wrong source class for them. The two entries fill the one genuine gap the batch did expose — every existing `pivoting` row is a command reference, and none teaches multi-hop chain discipline. The unplanned find was worth more than the planned one: the arsenal had **zero** pivoting tools despite `cockpit/tunnels.py` driving chisel, ligolo and proxychains since Phase 4, and cataloguing `proxychains` surfaced a **pre-existing gate hole** — the danger heuristic classified `argv[0]` only, so wrapping a dangerous command in a tunnel wrapper stripped its red-confirm, making the gate weaker the deeper you reached. Fixed in the predicate and regression-locked through `validate_request` (D22). Suite: **52 files, all green**; KB 2,712 → 2,714; arsenal 110 → 115. All 1.6 GB of clones deleted; `sources/repos-manifest.md` is the reproducibility record and required a deliberate, single-file gitignore exception to survive.
 
 ## Build #9 — the Windows/AD path, driven live against a real domain (2026-07-31)
 
@@ -1022,3 +1027,96 @@ thinnest, while deliberately adding nothing to the ones already carrying hundred
 next batch — 23 cert-study and CTF-writeup repositories — is scoped in `PROMPT-kb-repo-ingest.md`
 and is expected to yield most of its value in `pivoting`, `credentials`, `persistence` and `iot`,
 with several repositories predicted in advance to yield nothing at all.
+
+## KB enrichment — 24 cert/CTF/pentest repos, and a prediction that was wrong (2026-08-01)
+
+The batch scoped above ran. **24 repositories were cloned, 22 yielded nothing, one produced the
+batch's only two KB entries, and one contributed to them without earning an entry of its own.**
+That is the headline, and under D21 it is a correct outcome rather than a disappointing one.
+
+**The prediction the batch was scoped on was wrong, and the way it was wrong is the useful part.**
+CPENT was expected to be the highest-yield group, because the KB is thinnest in exactly what CPENT
+claims to cover — IoT (2 entries), ICS, and pivoting. It covers none of it in practice. The study
+guide has only modules 05 and 06 written; modules 09 (wireless), 11 (IoT) and 12 (SCADA/ICS) are
+`[TBD]` stubs with no content behind them, and the companion repo is a six-file link list. Widening
+the check from that repo to the whole batch settled it: across **all 24 repositories**, exactly one
+file mentions ICS vocabulary (modbus, s7comm, dnp3, scada, plc, profinet, HMI, Purdue) four or more
+times, and that file is a CTF challenge *named* "Scada" which turns out to be Jinja2 SSTI. There is
+no ICS, no IoT-hardware and no firmware/UART/JTAG material in this batch at all. `iot` (2) and
+`phishing` (1) are still the KB's thinnest categories, and they need a different kind of source —
+vendor and ICS-CERT advisories, teardown writeups, protocol specifications — not more exam notes.
+
+**Saturation was measured, not assumed.** Beyond grepping each candidate technique against all
+2,712 rows, every word in the batch was tokenised against the whole KB. **308 terms appear in three
+or more repository files and never once in the KB — and on inspection all 308 are URL slugs, lab
+hostnames, YouTube playlist IDs, filenames or typos.** Not one new tool name, not one new technique
+name. That is the quantitative form of "these repos are saturated," and it is a far stronger claim
+than reading a sample and forming an impression. Individually probed and confirmed already covered:
+DCSync (47 rows), mimikatz (90), LSASS dumping (34), password spraying (43, including lockout
+thresholds), Kerberoasting, chisel (19), proxychains (22), sshuttle (7), mitm6/DHCPv6/WPAD relay,
+IPsec/IKE, VoIP/SIP, Jinja2 SSTI, and the SEH / bad-character / `jmp esp` stack-overflow workflow.
+
+**Where the two entries came from.** One repository — `eCPPTv2-PTP-Notes`, with the TryHackMe
+Wreath notes from `PNPT-study-guide` as a second source — carries a worked three-network, three-hop
+pivot lab. The KB's six existing `pivoting` entries and its pivot cheat sheet are all *command
+references*: here is `ssh -L` syntax, here is chisel syntax. None of them teaches the discipline
+that keeps a chain standing, which is a different kind of knowledge and the one thing in the batch
+the KB genuinely lacked. Two entries were written to fill it (`pivoting` 6 → 8, KB 2,712 → 2,714):
+
+* **Multi-hop pivot chains.** The asymmetry every naive chain dies on: hop 1 can reach you, hop 2
+  cannot, so each hop needs an outbound path *and* a return path built by separate commands — a
+  SOCKS proxy per hop on its own port, and a socat relay chain carrying callbacks back. Plus the
+  parts that are only obvious in hindsight: stage tooling from hop N-1 rather than from your box
+  (hop 2 cannot fetch from you), stage *static* binaries (a pivot host often has no interpreter and
+  no package manager), verify each hop before adding the next, scope the subnet before routing into
+  it, and tear down in reverse while recording what you left behind.
+* **Choosing the pivot primitive.** Three properties decide it and none of them is preference:
+  direction (egress decides forward vs reverse, not taste), shape (one port vs SOCKS vs a layer-3
+  TUN), and footprint. Including the SOCKS tax that costs people hours — a SOCKS proxy relays
+  completed TCP only, so `-sS` and ICMP host discovery return a silence that reads exactly like
+  "host is down" — and the quiet relay that moves both listeners onto the attacker's box so the
+  compromised host has **nothing listening on it at all**.
+
+**The arsenal gap this exposed was not in the plan, and was the more valuable find.** HackPit's
+`cockpit/tunnels.py` has driven chisel, ligolo and proxychains since Phase 4; all five pivot
+binaries were confirmed present and runnable in the live sandbox image — and the 110-tool catalog
+contained **zero** pivoting tools. Five rows were added in a new `pivoting` category (chisel,
+ligolo-ng, socat, sshuttle, proxychains), 110 → 115.
+
+**Cataloguing proxychains then surfaced a real gate hole that predated it.** The danger heuristic
+classified `argv[0]` only. Bare `weevely` produced a red-confirm reason; `proxychains -q weevely …`
+produced **none** — and `wrap_command` builds precisely that argv for the human to approve. So
+routing a command through a tunnel *stripped its red-confirm*: the deeper into a network you went,
+the weaker the gate got, which is exactly backwards. The fix is in the predicate, not in the file
+set — wrappers are peeled off and the command that actually runs is classified, with the wrapper
+kept visible in the reason (`through proxychains: weevely: turns a vulnerability into …`). It is
+regression-locked by `test_a_wrapper_cannot_launder_the_red_confirm`, which asserts through
+`validate_request` rather than through the predicate, because the claim is about the *gate*; it
+carries the `-f <config>` case (skipping the flag but not its value would read the config path as
+the command) and the negative half, that a benign inner command must **not** raise a confirm.
+
+`sshuttle` was classified into the same bucket as chisel and ligolo on what it does — it puts a
+whole subnet inside reach — rather than on how quiet it is; needing no agent and no listener makes
+it the stealthiest of the three, not the least dangerous.
+
+**One gitignore exception was taken, deliberately.** `/sources/` was ignored wholesale, which meant
+`sources/repos-manifest.md` — the record of which commit of which repository produced which entry —
+could never be committed and would vanish with the clones. The pattern is now `/sources/*` with a
+single negation for that one file; it holds our own prose about third-party repositories and never
+their content, and `git status` was checked afterwards to confirm it is the only thing in the tree
+git can see.
+
+**Also worth recording, because it was on disk and is not any more.** `ciwen3/PNPT` (307 MB, the
+largest clone in the batch) contains a `conti/` directory holding leaked Conti ransomware operator
+manuals in Russian, `rclone.exe`, and a Cobalt Strike 4.3 archive. Nothing from it was read into an
+entry and nothing from it could ever have been committed — `sources/` is gitignored — and all
+1.6 GB of clones were deleted after verification, as the process requires. It is noted here because
+"we cloned 24 arbitrary repositories" has a supply-chain shape worth being explicit about.
+
+**`0xdf.gitlab.io` is deferred with a concrete proposal, not skipped.** It is a website, not a
+repository, and was correctly excluded from this batch. It is also the highest-quality HTB writeup
+source in existence, and the KB already holds 41 `htb-writeups` + 173 `writeup` entries, so the
+first step is not fetching — it is **overlap measurement**: pull the sitemap, diff the box names
+against those 214 rows, and establish how many boxes are genuinely absent before writing an
+ingester. If the answer is meaningful, the shape is the existing sitemap-driven PortSwigger
+ingester (enumerate → fetch → distil → authored entries), never a crawler. Recorded as a follow-up.

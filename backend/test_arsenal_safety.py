@@ -207,6 +207,10 @@ _MUST_FIRE = frozenset({
     "secretsdump", "secretsdump.py", "impacket-secretsdump",
     # coerces or relays authentication
     "ntlmrelayx", "ntlmrelayx.py", "impacket-ntlmrelayx", "responder", "Responder.py",
+    # pivots — each one puts a network the operator has NOT been gated against inside reach,
+    # which is the same claim the dnscat2/iodine entries above are here for. socat is the
+    # return path in a multi-hop chain and carries a reverse shell just as readily.
+    "chisel", "ligolo-ng", "ligolo-proxy", "ligolo-agent", "socat", "sshuttle",
 })
 
 # Clean by binary identity, and clean across every template the catalog ships for it. A confirm
@@ -253,6 +257,15 @@ _MUST_NOT_FIRE = frozenset({
     # OSINT / secret scanning
     "trufflehog", "msftrecon", "github-subdomains", "gitlab-subdomains", "dorks_hunter",
     "gitdorks_go",
+    # proxychains is a WRAPPER, not a tunnel: it carries no payload and opens no channel, it
+    # forces an already-chosen program through an already-established SOCKS proxy. Flagging the
+    # wrapper would fire on every pivoted `nmap` and teach the operator to click through. The
+    # danger is the WRAPPED command, and allowlist.dangerous_command_heuristic now unwraps to
+    # find it — regression-locked in test_a_wrapper_cannot_launder_the_red_confirm below.
+    "proxychains", "proxychains4",
+    # `ip route add <cidr> dev <tun>` from the ligolo templates — a LOCAL routing-table change
+    # on this box. It runs nothing, reaches nothing and delivers nothing.
+    "ip",
 })
 
 # The bare binary is deliberately CLEAN (it has a legitimate read-only mode that must not train
@@ -356,6 +369,68 @@ def test_dangerous_catalogued_tools_demand_the_red_confirm() -> None:
         assert name in _MUST_FIRE, f"{name} was dropped from _MUST_FIRE — that is the bug returning"
     print(f"  all {len(_MUST_FIRE)} dangerous catalogued invocations are refused without the "
           "red-confirm: PASS")
+
+
+def test_a_wrapper_cannot_launder_the_red_confirm() -> None:
+    """`proxychains -q <dangerous>` must carry the SAME verdict as `<dangerous>` bare.
+
+    WHY THIS EXISTS. Cataloguing proxychains surfaced a gate hole that predated it. The
+    heuristic classified argv[0] only, so `weevely` produced a reason and
+    `proxychains -q weevely ...` produced NONE — and cockpit/tunnels.py's ``wrap_command``
+    builds precisely that argv for the human to approve. Routing a command through a tunnel
+    therefore STRIPPED its red-confirm: the deeper into a network you went, the weaker the gate
+    got, which is exactly backwards.
+
+    Asserted through validate_request, because the claim is about the GATE, not the predicate.
+    """
+    from cockpit import executor as E
+    from cockpit.models import ExecRequest
+
+    # Every fixture references the lab target: the danger gate is what is under test here, and
+    # a command that named no lab host would be stopped one gate earlier (target) and prove
+    # nothing about the confirm.
+    # The lab host is a STANDALONE token in every fixture: the target gate does not resolve one
+    # buried inside impacket's `domain/user:pass@host` string, and it runs before the danger
+    # gate — so that spelling would stop the request one gate early and prove nothing here.
+    inner_cases = [
+        ("weevely", [f"http://{_LAB}/shell.php", "pw"]),
+        ("psexec.py", ["-target-ip", _LAB]),
+        ("evil-winrm", ["-i", _LAB]),
+        ("secretsdump.py", ["-target-ip", _LAB]),
+    ]
+    for wrapper in ("proxychains", "proxychains4"):
+        for inner, inner_args in inner_cases:
+            bare = allowlist.dangerous_command_heuristic(inner, inner_args)
+            assert bare, f"fixture is wrong: bare {inner!r} must already be dangerous"
+
+            wrapped_args = ["-q", inner, *inner_args]
+            wrapped = allowlist.dangerous_command_heuristic(wrapper, wrapped_args)
+            assert wrapped, (
+                f"{wrapper} {inner} produces NO danger reason while bare {inner} produces "
+                f"{bare} — the wrapper laundered the red-confirm away"
+            )
+            rej = E.validate_request(
+                ExecRequest(command=wrapper, args=wrapped_args, approved=True)
+            )
+            assert rej is not None and rej.gate == "danger", (
+                f"{wrapper} {inner} approved WITHOUT dangerous_ack must be refused at the danger "
+                f"gate — got {getattr(rej, 'gate', None)}"
+            )
+
+    # `-f <config>` takes a VALUE: skipping the flag but not its value would read the config
+    # path as the command and miss the real one.
+    assert allowlist.dangerous_command_heuristic(
+        "proxychains", ["-f", "/etc/proxychains4.conf", "weevely", f"http://{_LAB}/", "pw"]
+    ), "the -f config VALUE was mistaken for the inner command"
+
+    # The other half: the wrapper must NOT invent danger where the inner command has none, or
+    # every pivoted scan raises a confirm and the confirm stops meaning anything.
+    for benign in (["-q", "nmap", "-sT", "-Pn", _LAB],
+                   ["-q", "curl", "-s", f"http://{_LAB}/"], ["-q"]):
+        assert not allowlist.dangerous_command_heuristic("proxychains", benign), (
+            f"proxychains {' '.join(benign)} raised a confirm around a benign inner command"
+        )
+    print("  a proxychains wrapper keeps the inner command's danger verdict: PASS")
 
 
 def test_benign_catalogued_tools_stay_clean() -> None:
@@ -650,6 +725,7 @@ if __name__ == "__main__":
     test_arsenal_command_still_clears_every_gate()
     test_every_catalogued_invocation_has_a_pinned_danger_verdict()
     test_dangerous_catalogued_tools_demand_the_red_confirm()
+    test_a_wrapper_cannot_launder_the_red_confirm()
     test_benign_catalogued_tools_stay_clean()
     test_argument_dependent_tools_are_clean_bare_and_flagged_when_abusive()
     test_console_subcommands_are_excused_only_when_their_console_is_flagged()

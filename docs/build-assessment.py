@@ -50,10 +50,24 @@ def build() -> None:
         sys.exit(f"could not find {BODY_MARKER!r} in the existing HTML — template boundary lost")
     header = old_html[:cut]  # <head> + full print CSS + cover page, verbatim
 
-    body = markdown.markdown(
-        MD.read_text(encoding="utf-8"),
-        extensions=["extra", "toc"],
-    )
+    md = markdown.Markdown(extensions=["extra", "toc"])
+    body = md.convert(MD.read_text(encoding="utf-8"))
+
+    # THE TOC MUST BE REBUILT, NOT PRESERVED.
+    # It sits BEFORE the first `<h1 id=`, so it falls inside `header` — which is
+    # copied verbatim. That silently froze it: the shipped ToC still ended at
+    # build #9 while the body had grown two builds past it, because nothing ever
+    # regenerated the list. The `toc` extension only *inserts* a ToC where a
+    # `[TOC]` marker appears in the markdown; with no marker it just assigns
+    # heading ids and leaves the rendered list on `md.toc`. So splice it in.
+    start = header.find('<div class="toc">')
+    if start == -1:
+        sys.exit('could not find <div class="toc"> in the template — ToC boundary lost')
+    end = header.find("</div>", start)
+    if end == -1:
+        sys.exit("unterminated toc div in the template")
+    header = header[:start] + md.toc.strip() + header[end + len("</div>"):]
+
     HTML.write_text(header + body + "\n</body>\n</html>\n", encoding="utf-8")
     print(f"  wrote {HTML.name} ({HTML.stat().st_size:,} bytes)")
 

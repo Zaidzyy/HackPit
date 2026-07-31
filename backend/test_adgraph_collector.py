@@ -141,7 +141,23 @@ def test_failure_classification() -> None:
     assert "dns" in C.classify_failure(1, "", "could not resolve host")[1].lower()
     assert "clock" in C.classify_failure(1, "", "KRB_AP_ERR_SKEW")[1].lower()
     assert C.classify_failure(0, "ok", "")[0] is False
-    print("  failure classification: bad-creds / unreachable / DNS / skew -> clean reasons: PASS")
+
+    # Build #9's FIRST live collection against a real domain failed here and the classifier had
+    # nothing to say about it: bloodhound-python refuses an IP for -dc. Its own error text also
+    # mentions a "DNS server IP", so this signature must WIN over the generic DNS one — ordered
+    # the other way the operator is told to fix their nameserver when -dc is the real problem.
+    real_stderr = (
+        "ERROR: The specified domain controller 192.168.13.140 looks like an IP address, but "
+        "requires a hostname (FQDN).\nUse the -ns flag to specify a DNS server IP if the "
+        "hostname does not resolve on your default nameserver."
+    )
+    failed, reason = C.classify_failure(1, "", real_stderr)
+    assert failed is True
+    assert "fqdn" in reason.lower() and "-dc" in reason.lower(), reason
+    assert "nameserver" not in reason.lower().split("—")[0], (
+        "the generic DNS signature must not shadow the FQDN one"
+    )
+    print("  failure classification: bad-creds / unreachable / DNS / skew / -dc-needs-FQDN: PASS")
 
 
 # --------------------------------------------------------------------------- #

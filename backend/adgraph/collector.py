@@ -44,7 +44,10 @@ class CollectorParams:
 
     domain: str                                  # e.g. sevenkingdoms.local
     username: str                                # a low-priv domain user (the owned principal)
-    dc: str                                       # the DC host/FQDN to query (must be in scope)
+    # The DC to query, and it must be the FQDN — bloodhound-python rejects a bare IP here
+    # ("looks like an IP address, but requires a hostname"). Point `nameserver` at the DC's IP
+    # so the FQDN resolves. Whichever form is used, it must be inside the engagement scope.
+    dc: str
     password: str | None = None                  # OR a hash / kerberos
     nthash: str | None = None                    # -hashes :NTHASH  (pass-the-hash)
     nameserver: str | None = None                # -ns  (usually the DC's IP; must be in scope)
@@ -130,6 +133,14 @@ def build_collector_request(
 # --- failure classification ------------------------------------------------- #
 # Signatures in bloodhound-python's stderr for the common, actionable failure modes.
 _FAILURE_SIGNS = [
+    # FIRST, deliberately. bloodhound-python refuses an IP for -dc, and the very message it
+    # prints also says "Use the -ns flag to specify a DNS server IP" — which the generic DNS
+    # signature below matches. Ordered after it, the operator would be told to fix their
+    # nameserver when the actual problem is the -dc value. Build #9's first live collection
+    # against a real domain failed exactly here, and the classifier had nothing to say about it.
+    (re.compile(r"looks like an IP address, but requires a hostname", re.I),
+     "bloodhound-python needs the DC's FQDN for -dc, not its IP (e.g. dc01.corp.local) — keep "
+     "-ns pointed at the DC's IP so that name resolves"),
     (re.compile(r"STATUS_LOGON_FAILURE|invalid credentials|authenticationexception", re.I),
      "authentication failed — check the username / password / hash and the domain"),
     (re.compile(r"STATUS_ACCOUNT_LOCKED_OUT", re.I),

@@ -56,6 +56,9 @@ echo "== WinRM Windows transport (profile CRUD / routes to WinRM / records mode=
 echo "== WinRM SAFETY invariants (host-locked / no gate bypass / secret never leaks / no auto-run) =="
 "$PY" test_winrm_safety.py
 
+echo "== credential redaction in persisted run records (build #9 live-fire finding) =="
+"$PY" test_secretargs.py
+
 echo "== orchestrator-loop tests (proposer cannot execute / no :kali path / gate pre-check) =="
 "$PY" test_loop.py
 

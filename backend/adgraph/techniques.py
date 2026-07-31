@@ -42,6 +42,10 @@ class AbuseSpec:
     # ON the Windows box over WinRM (the CRTP way), vs the Linux `template` that runs FROM Kali.
     # The walk/orchestrator offers both; the human picks the transport. Same {placeholders}.
     win_template: str = ""
+    # This edge is RIGHTS YOU ALREADY HOLD, not an action — there is nothing to run, and the
+    # template is deliberately a prose note. Such an edge must never acquire a command, INCLUDING
+    # from the KB grounder: see :func:`technique_for_edge` for what happened live when it could.
+    no_command: bool = False
 
 
 # The catalog. Keyed by edge kind; a few kinds specialize by target type via _specialize().
@@ -52,6 +56,7 @@ _CATALOG: dict[str, AbuseSpec] = {
         tool="(none)",
         kb_seeds="active directory group membership privilege inheritance",
         template="# {source} is a member of {target} — its rights are already yours.",
+        no_command=True,
         win_template="# {source} is a member of {target} — rights already yours "
                      "(PowerView: Get-DomainGroupMember -Identity '{target_sam}').",
     ),
@@ -215,6 +220,7 @@ _CATALOG: dict[str, AbuseSpec] = {
         tool="(none)",
         kb_seeds="SID history sidhistory abuse access token",
         template="# {source} has {target} in SID history — use {source}'s creds; access is inherited.",
+        no_command=True,
         win_template="# {source} carries {target}'s SID in history — access is inherited "
                      "(whoami /groups shows the SID).",
     ),
@@ -377,6 +383,20 @@ def technique_for_edge(
     why = ""
 
     # Try to ground the command in the KB via the injected grounder.
+    #
+    # A ``no_command`` edge (MemberOf, HasSIDHistory) takes the CITATION but NOT the commands.
+    # Build #9's live walk is why. Those specs are prose by design — "its rights are already
+    # yours" — but their kb_seeds still match a real ACL-abuse KB entry, and that entry's
+    # examples were being adopted wholesale. On the real corp.local graph the orchestrator
+    # therefore proposed, for ADMINISTRATOR -MemberOf-> DOMAIN ADMINS (an edge with nothing to
+    # do), a runnable `net rpc password` — a DESTRUCTIVE password reset against a live domain
+    # user, reported as resolution="ready". Every gate still held (the human approves each
+    # command and the red-confirm was demanded), so nothing fired; but the panel was asking a
+    # human to approve a domain change for a step that requires no action, and it contradicted
+    # proposal_for_edge's own documented contract that MemberOf resolves "note-only".
+    #
+    # The KB may ENRICH such an edge (the entry id/title still cite where the explanation comes
+    # from). It may not manufacture an action for an edge that has none.
     if grounder is not None:
         try:
             hit = grounder(spec.kb_seeds)
@@ -387,8 +407,12 @@ def technique_for_edge(
             entry_title = hit.get("title")
             grounded = True
             why = f"Grounded in KB technique “{entry_title}”."
-            for c in hit["commands"][:3]:
-                commands.append({"lang": c.get("lang") or "bash", "cmd": c.get("cmd") or ""})
+            if not spec.no_command:
+                for c in hit["commands"][:3]:
+                    commands.append({"lang": c.get("lang") or "bash", "cmd": c.get("cmd") or ""})
+            else:
+                why += (" Rights you already hold — the KB entry explains the edge; there is "
+                        "nothing to run, so no command is offered.")
 
     if not commands:  # fallback: the catalog template (general knowledge)
         commands = [{"lang": "bash", "cmd": _fill(spec.template, ctx)}]

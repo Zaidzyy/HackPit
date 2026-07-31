@@ -745,9 +745,13 @@ SPECS: dict[str, FootprintSpec] = {s.key: s for s in [
     _f("ad_collect", "Domain-wide AD collection (BloodHound-style)",
        "T1087.002 T1069.002 T1482 T1018",
        "ldap_recon bloodhound_files sharphound_rpc adws_uncommon net_recon",
-       "Windows LDAP client / DC LDAP diagnostics: one principal issuing a huge, broad LDAP "
-       "search set in minutes; "
-       "Security 4662 on directory objects if object auditing is enabled; "
+       "Windows LDAP client / DC LDAP diagnostics (1644, needs the Field Engineering "
+       "diagnostic turned up): one principal issuing a huge, broad LDAP search set in minutes; "
+       "NOT Security 4662 — measured against a live Server 2022 DC, a full `-c All` collection "
+       "produced ZERO 4662 events even with Directory Service Access auditing on (its default "
+       "on a DC). 4662 needs a SACL on the objects being read, and the default schema does not "
+       "audit reads; only rights-checked operations like DCSync's replication extended rights "
+       "reliably raise it. Expect 4624 network logons, not directory-access events; "
        "SMB sessions to every host when session/loggedon collection runs; "
        "The collector's own output files (.zip / *_computers.json) landing on disk",
        "loud",
@@ -780,13 +784,21 @@ SPECS: dict[str, FootprintSpec] = {s.key: s for s in [
     _f("secretsdump", "Remote secret dumping (SAM / LSA / NTDS)",
        "T1003.002 T1003.003 T1003.004 T1021.002",
        "secretsdump secretsdump_zeek admin_share smb_admin_write",
-       "Security 5145 for ADMIN$ / IPC$ access with a remote-registry or service handle; "
-       "A service created and deleted within seconds (7045 / 4697); "
+       "WHICH ARTEFACTS APPEAR DEPENDS ON THE MODE — the SAM/LSA path and the `-just-dc` path "
+       "leave different traces, and treating this list as one undifferentiated set was wrong. "
+       "SAM/LSA mode (no -just-dc): Security 5145 for ADMIN$ / IPC$ access with a remote-registry "
+       "or service handle (needs Detailed File Share auditing, which is OFF by default); "
+       "a service created and deleted within seconds (7045 / 4697); "
        "Zeek smb_files: the tell-tale temporary output file written and read back; "
-       "Registry save operations against SAM/SECURITY/SYSTEM hives",
+       "Registry save operations against SAM/SECURITY/SYSTEM hives. "
+       "NTDS/`-just-dc` mode: NONE of the above — measured against a live Server 2022 DC, a "
+       "`-just-dc` run added 0 × 5145 and 0 × 7045 because it replicates over DRSUAPI and never "
+       "touches an admin share, creates a service or saves a hive. It shows up as DCSync does: "
+       "Security 4662 carrying the DS-Replication GUIDs (12 events on one measured run)",
        "loud",
        "Admin-share access plus a short-lived service — the exact pattern SigmaHQ's Impacket "
-       "secretsdump rules match.",
+       "secretsdump rules match. With `-just-dc` that pattern is absent and the signal is the "
+       "replication request instead, so a rule keyed only on the admin-share shape misses it.",
        "Loud: the technique has a distinctive, well-documented artefact chain that both host and "
        "network rules key on."),
     _f("dcsync", "DCSync — directory replication of secrets", "T1003.006",

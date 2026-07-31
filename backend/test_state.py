@@ -138,6 +138,33 @@ def test_secretsdump_drops_the_empty_hash() -> None:
     print("  secretsdump: hashes parsed, the empty-password hash dropped: PASS")
 
 
+def test_kali_impacket_binary_names_reach_their_parser() -> None:
+    """Kali's `impacket-secretsdump` must resolve to the same parser as `secretsdump.py`.
+
+    Build #9's live DCSync against a real domain returned four NTLM hashes, krbtgt included,
+    and ingested NONE of them: the parser registry knew `secretsdump` / `secretsdump.py` while
+    HackPit's own AD technique catalog proposes Kali's `impacket-secretsdump`. Two halves of
+    this codebase disagreed about the name of one tool. No hermetic test could catch it —
+    they all fed the parser a program string they had picked themselves.
+    """
+    dump = ("corp.local\\svc_sql:1104:aad3b435b51404eeaad3b435b51404ee:"
+            "64f12cddaa88057e06a81b54e73b949b:::\n")
+    for command in ("impacket-secretsdump", "/usr/bin/impacket-secretsdump",
+                    "secretsdump.py", "secretsdump"):
+        program = ingest.program_name(command)
+        got = parsers.parse_stdout(program, dump, _S, "run-e")
+        assert got.credentials, f"{command!r} (-> {program!r}) reached no parser"
+        assert got.credentials[0].principal == "svc_sql", command
+
+    # The prefix strip must not turn every impacket script into a secretsdump parser.
+    assert ingest.program_name("impacket-wmiexec") == "wmiexec"
+    assert not parsers.parse_stdout(ingest.program_name("impacket-wmiexec"), dump,
+                                    _S, "run-e").credentials
+    # ...and an ordinary tool is untouched.
+    assert ingest.program_name("/usr/bin/nmap") == "nmap"
+    print("  Kali's impacket-* binary names resolve to the same parsers: PASS")
+
+
 def test_json_shapes_all_parse() -> None:
     """httpx emits JSONL, ffuf wraps a results array, dalfox writes a bare array. All three
     reach the same place, so no caller has to guess."""
@@ -430,6 +457,7 @@ if __name__ == "__main__":
     test_ingest_never_raises_on_garbage()
     test_nmap_xml_parses_and_drops_non_open_ports()
     test_secretsdump_drops_the_empty_hash()
+    test_kali_impacket_binary_names_reach_their_parser()
     test_json_shapes_all_parse()
     test_writes_are_upserts_not_appends()
     test_a_later_run_never_blanks_what_an_earlier_one_learned()

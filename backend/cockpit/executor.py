@@ -23,7 +23,9 @@ from typing import Any, Iterator, NamedTuple
 
 from state import ingest as state_ingest
 
-from . import allowlist, config, engagement, loot, runstore, winprofiles, winrm_transport
+from . import (
+    allowlist, config, engagement, loot, runstore, secretargs, winprofiles, winrm_transport,
+)
 from .models import EngagementRecord, ExecRejected, ExecRequest, RunRecord
 from .sandbox import SandboxError, assert_isolation_proven
 
@@ -709,7 +711,11 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
     record = RunRecord(
         run_id=run_id,
         command=request.command,
-        args=request.args,
+        # A credentialed Linux tool (bloodhound-python, netexec, impacket-*) carries its secret
+        # as an argv token — the only interface it has. The EXECUTED argv above is untouched;
+        # what gets PERSISTED is redacted, because the stored record is what the audit trail,
+        # the rendered report and the LLM proposer context all read back. See secretargs.py.
+        args=secretargs.redact_argv(request.command, request.args),
         target=target,
         approved=request.approved,
         mode=mode,
@@ -850,7 +856,10 @@ def _run_windows(request: ExecRequest, resolved: "ResolvedMode") -> Iterator[dic
     record = RunRecord(
         run_id=run_id,
         command=request.command,
-        args=request.args,
+        # Uniform with the docker path. A Windows run has no secret in its argv by construction
+        # (the credential is resolved server-side from the profile), so this is a no-op there —
+        # but it must not be the ONE record path that skips the redaction.
+        args=secretargs.redact_argv(request.command, request.args),
         target=target,
         approved=request.approved,
         mode="windows",

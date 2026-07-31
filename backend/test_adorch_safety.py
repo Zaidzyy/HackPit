@@ -387,7 +387,63 @@ def test_agent_cannot_advance_the_graph_by_itself() -> None:
     print("  the agent cannot advance the walk itself; advance() is pure and separate: PASS")
 
 
+def test_an_inherited_rights_edge_never_acquires_a_command() -> None:
+    """A ``no_command`` edge stays note-only EVEN WITH a grounder that offers a command.
+
+    Build #9's live walk found this the hard way. MemberOf's catalog spec is prose — "its rights
+    are already yours", tool "(none)" — but its kb_seeds still matched a real ACL-abuse KB entry,
+    whose example commands were adopted wholesale. On the real corp.local graph the orchestrator
+    proposed a runnable, DESTRUCTIVE `net rpc password` for ADMINISTRATOR -MemberOf-> DOMAIN
+    ADMINS: a password reset against a live domain user, for an edge that requires no action.
+
+    The gates held (nothing ran unapproved, the red-confirm was demanded), so this is a
+    CORRECTNESS lock, not a containment one — but a panel that asks a human to approve a domain
+    change for a free step is how a hurried operator makes a change they never meant to.
+    """
+    from adgraph import techniques as T
+
+    g = P.parse_collection(S.sample_collection())
+
+    def loud_grounder(_seeds: str) -> dict:
+        """A grounder that always offers a destructive command — the adversarial case."""
+        return {
+            "id": "ht-acl-persistence-abuse",
+            "title": "Abusing Active Directory ACLs/ACEs",
+            "commands": [{"lang": "bash", "cmd": "net rpc password victim 'N3wPass!' -U dom/u%p"}],
+        }
+
+    for kind in ("MemberOf", "HasSIDHistory"):
+        assert T._CATALOG[kind].no_command, f"{kind} must be marked no_command"
+        edge = Edge(source="a", target="b", kind=kind)
+        tech = T.technique_for_edge(edge, g, loud_grounder, "dc01.lab.local")
+        cmds = [c.get("cmd", "") for c in tech.get("commands") or []]
+        assert all(c.strip().startswith("#") for c in cmds), (
+            f"{kind} must stay a prose note, got {cmds!r}"
+        )
+        assert not any("net rpc password" in c for c in cmds), (
+            f"the grounder must not hand {kind} a destructive command"
+        )
+        # The CITATION is still kept — the KB explains the edge, it just supplies no action.
+        assert tech.get("entry_id") == "ht-acl-persistence-abuse", "the KB citation is retained"
+
+        # And the proposal built from it must report note-only / not runnable.
+        prop = O.proposal_for_edge(g, edge, "why", loud_grounder, "dc01.lab.local")
+        assert prop["resolution"] == "note-only", prop["resolution"]
+        assert prop["runnable"] is False and not prop["command"], prop
+        assert prop["requires_confirm"] is False, "a free step must not demand a red confirm"
+
+    # POSITIVE CONTROL: an edge that IS an action still takes the grounder's command, or the
+    # check above would pass just as well with grounding switched off entirely.
+    edge = Edge(source="a", target="b", kind="ForceChangePassword")
+    tech = T.technique_for_edge(edge, g, loud_grounder, "dc01.lab.local")
+    assert any("net rpc password" in (c.get("cmd") or "") for c in tech["commands"]), (
+        "an actionable edge must still be groundable — the fix must not disable grounding"
+    )
+    print("  inherited-rights edges never acquire a command, even from the KB grounder: PASS")
+
+
 if __name__ == "__main__":
+    test_an_inherited_rights_edge_never_acquires_a_command()
     test_orchestrator_has_no_execution_path()
     test_orchestrator_cannot_approve()
     test_there_is_no_second_execution_path()

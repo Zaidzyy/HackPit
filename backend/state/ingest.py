@@ -46,11 +46,22 @@ def program_name(command: str) -> str:
 
     Read from the command itself, never from anything a model claimed — `/usr/bin/nmap`,
     `nmap.exe` and `nmap` are the same tool.
+
+    THE ``impacket-`` PREFIX IS PART OF THAT SAME EQUIVALENCE, and dropping it was a real gap.
+    Kali installs the impacket example scripts as ``impacket-secretsdump``; upstream ships them
+    as ``secretsdump.py``. The parser registry was keyed only on the upstream spellings, while
+    HackPit's own AD technique catalog proposes the Kali one — so build #9's live DCSync against
+    a real domain dumped four NTLM hashes, including krbtgt, and ingested exactly none of them.
+    Two halves of this codebase disagreed about the name of the same tool, and only a live run
+    could show it: every hermetic test fed the parser a string it had chosen itself.
     """
     base = os.path.basename((command or "").strip())
     if base.lower().endswith(".exe"):
         base = base[:-4]
-    return base.lower()
+    base = base.lower()
+    if base.startswith("impacket-"):
+        base = base[len("impacket-"):]
+    return base
 
 
 def new_loot_files(loot_dir: Path | None, since: float) -> list[Path]:

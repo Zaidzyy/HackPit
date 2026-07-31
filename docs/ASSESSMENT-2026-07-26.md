@@ -318,6 +318,8 @@ Every decision that drove the build. D1/D3/D4/D6/D7 were the Phase-1 build; D9 w
 
 - **D22 — A command is gated on what it RUNS, not on what it is named.** Set while cataloguing the pivot tools. The danger heuristic classified `argv[0]` and stopped there, so `weevely` demanded the red-confirm and `proxychains -q weevely …` demanded nothing — while `cockpit/tunnels.py` builds exactly that argv for the operator to approve. The consequence was precisely inverted: **routing a command through a tunnel made its gate weaker, so the further into a network you reached, the less the confirm applied.** The rule now is that a wrapper is peeled off and the command that actually executes is what gets classified, with the wrapper named in the reason so the warning still matches the argv on screen. The corollary is the part worth keeping: a catalogued entry is classified by **what it does**, which is why `proxychains` is clean (it routes; it carries nothing) while `sshuttle` sits beside chisel and ligolo (it needs no agent and no listener, which makes it the quietest way to put a subnet inside reach — not the least dangerous one). *Built (KB repo batch, 2026-08-01), regression-locked through `validate_request` rather than through the predicate, with both halves asserted: the wrapped dangerous command must fire, and a wrapped benign one must stay silent.*
 
+- **D23 — 0xdf is drawn from under the project-wide distil-not-parrot rule; the standing ban on it was reviewed and reversed.** When the fingerprint corpus was first scoped, `ingest_exploitation_writeups.py` carried a hard sourcing line naming 0xdf, IppSec and individual HTB walkthroughs as sources *never to draw from* — and the batch declined the ingest on that line. The operator reviewed that position and reversed it: a third-party writeup is treated exactly like every other source this KB absorbs (D21) — **you learn the technique from it and write an original entry, crediting the source by URL in `references`; you never reproduce its prose, structure, screenshots or phrasing.** The reversal is the decision; the honest record is that 0xdf was declined first and that position did not survive contact with the rule already governing every other source. Two things were changed and one was deliberately left alone. The docstring that forbade what the pipeline now does was rewritten to state distil-not-parrot and the attribution requirement, because a comment contradicting practice is worse than either policy. The link-index skip at `consolidate.py:2324` — which drops a 0xdf *link-list* file as "no technique" — was **left untouched**, because a list of links carries no technique regardless of sourcing policy, the same reason `awesome-oscp` yields nothing. *Applied (0xdf fingerprint batch, 2026-08-01).*
+
 ## Phase 1 — reach a real target
 
 *Commits `e4e8de5`, `80a18d5`, `2d0928f`.*
@@ -869,6 +871,7 @@ Three properties matter and each is verified:
 - **Operator identity, checked against git itself** (build #11) — `test_operator.py` asserts `backend/operator.json` is ignored by asking `git check-ignore` rather than by reading the ignore file and trusting the pattern, and carries a control proving the predicate can answer "no" for a tracked file. The staged diff was grepped for the real name and identifiers before committing; only synthetic fixtures remained.
 - **KB enrichment, measured rather than asserted** (2026-07-31) — the first external-corpus batch is verified four ways instead of by row count: **per-source counts diffed before and after** (2,699 → 2,712, every other source byte-for-byte unchanged), the KB file confirmed to still exist afterwards (Defender has deleted it before), **6 of 7 natural-language retrieval probes returning the new entry at rank 1**, and the full safety suite at 52 files. A first suite run aborted at `test_corpora.py` and passed on re-run and standalone; the cause is environmental and is recorded rather than hidden — `pipeline/ingest_corpora.py:139` shells to `git show HEAD:<file>` expressly "to recover AV-locked / dehydrated files", and rewriting the 22 MB `entries.jsonl` triggers a Defender sweep that briefly locks corpus sidecars.
 - **KB enrichment batch 2 — 24 cert/CTF/pentest repos** (2026-08-01) — verified the same four ways, and the numbers are small on purpose. **Per-source counts diffed before and after**: 2,712 → 2,714, all 22 sources still present and every one of the other 21 unchanged to the row; `pivoting` 6 → 8. The KB file, `embeddings.npy` and `ids.json` all confirmed present afterwards (22,487,315 bytes; Defender has deleted the KB before, so it is backed up first and re-checked after). **Retrieval: 6 of 6 natural-language probes surfaced a new entry in the top 5, four of them at rank 1** — including the ones a command reference cannot answer ("the second pivot host cannot reach my attacking machine, how do I get a shell back", "why does nmap find nothing through proxychains"). Full hermetic suite green at **52 files, every one exit 0**; `test_corpora.py` aborted the first run and passed standalone and on re-run, the documented Defender/sidecar flake, recorded rather than hidden. Saturation was measured rather than asserted: 308 terms appear in ≥3 repo files and never in the KB, and all 308 are URL slugs, hostnames, playlist IDs, filenames or typos. Arsenal: 110 → 115 tools, all 188 catalogued invocation names carrying a pinned danger verdict, all 286 templates across 115 tools rendering target-faithfully with no foreign host. All five new binaries were confirmed **present and runnable inside the live sandbox image** before being catalogued, rather than assumed from the Dockerfile. All 1.6 GB of clones deleted afterwards, with `git status` confirming the manifest is the only thing in `sources/` that git can see.
+- **KB enrichment batch 4 — the 0xdf fingerprint corpus** (2026-08-01) — unlike batches 1–3 this one **added** rows, so the verification is that it added exactly what it claimed and touched nothing else. Per-source counts diffed before/after: **only `hackpit-distilled` moved, 78 → 97 (+19); no other source lost a single row**, and a total alone was not accepted as proof. `data/kb/entries.jsonl` still exists (22.5 MB, 2,733 rows) after both the ingest and the embed — the Defender-quarantine check that has bitten before. `embed.py` reports **19 new, 2,714 cached**, so the vector space grew by exactly the new entries. Retrieval was run through `search.search(entries, query, top)` (positional, no `k=`) on realistic scan strings — `OpenSMTPD smtpd 6.6.1 25/tcp`, `Apache Tomcat 9.0.27 8080`, `Apache Solr 8.3.1 wt velocity`, `jetdirect printer 9100 snmp`, `IPMI 623 BMC RAKP`, `gitlab 11.4.7 redis ssrf`, `netdata ndsudo setuid`, `xwiki solr search groovy`, `pgadmin query tool 9.1`, `mariadb wsrep 10.3.25` — and each new fingerprint ranked first or top-three for its own banner while the controls `vsftpd 2.3.4` and `Apache 2.4.49` still won theirs. `sh backend/run_safety_tests.sh` → **52 test files, every one exited 0**, `test_corpora` included and with no flake this run.
 - **KB enrichment batch 3 — 7 GitBook certification spaces** (2026-08-01) — the verification here is of a **zero**, which is a different claim and needs different evidence: not "the ingest did no damage" but "no entry was warranted." The KB is byte-unchanged at **2,714 rows**, and no ingester was run. Saturation was established at three independent levels. **Index level, before any page was requested**: the 545 page URLs the six reachable spaces publish were tokenised against all 2,714 rows, and of 109/88/59/37/56/166 slug words per space, the words absent from the KB number **6/5/3/1/2/2** — every one an author name, a certification acronym, or a typo (`foundamentals`, `accross`, `uncostrained`, `gnereral`). **Page level**, for the one space fetched in full: 175 distinct leading commands across its 214 code blocks, of which 10 appear nowhere in the KB and all 10 resolve to covered material. **Concept level**, for the two survivors that a token diff called new — and this is the leg that mattered, because `seshutdownprivilege` (11 occurrences, 0 in the KB) is a real technique that the KB **already carries under a different spelling**, `ex-windows-checking-services` step 4: *"reboot if you hold SeShutdown."* A token miss is not a coverage miss. Full hermetic suite green at **52 test files, every one exit 0**, run after the batch; `test_corpora.py` did not flake this time, which is consistent with its documented cause — no 22 MB KB rewrite happened to trigger the Defender sweep. Politeness is verifiable rather than claimed: `robots.txt` is parsed and honoured **before the first request**, and it refused a space during this batch rather than in theory.
 
 ## Status
@@ -894,6 +897,8 @@ The follow-on the build flagged is now **landed**: the **KB exploitation-writeup
 **Build #10 (the opt-in C2 exposure override, and an honest NOT-RUN) — complete.** Build #9's Task 4 recorded a Windows-target C2 callback as NOT-RUN for one concrete reason: the Sliver/tunnel listener lives in `hackpit-engage-sandbox`, which by standing invariant publishes no ports, so the lab DC had no route to it. Build #10 supplies exactly that missing route **without widening the default posture**: `docker/proof/c2-lab.yml`, an opt-in compose override that publishes a single port — `192.168.13.1:53/udp`, the iodine tunnel server's DNS port bound to the one host interface (VMnet8) the lab DC can reach — and nothing else, never a wildcard. It is never applied by the documented bring-up; `backend/test_exposure_safety.py` locks three invariants (default compose publishes nothing, every override port names a literal host IP, nothing composes it in implicitly) and plants a violation to prove the scan can fail. The override is not only built but **demonstrated live** — the exposure came up on `192.168.13.1:53/udp` and tore down cleanly. On it sits a gated C2/AD proof harness (`docker/proof/c2_0{1..4}_*.sh` + `c2_lab_proof.sh` orchestrator + in-process driver) built on build #7's discipline: offensive command strings are never inlined — they are operator-supplied paste values read by file path, and an empty value reports **NOT-RUN**, never a fake pass. The four offensive proofs it drives — staging the tunnel client on the DC, the iodine DNS tunnel, a Sliver beacon over it, and a native DCSync behind a scoped Defender **exclusion** (not a real-time-protection toggle) removed in a `trap` guard — are **NOT-RUN**: harness-ready but requiring operator-supplied commands that were deliberately not filled, recorded as such rather than folded into a pass. A final hardening pass closed the build's engineering items and corrected one of its own claims: the suspected `run_safety_tests.sh` gating hole did **not** exist (`set -e` has been in the committed runner all along, and a planted failure was verified to abort it), while the failing `nc` danger-gate test turned out to be an environment leak rather than an over-block — the one test in `test_session.py` that called the gates outside the hermetic fixture, so it reached a live Docker probe. Both are now fixed and the runner additionally checks every test's exit code explicitly. The build also added a read-only DC prerequisite probe and a harness-honesty regression test, and that test immediately caught a real defect: three of the four proof scripts' `[[PASTE]]` slots were not actually empty, so an unfilled proof was one WinRM round-trip away from being scored as a genuine attempt. Suite: **538 checks across 50 files, green**. The four offensive proofs remain **NOT-RUN**.
 
 **KB enrichment batch 2 (24 cert/CTF/pentest repos) — complete, and its honest result is two entries.** 24 repositories cloned, **22 yielded nothing**, one produced both entries. Under D21 that is the process working: the KB was already saturated in what these repos cover, and 308 candidate "new" terms turned out to be URL slugs and filenames rather than techniques. The batch's scoping prediction was **wrong in a way worth recording** — CPENT was expected to carry IoT and ICS/SCADA and carries neither; across all 24 repos exactly one file mentions ICS vocabulary and it is a CTF challenge named "Scada" that is really Jinja2 SSTI. `iot` (2) and `phishing` (1) remain the thinnest KB categories and now have a *reason* attached: exam notes are the wrong source class for them. The two entries fill the one genuine gap the batch did expose — every existing `pivoting` row is a command reference, and none teaches multi-hop chain discipline. The unplanned find was worth more than the planned one: the arsenal had **zero** pivoting tools despite `cockpit/tunnels.py` driving chisel, ligolo and proxychains since Phase 4, and cataloguing `proxychains` surfaced a **pre-existing gate hole** — the danger heuristic classified `argv[0]` only, so wrapping a dangerous command in a tunnel wrapper stripped its red-confirm, making the gate weaker the deeper you reached. Fixed in the predicate and regression-locked through `validate_request` (D22). Suite: **52 files, all green**; KB 2,712 → 2,714; arsenal 110 → 115. All 1.6 GB of clones deleted; `sources/repos-manifest.md` is the reproducibility record and required a deliberate, single-file gitignore exception to survive.
+
+**KB enrichment batch 4 (the 0xdf fingerprint corpus) — complete, and it closes the enrichment series.** This was the first non-cert-note source, and the first batch to add rows: **19 entries from 12 posts, `hackpit-distilled` 78 → 97, KB 2,714 → 2,733**, all in the thin categories a fingerprint corpus is for (services, pivoting, credentials, persistence, reversing/privesc). The standing ban on 0xdf was reviewed and reversed to the project-wide distil-not-parrot rule (D23), the ingester docstring was corrected to match, and the `consolidate.py` link-index skip was deliberately left alone. Phase 1 cost two requests and mapped 614 posts / 276 CVE tags, **175 of them never before in the KB** — the measurement that told us this source was unlike the cert notes before a page was read. 55 posts were selected by KB gap and fetched (Defender deleted 5 mid-triage; triage tolerated it and re-fetched), every candidate was concept-grepped before writing, and that grep killed ~43 shortlisted posts as already-covered and caught two pure slug collisions (`schallenge`→`XSSChallengeWiki`, `wsrep`→`wsrepl`) that a token count would have miscalled — the same `SeShutdown` trap batch 2 found. **The series, whole: five batches, of which the PDF/pages batch has NOT run** (it is written but never executed, and is not counted as complete). The four that ran added 34 entries (13 + 2 + 0 + 19). **The headline is the cert-note yield — 31 sources produced 2 entries** — a real measurement of the KB's maturity on exam-syllabus material, set against 19 from one narrative source that supplied the scan→root shape nothing else did. Carried forward: the token diff **nominates, never confirms** (grep the concept); themastermindnotes **declined** as a commercial product; `mqt.gitbook.io` **refused itself** by robots.txt; 0xdf **declined-then-reversed**. KB now at 2,733; suite 52 files all green.
 
 **KB enrichment batch 3 (7 GitBook certification spaces) — complete, and its honest result is zero entries.** Batch 2 ended by predicting that four of these seven spaces were near-certain duplicates; the prediction held, and the two it named as genuine unknowns resolved against it too. **Five of the seven were never fetched at all** — four because an index-level gate settled them from their published page lists alone, and one because its operator has opted out of machine collection. Of the two fetched, one was taken only as its 15-page delta over a space already mined, and that delta turned out to be an Active Directory chapter that has been outlined but not written (1,058 words, **zero code blocks**, 24-word pages). The remaining space was fetched in full, deliberately, because its hypothesis was *methodology structure* rather than technique novelty and no index gate can test shape — 20,248 words and 214 code blocks, and it yielded nothing either: the KB already carries **118 `checklist-*` entries** in exactly that shape. The build's carry-forward is a method, not a technique. The batch's one plausible find, `seshutdownprivilege`, was absent from the KB as a *string* and present as a *technique* under the spelling `SeShutdown` — so the token diff that batch 2 established as proof-of-saturation is now bounded by an explicit rule: **it can only ever nominate candidates, never confirm a gap; the concept has to be grepped before a zero or an entry is claimed.** Under D21 this is the process working: 21,306 words were read and nothing was written, because writing anything would have meant duplicating rows already present. KB unchanged at 2,714; suite **52 files, all green**; `sources/gitbooks-manifest.md` is the reproducibility record.
 
@@ -1213,3 +1218,107 @@ the fetched source tree as well. Triage was made tolerant of unreadable files ra
 The fetched tree is deleted. `sources/gitbooks-manifest.md` is what remains — URL, fetch date,
 pages published, pages taken, and the verdict for each of the seven, under the same single-file
 gitignore negation the repo manifest uses.
+
+## KB enrichment — the 0xdf fingerprint corpus, and the series close-out (2026-08-01)
+
+This is the last batch in the enrichment series, and the first that was **not** cert notes. The
+target was `hackpit-distilled`, the 78-entry corpus that keys a service+version fingerprint to the
+technique that solves it and that build #8's 2.7 retrieval ranks ahead of generic token matches —
+78 entries is thin, and every `nmap` result the cockpit parses is a fingerprint that either hits
+that corpus or falls back to fuzzy prose. `https://0xdf.gitlab.io` is several hundred long-form
+HTB/CTF machine writeups, each starting from a scan result and ending at root: a service→technique
+mapping in narrative form, which is exactly the shape a fingerprint corpus needs and the one shape
+31 sources of cert notes never supplied.
+
+**The policy came first (D23).** The ingester's docstring named 0xdf as never-to-draw-from; that
+rule was reviewed by the operator and reversed to the project-wide distil-not-parrot rule, and the
+docstring was rewritten to match. The `consolidate.py:2324` link-index skip was deliberately left
+alone. None of the 55 fetched pages nor any 0xdf prose is committed — the committable artifacts are
+`fetch_0xdf.py`, the policy fix, the distilled entries and the manifest.
+
+**Politeness, and why the index was cheap.** `robots.txt` is a 404 — no restrictions published —
+which the fetcher checks on every run and would refuse on. `fetch_0xdf.py` takes URLs only from the
+site's own `sitemap.xml` and its `/tags/` page, never from crawling, and serialises requests behind
+a 1.8s delay (slower than the PortSwigger fetcher on purpose — this is one person's blog on GitLab
+Pages). **Phase 1 cost exactly two requests**: the sitemap (614 dated posts) and the tags page,
+which is the whole archive's metadata in one 2.8 MB document — 614 posts across 3,981 tags, and
+**276 distinct CVE tags of which 175 had never appeared anywhere in the KB.** That 175 is the number
+that separated this source from the cert notes before a single writeup was read: the 31 cert-note
+sources re-covered a syllabus the KB had already absorbed, and this one did not.
+
+**Phase 2 was selected by KB gap, not by recency.** Each post was scored `3×network-service tags +
+2×thin-category tags + 4×KB-absent-CVEs − web-app tags`, and the top **55** were fetched — 55/55, no
+failures. Windows Defender then did exactly what batch 2 warned it now does: it deleted **5 of 58
+files mid-triage** (`OSError 22`→`OSError 2`), on the KB's own web-shell-signature behaviour reaching
+the fetched tree. Triage was written to tolerate a file vanishing between listing and reading — it
+counted 53 analysed and named the 5 lost rather than crashing — and a re-fetch restored them.
+
+**Yield: 19 entries from 12 posts, `hackpit-distilled` 78 → 97, KB 2,714 → 2,733.** Every candidate
+was grepped by **concept** — synonyms, stems, tool names, technique words, not the token — against
+the whole KB before it was written, per batch 2's correction. That grep did real work: it killed
+~43 of the 55 shortlisted posts whose standout CVE was already covered (runc fd-leak escape was
+present via `cred-toctou`; Azure AD Connect decrypt, fail2ban, vm2 escape, Office/RTF CVE-2017-0199,
+polkit CVE-2021-3560, rsync 873, and the Craft/Openfire/Jenkins-CLI CVEs were all already in), and
+it caught two would-be false positives that were pure slug collisions — a `SeShutdown`-style trap
+each: the KB's only `schallenge` hit was `XSSChallengeWiki`, and its only `wsrep` hit was `wsrepl`,
+a WebSocket tool. One candidate (CrushFTP / htb-soulmate) was **dropped** because Defender deleted
+its page twice — the rule is that if you cannot read it, you do not understand it well enough to
+write it.
+
+The 19 landed in the thin categories a fingerprint corpus is for, not the saturated web tree:
+OpenSMTPD MAIL-FROM injection, SaltStack master auth-bypass, Tomcat FileStore deserialization, Solr
+Velocity RCE, OFBiz XML-RPC deser, Cacti graph_realtime SQLi, CUPS ErrorLog read, printer 9100/PJL+
+SNMP credential leak, MariaDB wsrep RCE, IPMI RAKP hash leak, GitLab SSRF→Redis RCE, Vim modeline
+RCE, Rails cache-store deserialization, XWiki SolrSearch Groovy RCE, Netdata ndsudo PATH privesc,
+Firejail `--join` privesc, ManageEngine SAML RCE, pgAdmin Query-Tool RCE, and the Squid CONNECT
+pivot. Retrieval was confirmed against realistic scan strings (`OpenSMTPD smtpd 6.6.1 25/tcp`,
+`Apache Tomcat 9.0.27 8080`, `jetdirect printer 9100 snmp`, …): each new fingerprint ranks first or
+top-three for its own banner, and the existing controls (`vsftpd 2.3.4`, `Apache 2.4.49`) still win
+theirs, so nothing was displaced.
+
+### The series, whole (five batches)
+
+Checking `git log` and the manifests in `sources/` for what actually landed rather than assuming an
+order, the enrichment series ran as five batches:
+
+| Batch | Source | Sources | Entries | Note |
+|---|---|---|---|---|
+| Transcript corpus | live-hunting transcripts | 1 corpus | **13** | set D21; first external corpus |
+| Batch 1 — repos | 24 cert/CTF/pentest repos | 24 | **2** | both from one repo; exposed D22 |
+| Batch 2 — GitBooks | 7 GitBook cert spaces | 7 | **0** | index-gate; bounded the token diff |
+| PDF/pages | `PROMPT-pdf-and-pages.md` | — | **NOT RUN** | never executed — see below |
+| Batch 4 — 0xdf | 0xdf machine writeups | 55 posts | **19** | this batch; first non-cert source |
+
+**The PDF/pages batch has not run.** `PROMPT-pdf-and-pages.md` is written but was never executed;
+it is not described as complete here because it is not. The four batches that did run added **34
+entries total** (13 + 2 + 0 + 19).
+
+**The stark, honest number is the cert-note yield: 31 sources produced 2 entries.** Twenty-four
+repositories and seven GitBook spaces of certification notes — the single most duplicated material
+in this KB — yielded two pivoting entries between them, both from one repo. That is not a failed
+series; it is a genuine measurement of the KB's maturity on exam-syllabus material, and it is why
+the series was worth running to its end: it told us, with evidence rather than assertion, that the
+KB is *saturated* on cert notes and *not* saturated on the service→technique fingerprint shape. The
+same effort spent on 0xdf — one source, narrative machine writeups — returned 19 entries against 2,
+because it supplied a shape nothing else in the KB did. The lesson for any future batch is to weigh
+the **source class**, not the source count: 31 derivative syllabus sources are worth less than one
+that maps scans to root.
+
+**Two records the series is required to carry forward, both confirmed:**
+
+* **The token-diff bounding (batch 2, methodological).** A token diff **nominates** candidates and
+  can **never** confirm a gap. Batch 2's diff flagged `seshutdownprivilege` — 11 hits, zero across
+  2,714 rows — and it was already in the KB as `SeShutdown`; one missing suffix was the whole
+  "gap." This batch applied the rule and it paid twice more: `schallenge`→`XSSChallengeWiki` and
+  `wsrep`→`wsrepl` were both slug collisions a token count would have called gaps. Grep the concept,
+  never the token, before claiming a zero *or* writing an entry.
+* **The declines and refusals.** `themastermindnotes.com/products/ecppt-study-notes-guide-unofficial`
+  **declined** as a commercial product for sale — not fetched; if the operator supplies a purchased
+  copy it goes through the PDF path. `mqt.gitbook.io` **refused itself** via `robots.txt`
+  (`Content-Signal: ai-train=no`, blanket `Disallow: /` for ClaudeBot and eight others) and was
+  correctly not fetched. And **0xdf was initially declined and that position was reversed** (D23) —
+  the reversal is part of the story, not a footnote to it.
+
+The fetched tree is deleted. `sources/0xdf-manifest.md` remains — the 55 URLs, the fetch date, and
+which 12 produced an entry — under the same single-file gitignore negation the repo and GitBook
+manifests use.

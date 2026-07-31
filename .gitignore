@@ -16,6 +16,7 @@
 # the whole point of deleting them.
 !/sources/repos-manifest.md
 !/sources/gitbooks-manifest.md
+!/sources/0xdf-manifest.md
 
 # Secrets & env
 .env

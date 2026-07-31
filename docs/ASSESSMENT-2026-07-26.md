@@ -869,6 +869,7 @@ Three properties matter and each is verified:
 - **Operator identity, checked against git itself** (build #11) — `test_operator.py` asserts `backend/operator.json` is ignored by asking `git check-ignore` rather than by reading the ignore file and trusting the pattern, and carries a control proving the predicate can answer "no" for a tracked file. The staged diff was grepped for the real name and identifiers before committing; only synthetic fixtures remained.
 - **KB enrichment, measured rather than asserted** (2026-07-31) — the first external-corpus batch is verified four ways instead of by row count: **per-source counts diffed before and after** (2,699 → 2,712, every other source byte-for-byte unchanged), the KB file confirmed to still exist afterwards (Defender has deleted it before), **6 of 7 natural-language retrieval probes returning the new entry at rank 1**, and the full safety suite at 52 files. A first suite run aborted at `test_corpora.py` and passed on re-run and standalone; the cause is environmental and is recorded rather than hidden — `pipeline/ingest_corpora.py:139` shells to `git show HEAD:<file>` expressly "to recover AV-locked / dehydrated files", and rewriting the 22 MB `entries.jsonl` triggers a Defender sweep that briefly locks corpus sidecars.
 - **KB enrichment batch 2 — 24 cert/CTF/pentest repos** (2026-08-01) — verified the same four ways, and the numbers are small on purpose. **Per-source counts diffed before and after**: 2,712 → 2,714, all 22 sources still present and every one of the other 21 unchanged to the row; `pivoting` 6 → 8. The KB file, `embeddings.npy` and `ids.json` all confirmed present afterwards (22,487,315 bytes; Defender has deleted the KB before, so it is backed up first and re-checked after). **Retrieval: 6 of 6 natural-language probes surfaced a new entry in the top 5, four of them at rank 1** — including the ones a command reference cannot answer ("the second pivot host cannot reach my attacking machine, how do I get a shell back", "why does nmap find nothing through proxychains"). Full hermetic suite green at **52 files, every one exit 0**; `test_corpora.py` aborted the first run and passed standalone and on re-run, the documented Defender/sidecar flake, recorded rather than hidden. Saturation was measured rather than asserted: 308 terms appear in ≥3 repo files and never in the KB, and all 308 are URL slugs, hostnames, playlist IDs, filenames or typos. Arsenal: 110 → 115 tools, all 188 catalogued invocation names carrying a pinned danger verdict, all 286 templates across 115 tools rendering target-faithfully with no foreign host. All five new binaries were confirmed **present and runnable inside the live sandbox image** before being catalogued, rather than assumed from the Dockerfile. All 1.6 GB of clones deleted afterwards, with `git status` confirming the manifest is the only thing in `sources/` that git can see.
+- **KB enrichment batch 3 — 7 GitBook certification spaces** (2026-08-01) — the verification here is of a **zero**, which is a different claim and needs different evidence: not "the ingest did no damage" but "no entry was warranted." The KB is byte-unchanged at **2,714 rows**, and no ingester was run. Saturation was established at three independent levels. **Index level, before any page was requested**: the 545 page URLs the six reachable spaces publish were tokenised against all 2,714 rows, and of 109/88/59/37/56/166 slug words per space, the words absent from the KB number **6/5/3/1/2/2** — every one an author name, a certification acronym, or a typo (`foundamentals`, `accross`, `uncostrained`, `gnereral`). **Page level**, for the one space fetched in full: 175 distinct leading commands across its 214 code blocks, of which 10 appear nowhere in the KB and all 10 resolve to covered material. **Concept level**, for the two survivors that a token diff called new — and this is the leg that mattered, because `seshutdownprivilege` (11 occurrences, 0 in the KB) is a real technique that the KB **already carries under a different spelling**, `ex-windows-checking-services` step 4: *"reboot if you hold SeShutdown."* A token miss is not a coverage miss. Full hermetic suite green at **52 test files, every one exit 0**, run after the batch; `test_corpora.py` did not flake this time, which is consistent with its documented cause — no 22 MB KB rewrite happened to trigger the Defender sweep. Politeness is verifiable rather than claimed: `robots.txt` is parsed and honoured **before the first request**, and it refused a space during this batch rather than in theory.
 
 ## Status
 
@@ -893,6 +894,8 @@ The follow-on the build flagged is now **landed**: the **KB exploitation-writeup
 **Build #10 (the opt-in C2 exposure override, and an honest NOT-RUN) — complete.** Build #9's Task 4 recorded a Windows-target C2 callback as NOT-RUN for one concrete reason: the Sliver/tunnel listener lives in `hackpit-engage-sandbox`, which by standing invariant publishes no ports, so the lab DC had no route to it. Build #10 supplies exactly that missing route **without widening the default posture**: `docker/proof/c2-lab.yml`, an opt-in compose override that publishes a single port — `192.168.13.1:53/udp`, the iodine tunnel server's DNS port bound to the one host interface (VMnet8) the lab DC can reach — and nothing else, never a wildcard. It is never applied by the documented bring-up; `backend/test_exposure_safety.py` locks three invariants (default compose publishes nothing, every override port names a literal host IP, nothing composes it in implicitly) and plants a violation to prove the scan can fail. The override is not only built but **demonstrated live** — the exposure came up on `192.168.13.1:53/udp` and tore down cleanly. On it sits a gated C2/AD proof harness (`docker/proof/c2_0{1..4}_*.sh` + `c2_lab_proof.sh` orchestrator + in-process driver) built on build #7's discipline: offensive command strings are never inlined — they are operator-supplied paste values read by file path, and an empty value reports **NOT-RUN**, never a fake pass. The four offensive proofs it drives — staging the tunnel client on the DC, the iodine DNS tunnel, a Sliver beacon over it, and a native DCSync behind a scoped Defender **exclusion** (not a real-time-protection toggle) removed in a `trap` guard — are **NOT-RUN**: harness-ready but requiring operator-supplied commands that were deliberately not filled, recorded as such rather than folded into a pass. A final hardening pass closed the build's engineering items and corrected one of its own claims: the suspected `run_safety_tests.sh` gating hole did **not** exist (`set -e` has been in the committed runner all along, and a planted failure was verified to abort it), while the failing `nc` danger-gate test turned out to be an environment leak rather than an over-block — the one test in `test_session.py` that called the gates outside the hermetic fixture, so it reached a live Docker probe. Both are now fixed and the runner additionally checks every test's exit code explicitly. The build also added a read-only DC prerequisite probe and a harness-honesty regression test, and that test immediately caught a real defect: three of the four proof scripts' `[[PASTE]]` slots were not actually empty, so an unfilled proof was one WinRM round-trip away from being scored as a genuine attempt. Suite: **538 checks across 50 files, green**. The four offensive proofs remain **NOT-RUN**.
 
 **KB enrichment batch 2 (24 cert/CTF/pentest repos) — complete, and its honest result is two entries.** 24 repositories cloned, **22 yielded nothing**, one produced both entries. Under D21 that is the process working: the KB was already saturated in what these repos cover, and 308 candidate "new" terms turned out to be URL slugs and filenames rather than techniques. The batch's scoping prediction was **wrong in a way worth recording** — CPENT was expected to carry IoT and ICS/SCADA and carries neither; across all 24 repos exactly one file mentions ICS vocabulary and it is a CTF challenge named "Scada" that is really Jinja2 SSTI. `iot` (2) and `phishing` (1) remain the thinnest KB categories and now have a *reason* attached: exam notes are the wrong source class for them. The two entries fill the one genuine gap the batch did expose — every existing `pivoting` row is a command reference, and none teaches multi-hop chain discipline. The unplanned find was worth more than the planned one: the arsenal had **zero** pivoting tools despite `cockpit/tunnels.py` driving chisel, ligolo and proxychains since Phase 4, and cataloguing `proxychains` surfaced a **pre-existing gate hole** — the danger heuristic classified `argv[0]` only, so wrapping a dangerous command in a tunnel wrapper stripped its red-confirm, making the gate weaker the deeper you reached. Fixed in the predicate and regression-locked through `validate_request` (D22). Suite: **52 files, all green**; KB 2,712 → 2,714; arsenal 110 → 115. All 1.6 GB of clones deleted; `sources/repos-manifest.md` is the reproducibility record and required a deliberate, single-file gitignore exception to survive.
+
+**KB enrichment batch 3 (7 GitBook certification spaces) — complete, and its honest result is zero entries.** Batch 2 ended by predicting that four of these seven spaces were near-certain duplicates; the prediction held, and the two it named as genuine unknowns resolved against it too. **Five of the seven were never fetched at all** — four because an index-level gate settled them from their published page lists alone, and one because its operator has opted out of machine collection. Of the two fetched, one was taken only as its 15-page delta over a space already mined, and that delta turned out to be an Active Directory chapter that has been outlined but not written (1,058 words, **zero code blocks**, 24-word pages). The remaining space was fetched in full, deliberately, because its hypothesis was *methodology structure* rather than technique novelty and no index gate can test shape — 20,248 words and 214 code blocks, and it yielded nothing either: the KB already carries **118 `checklist-*` entries** in exactly that shape. The build's carry-forward is a method, not a technique. The batch's one plausible find, `seshutdownprivilege`, was absent from the KB as a *string* and present as a *technique* under the spelling `SeShutdown` — so the token diff that batch 2 established as proof-of-saturation is now bounded by an explicit rule: **it can only ever nominate candidates, never confirm a gap; the concept has to be grepped before a zero or an entry is claimed.** Under D21 this is the process working: 21,306 words were read and nothing was written, because writing anything would have meant duplicating rows already present. KB unchanged at 2,714; suite **52 files, all green**; `sources/gitbooks-manifest.md` is the reproducibility record.
 
 ## Build #9 — the Windows/AD path, driven live against a real domain (2026-07-31)
 
@@ -1120,3 +1123,93 @@ first step is not fetching — it is **overlap measurement**: pull the sitemap, 
 against those 214 rows, and establish how many boxes are genuinely absent before writing an
 ingester. If the answer is meaningful, the shape is the existing sitemap-driven PortSwigger
 ingester (enumerate → fetch → distil → authored entries), never a crawler. Recorded as a follow-up.
+
+## KB enrichment — 7 GitBook certification spaces, and a zero that took three probes to earn (2026-08-01)
+
+Seven GitBook spaces of personal certification notes were supplied — two eCPPT, three CRTP, one
+OSCP, one pentesting checklist. **All seven yielded zero entries, five were never fetched, and the
+KB is byte-unchanged at 2,714 rows.** Under D21 that is the correct outcome and not a failed run:
+certification notes are the single most duplicated material in this KB, and the batch was scoped
+expecting it.
+
+**What is new here is the gate, not the yield.** Batch 2 fetched 24 repositories in full and *then*
+discovered 22 were duplicates. This batch inverted that: the page lists were pulled from each
+space's own sitemap and tokenised against all 2,714 KB rows **before a single content page was
+requested**. Across the six reachable spaces that is 545 published pages, and the slug words absent
+from the KB number six, five, three, one, two and two respectively — `foundamentals`, `accross`,
+`uncostrained`, `gnereral`, plus author names and the acronyms `crtp` and `ecppt`. Four spaces were
+closed on that evidence and never fetched. The cost of settling three CRTP spaces was three sitemap
+requests.
+
+**One space was resolved by path, not by inference.** `dev-angelist.gitbook.io/ecpptv2-ptp-notes`
+was suspected of being the GitBook publication of `github.com/dev-angelist/eCPPTv2-PTP-Notes`,
+mined in batch 2 at commit `a543e9167445`. Suspicion is not evidence, so it was checked: the space
+publishes `network-security/2.4-1/2.2-pivoting` and `…/2.2-pivoting-1`, byte-identical to the repo
+paths `repos-manifest.md` records as the source of both authored pivoting entries. Same content,
+same author, two surfaces. Not fetched.
+
+**The two spaces batch 2 named as genuine unknowns both resolved against the prediction.**
+
+* **`ecpptv3-ptp-notes` was the one expected to pay.** 75 of its 90 distinct page slugs are shared
+  with the same author's already-mined v2 space, so only the 15-page delta was fetched — and the
+  delta is the reason it yields nothing. It is an Active Directory chapter that has been outlined
+  but not written: **1,058 words across 14 pages, zero code blocks**, median 23 words per page,
+  with `6.1.4-ad-enumeration` at 25 words and `6.1.7-ad-persistence` at 24. Its one substantial page
+  is a conceptual introduction to users, groups and OUs, against a KB holding 123 `active-directory`
+  entries. eCPPTv3 is eCPPTv2 plus a stub.
+* **`pentesting-checklist` was fetched in full on purpose**, 113 pages / 20,248 words / 214 code
+  blocks, because its hypothesis was methodology *structure* rather than technique novelty and no
+  index gate can test shape. Three probes, all negative. Word novelty: 10 words appear three or more
+  times and never in the KB, eight of them the author's name and lab hostnames — batch 2's exact
+  pattern. Tool novelty: 175 distinct leading commands, 10 unknown to the KB, all 10 resolving to
+  covered material (PowerView cmdlets against 47 entries, `rpcclient` subcommands against 23,
+  `vshadow.exe` as an alternate shadow-copy binary against `diskshadow` and `tool-sebackupprivilege`,
+  a Linux capability string against `ht-linux-capabilities`). And the structure hypothesis itself
+  failed: **the KB already carries 118 `checklist-*` entries** — 51 Active Directory, 21 privesc,
+  21 recon, 19 enumeration, 4 credentials, 2 persistence — against a space that is 74 Windows/AD
+  pages, 17 Linux and 5 pivoting, the latter naming the same primitives batch 2 catalogued a day
+  earlier.
+
+**The finding worth carrying forward is a correction to batch 2's own method.** The token diff
+nominated `seshutdownprivilege` — 11 occurrences in the checklist, zero anywhere in 2,714 KB rows,
+and unlike the slugs and hostnames it is unmistakably a real privilege-escalation technique. It was
+the batch's one credible entry, and it is already in the KB. `ex-windows-checking-services` step 4
+reads *"Stop the service, check its start mode, reboot if you hold SeShutdown"* and carries
+`shutdown /r /t 0`; `ht-service-triggers` covers the harder form of the same hinge, starting a
+service without `SERVICE_START` rights by firing its trigger rather than rebooting the host. The
+KB spells it without the `Privilege` suffix, and that one suffix was the entire "gap". So the rule
+batch 2 established is now bounded: **the token diff nominates candidates and can never confirm a
+gap.** A zero it produces is only trustworthy once the *concept* has been grepped, and an entry it
+motivates is only safe on the same condition. The second survivor, `setakeownership`, failed the
+same way against a dedicated `oscp-setakeownershipprivilege` entry.
+
+**One space was refused rather than skipped, and the refusal is in code.** `mqt.gitbook.io` serves
+a `robots.txt` carrying `Content-Signal: ai-train=no` and a blanket `Disallow: /` for ClaudeBot,
+GPTBot, CCBot, Google-Extended, Applebot-Extended, Bytespider, Amazonbot and meta-externalagent.
+`pipeline/fetch_gitbook.py` parses that before its first request and skips the space; its sitemap
+was never requested. We are none of those user-agents, and the check is not one we could be
+compelled by — which is exactly why it belongs in the fetcher rather than in a person's judgement
+at fetch time. The space was independently a likely zero: all four OSCP repos in batch 2 yielded
+nothing.
+
+**`pipeline/fetch_gitbook.py` follows `fetch_portswigger.py` and improves on it in one respect.**
+Sitemap-driven with the GitBook `sitemap.xml` → `sitemap-pages.xml` indirection resolved per space
+rather than assumed, serialised with a delay, honest User-Agent, fetch-once-to-disk. The improvement
+is that it does not scrape HTML at all by default: GitBook serves every page as markdown at
+`<url>.md` and advertises it in-page beside an `llms.txt` index, so the fetcher asks for the format
+the publisher chose to hand to machines — a third of the bytes, real fenced code blocks, no nav
+chrome. The `<main>`-to-markdown parser remains as the fallback. One sharp edge is handled
+explicitly: a missing page is served as HTTP 200 with a `# Page Not Found` body, so without a check
+a renamed page lands on disk as a stub and gets triaged as though it were content.
+
+**An operational note, because it is the third time this has bitten.** Windows Defender deleted two
+fetched pages mid-triage — `enumeration/ports.md` (8.4 KB of port-enumeration commands) moved from
+`OSError 22` to `OSError 2` between two reads, and an LFI/RFI page followed. The same
+signature-on-our-own-examples behaviour has deleted `data/kb/entries.jsonl` before; it now reaches
+the fetched source tree as well. Triage was made tolerant of unreadable files rather than retried,
+111 of 113 pages were analysed, and both lost pages sit in saturated categories
+(`network-services` 183, `web` 642).
+
+The fetched tree is deleted. `sources/gitbooks-manifest.md` is what remains — URL, fetch date,
+pages published, pages taken, and the verdict for each of the seven, under the same single-file
+gitignore negation the repo manifest uses.

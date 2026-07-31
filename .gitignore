@@ -9,11 +9,13 @@
 # descends into cannot have a file re-included from it. Subdirectories (sources/repos/...)
 # are still ignored wholesale, because their parent is.
 /sources/*
-# THE ONE EXCEPTION: the clone manifest. It records URL + date + commit SHA + verdict for
-# every repo a KB batch was built from — our own prose about third-party repos, never their
-# content. Without it, "which commit of which repo produced these entries" is unanswerable
-# once the clones are deleted, which is the whole point of deleting them.
+# THE EXCEPTIONS: the batch manifests. They record URL + date + commit SHA (or fetch date)
+# + verdict for every source a KB batch was built from — our own prose about third-party
+# material, never its content. Without them, "which commit of which repo, or which fetch of
+# which site, produced these entries" is unanswerable once the sources are deleted, which is
+# the whole point of deleting them.
 !/sources/repos-manifest.md
+!/sources/gitbooks-manifest.md
 
 # Secrets & env
 .env

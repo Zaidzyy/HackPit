@@ -52,6 +52,39 @@ box, which is why it is worth doing properly.
 
 ---
 
+---
+
+## WHAT THE EARLIER BATCHES PROVED — read the manifests in `sources/` first
+
+Two batches of cert-note sources have run. **Their combined result is 31 sources → 2 entries.**
+
+* **Batch 1** (`sources/repos-manifest.md`) — 24 repos, 22 zeros. Two pivoting entries, both from
+  `dev-angelist/eCPPTv2-PTP-Notes` @ `a543e9167445`.
+* **Batch 2** (`sources/gitbooks-manifest.md`) — 7 GitBook spaces, **all zero**. KB unchanged.
+
+**Two findings from batch 2 that change how you work — apply both:**
+
+1. **THE TOKEN DIFF NOMINATES CANDIDATES; IT CAN NEVER CONFIRM A GAP.** Batch 2's diff flagged
+   `seshutdownprivilege` — 11 occurrences, 0 hits across 2,714 rows — and it looked unmistakably
+   real. It was already in the KB, spelled without the suffix (`ex-windows-checking-services`
+   step 4: "reboot if you hold SeShutdown"). **One missing suffix was the entire "gap".**
+   So: a token diff may only ever *propose* a candidate. Before writing any entry you must grep
+   the **concept** — synonyms, stems, the technique name, the tool name — not the token.
+   A zero produced by a token diff alone is not trustworthy.
+2. **Windows Defender is now deleting files out of fetched source trees mid-run**, not just
+   `data/kb/entries.jsonl`. Batch 2 lost 2 of 113 pages (`OSError 22` → `OSError 2`). **Make
+   your triage tolerant of a file vanishing between listing and reading** — catch and continue,
+   count what was actually analysed, and report the shortfall rather than crashing or silently
+   under-reporting.
+
+**Why 0xdf is a different proposition from those 31 sources:** they were exam notes — condensed,
+derivative, and covering the same syllabus the KB already absorbed. 0xdf is narrative machine
+writeups that start from a scan result and end at root. That is the service→technique shape the
+fingerprint corpus needs and nothing else in the KB supplies. Do not let the 31-source zero
+record lower your effort here; it is evidence about *cert notes*, not about this source.
+
+---
+
 ## HARD RULES
 
 1. **DISTIL, never parrot.** Not one line of 0xdf's prose, headings, structure or phrasing enters
@@ -154,14 +187,23 @@ alone. That is a real decision and belongs on paper.
 
 **(b) This batch:** fingerprints added, which thin categories moved, yield rate.
 
-**(c) A SERIES SUMMARY covering all five batches** — the transcript corpus (13 entries), the 23
-repos, the 7 GitBook spaces, the PDFs/pages/CPENT repo, and this one. Report honestly: total
-entries added, which thin categories actually moved and which did not budge, **how much of the
-material turned out to be duplicate**, and whether the exercise was worth the effort. If the
-answer is "most of it was already covered", say that — a KB enrichment series that concludes
-"the KB was already good here" is a useful finding, not a failure. Record
-**themastermindnotes declined** as a commercial product, and note that **0xdf was initially
-declined and that position was reversed** — the reversal is part of the story.
+**(c) A SERIES SUMMARY.** This is the last batch, **whichever order the others ran in** — check
+`git log` and the manifests in `sources/` for what has actually landed rather than assuming.
+As of writing that is: the transcript corpus (13 entries), batch 1 repos (24 sources → 2), batch 2
+GitBooks (7 sources → 0), possibly `PROMPT-pdf-and-pages.md`, and this one. **If the PDF/pages
+batch has not run, say so — do not describe it as complete.**
+
+Report honestly: total entries added, which thin categories actually moved and which did not
+budge, **how much of the material turned out to be duplicate**, and whether the exercise was
+worth the effort. The running answer is stark — **31 cert-note sources produced 2 entries** — and
+that is a genuine finding about the KB's maturity, not a failed series. Say it plainly.
+
+Record: **themastermindnotes declined** as a commercial product; **`mqt.gitbook.io` refused
+itself** via `robots.txt` (`Content-Signal: ai-train=no`, blanket `Disallow: /` for ClaudeBot and
+eight others) and was correctly not fetched; and **0xdf was initially declined and that position
+was reversed** — the reversal is part of the story. Also record the **token-diff bounding** from
+batch 2 (nominates, never confirms) as a methodological correction, since it changes how every
+future batch measures saturation.
 **No strikethrough (`~~`).** Update Verification and Status, then
 `backend/.venv/Scripts/python.exe docs/build-assessment.py`, and verify the PDF with a
 **positive control first** (extract via `pypdf` on the SYSTEM python — the venv has no pip —

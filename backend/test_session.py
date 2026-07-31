@@ -160,38 +160,48 @@ def test_start_trips_the_danger_heuristic() -> None:
     """A listener/handler is exactly what the heuristic flags — it needs dangerous_ack.
 
     This is the point: you cannot start a shell-catcher by accident, and neither can an
-    agent-proposed command sneak one through on a plain approval."""
-    for cmd, args in [
-        ("nc", ["-lvnp", "4444"]),
-        ("ncat", ["-l", "-p", "4444", "-e", "/bin/sh"]),
-        ("socat", ["TCP-LISTEN:4444,reuseaddr", "EXEC:/bin/sh"]),
-        ("python3", ["-c", "import pty"]),
-    ]:
-        rejected = S.validate_start(_req(command=cmd, args=args, dangerous_ack=False))
-        assert rejected is not None and rejected.gate == "danger", (
-            f"{cmd} must require an explicit dangerous_ack, got {rejected}"
-        )
-        assert rejected.dangerous_flags, "the confirm must name why it was flagged"
-        # With the ack it clears the danger gate.
-        assert S.validate_start(_req(command=cmd, args=args)) is None, (
-            f"{cmd} must start once explicitly acked"
-        )
+    agent-proposed command sneak one through on a plain approval.
 
-    # A `pty.spawn(...)` payload is caught by the DANGER gate (it names `pty`), which is the
-    # correct control. It used to be refused earlier at the TARGET gate, but only because the
-    # dotted token `pty.spawn(` was MISREAD as a foreign host — a false positive that the
-    # step-12 host-check fix removes (the same fix stops rejecting `directory-list-2.3-medium`
-    # and `Mozilla/5.0`). So without the ack it fails closed at `danger`, not `target`:
-    payload = ["-c", "import pty; pty.spawn('/bin/sh')"]
-    rejected = S.validate_start(_req(command="python3", args=payload, dangerous_ack=False))
-    assert rejected is not None and rejected.gate == "danger", (
-        f"a pty payload must fail closed at the danger gate, got {rejected}"
-    )
-    # And with the explicit human ack it clears — an approved dangerous command in the
-    # isolated lab, where isolation is the real bound. That is the intended model.
-    assert S.validate_start(_req(command="python3", args=payload)) is None, (
-        "an explicitly-acked pty payload must start in the isolated lab"
-    )
+    Runs inside _Spy() like every other gate test in this file, and it must. The LAB gate
+    chain is target → approval → danger → ISOLATION, and that last gate calls the LIVE
+    `assert_isolation_proven()` Docker probe. The un-acked half of each pair short-circuits
+    at `danger` and never reaches it; the ACKED half falls all the way through, so on a host
+    with the stack down it would come back gate="sandbox" and this test would fail for a
+    reason that has nothing to do with the danger heuristic it is guarding. _Spy stubs that
+    probe, which is what makes the assertion below test the danger gate and nothing else."""
+    with _Spy():
+        for cmd, args in [
+            ("nc", ["-lvnp", "4444"]),
+            ("ncat", ["-l", "-p", "4444", "-e", "/bin/sh"]),
+            ("socat", ["TCP-LISTEN:4444,reuseaddr", "EXEC:/bin/sh"]),
+            ("python3", ["-c", "import pty"]),
+        ]:
+            rejected = S.validate_start(_req(command=cmd, args=args, dangerous_ack=False))
+            assert rejected is not None and rejected.gate == "danger", (
+                f"{cmd} must require an explicit dangerous_ack, got {rejected}"
+            )
+            assert rejected.dangerous_flags, "the confirm must name why it was flagged"
+            # With the ack it clears the danger gate.
+            assert S.validate_start(_req(command=cmd, args=args)) is None, (
+                f"{cmd} must start once explicitly acked"
+            )
+
+        # A `pty.spawn(...)` payload is caught by the DANGER gate (it names `pty`), which is
+        # the correct control. It used to be refused earlier at the TARGET gate, but only
+        # because the dotted token `pty.spawn(` was MISREAD as a foreign host — a false
+        # positive that the step-12 host-check fix removes (the same fix stops rejecting
+        # `directory-list-2.3-medium` and `Mozilla/5.0`). So without the ack it fails closed
+        # at `danger`, not `target`:
+        payload = ["-c", "import pty; pty.spawn('/bin/sh')"]
+        rejected = S.validate_start(_req(command="python3", args=payload, dangerous_ack=False))
+        assert rejected is not None and rejected.gate == "danger", (
+            f"a pty payload must fail closed at the danger gate, got {rejected}"
+        )
+        # And with the explicit human ack it clears — an approved dangerous command in the
+        # isolated lab, where isolation is the real bound. That is the intended model.
+        assert S.validate_start(_req(command="python3", args=payload)) is None, (
+            "an explicitly-acked pty payload must start in the isolated lab"
+        )
     print("  start trips the heuristic red-confirm (nc/ncat/socat/interpreter): PASS")
 
 

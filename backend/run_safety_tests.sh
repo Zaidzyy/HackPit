@@ -9,6 +9,16 @@
 #   allowlist (recon-only, no metachars) -> target-lock (lab only) -> approval
 #   (explicit) -> isolation (sandbox on internal-only networks). See test_cockpit.py.
 #
+# GATING. Every test runs through run_test(), which checks the interpreter's exit code
+# EXPLICITLY and aborts the suite on the first non-zero. `set -e` below says the same
+# thing, and on its own it does gate — but `set -e` is quietly suspended for any command
+# in a pipeline, an `if`/`while` condition, or an `&&`/`||` chain, so a later edit as
+# innocent as `"$PY" test_x.py | tee log` would disarm it with no visible change in
+# output. A suite whose whole job is to prove safety controls fire must not depend on a
+# guard that can be switched off by accident, so the check is written out per test and
+# the failure is named loudly. A green run means all N files exited 0; there is no path
+# on which a failing test still prints "passed".
+#
 # Usage:
 #   sh backend/run_safety_tests.sh              # hermetic tests only
 #   sh backend/run_safety_tests.sh --with-proof # + live isolation proof
@@ -20,152 +30,129 @@ cd "$(dirname "$0")"
 PY="${PY:-.venv/Scripts/python.exe}"
 [ -x "$PY" ] || PY="$(command -v python3 || command -v python)"
 
+FILES_RUN=0
+
+# run_test <test-file> <description>
+run_test() {
+  _file="$1"
+  _desc="$2"
+  echo "== $_desc =="
+  if "$PY" "$_file"; then
+    FILES_RUN=$((FILES_RUN + 1))
+  else
+    _status=$?
+    echo >&2
+    echo "!! SAFETY SUITE FAILED" >&2
+    echo "!!   test  : $_file (exit $_status)" >&2
+    echo "!!   guards: $_desc" >&2
+    echo "!! Aborting: $FILES_RUN file(s) had passed; the rest were NOT run." >&2
+    echo "!! NOTHING in this run may be treated as passing." >&2
+    exit "$_status"
+  fi
+}
+
 # FIRST, deliberately. Ten human-only / decoupling locks rest on this scanner, and every one
 # of them reports "no offenders" when it is working AND when it is broken. If the scanner
 # cannot demonstrate that it catches a planted violation, nothing after this line means much.
-echo "== shared source scanner (whole-tree sweep / path allow-lists / AST indirection / can-fail) =="
-"$PY" test_scans.py
+run_test test_scans.py "shared source scanner (whole-tree sweep / path allow-lists / AST indirection / can-fail)"
 
-echo "== attack-path composer regressions =="
-"$PY" test_attack_path.py
+run_test test_attack_path.py "attack-path composer regressions"
 
-echo "== target-substitution polish (range rewrite / foreign-host flag / target-lock backstop) =="
-"$PY" test_target_substitution.py
+run_test test_target_substitution.py "target-substitution polish (range rewrite / foreign-host flag / target-lock backstop)"
 
-echo "== cockpit safety-layer tests (allowlist / target / approval / isolation / order) =="
-"$PY" test_cockpit.py
+run_test test_cockpit.py "cockpit safety-layer tests (allowlist / target / approval / isolation / order)"
 
-echo "== prevalidated-path gate re-checks (approval AND danger re-checked in all 3 modes) =="
-"$PY" test_prevalidated_gates.py
+run_test test_prevalidated_gates.py "prevalidated-path gate re-checks (approval AND danger re-checked in all 3 modes)"
 
-echo "== :kali containment tests (human-only / hardcoded-open-container / no-isolation-gate / audit) =="
-"$PY" test_kali.py
+run_test test_kali.py ":kali containment tests (human-only / hardcoded-open-container / no-isolation-gate / audit)"
 
-echo "== CVE -> exploit index (version comparison / tiered ranking / executes nothing) =="
-"$PY" test_exploits.py
+run_test test_exploits.py "CVE -> exploit index (version comparison / tiered ranking / executes nothing)"
 
-echo "== relevance-first KB ranking (substance-gated tier boost / completeness nudge) =="
-"$PY" test_search_ranking.py
+run_test test_search_ranking.py "relevance-first KB ranking (substance-gated tier boost / completeness nudge)"
 
-echo "== raw PTY terminal containment (human-only / hardcoded open box / sentinel shell untouched) =="
-"$PY" test_terminal.py
+run_test test_terminal.py "raw PTY terminal containment (human-only / hardcoded open box / sentinel shell untouched)"
 
-echo "== WinRM Windows transport (profile CRUD / routes to WinRM / records mode=windows) =="
-"$PY" test_winrm.py
+run_test test_winrm.py "WinRM Windows transport (profile CRUD / routes to WinRM / records mode=windows)"
 
-echo "== WinRM SAFETY invariants (host-locked / no gate bypass / secret never leaks / no auto-run) =="
-"$PY" test_winrm_safety.py
+run_test test_winrm_safety.py "WinRM SAFETY invariants (host-locked / no gate bypass / secret never leaks / no auto-run)"
 
-echo "== credential redaction in persisted run records (build #9 live-fire finding) =="
-"$PY" test_secretargs.py
+run_test test_secretargs.py "credential redaction in persisted run records (build #9 live-fire finding)"
 
-echo "== orchestrator-loop tests (proposer cannot execute / no :kali path / gate pre-check) =="
-"$PY" test_loop.py
+run_test test_loop.py "orchestrator-loop tests (proposer cannot execute / no :kali path / gate pre-check)"
 
-echo "== reasoning copilot (ledger / hypothesis schema / frontier / diagnosis / critic / specialist / retrieval / tier) =="
-"$PY" test_reasoning.py
+run_test test_reasoning.py "reasoning copilot (ledger / hypothesis schema / frontier / diagnosis / critic / specialist / retrieval / tier)"
 
-echo "== substrate coverage (Task 1: landmine!=runs / real-catalog pipeline / static Dockerfile coverage) =="
-"$PY" test_substrate.py
+run_test test_substrate.py "substrate coverage (Task 1: landmine!=runs / real-catalog pipeline / static Dockerfile coverage)"
 
-echo "== live-session tests (start is GATED / stdin HUMAN-ONLY / mode-bound / recorded) =="
-"$PY" test_session.py
+run_test test_session.py "live-session tests (start is GATED / stdin HUMAN-ONLY / mode-bound / recorded)"
 
-echo "== engagement/report path tests (run recorded + report evidence + scope) =="
-"$PY" test_engagement.py
+run_test test_engagement.py "engagement/report path tests (run recorded + report evidence + scope)"
 
-echo "== engagement MODE tests (real-target: never-auto-run / explicit entry / no Wall-A gate / no autonomy) =="
-"$PY" test_engagement_mode.py
+run_test test_engagement_mode.py "engagement MODE tests (real-target: never-auto-run / explicit entry / no Wall-A gate / no autonomy)"
 
-echo "== program-SCOPE model tests (parse / fail-closed / wildcard+CIDR matching / extraction) =="
-"$PY" test_scope.py
+run_test test_scope.py "program-SCOPE model tests (parse / fail-closed / wildcard+CIDR matching / extraction)"
 
-echo "== engagement SCOPE tests (in-scope passes / out-of-scope refused / expansion never widens) =="
-"$PY" test_engagement_scope.py
+run_test test_engagement_scope.py "engagement SCOPE tests (in-scope passes / out-of-scope refused / expansion never widens)"
 
-echo "== AD graph parser + path tests (BloodHound -> graph -> route to Domain Admin) =="
-"$PY" test_adgraph.py
+run_test test_adgraph.py "AD graph parser + path tests (BloodHound -> graph -> route to Domain Admin)"
 
-echo "== AD collector tests (argv-only / unapproved / scope-locked DC / failure / no exec) =="
-"$PY" test_adgraph_collector.py
+run_test test_adgraph_collector.py "AD collector tests (argv-only / unapproved / scope-locked DC / failure / no exec)"
 
-echo "== AD orchestration tests (frontier / proposals / synthetic walk to Domain Admin) =="
-"$PY" test_adorch.py
+run_test test_adorch.py "AD orchestration tests (frontier / proposals / synthetic walk to Domain Admin)"
 
-echo "== AD ORCHESTRATION safety (agent proposes only / never-auto-run / destructive red-confirm) =="
-"$PY" test_adorch_safety.py
+run_test test_adorch_safety.py "AD ORCHESTRATION safety (agent proposes only / never-auto-run / destructive red-confirm)"
 
-echo "== AD graph SAFETY invariants (no exec in adgraph / zero :kali / collector+abuse gated / lab unchanged) =="
-"$PY" test_adgraph_safety.py
+run_test test_adgraph_safety.py "AD graph SAFETY invariants (no exec in adgraph / zero :kali / collector+abuse gated / lab unchanged)"
 
-echo "== detection footprint tests (matching / ATT&CK / grounded+ai_suggested / tagging / report) =="
-"$PY" test_detection.py
+run_test test_detection.py "detection footprint tests (matching / ATT&CK / grounded+ai_suggested / tagging / report)"
 
-echo "== detection SAFETY invariants (no exec / read-only / cockpit untouched / describes-not-evades) =="
-"$PY" test_detection_safety.py
+run_test test_detection_safety.py "detection SAFETY invariants (no exec / read-only / cockpit untouched / describes-not-evades)"
 
-echo "== Channel-2 context grounding (Channel-1 filters unchanged / leak guard / no-op / budget) =="
-"$PY" test_context_channel.py
+run_test test_context_channel.py "Channel-2 context grounding (Channel-1 filters unchanged / leak guard / no-op / budget)"
 
-echo "== :code scan tests (normalisation / malformed output / merge / KB links / report) =="
-"$PY" test_codescan.py
+run_test test_codescan.py ":code scan tests (normalisation / malformed output / merge / KB links / report)"
 
-echo "== :code scan SAFETY invariants (static-only / orthogonal / bounded / read-only) =="
-"$PY" test_codescan_safety.py
+run_test test_codescan_safety.py ":code scan SAFETY invariants (static-only / orthogonal / bounded / read-only)"
 
-echo "== :code scan bundled rules + ruleset picker (multi-language coverage / resolver) =="
-"$PY" test_codescan_rules.py
+run_test test_codescan_rules.py ":code scan bundled rules + ruleset picker (multi-language coverage / resolver)"
 
-echo "== tool arsenal tests (catalog / lookup / target-faithful render / provenance tags) =="
-"$PY" test_arsenal.py
+run_test test_arsenal.py "tool arsenal tests (catalog / lookup / target-faithful render / provenance tags)"
 
-echo "== tool arsenal SAFETY invariants (executes nothing / NO gate bypassed / gates unchanged) =="
-"$PY" test_arsenal_safety.py
+run_test test_arsenal_safety.py "tool arsenal SAFETY invariants (executes nothing / NO gate bypassed / gates unchanged)"
 
-echo "== Phase-1 runtime (timeout clamp / background jobs / loot / tool reconciliation) =="
-"$PY" test_phase1_runtime.py
+run_test test_phase1_runtime.py "Phase-1 runtime (timeout clamp / background jobs / loot / tool reconciliation)"
 
-echo "== Phase-2 state (parsers / upserts / task tree / prompt grounding / executes-nothing) =="
-"$PY" test_state.py
+run_test test_state.py "Phase-2 state (parsers / upserts / task tree / prompt grounding / executes-nothing)"
 
-echo "== Phase-3 scope host-check (no false-reject of files/versions; real hosts still caught) =="
-"$PY" test_scope_hostcheck.py
+run_test test_scope_hostcheck.py "Phase-3 scope host-check (no false-reject of files/versions; real hosts still caught)"
 
-echo "== Phase-3 credential vault (fills user/pass/hash/domain; wrong-kind + non-cred left alone) =="
-"$PY" test_credvault.py
+run_test test_credvault.py "Phase-3 credential vault (fills user/pass/hash/domain; wrong-kind + non-cred left alone)"
 
-echo "== Phase-4 corpus ingest (additive/byte-preserving/idempotent; no_merge; windows marked) =="
-"$PY" test_corpora.py
+run_test test_corpora.py "Phase-4 corpus ingest (additive/byte-preserving/idempotent; no_merge; windows marked)"
 
-echo "== Phase-4 HTTP repeater (hardcoded container / argv-only / human-only / scope-checked) =="
-"$PY" test_repeater.py
+run_test test_repeater.py "Phase-4 HTTP repeater (hardcoded container / argv-only / human-only / scope-checked)"
 
-echo "== listener lifecycle SAFETY invariants (no stdin writer / status observed, never assigned) =="
-"$PY" test_lifecycle_safety.py
+run_test test_lifecycle_safety.py "listener lifecycle SAFETY invariants (no stdin writer / status observed, never assigned)"
 
-echo "== Phase-4 pivot/tunnels (human-only lifecycle / pure rewrite-before-approval / scope-by-hand) =="
-"$PY" test_tunnels.py
+run_test test_tunnels.py "Phase-4 pivot/tunnels (human-only lifecycle / pure rewrite-before-approval / scope-by-hand)"
 
-echo "== Phase-4 exam report templates (proof-flag capture / per-host table / CVSS 3.1 / template select) =="
-"$PY" test_report_templates.py
+run_test test_report_templates.py "Phase-4 exam report templates (proof-flag capture / per-host table / CVSS 3.1 / template select)"
 
-echo "== Sliver C2 containment (human-only server lifecycle / GATED implant gen / <listener> verbatim) =="
-"$PY" test_sliver.py
+run_test test_sliver.py "Sliver C2 containment (human-only server lifecycle / GATED implant gen / <listener> verbatim)"
 
-echo "== Sliver C2 SAFETY invariants (no agent path / gated-vs-human-only split / never executes what it builds) =="
-"$PY" test_sliver_safety.py
+run_test test_sliver_safety.py "Sliver C2 SAFETY invariants (no agent path / gated-vs-human-only split / never executes what it builds)"
 
-echo "== DNS-tunnel obfuscation containment (human-only listener / client one-liner never delivered) =="
-"$PY" test_obfuscation.py
+run_test test_obfuscation.py "DNS-tunnel obfuscation containment (human-only listener / client one-liner never delivered)"
 
-echo "== DNS-tunnel SAFETY invariants (no agent path / one-liner never delivered / secret never crosses HTTP) =="
-"$PY" test_obfuscation_safety.py
+run_test test_obfuscation_safety.py "DNS-tunnel SAFETY invariants (no agent path / one-liner never delivered / secret never crosses HTTP)"
 
-echo "== evasion engine (generate-only / gated / forced honest footprint) =="
-"$PY" test_evasion.py
+run_test test_evasion.py "evasion engine (generate-only / gated / forced honest footprint)"
 
-echo "== evasion engine SAFETY invariants (no agent path / never runs what it builds / footprint has no off switch) =="
-"$PY" test_evasion_safety.py
+run_test test_evasion_safety.py "evasion engine SAFETY invariants (no agent path / never runs what it builds / footprint has no off switch)"
+
+run_test test_exposure_safety.py "published-port exposure invariants (default publishes nothing / opt-in override is IP-bound)"
+
+run_test test_proof_honesty.py "proof-harness HONESTY (an unfilled offensive slot reports NOT-RUN, never a fake pass)"
 
 if [ "$1" = "--with-proof" ]; then
   echo
@@ -176,7 +163,7 @@ if [ "$1" = "--with-proof" ]; then
   sh ../docker/proof/engage_open_proof.sh
 else
   echo
-  echo "Hermetic safety tests passed."
+  echo "Hermetic safety tests passed ($FILES_RUN test files, every one exited 0)."
   echo "To also run the live isolation proof (needs the stack up):"
   echo "  sh backend/run_safety_tests.sh --with-proof"
 fi

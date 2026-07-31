@@ -1,0 +1,35 @@
+# HackPit — OPT-IN PUBLISHED-PORT OVERRIDE (build #10).
+#
+# This file is the ONE place HackPit publishes a port on the host, and it is never applied by
+# default. `docker compose -f docker/docker-compose.yml up` exposes nothing (test_exposure_safety.py
+# invariant 1). This override is reachable only by TYPING it in as a second file:
+#
+#     docker compose -f docker/docker-compose.yml -f docker/proof/c2-lab.yml up -d
+#
+# WHY IT EXISTS. Build #9's live-fire task 4 recorded a NOTRUN: the lab domain controller
+# (192.168.13.140, on VMware's NAT subnet) has no route to a Docker bridge, so a callback from the
+# DC had nowhere to land. The honest fix is to publish exactly the listener the DC needs on exactly
+# the host interface the DC can see — and nothing else, nowhere else.
+#
+# WHY THE BINDING NAMES 192.168.13.1. That is the host's "VMware Network Adapter VMnet8" address
+# (see fix-vmnet8.ps1) — the single interface on this machine that the lab DC's subnet can reach.
+# Binding the listener to it means "the DC can reach this" WITHOUT also meaning "so can whatever
+# Wi-Fi this laptop is on". A bare "53:53/udp" or "0.0.0.0:53:53/udp" would bind every interface;
+# invariant 3 in test_exposure_safety.py rejects both, on purpose.
+#
+# WHAT IS PUBLISHED. UDP/53 only — the DNS port the iodine tunnel server (iodined, started inside
+# the engage sandbox) listens on. A DNS tunnel's whole shape is that the client reaches the server
+# over 53/udp; that one port is the entire exposure surface. Nothing TCP, nothing else.
+#
+# CONTAINMENT NOTE. This does not widen the engage sandbox's reach — that sandbox is already fully
+# open by design (Wall A down; see docker-compose.yml). What it changes is the OTHER direction:
+# inbound from the host's VMnet8 address to one UDP port. Tear down with the same two -f flags plus
+# `down`, and the exposure is gone.
+name: hackpit-cockpit
+
+services:
+  engage-sandbox:
+    # Merge-only override: every other field (image, networks, privilege, volumes) comes from
+    # docker/docker-compose.yml. This file adds nothing but the one published port.
+    ports:
+      - "192.168.13.1:53:53/udp"

@@ -157,7 +157,7 @@ a { color: var(--accent); text-decoration: none; }
 </ul>
 </li>
 <li><a href="#part-iii-build-log-phases-15-shipped-2026-07-26">PART III — BUILD LOG (Phases 1–5, shipped 2026-07-26)</a><ul>
-<li><a href="#decisions-taken-d1d20">Decisions taken (D1–D20)</a></li>
+<li><a href="#decisions-taken-d1d21">Decisions taken (D1–D21)</a></li>
 <li><a href="#phase-1-reach-a-real-target">Phase 1 — reach a real target</a></li>
 <li><a href="#phase-2-make-it-remember">Phase 2 — make it remember</a></li>
 <li><a href="#phase-3-make-it-fast-to-drive">Phase 3 — make it fast to drive</a></li>
@@ -206,6 +206,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#what-is-locked">What is locked</a></li>
 </ul>
 </li>
+<li><a href="#kb-enrichment-the-first-external-corpus-and-what-it-cost-to-read-it-2026-07-31">KB enrichment — the first external corpus, and what it cost to read it (2026-07-31)</a></li>
 </ul>
 </li>
 </ul>
@@ -752,7 +753,7 @@ a { color: var(--accent); text-decoration: none; }
 <hr />
 <h1 id="part-iii-build-log-phases-15-shipped-2026-07-26">PART III — BUILD LOG (Phases 1–5, shipped 2026-07-26)</h1>
 <p>Branch <code>sandbox-kali-image</code>. Full hermetic safety suite green throughout (36 test files); both Docker proofs 4/4 (lab still egress-less; engage fully open); browser-verified with Ollama (<code>qwen3:8b</code>).</p>
-<h2 id="decisions-taken-d1d20">Decisions taken (D1–D20)</h2>
+<h2 id="decisions-taken-d1d21">Decisions taken (D1–D21)</h2>
 <p>Every decision that drove the build. D1/D3/D4/D6/D7 were the Phase-1 build; D9 was a standing accepted gap that is <strong>now built</strong> (the Windows execution backend); D2/D5/D8 are standing policy (Part II); D10/D11/D12 were Phase-4 work, now built; D13 is this document; D14/D15 shaped Phase 5; <strong>D16/D17 are build #4</strong> — D16 amends D10 and is the one policy reversal in the project's history.</p>
 <ul>
 <li><strong>D1 — Fix the sandbox image; HackPit <em>is</em> the attack box.</strong> A Kali VM's advantages (root, raw sockets, VPN, <code>/etc/hosts</code>) are all reachable in Docker via capabilities + <code>/dev/net/tun</code>. <em>Built (Phase 1).</em></li>
@@ -775,7 +776,12 @@ a { color: var(--accent); text-decoration: none; }
 <li><strong>D17 — Split the gating for C2 rather than gate it uniformly.</strong> Server and listener <strong>lifecycle</strong> is human-only with no red-confirm (operator infrastructure on the operator's own sandbox — no target is touched, so clicking start is the approval); <strong>artifact generation</strong> is a fully gated command (approval + scope + red-confirm) because it produces something that will run on someone else's machine. Uniform gating would have meant either a meaningless confirm on every server start or no confirm on a payload build. <em>Built (build #4).</em></li>
 <li><strong>D18 — The loop may REASON, but it still never executes, and approval stays per-command.</strong> Build #8 makes the proposer genuinely deeper — working memory (a tried/failed ledger), hypothesis-first proposals, a scored candidate frontier, failure diagnosis, a refute-first critic, domain-specialist routing, fingerprint-keyed retrieval, and a model-tier config lever. Every one of those produces <strong>proposals and rationale only</strong>. The decision recorded here is the boundary they were built against and re-locked to: <code>orchestrator.py</code> and the whole new <code>reasoning/</code> package have <strong>no path to any execution surface</strong>, the frontier holds untried leads rather than a queue that fires, and there is <strong>no auto-approve / batch-approve / run-the-chain</strong> anywhere — a human still approves every single command. Deeper proposer, identical autonomy. <em>Built (build #8), regression-locked by an extension of the loop's source-scan onto the whole reasoning package.</em></li>
 <li><strong>D19 — The launcher lives ON the home page, not on its own route.</strong> Roughly a dozen surfaces were built and then invisible — <code>:arsenal</code>, <code>:c2</code>, <code>:tunnels</code>, <code>:windows</code>, <code>:repeater</code>, <code>:scripts</code>, <code>:code-scan</code> and the AD graph were reachable only by typing the URL, and the operator's own notes had flagged it twice before it was fixed. Both placements were built as mocks and compared. The deciding argument was that <em>a page you have to navigate to fixes discoverability only if you remember to navigate to it</em> — so the index belongs on the screen you already land on. Cost measured before committing: +1,024px on a page already ~1,936px, i.e. ~2 screens to ~3. The hero, the stat counters and the intro are untouched. <em>Built (build #11).</em></li>
-<li><strong>D20 — Operator identity is configuration, never a constant.</strong> This repo is public, and a real name, email or OSID written into source is in the public git history permanently. Identity therefore lives in a gitignored <code>backend/operator.json</code> with env overrides, read through two deliberately separate accessors: <code>public_profile()</code> (name + handle) for the browser, <code>report_identity()</code> (adds OSID / handle / contact) for a report handed to an examiner. A page has no use for an OSID, so it never receives one. The report block is <em>spliced by code</em>, never prompted for — handing the model a real name or an OSID invites it to transcribe or invent one. <em>Built (build #11).</em></li>
+<li>
+<p><strong>D20 — Operator identity is configuration, never a constant.</strong> This repo is public, and a real name, email or OSID written into source is in the public git history permanently. Identity therefore lives in a gitignored <code>backend/operator.json</code> with env overrides, read through two deliberately separate accessors: <code>public_profile()</code> (name + handle) for the browser, <code>report_identity()</code> (adds OSID / handle / contact) for a report handed to an examiner. A page has no use for an OSID, so it never receives one. The report block is <em>spliced by code</em>, never prompted for — handing the model a real name or an OSID invites it to transcribe or invent one. <em>Built (build #11).</em></p>
+</li>
+<li>
+<p><strong>D21 — A source is DISTILLED into the KB, never parroted into it, and a source that teaches something wrongly is rewritten or dropped.</strong> Set while folding in the first external corpus of live-hunting transcripts. Three rules came out of it and now govern every enrichment batch. (a) <strong>Check before writing:</strong> every candidate technique is grepped against the whole KB first, and anything already covered is skipped and reported as skipped — that batch added 13 entries while deliberately re-ingesting nothing of the 24 existing Java-deserialization, 19 cache-poisoning, 11 open-redirect/OAuth or 3 mass-assignment rows. (b) <strong>Zero is a valid result:</strong> a source that yields nothing is reported as yielding nothing, because a batch padded to look productive is worse than a small one. (c) <strong>Correctness outranks fidelity to the source:</strong> the corpus taught "price tampering" while conflating it with bounty manipulation and discussing selling exploits instead of reporting them; the concept was kept and rewritten from scratch, and that framing was not carried across. <em>Applied (KB enrichment, 2026-07-31).</em></p>
+</li>
 </ul>
 <h2 id="phase-1-reach-a-real-target">Phase 1 — reach a real target</h2>
 <p><em>Commits <code>e4e8de5</code>, <code>80a18d5</code>, <code>2d0928f</code>.</em></p>
@@ -1253,6 +1259,7 @@ new finding.</p>
 <li><strong>Frontend</strong> — <code>tsc</code> clean, lint at the pre-existing baseline (11 errors + 1 warning, unchanged — verified by stashing the changes and re-running), <code>next build</code> exit 0 (routes include <code>/terminal</code>, <code>/exploits</code>, <code>/windows</code>).</li>
 <li><strong>The launcher, verified against real state rather than a mock</strong> (build #11) — the status rail was exercised in both directions on the same page with no code change: with Docker down it reported <code>sandbox stack down</code> with <strong>7 tiles dimmed and 7 <code>stack down</code> markers</strong>; after <code>docker compose up -d</code> it reported <code>up · engage up</code> with <strong>0 dimmed and 7 <code>needs the stack</code></strong>. The freshly created networks were re-checked against the isolation floor — <code>assert_isolation_proven()</code> passes and <code>hackpit-isolated</code> is <code>internal=true</code> while <code>hackpit-open</code> and <code>hackpit-engage</code> are deliberately not. 4 bands, 15 surface tiles and 30 category cards render live.</li>
 <li><strong>Operator identity, checked against git itself</strong> (build #11) — <code>test_operator.py</code> asserts <code>backend/operator.json</code> is ignored by asking <code>git check-ignore</code> rather than by reading the ignore file and trusting the pattern, and carries a control proving the predicate can answer "no" for a tracked file. The staged diff was grepped for the real name and identifiers before committing; only synthetic fixtures remained.</li>
+<li><strong>KB enrichment, measured rather than asserted</strong> (2026-07-31) — the first external-corpus batch is verified four ways instead of by row count: <strong>per-source counts diffed before and after</strong> (2,699 → 2,712, every other source byte-for-byte unchanged), the KB file confirmed to still exist afterwards (Defender has deleted it before), <strong>6 of 7 natural-language retrieval probes returning the new entry at rank 1</strong>, and the full safety suite at 52 files. A first suite run aborted at <code>test_corpora.py</code> and passed on re-run and standalone; the cause is environmental and is recorded rather than hidden — <code>pipeline/ingest_corpora.py:139</code> shells to <code>git show HEAD:&lt;file&gt;</code> expressly "to recover AV-locked / dehydrated files", and rewriting the 22 MB <code>entries.jsonl</code> triggers a Defender sweep that briefly locks corpus sidecars.</li>
 </ul>
 <h2 id="status">Status</h2>
 <p>Build #4 (AV/EDR evasion + traffic obfuscation) is complete and verified: image <code>hackpit-kali:build4</code> builds with all eight new binaries smoke-tested by invocation, the full hermetic suite was green at 42 files / 446 checks at that point, and the frontend builds clean. Tasks 8–13 have now had their independent review (see Part II) — no containment hole, five substantive defects fixed, each with a regression test. <strong>Two caveats are carried forward as open items in Part II rather than papered over</strong>, and build #4 should not be called field-ready until they close: the C2 and tunnel surfaces have never been run against a live beacon, a real delegated DNS zone, or an instrumented Windows host, so their <em>efficacy</em> claims are documented rather than demonstrated (the <em>containment</em> claims are what the suite locks, and those hold without live infrastructure); and three installs in the image layer are still unpinned, so that layer is not yet byte-reproducible.</p>
@@ -1309,5 +1316,52 @@ new finding.</p>
 <p><code>test_home_summary.py</code> and <code>test_operator.py</code>, both in the suite. Between them: no secret reaches the browser (checked against the <strong>real</strong> stores — stored WinRM secrets, the configured LLM key, every credential in state — and reporting per-source counts so an empty leg is <em>visible</em> rather than absorbed into a reassuring total); the endpoints call only the masked accessors, asserted over the <strong>AST</strong> rather than a substring; a status endpoint cannot reach an execution path; the operator config is gitignored, asserted by asking git; and the OSID and email never reach the browser. Every check carries a positive control, and the leak test asserts it cannot go vacuous.</p>
 <p><strong>Suite state.</strong> <code>sh backend/run_safety_tests.sh</code> exits 0 across <strong>52 test files</strong> (50 → 51 → 52). Frontend lint holds at the pre-existing baseline of 11 errors + 1 warning; new tiles stagger via CSS <code>animation-delay</code> specifically so as not to add more <code>react-hooks/set-state-in-effect</code> errors, and <code>next build</code> exits 0.</p>
 <p><strong>Build #11 (the launcher + operator identity) — complete.</strong> Neither half moved the safety boundary; both closed a gap that had been visible and unaddressed. The launcher's value showed up immediately and by accident: bringing the Docker stack up during verification flipped the rail from <code>down</code> to <code>up · engage up</code> and un-dimmed seven tiles with no code change, which is the whole feature demonstrated end to end. The report identity block closes a real submission blocker — the generated OSCP report previously carried no candidate identification at all. One near-miss is recorded in full above (a module named <code>operator.py</code> shadowing the stdlib) because the failure would have been silent and process-wide.</p>
+<h2 id="kb-enrichment-the-first-external-corpus-and-what-it-cost-to-read-it-2026-07-31">KB enrichment — the first external corpus, and what it cost to read it (2026-07-31)</h2>
+<p>A 687,830-character corpus of live bug-bounty stream transcripts was folded into the KB. It is
+recorded here because the <em>ratio</em> is the finding, and it sets the expectation for every batch
+that follows.</p>
+<p><strong>11% of the file was exact duplication</strong> — two sections were byte-identical copies of two
+others, caught by hashing before any reading effort was spent on them. <strong>A further 44% (nine
+Hindi-language sections, 268,048 characters) yielded exactly one usable technique.</strong> That was
+established by counting technique vocabulary on the Devanagari transliterations rather than by
+sampling: across all 268k characters the corpus contained 57 mentions of price tampering, 15 of
+SQLi, 2 of CSRF — and <strong>zero</strong> mentions of XSS, IDOR, open redirect, subdomain takeover, rate
+limiting, brute force, path traversal, Burp, nuclei or dorking. The remainder was stream
+management and narration.</p>
+<p>So roughly a third of the corpus carried essentially all of its value. The lesson is not that
+the source was bad — the English third was excellent — but that <strong>volume is not a proxy for
+content, and measuring density before reading is cheap.</strong></p>
+<p><strong>Thirteen entries were written</strong>, each checked against all 2,699 existing rows first. They
+cluster in three places the KB was genuinely empty:</p>
+<ul>
+<li><strong>Targeting</strong> — hunting the most recently <em>added</em> wildcard (platforms publish scope changes as
+  a dated diff, and a wildcard added weeks ago cannot have been fully tested); hunting the asset
+  with the <em>fewest</em> resolved reports rather than the most; <code>origin-*</code> hosts that serve the same
+  application with the edge WAF removed; and the cheap staleness signals that decide which of
+  several hundred hosts is worth attention.</li>
+<li><strong>Method</strong> — <strong>STRIDE threat modelling</strong>, which closes the gap between "recon is finished" and
+  "what do I actually test": decompose into mechanisms, walk each through Spoofing / Tampering /
+  Repudiation / Information disclosure / Denial of service / Elevation of privilege, and emit a
+  ranked attack-vector list. The KB previously held two passing mentions of threat modelling and
+  no method at all, which is a structural gap rather than a content one — HackPit's planner had
+  no model of this phase.</li>
+<li><strong>Web</strong> — repudiation and audit-trail attacks (the most overlooked STRIDE class: a role able to
+  edit the logs it is audited by, with impact argued through the compliance regime); brute
+  forcing through the change-password endpoint, where login is rate-limited and the
+  change-password path usually is not; CSRF token <em>binding</em> failures rather than missing tokens;
+  client-trusted entitlement flags, with the discipline that a UI which unhides is not an
+  authorization bypass until the server honours it; and letting the framework fingerprint decide
+  the test set — verb tampering is futile against Express and worth doing against Django/PHP.</li>
+</ul>
+<p><code>pipeline/authored/authored_entries.jsonl</code> is the one committable artifact; the raw corpus lives
+under the gitignored <code>sources/</code> tree and never enters this public repository.</p>
+<p><strong>KB enrichment is now a measured process rather than an additive one (2026-07-31).</strong> The
+governing rule is D21: distil, never parrot; check every candidate against the whole KB before
+writing; report zero when a source yields zero. The first batch under that rule took a corpus
+that was one-third signal and produced 13 entries aimed squarely at the categories that were
+thinnest, while deliberately adding nothing to the ones already carrying hundreds of rows. The
+next batch — 23 cert-study and CTF-writeup repositories — is scoped in <code>PROMPT-kb-repo-ingest.md</code>
+and is expected to yield most of its value in <code>pivoting</code>, <code>credentials</code>, <code>persistence</code> and <code>iot</code>,
+with several repositories predicted in advance to yield nothing at all.</p>
 </body>
 </html>

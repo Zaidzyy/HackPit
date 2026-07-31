@@ -154,6 +154,8 @@ run_test test_exposure_safety.py "published-port exposure invariants (default pu
 
 run_test test_proof_honesty.py "proof-harness HONESTY (an unfilled offensive slot reports NOT-RUN, never a fake pass)"
 
+run_test test_home_summary.py "/home-summary launcher rail (no secret reaches the browser / status endpoint executes nothing)"
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

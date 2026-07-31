@@ -28,6 +28,25 @@ export type Category = {
   icon: string;
 };
 
+/** Status rail for the launcher. Mirrors the backend's `HomeRail` — statuses only,
+ *  never a secret (`llm_model` is the model name; the API key is never sent). */
+export type HomeRail = {
+  /** null when the probe could not determine it (docker missing, probe timed out). */
+  sandbox_up: boolean | null;
+  engage_sandbox_up: boolean | null;
+  llm_provider: string;
+  llm_model: string;
+  windows_profile: string | null;
+  engagement_id: string | null;
+  engagement_target: string | null;
+};
+
+export type HomeSummary = {
+  rail: HomeRail;
+  /** Surface id -> count for the tile badges. Absent id = no badge. */
+  surfaces: Record<string, number>;
+};
+
 export type EntrySummary = {
   id: string;
   title: string;
@@ -395,6 +414,14 @@ export const getStats = (signal?: AbortSignal) =>
 
 export const getCategories = (signal?: AbortSignal) =>
   getJSON<Category[]>("/categories", signal);
+
+/**
+ * Launcher status rail. Fetched SEPARATELY from /stats on purpose: this endpoint
+ * runs docker probes, so putting it on the hero's critical path would gate the
+ * counters behind a container inspect. The rail renders "checking…" until it lands.
+ */
+export const getHomeSummary = (signal?: AbortSignal) =>
+  getJSON<HomeSummary>("/home-summary", signal);
 
 export const getCategory = (slug: string, signal?: AbortSignal) =>
   getJSON<EntrySummary[]>(`/categories/${encodeURIComponent(slug)}`, signal);

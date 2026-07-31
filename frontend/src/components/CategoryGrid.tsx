@@ -1,10 +1,7 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useState } from "react";
 import { CategoryCard } from "./CategoryCard";
-import { ScriptsCard } from "./ScriptsCard";
-import { COCKPIT_FEATURE, FEATURED } from "@/lib/data";
 import type { Category } from "@/lib/api";
 import { useReducedMotion } from "@/lib/useReducedMotion";
 
@@ -25,9 +22,18 @@ const HIDDEN_CATEGORIES = new Set([
 ]);
 
 /**
- * The bento grid. The featured card is static; the rest are populated from
- * GET /categories (real counts + colour/icon). Cards stagger in (70ms apart)
- * once revealed and data is present; reduced motion reveals them at once.
+ * The KB category grid — now categories ONLY.
+ *
+ * It used to also carry five product cards: the two featured surfaces
+ * (attack-paths + Cockpit), the scripts arsenal, the tool arsenal and code scan.
+ * Every one of those is a tile in the launcher bands above (see
+ * `SURFACE_BANDS` in lib/data.ts), so keeping them here would show each surface
+ * twice on the same screen. `ScriptsCard`, `FEATURED` and `COCKPIT_FEATURE` are
+ * left in the tree unreferenced rather than deleted, so restoring the old layout
+ * is a revert of this file alone.
+ *
+ * Cards stagger in (70ms apart) once revealed and data is present; reduced motion
+ * reveals them at once.
  */
 export function CategoryGrid({
   active,
@@ -41,8 +47,9 @@ export function CategoryGrid({
   const visibleCategories =
     categories?.filter((cat) => !HIDDEN_CATEGORIES.has(cat.slug)) ?? null;
 
-  // reveal order: attack-paths, cockpit, scripts, then each category
-  const total = 3 + (visibleCategories?.length ?? 0);
+  // The three-card head start is gone with the product cards — the reveal order
+  // is now just the categories themselves.
+  const total = visibleCategories?.length ?? 0;
 
   useEffect(() => {
     if (!active) return;
@@ -63,87 +70,8 @@ export function CategoryGrid({
 
   return (
     <div className="hp-grid">
-      {/* Two featured surfaces, side-by-side (stack on mobile): the generative
-          attack-paths planner and the live Cockpit. */}
-      <div className="hp-feat-row">
-        {/* Featured — guided attack paths (the first generative feature) */}
-        <Link
-          href="/attack-path"
-          className={`hp-card hp-feat${shownCount > 0 ? " hp-in" : ""}`}
-          style={{ "--cc": FEATURED.color } as CSSProperties}
-        >
-          <div className="hp-ic">{FEATURED.icon}</div>
-          <div className="hp-fx">
-            <h3>
-              {FEATURED.title}{" "}
-              <span className="hp-badge">{FEATURED.badge}</span>
-            </h3>
-            <p>{FEATURED.desc}</p>
-          </div>
-          <div className="hp-go">{FEATURED.cta}</div>
-        </Link>
-
-        {/* Cockpit — plot a path, then run it against the isolated lab */}
-        <Link
-          href="/cockpit"
-          className={`hp-card hp-feat${shownCount > 1 ? " hp-in" : ""}`}
-          style={{ "--cc": COCKPIT_FEATURE.color } as CSSProperties}
-        >
-          <div className="hp-ic">{COCKPIT_FEATURE.icon}</div>
-          <div className="hp-fx">
-            <h3>
-              {COCKPIT_FEATURE.title}{" "}
-              <span className="hp-badge">{COCKPIT_FEATURE.badge}</span>
-            </h3>
-            <p>{COCKPIT_FEATURE.desc}</p>
-          </div>
-          <div className="hp-go">{COCKPIT_FEATURE.cta}</div>
-        </Link>
-      </div>
-
-      {/* Scripts arsenal — the copy-ready operator view of the whole KB */}
-      <ScriptsCard shown={shownCount > 2} />
-
-      {/* Tool arsenal — the standard toolbox as a catalog: purpose + copy-ready
-          invocations. Data, not an engine; the planner draws on the same templates. */}
-      <Link
-        href="/arsenal"
-        className={`hp-card${shownCount > 2 ? " hp-in" : ""}`}
-        style={{ "--cc": "#e0c15a" } as CSSProperties}
-      >
-        <div className="hp-ic">{"⚒"}</div>
-        <h3>
-          Tool arsenal <span className="hp-badge">catalog</span>
-        </h3>
-        <p>
-          The standard toolbox — recon, web, AD, creds, cloud, RE — each with what it
-          is for and copy-ready invocations the planner writes from.
-        </p>
-      </Link>
-
-      {/* Code scan — the DEFENSIVE side: read a codebase, report its bugs. No target,
-          no execution; entirely separate from the cockpit's attack surface. */}
-      <Link
-        href="/code-scan"
-        className={`hp-card${shownCount > 2 ? " hp-in" : ""}`}
-        style={{ "--cc": "#7ec8a0" } as CSSProperties}
-      >
-        <div className="hp-ic">{"◈"}</div>
-        <h3>
-          Code scan <span className="hp-badge">static</span>
-        </h3>
-        <p>
-          Point Semgrep + Bandit at a codebase and read the findings — severity, CWE,
-          and the KB technique behind each one. Reads code, runs nothing.
-        </p>
-      </Link>
-
       {visibleCategories?.map((cat, i) => (
-        <CategoryCard
-          key={cat.slug}
-          category={cat}
-          shown={shownCount > i + 3}
-        />
+        <CategoryCard key={cat.slug} category={cat} shown={shownCount > i} />
       ))}
 
       {loading && !categories && (

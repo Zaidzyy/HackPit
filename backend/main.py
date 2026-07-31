@@ -58,6 +58,7 @@ from cockpit import engagement as cockpit_engagement  # noqa: E402
 from cockpit import reconcile as cockpit_reconcile  # noqa: E402
 from cockpit import loot as cockpit_loot  # noqa: E402
 from cockpit import winprofiles as cockpit_winprofiles  # noqa: E402  (Windows target store)
+from cockpit import sandbox as cockpit_sandbox  # noqa: E402  (read-only container probes)
 # The two evasion/exfil surfaces. Their ROUTES live here, not in cockpit/router.py, and NOT in
 # any orchestrator/loop module: see the "Sliver C2 + DNS-tunnel obfuscation" section below.
 from cockpit import sliver as cockpit_sliver  # noqa: E402  (Sliver C2 — human-only + gated gen)
@@ -471,6 +472,34 @@ class StatsResponse(BaseModel):
     screenshots_ocr: int = Field(description="Screenshots OCR'd into the KB.")
     total_entries: int
     categories: int
+
+
+class HomeRail(BaseModel):
+    """The launcher status rail. Answers "why is that surface refusing?" at a glance.
+
+    Every field is a STATUS, never a secret. `llm_model` is the model NAME (the key
+    is never included — see `llm.public_config`), and `windows_profile` is the
+    profile's display name, never its stored credential.
+    """
+
+    sandbox_up: bool | None = Field(description="Lab sandbox running; None if undeterminable.")
+    engage_sandbox_up: bool | None = Field(description="Engagement sandbox running.")
+    llm_provider: str
+    llm_model: str
+    windows_profile: str | None = Field(description="Newest WinRM profile's display name.")
+    engagement_id: str | None = None
+    engagement_target: str | None = None
+
+
+class HomeSummary(BaseModel):
+    """Launcher payload: the rail plus per-surface counts.
+
+    Deliberately SEPARATE from /stats so the hero's counters render immediately —
+    this endpoint runs docker probes and must never be on the hero's critical path.
+    """
+
+    rail: HomeRail
+    surfaces: dict[str, int] = Field(description="Surface id -> count for the tile badges.")
 
 
 class CategoryOut(BaseModel):
@@ -1124,6 +1153,62 @@ def tool_reconciliation(
 def stats() -> dict[str, int]:
     """Home-page counters, derived from the built KB."""
     return STATE.stats
+
+
+@app.get("/home-summary", response_model=HomeSummary)
+def home_summary() -> dict[str, Any]:
+    """The launcher's status rail + per-surface counts.
+
+    CROSS-CUTTING BY CONSTRUCTION, so it lives here rather than in any package —
+    it reads the sandbox probe, the LLM config, the Windows profile store, the
+    engagement store and the KB counters, and `cockpit` and `arsenal` may not
+    reference each other (see backend/AGENTS.md).
+
+    NO SECRETS. Every accessor used below is the masked/public variant:
+    `llm.public_config()` reduces the API key to a boolean and
+    `winprofiles.list_profiles()` returns `_public` rows. The raw
+    `llm.load_config()` and `winprofiles.get_secret()` must never appear in this
+    function — `test_home_summary.py` asserts that on the source AND proves the
+    check can fail by planting a call.
+
+    READ-ONLY. It probes and counts; it starts nothing and runs no user input.
+    The docker probes are best-effort: a status endpoint that 500s because the
+    stack is down is worse than one that reports "down", so every probe is
+    wrapped.
+    """
+    def _probe(fn: Any) -> bool | None:
+        """Run a docker probe, returning None when it cannot be determined."""
+        try:
+            return bool(fn())
+        except Exception:  # noqa: BLE001 - a status endpoint must never 500
+            return None
+
+    llm_cfg = llm.public_config()
+    profiles = cockpit_winprofiles.list_profiles()
+    engagements = cockpit_engagement.list_active()
+
+    active = engagements[0] if engagements else None
+    rail = {
+        "sandbox_up": _probe(cockpit_sandbox.is_sandbox_up),
+        "engage_sandbox_up": _probe(cockpit_sandbox.is_engage_sandbox_up),
+        "llm_provider": llm_cfg["provider"],
+        "llm_model": llm_cfg["model"],
+        "windows_profile": (profiles[0]["name"] or profiles[0]["host"]) if profiles else None,
+        "engagement_id": active.engagement_id if active else None,
+        "engagement_target": active.target if active else None,
+    }
+
+    return {
+        "rail": rail,
+        "surfaces": {
+            "library": STATE.stats.get("total_entries", 0),
+            "arsenal": len(attack_path._arsenal().tools),
+            "scripts": STATE.scripts.get("total", 0),
+            "sessions": len(sessions_db.list_sessions()),
+            "engagements": len(engagements),
+            "windows_profiles": len(profiles),
+        },
+    }
 
 
 @app.get("/categories", response_model=list[CategoryOut])

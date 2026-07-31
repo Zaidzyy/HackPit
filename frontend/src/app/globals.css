@@ -7857,3 +7857,163 @@ a.hp-card {
   color: var(--accent); border-bottom: 1px solid var(--accent-line);
 }
 .hp-cs-xploit:hover { border-bottom-color: var(--accent); }
+
+/* ------------------------------------------------------------------ *
+ *  LAUNCHER — status rail + surface bands (home page)
+ *
+ *  Sits between the hero and the category grid. Reuses .hp-card wholesale
+ *  so a surface tile and a category card are visibly the same object; only
+ *  the grid track count and the badge differ.
+ * ------------------------------------------------------------------ */
+
+/* ---------- status rail ---------- */
+.hp-rail {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  backdrop-filter: blur(6px);
+  margin-top: 30px;
+  overflow: hidden;
+}
+/* single-cell states (loading / backend unreachable) */
+.hp-rail-msg {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+  font-size: 11.5px;
+  letter-spacing: 0.4px;
+  color: var(--dim);
+}
+.hp-st {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 16px;
+  font-size: 11.5px;
+  letter-spacing: 0.4px;
+  color: var(--grey);
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+.hp-st > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hp-st:last-child { border-right: 0; }
+.hp-st b { color: var(--white); font-weight: 400; }
+.hp-st .hp-sub { color: var(--dim); font-size: 10.5px; }
+.hp-st-on { background: var(--accent-soft); }
+
+.hp-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--dim);
+}
+.hp-dot-up { background: #b8f24a; box-shadow: 0 0 10px rgba(184, 242, 74, 0.55); }
+.hp-dot-down { background: #ff6b5e; box-shadow: 0 0 10px rgba(255, 107, 94, 0.45); }
+.hp-dot-warn { background: var(--accent); box-shadow: 0 0 10px rgba(255, 176, 58, 0.45); }
+/* "unknown" is NOT "down" — a probe we never got must not read as a failure. */
+.hp-dot-unknown { background: var(--border-2); }
+
+/* ---------- band section headers ---------- */
+.hp-sec {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin: 40px 0 15px;
+}
+.hp-sec h2 {
+  font-family: var(--font-space-grotesk), "Space Grotesk", sans-serif;
+  font-weight: 400;
+  font-size: 12px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: var(--grey);
+}
+.hp-sec .hp-rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--border-2), transparent);
+}
+.hp-sec .hp-hint {
+  font-size: 10.5px;
+  color: var(--dim);
+  letter-spacing: 0.5px;
+}
+/* the library divider — the one header that reads as a section break, not a band */
+.hp-sec-major { margin-top: 60px; }
+.hp-sec-major h2 { color: var(--accent); font-size: 13px; }
+
+/* ---------- surface tiles ---------- */
+/* 4 tracks for surfaces; the category grid keeps globals' 3. */
+.hp-grid-4 { grid-template-columns: repeat(4, 1fr); margin-top: 0; }
+
+/* Surface tiles reveal via CSS animation-delay, NOT a setState-per-tile effect —
+   see SurfaceBands.tsx. .hp-card starts at opacity 0, so they need their own
+   keyframe rather than the .hp-in class the category cards toggle. */
+.hp-surface {
+  animation: hp-rise 0.5s forwards;
+}
+@keyframes hp-rise {
+  to { opacity: 1; transform: none; }
+}
+.hp-surface:hover {
+  border-color: var(--cc, var(--border-2));
+  transform: translateY(-3px);
+  background: rgba(22, 25, 26, 0.6);
+}
+.hp-surface:hover::before { transform: scaleX(1); }
+.hp-surface h3 {
+  font-family: var(--font-space-grotesk), "Space Grotesk", sans-serif;
+  font-weight: 400;
+  font-size: 15.5px;
+  margin-bottom: 5px;
+  letter-spacing: 0.2px;
+}
+.hp-surface p {
+  font-size: 11.5px;
+  color: var(--grey);
+  line-height: 1.55;
+  letter-spacing: 0.2px;
+}
+.hp-surface:hover .hp-ct { color: var(--cc, var(--accent)); }
+
+/* dependency marker — "this needs the docker stack up" */
+.hp-req {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 11px;
+  font-size: 9.5px;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.hp-req i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #b8f24a;
+  font-style: normal;
+}
+.hp-req-off { color: #ff6b5e; opacity: 0.75; }
+.hp-req-off i { background: #ff6b5e; }
+.hp-card-dim { opacity: 0.55; }
+.hp-card-dim:hover { opacity: 1; }
+
+@media (max-width: 1000px) {
+  .hp-grid-4 { grid-template-columns: repeat(2, 1fr); }
+  .hp-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 680px) {
+  .hp-grid-4 { grid-template-columns: 1fr; }
+  .hp-rail { grid-template-columns: 1fr; }
+  .hp-st { border-right: 0; border-bottom: 1px solid var(--border); }
+  .hp-st:last-child { border-bottom: 0; }
+}

@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HackPit — launcher mock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&family=Space+Grotesk:wght@300;400;500&display=swap" rel="stylesheet" />
+<style>
+/* ------------------------------------------------------------------ *
+ *  LAUNCHER MOCK — reuses HackPit's real tokens from globals.css so
+ *  this previews as an integrated surface, not a foreign design.
+ * ------------------------------------------------------------------ */
+:root{
+  --accent:#ffb03a;
+  --accent-soft:rgba(255,176,58,.14);
+  --accent-line:rgba(255,176,58,.4);
+  --bg:#060707;
+  --panel:rgba(17,19,20,.55);
+  --border:#1b1f22;
+  --border-2:#2a3036;
+  --white:#eef2ee;
+  --grey:#8b938d;
+  --dim:#565e58;
+  --lime:#b8f24a;
+  --cyan:#4fe0d0;
+  --red:#ff6b5e;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --font-display:"Space Grotesk",var(--font-mono);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg);color:var(--white);
+  font-family:var(--font-mono);
+  -webkit-font-smoothing:antialiased;
+  min-height:100vh;overflow-x:hidden;
+}
+canvas#wave{position:fixed;inset:0;z-index:0;opacity:.5}
+.hp-veil{
+  position:fixed;inset:0;z-index:1;pointer-events:none;
+  background:
+    radial-gradient(1100px 700px at 50% 0%,var(--accent-soft),transparent 55%),
+    radial-gradient(900px 600px at 90% 90%,rgba(79,224,208,.05),transparent 60%);
+}
+/* subtle film grain — matches the app's textured dark */
+.hp-veil::after{
+  content:"";position:absolute;inset:0;opacity:.025;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ---------- shell ---------- */
+.hp-home{position:relative;z-index:2;max-width:1180px;margin:0 auto;padding:0 26px 90px}
+
+/* ---------- topbar (verbatim structure from globals.css) ---------- */
+.hp-topbar{
+  display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+  align-items:center;height:66px;gap:20px;
+}
+.hp-wm{font-weight:500;font-size:19px;letter-spacing:.02em}
+.hp-wm .hp-c{color:var(--accent);animation:hp-blink 1s steps(1) infinite}
+@keyframes hp-blink{50%{opacity:0}}
+.hp-nav{
+  display:flex;gap:20px;justify-self:center;font-size:12px;
+  letter-spacing:2px;color:var(--dim);text-transform:uppercase;
+}
+.hp-nav a{cursor:pointer;color:inherit;text-decoration:none;transition:color .2s}
+.hp-nav a:hover{color:var(--grey)}
+.hp-nav .hp-on{color:var(--accent)}
+.hp-cmdk{
+  font-size:11px;color:var(--grey);border:1px solid var(--border-2);
+  border-radius:8px;padding:8px 14px;min-width:215px;justify-self:end;
+  display:flex;gap:8px;align-items:center;justify-content:space-between;
+  cursor:text;background:transparent;transition:border-color .2s;
+}
+.hp-cmdk:hover{border-color:var(--accent-line)}
+.hp-cmdk kbd{
+  border:1px solid var(--border-2);border-radius:4px;padding:0 5px;
+  color:var(--dim);font-family:inherit;
+}
+
+/* ---------- status rail (NEW — the "why is everything refusing" answer) ---------- */
+.hp-rail{
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:stretch;
+  border:1px solid var(--border);border-radius:12px;
+  background:var(--panel);backdrop-filter:blur(6px);
+  margin-top:22px;overflow:hidden;
+  opacity:0;animation:rise .5s .05s forwards;
+}
+.hp-st{
+  display:flex;align-items:center;gap:9px;padding:13px 16px;
+  font-size:11.5px;letter-spacing:.4px;color:var(--grey);
+  border-right:1px solid var(--border);min-width:0;
+}
+.hp-st > span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hp-st:last-child{border-right:0}
+.hp-dot{
+  width:7px;height:7px;border-radius:50%;flex:none;
+  background:var(--dim);box-shadow:0 0 0 3px transparent;
+}
+.hp-dot.up{background:var(--lime);box-shadow:0 0 10px rgba(184,242,74,.55)}
+.hp-dot.down{background:var(--red);box-shadow:0 0 10px rgba(255,107,94,.45)}
+.hp-dot.warn{background:var(--accent);box-shadow:0 0 10px rgba(255,176,58,.45)}
+.hp-st b{color:var(--white);font-weight:400}
+.hp-st .hp-sub{color:var(--dim);font-size:10.5px}
+.hp-st.hp-act{background:rgba(255,176,58,.05)}
+
+/* ---------- section headers ---------- */
+.hp-sec{
+  display:flex;align-items:baseline;gap:14px;
+  margin:44px 0 16px;
+}
+.hp-sec h2{
+  font-family:var(--font-display);font-weight:400;font-size:12px;
+  letter-spacing:4px;text-transform:uppercase;color:var(--grey);
+}
+.hp-sec .hp-rule{flex:1;height:1px;background:linear-gradient(90deg,var(--border-2),transparent)}
+.hp-sec .hp-hint{font-size:10.5px;color:var(--dim);letter-spacing:.5px}
+
+/* ---------- grid ---------- */
+.hp-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:13px}
+.hp-card{
+  background:var(--panel);border:1px solid var(--border);border-radius:14px;
+  padding:18px;cursor:pointer;position:relative;overflow:hidden;
+  backdrop-filter:blur(6px);text-decoration:none;color:inherit;display:block;
+  opacity:0;transform:translateY(16px);
+  animation:rise .5s forwards;
+  transition:border-color .25s,transform .25s,background .25s;
+}
+@keyframes rise{to{opacity:1;transform:none}}
+.hp-card:hover{
+  border-color:var(--cc,var(--border-2));transform:translateY(-3px);
+  background:rgba(22,25,26,.62);
+}
+.hp-card::before{
+  content:"";position:absolute;top:0;left:0;right:0;height:2px;
+  background:var(--cc,var(--accent));opacity:.55;
+  transform:scaleX(0);transform-origin:left;transition:transform .3s;
+}
+.hp-card:hover::before{transform:scaleX(1)}
+.hp-ic{
+  width:34px;height:34px;border-radius:9px;display:flex;
+  align-items:center;justify-content:center;font-size:15px;
+  color:var(--cc,var(--accent));
+  background:color-mix(in srgb,var(--cc,var(--accent)) 12%,transparent);
+  border:1px solid color-mix(in srgb,var(--cc,var(--accent)) 30%,transparent);
+  margin-bottom:14px;
+}
+.hp-card h3{
+  font-family:var(--font-display);font-weight:400;font-size:15.5px;
+  margin-bottom:5px;letter-spacing:.2px;
+}
+.hp-card p{font-size:11.5px;color:var(--grey);line-height:1.55;letter-spacing:.2px}
+.hp-ct{
+  position:absolute;top:17px;right:17px;font-size:12.5px;
+  color:var(--dim);font-weight:500;letter-spacing:.3px;
+}
+.hp-card:hover .hp-ct{color:var(--cc,var(--accent))}
+/* "needs the docker stack" marker */
+.hp-req{
+  display:inline-flex;align-items:center;gap:5px;margin-top:11px;
+  font-size:9.5px;letter-spacing:1.1px;text-transform:uppercase;color:var(--dim);
+}
+.hp-req i{width:5px;height:5px;border-radius:50%;background:var(--lime);font-style:normal}
+.hp-req.off i{background:var(--red)}
+.hp-req.off{color:var(--red);opacity:.75}
+.hp-card.dim{opacity:.55}
+.hp-card.dim:hover{opacity:1}
+
+/* ---------- activity ---------- */
+.hp-act-list{
+  border:1px solid var(--border);border-radius:14px;background:var(--panel);
+  backdrop-filter:blur(6px);overflow:hidden;
+  opacity:0;animation:rise .5s .1s forwards;
+}
+.hp-row{
+  display:grid;grid-template-columns:78px 96px 1fr auto;gap:16px;
+  align-items:center;padding:12px 18px;
+  border-bottom:1px solid var(--border);font-size:11.5px;
+  transition:background .2s;
+}
+.hp-row:last-child{border-bottom:0}
+.hp-row:hover{background:rgba(255,255,255,.017)}
+.hp-row .t{color:var(--dim);font-size:10.5px;letter-spacing:.3px}
+.hp-tag{
+  font-size:9.5px;letter-spacing:1px;text-transform:uppercase;
+  padding:3px 8px;border-radius:5px;text-align:center;
+  border:1px solid color-mix(in srgb,var(--cc,var(--accent)) 32%,transparent);
+  color:var(--cc,var(--accent));
+  background:color-mix(in srgb,var(--cc,var(--accent)) 10%,transparent);
+}
+.hp-row .cmd{
+  color:var(--grey);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.hp-row .cmd b{color:var(--white);font-weight:400}
+.hp-ok{color:var(--lime);font-size:10.5px;letter-spacing:.5px}
+.hp-no{color:var(--red);font-size:10.5px;letter-spacing:.5px}
+.hp-pend{color:var(--accent);font-size:10.5px;letter-spacing:.5px}
+
+/* ---------- footer note ---------- */
+.hp-note{
+  margin-top:40px;padding:16px 20px;border-radius:12px;
+  border:1px dashed var(--border-2);color:var(--dim);
+  font-size:11px;line-height:1.7;letter-spacing:.3px;
+}
+.hp-note b{color:var(--grey);font-weight:400}
+
+@media(max-width:1000px){.hp-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:680px){
+  .hp-grid{grid-template-columns:1fr}
+  .hp-nav,.hp-cmdk{display:none}
+  .hp-topbar{grid-template-columns:1fr}
+  .hp-row{grid-template-columns:1fr;gap:6px}
+}
+</style>
+</head>
+<body>
+<canvas id="wave"></canvas>
+<div class="hp-veil"></div>
+
+<div class="hp-home">
+
+  <!-- ── topbar ─────────────────────────────────────────────── -->
+  <div class="hp-topbar">
+    <div class="hp-wm">hackpit<span class="hp-c">_</span></div>
+    <nav class="hp-nav">
+      <a class="hp-on">:launcher</a>
+      <a>:attack-paths</a>
+      <a>:cockpit</a>
+      <a>:kali</a>
+      <a>:engagements</a>
+    </nav>
+    <div class="hp-cmdk">
+      <span>search 2,699 entries</span>
+      <span class="hp-cmdk-keys"><kbd>⌘</kbd><kbd>K</kbd></span>
+    </div>
+  </div>
+
+  <!-- ── status rail ────────────────────────────────────────── -->
+  <div class="hp-rail">
+    <div class="hp-st"><span class="hp-dot up"></span>
+      <span>sandbox stack&nbsp; <b>up</b> <span class="hp-sub">· 4 containers</span></span></div>
+    <div class="hp-st"><span class="hp-dot up"></span>
+      <span>ollama&nbsp; <b>qwen2.5-coder:14b</b></span></div>
+    <div class="hp-st"><span class="hp-dot warn"></span>
+      <span>winrm&nbsp; <b>dc01.corp.local</b> <span class="hp-sub">· idle</span></span></div>
+    <div class="hp-st hp-act"><span class="hp-dot up"></span>
+      <span>engagement&nbsp; <b>eng-57550b4b</b></span></div>
+  </div>
+
+  <!-- ── knowledge ──────────────────────────────────────────── -->
+  <div class="hp-sec">
+    <h2>knowledge</h2><div class="hp-rule"></div>
+    <span class="hp-hint">read-only · no stack required</span>
+  </div>
+  <div class="hp-grid">
+    <a class="hp-card" style="--cc:#ffb03a;animation-delay:.06s">
+      <div class="hp-ic">◈</div><span class="hp-ct">2,699</span>
+      <h3>:library</h3><p>Searchable technique corpus across 33 categories.</p>
+    </a>
+    <a class="hp-card" style="--cc:#ffb03a;animation-delay:.09s">
+      <div class="hp-ic">⌁</div><span class="hp-ct">7.4k</span>
+      <h3>:exploits</h3><p>Service + version → CVE → public exploit lookup.</p>
+    </a>
+    <a class="hp-card" style="--cc:#ffb03a;animation-delay:.12s">
+      <div class="hp-ic">⚒</div><span class="hp-ct">110</span>
+      <h3>:arsenal</h3><p>Catalogued tools with vetted invocation templates.</p>
+    </a>
+    <a class="hp-card" style="--cc:#ffb03a;animation-delay:.15s">
+      <div class="hp-ic">≡</div><span class="hp-ct">148</span>
+      <h3>:scripts</h3><p>Reusable one-liners and enumeration snippets.</p>
+    </a>
+  </div>
+
+  <!-- ── plan ───────────────────────────────────────────────── -->
+  <div class="hp-sec">
+    <h2>plan</h2><div class="hp-rule"></div>
+    <span class="hp-hint">proposes · never executes</span>
+  </div>
+  <div class="hp-grid">
+    <a class="hp-card" style="--cc:#b8f24a;animation-delay:.18s">
+      <div class="hp-ic">↳</div><span class="hp-ct">—</span>
+      <h3>:attack-paths</h3><p>Ordered recon → exploit → privesc walkthrough from your notes.</p>
+    </a>
+    <a class="hp-card" style="--cc:#b8f24a;animation-delay:.21s">
+      <div class="hp-ic">◱</div><span class="hp-ct">19</span>
+      <h3>:engagements</h3><p>Scoped targets, state, findings and exam reports.</p>
+    </a>
+    <a class="hp-card" style="--cc:#b8f24a;animation-delay:.24s">
+      <div class="hp-ic">⛁</div><span class="hp-ct">4</span>
+      <h3>:ad-graph</h3><p>BloodHound graph routed to Domain Admin, edge by edge.</p>
+    </a>
+    <a class="hp-card" style="--cc:#b8f24a;animation-delay:.27s">
+      <div class="hp-ic">◎</div><span class="hp-ct">—</span>
+      <h3>:code-scan</h3><p>Static application-security review of a source tree.</p>
+    </a>
+  </div>
+
+  <!-- ── operate ────────────────────────────────────────────── -->
+  <div class="hp-sec">
+    <h2>operate</h2><div class="hp-rule"></div>
+    <span class="hp-hint">every command human-approved · needs the stack</span>
+  </div>
+  <div class="hp-grid">
+    <a class="hp-card" style="--cc:#4fe0d0;animation-delay:.30s">
+      <div class="hp-ic">▶</div><span class="hp-ct">312</span>
+      <h3>:cockpit</h3><p>Guided loop — propose, approve, run, parse to state.</p>
+      <span class="hp-req"><i></i>stack up</span>
+    </a>
+    <a class="hp-card" style="--cc:#4fe0d0;animation-delay:.33s">
+      <div class="hp-ic">▮</div><span class="hp-ct">—</span>
+      <h3>:terminal</h3><p>Real PTY inside the container. vim, top, msfconsole.</p>
+      <span class="hp-req"><i></i>stack up</span>
+    </a>
+    <a class="hp-card" style="--cc:#4fe0d0;animation-delay:.36s">
+      <div class="hp-ic">$</div><span class="hp-ct">—</span>
+      <h3>:kali</h3><p>Sentinel shell — clean, escape-free per-command records.</p>
+      <span class="hp-req"><i></i>stack up</span>
+    </a>
+    <a class="hp-card" style="--cc:#4fe0d0;animation-delay:.39s">
+      <div class="hp-ic">⇌</div><span class="hp-ct">27</span>
+      <h3>:repeater</h3><p>Craft and replay HTTP from inside the sandbox.</p>
+      <span class="hp-req"><i></i>stack up</span>
+    </a>
+  </div>
+
+  <!-- ── infrastructure ─────────────────────────────────────── -->
+  <div class="hp-sec">
+    <h2>infrastructure</h2><div class="hp-rule"></div>
+    <span class="hp-hint">gated start · human-only stdin</span>
+  </div>
+  <div class="hp-grid">
+    <a class="hp-card" style="--cc:#c98bff;animation-delay:.42s">
+      <div class="hp-ic">◉</div><span class="hp-ct">1</span>
+      <h3>:c2</h3><p>Catch and drive one live shell. No multi-implant fleet.</p>
+      <span class="hp-req"><i></i>1 active</span>
+    </a>
+    <a class="hp-card" style="--cc:#c98bff;animation-delay:.45s">
+      <div class="hp-ic">⇄</div><span class="hp-ct">2</span>
+      <h3>:tunnels</h3><p>Pivots and DNS/TCP tunnels through the sandbox.</p>
+      <span class="hp-req"><i></i>iodine up</span>
+    </a>
+    <a class="hp-card dim" style="--cc:#c98bff;animation-delay:.48s">
+      <div class="hp-ic">⊞</div><span class="hp-ct">—</span>
+      <h3>:windows</h3><p>Drive an external Windows/AD host over WinRM.</p>
+      <span class="hp-req off"><i></i>vm offline</span>
+    </a>
+    <a class="hp-card" style="--cc:#c98bff;animation-delay:.51s">
+      <div class="hp-ic">◐</div><span class="hp-ct">—</span>
+      <h3>:evasion</h3><p>Generate-only payload shaping. Never auto-runs.</p>
+      <span class="hp-req"><i></i>stack up</span>
+    </a>
+  </div>
+
+  <!-- ── activity ───────────────────────────────────────────── -->
+  <div class="hp-sec">
+    <h2>recent</h2><div class="hp-rule"></div>
+    <span class="hp-hint">last 6 approved commands</span>
+  </div>
+  <div class="hp-act-list">
+    <div class="hp-row" style="--cc:#4fe0d0">
+      <span class="t">14:22:07</span><span class="hp-tag">cockpit</span>
+      <span class="cmd"><b>nxc</b> smb 10.10.11.42 -u svc_sql -H 8846f7ea…</span>
+      <span class="hp-ok">✓ pwned</span>
+    </div>
+    <div class="hp-row" style="--cc:#4fe0d0">
+      <span class="t">14:19:51</span><span class="hp-tag">cockpit</span>
+      <span class="cmd"><b>impacket-secretsdump</b> corp.local/svc_sql@10.10.11.42</span>
+      <span class="hp-ok">✓ 41 hashes</span>
+    </div>
+    <div class="hp-row" style="--cc:#c98bff">
+      <span class="t">14:11:03</span><span class="hp-tag">tunnels</span>
+      <span class="cmd"><b>iodine</b> -f -P •••• tun.lab.local</span>
+      <span class="hp-ok">✓ up 18m</span>
+    </div>
+    <div class="hp-row" style="--cc:#4fe0d0">
+      <span class="t">13:58:40</span><span class="hp-tag">repeater</span>
+      <span class="cmd"><b>POST</b> /api/v2/export?tpl=../../etc/passwd</span>
+      <span class="hp-ok">✓ 200</span>
+    </div>
+    <div class="hp-row" style="--cc:#ff6b5e">
+      <span class="t">13:44:12</span><span class="hp-tag">cockpit</span>
+      <span class="cmd"><b>hydra</b> -L users.txt -P rockyou.txt ssh://10.10.11.42</span>
+      <span class="hp-no">✗ rejected · out of scope</span>
+    </div>
+    <div class="hp-row" style="--cc:#ffb03a">
+      <span class="t">13:41:55</span><span class="hp-tag">proposer</span>
+      <span class="cmd"><b>gobuster</b> dir -u http://10.10.11.42:8080 -w common.txt</span>
+      <span class="hp-pend">⧗ awaiting approval</span>
+    </div>
+  </div>
+
+  <div class="hp-note">
+    <b>Mock — not wired to the backend.</b> Real numbers where I had them (2,699 KB entries ·
+    33 categories · 110 arsenal tools · 19 engagements). Counts marked “—”, the status rail,
+    and the activity rows are sample data to show shape.
+    <br />Every tile maps to a route that already exists. <b>:evasion</b>, <b>:c2</b>,
+    <b>:tunnels</b>, <b>:windows</b>, <b>:repeater</b>, <b>:arsenal</b>, <b>:scripts</b>,
+    <b>:code-scan</b> and <b>:ad-graph</b> are currently reachable only by typing the URL.
+  </div>
+</div>
+
+<script>
+/* ---- living wave grid: matches the app's WaveGrid background ---- */
+(function(){
+  const c = document.getElementById('wave'), x = c.getContext('2d');
+  let w, h, t = 0;
+  const resize = () => {
+    const d = Math.min(devicePixelRatio || 1, 2);
+    w = c.width = innerWidth * d; h = c.height = innerHeight * d;
+    c.style.width = innerWidth + 'px'; c.style.height = innerHeight + 'px';
+    x.scale(d, d);
+  };
+  resize(); addEventListener('resize', resize);
+
+  const COLS = 46, ROWS = 26;
+  function frame(){
+    const vw = innerWidth, vh = innerHeight;
+    x.clearRect(0, 0, w, h);
+    const gx = vw / (COLS - 1), gy = vh / (ROWS - 1);
+    for (let i = 0; i < COLS; i++){
+      for (let j = 0; j < ROWS; j++){
+        const px = i * gx, py = j * gy;
+        // two interfering sine fields -> slow organic drift
+        const a = Math.sin(i * 0.34 + t) * Math.cos(j * 0.29 - t * 0.7);
+        const o = (a + 1) / 2;
+        const r = 0.7 + o * 0.9;
+        x.beginPath();
+        x.arc(px, py + a * 5, r, 0, 6.283);
+        x.fillStyle = 'rgba(255,176,58,' + (0.045 + o * 0.10).toFixed(3) + ')';
+        x.fill();
+      }
+    }
+    t += 0.006;
+    requestAnimationFrame(frame);
+  }
+  frame();
+})();
+
+/* ---- ⌘K affordance (visual only in the mock) ---- */
+addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k'){
+    e.preventDefault();
+    const el = document.querySelector('.hp-cmdk');
+    el.style.borderColor = 'var(--accent)';
+    setTimeout(() => el.style.borderColor = '', 450);
+  }
+});
+</script>
+</body>
+</html>

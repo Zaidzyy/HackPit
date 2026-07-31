@@ -4,20 +4,31 @@ import { motion } from "framer-motion";
 import { TopBar } from "./TopBar";
 import { StatCounter } from "./StatCounter";
 import { CategoryGrid } from "./CategoryGrid";
+import { StatusRail } from "./StatusRail";
+import { SurfaceBands } from "./SurfaceBands";
 import { STAT_FIELDS } from "@/lib/data";
-import { getCategories, getStats } from "@/lib/api";
+import { getCategories, getHomeSummary, getStats } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { useReducedMotion } from "@/lib/useReducedMotion";
 
 /**
- * The app shell revealed after the intro: top bar, hero with live stat
- * counters, and the bento grid populated from the API. `active` gates the
- * reveal + count-up + stagger; data is fetched on mount regardless.
+ * The app shell revealed after the intro: top bar, hero with live stat counters,
+ * the launcher (status rail + surface bands), then the KB category grid.
+ *
+ * WHY THE LAUNCHER IS HERE rather than on its own route: about a dozen surfaces
+ * were reachable only by typing the URL. A page you have to navigate to fixes
+ * that only if you remember to navigate to it, so the index lives on the screen
+ * you already land on. The hero and the category grid are unchanged.
+ *
+ * THREE INDEPENDENT FETCHES on purpose. /home-summary runs docker probes, so
+ * folding it into /stats would gate the hero's counters behind a container
+ * inspect; each section renders as its own data arrives.
  */
 export function Home({ active }: { active: boolean }) {
   const reduced = useReducedMotion();
   const stats = useApi(getStats, []);
   const categories = useApi(getCategories, []);
+  const summary = useApi(getHomeSummary, []);
 
   // Counters only start once revealed AND real numbers are in hand.
   const countersActive = active && !!stats.data;
@@ -54,6 +65,27 @@ export function Home({ active }: { active: boolean }) {
             couldn&apos;t load stats — {stats.error}
           </div>
         )}
+      </div>
+
+      <StatusRail
+        rail={summary.data?.rail ?? null}
+        loading={summary.loading}
+        error={summary.error}
+      />
+
+      <SurfaceBands
+        surfaces={summary.data?.surfaces ?? null}
+        rail={summary.data?.rail ?? null}
+      />
+
+      <div className="hp-sec hp-sec-major">
+        <h2 id="band-library">browse the library</h2>
+        <div className="hp-rule" />
+        <span className="hp-hint">
+          {stats.data
+            ? `${stats.data.categories} categories · ${stats.data.total_entries.toLocaleString()} entries`
+            : "the knowledge base"}
+        </span>
       </div>
 
       <CategoryGrid

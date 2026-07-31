@@ -34,6 +34,192 @@ export const NAV: NavItem[] = [
   { key: "engagements", label: ":engagements", href: "/engagements" },
 ];
 
+/** One launcher tile. `count` is looked up in HomeSummary.surfaces by `countKey`. */
+export type Surface = {
+  key: string;
+  label: string;
+  href: string;
+  desc: string;
+  /** Glyph on the tile — keeps a surface tile visually a sibling of a category card. */
+  icon: string;
+  /** Key into HomeSummary.surfaces. Omitted = no count badge. */
+  countKey?: string;
+  /** Shown as a small marker: this surface needs the docker stack up. */
+  needsStack?: boolean;
+};
+
+export type SurfaceBand = {
+  key: string;
+  title: string;
+  /** The safety posture of everything in the band — stated on the surface itself. */
+  hint: string;
+  color: string;
+  surfaces: Surface[];
+};
+
+/**
+ * THE LAUNCHER. Every route the app has, grouped by what it does to a target.
+ *
+ * This exists because roughly a dozen surfaces were reachable only by typing the
+ * URL — :arsenal, :c2, :tunnels, :windows, :repeater, :scripts, :code-scan and the
+ * AD graph were all built and then invisible. The top nav holds five product
+ * sections and deliberately stays that size; this is the full index.
+ *
+ * The band `hint` is not decoration. It states the posture of everything in the
+ * band, so the page cannot show a shell tile without also saying who approves it.
+ */
+export const SURFACE_BANDS: SurfaceBand[] = [
+  {
+    key: "plan",
+    title: "plan",
+    hint: "proposes · never executes",
+    color: "#b8f24a",
+    surfaces: [
+      {
+        key: "attack-paths",
+        icon: "↳",
+        label: ":attack-paths",
+        href: "/attack-path",
+        desc: "Ordered recon → exploit → privesc walkthrough from your notes.",
+      },
+      {
+        key: "engagements",
+        icon: "◱",
+        label: ":engagements",
+        href: "/engagements",
+        desc: "Scoped targets, state, findings and exam reports.",
+        countKey: "engagements",
+      },
+      {
+        key: "ad-graph",
+        icon: "⛁",
+        label: ":ad-graph",
+        href: "/cockpit/ad",
+        desc: "BloodHound graph routed to Domain Admin, edge by edge.",
+      },
+      {
+        key: "code-scan",
+        icon: "◎",
+        label: ":code-scan",
+        href: "/code-scan",
+        desc: "Static application-security review of a source tree.",
+      },
+    ],
+  },
+  {
+    key: "operate",
+    title: "operate",
+    hint: "every command human-approved · needs the stack",
+    color: "#4fe0d0",
+    surfaces: [
+      {
+        key: "cockpit",
+        icon: "▶",
+        label: ":cockpit",
+        href: "/cockpit",
+        desc: "Guided loop — propose, approve, run, parse to state.",
+        countKey: "sessions",
+        needsStack: true,
+      },
+      {
+        key: "terminal",
+        icon: "▮",
+        label: ":terminal",
+        href: "/terminal",
+        desc: "Real PTY inside the container. vim, top, msfconsole.",
+        needsStack: true,
+      },
+      {
+        key: "kali",
+        icon: "$",
+        label: ":kali",
+        href: "/kali",
+        desc: "Sentinel shell — clean, escape-free per-command records.",
+        needsStack: true,
+      },
+      {
+        key: "repeater",
+        icon: "⇌",
+        label: ":repeater",
+        href: "/repeater",
+        desc: "Craft and replay HTTP from inside the sandbox.",
+        needsStack: true,
+      },
+    ],
+  },
+  {
+    key: "infrastructure",
+    title: "infrastructure",
+    hint: "gated start · human-only stdin",
+    color: "#c98bff",
+    surfaces: [
+      {
+        key: "c2",
+        icon: "◉",
+        label: ":c2",
+        href: "/c2",
+        desc: "Catch and drive one live shell. No multi-implant fleet.",
+        needsStack: true,
+      },
+      {
+        key: "tunnels",
+        icon: "⇄",
+        label: ":tunnels",
+        href: "/tunnels",
+        desc: "Pivots and DNS/TCP tunnels through the sandbox.",
+        needsStack: true,
+      },
+      {
+        key: "windows",
+        icon: "⊞",
+        label: ":windows",
+        href: "/windows",
+        desc: "Drive an external Windows/AD host over WinRM.",
+        countKey: "windows_profiles",
+      },
+      {
+        key: "evasion",
+        icon: "◐",
+        label: ":evasion",
+        href: "/evasion",
+        desc: "Generate-only payload shaping. Never auto-runs.",
+        needsStack: true,
+      },
+    ],
+  },
+  {
+    key: "reference",
+    title: "reference",
+    hint: "read-only · no stack required",
+    color: "#ffb03a",
+    surfaces: [
+      {
+        key: "exploits",
+        icon: "⌁",
+        label: ":exploits",
+        href: "/exploits",
+        desc: "Service + version → CVE → public exploit lookup.",
+      },
+      {
+        key: "arsenal",
+        icon: "⚒",
+        label: ":arsenal",
+        href: "/arsenal",
+        desc: "Catalogued tools with vetted invocation templates.",
+        countKey: "arsenal",
+      },
+      {
+        key: "scripts",
+        icon: "≡",
+        label: ":scripts",
+        href: "/scripts",
+        desc: "Reusable one-liners and enumeration snippets.",
+        countKey: "scripts",
+      },
+    ],
+  },
+];
+
 export const ACCENTS: AccentSwatch[] = [
   { hex: "#ffb03a", title: "amber" },
   { hex: "#b8f24a", title: "lime" },

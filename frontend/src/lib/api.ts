@@ -41,6 +41,12 @@ export type HomeRail = {
   engagement_target: string | null;
 };
 
+export type Operator = {
+  /** Empty string when unconfigured — render no byline rather than an empty one. */
+  name: string;
+  handle: string;
+};
+
 export type HomeSummary = {
   rail: HomeRail;
   /** Surface id -> count for the tile badges. Absent id = no badge. */
@@ -422,6 +428,11 @@ export const getCategories = (signal?: AbortSignal) =>
  */
 export const getHomeSummary = (signal?: AbortSignal) =>
   getJSON<HomeSummary>("/home-summary", signal);
+
+/** Who is running this HackPit. Name + handle only — the OSID/email in the
+ *  operator config are report-only and are never served to the browser. */
+export const getOperator = (signal?: AbortSignal) =>
+  getJSON<Operator>("/operator", signal);
 
 export const getCategory = (slug: string, signal?: AbortSignal) =>
   getJSON<EntrySummary[]>(`/categories/${encodeURIComponent(slug)}`, signal);

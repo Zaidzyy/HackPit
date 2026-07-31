@@ -24,6 +24,9 @@ from __future__ import annotations
 import re
 
 import llm
+# NOT `operator.py` — `backend/` is first on sys.path, so that filename would shadow
+# the STDLIB `operator` module for every import in the process.
+import operator_identity
 
 # Reports are long; give the model room so sections aren't truncated. Local
 # models are slower at this length — acceptable for a one-shot report.
@@ -882,6 +885,13 @@ def compose_report(
     if cvss and "CVSS 3.1" not in md:
         # Prepend the authoritative CVSS block just under the first heading (bug-bounty).
         md = _prepend_after_title(md, cvss)
+    # WHO WROTE IT. Spliced, never prompted for: the model must not invent or
+    # transcribe a candidate name or an OSID. An OSCP submission is not
+    # attributable without this, and an unconfigured operator yields "" so the
+    # report is unchanged rather than carrying empty labels.
+    identity = operator_identity.report_identity(template)
+    if identity:
+        md = _prepend_after_title(md, identity)
     md = _insert_evidence(md, session, include_opsec=include_opsec)
     return md, cfg["model"]
 

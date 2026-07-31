@@ -2,6 +2,8 @@
 
 import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
+import { getOperator } from "@/lib/api";
+import { useApi } from "@/lib/useApi";
 
 const WORD = "hackpit_";
 
@@ -20,6 +22,8 @@ export function Intro({ onEnter }: IntroProps) {
   const [typed, setTyped] = useState("");
   const [showTag, setShowTag] = useState(false);
   const [showEnter, setShowEnter] = useState(false);
+  // Identity comes from the backend, so nothing personal sits in this public repo.
+  const operator = useApi(getOperator, []);
 
   // Typing sequence — a SIGNATURE animation that ALWAYS plays, even under
   // prefers-reduced-motion (it carries no vestibular risk). Only the continuous
@@ -68,6 +72,19 @@ export function Intro({ onEnter }: IntroProps) {
       >
         offensive security companion
       </motion.div>
+
+      {/* Byline. Fetched, never hardcoded: this repo is public, and identity
+          lives in the gitignored operator config. Unconfigured renders nothing
+          at all rather than an empty "by". */}
+      {operator.data?.name ? (
+        <motion.div
+          className="hp-by"
+          animate={{ opacity: showTag ? 1 : 0 }}
+          transition={{ duration: 1, delay: 0.6 }}
+        >
+          by {operator.data.name}
+        </motion.div>
+      ) : null}
 
       <motion.button
         type="button"

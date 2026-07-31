@@ -21,6 +21,11 @@ secrets/
 llm_config.json
 backend/llm_config.json
 
+# Operator identity (real name / OSID / email). This repo is PUBLIC. NEVER commit.
+operator.json
+backend/operator.json
+!backend/operator.example.json
+
 # Local engagement sessions store (SQLite). NEVER commit.
 sessions.db
 backend/sessions.db

@@ -156,6 +156,8 @@ run_test test_proof_honesty.py "proof-harness HONESTY (an unfilled offensive slo
 
 run_test test_home_summary.py "/home-summary launcher rail (no secret reaches the browser / status endpoint executes nothing)"
 
+run_test test_operator.py "operator identity (config gitignored in a PUBLIC repo / OSID+email never reach the browser)"
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

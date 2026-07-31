@@ -1,0 +1,7 @@
+{
+  "_comment": "Copy to operator.json (gitignored) and fill in. All fields optional; unset renders no byline and no report identity block. Env overrides: HACKPIT_OPERATOR_NAME / _HANDLE / _OSID / _EMAIL.",
+  "name": "Your Name",
+  "handle": "your-platform-handle",
+  "osid": "OS-XXXXX",
+  "email": "you@example.com"
+}

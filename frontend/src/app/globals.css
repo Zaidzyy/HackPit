@@ -8017,3 +8017,14 @@ a.hp-card {
   .hp-st { border-right: 0; border-bottom: 1px solid var(--border); }
   .hp-st:last-child { border-bottom: 0; }
 }
+
+/* Intro byline — sits under the tagline, quieter than it. Rendered only when an
+   operator name is configured (see backend/operator_identity.py). */
+.hp-by {
+  margin-top: 10px;
+  font-size: 11px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--dim);
+  opacity: 0.75;
+}

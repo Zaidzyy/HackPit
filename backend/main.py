@@ -49,6 +49,7 @@ from schema import Code, Entry  # noqa: E402  (pipeline/schema.py — canonical 
 import attack_path  # noqa: E402
 import chat as chat_assistant  # noqa: E402  (backend/chat.py — engagement assistant)
 import llm  # noqa: E402
+import operator_identity  # noqa: E402  (operator byline / report identity)
 import orchestrator  # noqa: E402  (backend/orchestrator.py — the loop's propose step)
 import reasoning  # noqa: E402  (backend/reasoning/ — deeper proposer; propose-only, no exec)
 import report as report_gen  # noqa: E402  (backend/report.py — LLM report drafting)
@@ -472,6 +473,14 @@ class StatsResponse(BaseModel):
     screenshots_ocr: int = Field(description="Screenshots OCR'd into the KB.")
     total_entries: int
     categories: int
+
+
+class OperatorOut(BaseModel):
+    """Operator identity for the BROWSER. Name and handle only, by construction —
+    the OSID and email in operator.json are report-only and never appear here."""
+
+    name: str = Field(description="Display name, or '' when unconfigured.")
+    handle: str = Field(description="Platform handle, or ''.")
 
 
 class HomeRail(BaseModel):
@@ -1153,6 +1162,19 @@ def tool_reconciliation(
 def stats() -> dict[str, int]:
     """Home-page counters, derived from the built KB."""
     return STATE.stats
+
+
+@app.get("/operator", response_model=OperatorOut)
+def operator_profile() -> dict[str, str]:
+    """Who is running this HackPit — NAME AND HANDLE ONLY.
+
+    `operator_identity.public_profile()` is the masked accessor; the raw `load()`
+    also carries an OSID and an email, which belong in a report handed to an
+    examiner and have no business on a web page. `test_operator.py` asserts on the
+    AST that this endpoint calls the masked one, and checks the real configured
+    OSID/email never appear in the response.
+    """
+    return operator_identity.public_profile()
 
 
 @app.get("/home-summary", response_model=HomeSummary)

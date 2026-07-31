@@ -144,11 +144,24 @@ Commit with `-F`, trailer
 `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`. Push
 `sandbox-kali-image`, fast-forward `main` if clean.
 
-Fold into `docs/ASSESSMENT-2026-07-26.md`: **record the policy change explicitly** — the standing
-rule named 0xdf as never-to-draw-from, it was reviewed by the operator and revised to the
-project-wide distil-not-parrot rule, the code comment was corrected to match, and the link-index
-skip in `consolidate.py` was deliberately left alone. That is a real decision, so add a
-**D-entry**. Then the batch itself: fingerprints added, which thin categories moved, yield rate.
+**THIS IS THE LAST BATCH IN THE SERIES — close it out.** Three things go into
+`docs/ASSESSMENT-2026-07-26.md`:
+
+**(a) The policy change, as a D-entry.** The standing rule named 0xdf as never-to-draw-from; it
+was reviewed by the operator and revised to the project-wide distil-not-parrot rule; the code
+comment was corrected to match; and the link-index skip in `consolidate.py` was deliberately left
+alone. That is a real decision and belongs on paper.
+
+**(b) This batch:** fingerprints added, which thin categories moved, yield rate.
+
+**(c) A SERIES SUMMARY covering all five batches** — the transcript corpus (13 entries), the 23
+repos, the 7 GitBook spaces, the PDFs/pages/CPENT repo, and this one. Report honestly: total
+entries added, which thin categories actually moved and which did not budge, **how much of the
+material turned out to be duplicate**, and whether the exercise was worth the effort. If the
+answer is "most of it was already covered", say that — a KB enrichment series that concludes
+"the KB was already good here" is a useful finding, not a failure. Record
+**themastermindnotes declined** as a commercial product, and note that **0xdf was initially
+declined and that position was reversed** — the reversal is part of the story.
 **No strikethrough (`~~`).** Update Verification and Status, then
 `backend/.venv/Scripts/python.exe docs/build-assessment.py`, and verify the PDF with a
 **positive control first** (extract via `pypdf` on the SYSTEM python — the venv has no pip —

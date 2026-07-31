@@ -103,21 +103,24 @@ Re-run before investigating.
 Delete `sources/pdfs/`, `sources/pages/` and the clone. Keep one manifest line per source: URL,
 date, verdict.
 
-### 5. Commit + push, then CLOSE OUT THE SERIES
+### 5. Commit + push, then assessment
 Commit with `-F`, trailer
 `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`. Push
 `sandbox-kali-image`, fast-forward `main`.
 
-This is the LAST batch in the series, so the assessment section should close it out: fold into
-`docs/ASSESSMENT-2026-07-26.md` a summary of **all four batches** (transcript corpus, repos,
-GitBooks, this one) — total entries added, which thin categories actually moved and which did
-not, how much of the material turned out to be duplicate, and whether the exercise was worth it.
-Record the two refusals explicitly: **0xdf declined** on the repo's own standing sourcing line,
-and **themastermindnotes declined** as a commercial product. Add a D-entry if the series
-produced a real standing decision. **No strikethrough (`~~`).** Update Verification and Status,
-then `backend/.venv/Scripts/python.exe docs/build-assessment.py`, and verify the PDF with a
+**This is batch 3 of 4 — do NOT write a series summary.** `PROMPT-fingerprint-corpus.md` runs
+after this one and closes out the series.
+
+Fold a section for THIS batch into `docs/ASSESSMENT-2026-07-26.md`: sources taken, sources that
+yielded nothing and why, entries added, which thin categories moved, and whether the CPENT repo
+delivered on the IoT/pivoting expectation. Record **themastermindnotes declined** as a commercial
+product. **No strikethrough (`~~`).** Update Verification and Status, then
+`backend/.venv/Scripts/python.exe docs/build-assessment.py`, and verify the PDF with a
 **positive control first** (extract with `pypdf` on system python, confirm "HackPit" is found
 before trusting any "missing" result).
+
+**Do not describe 0xdf as declined.** That position was reversed — 0xdf is in scope, distilled
+rather than copied, and is handled by batch 4.
 
 ---
 

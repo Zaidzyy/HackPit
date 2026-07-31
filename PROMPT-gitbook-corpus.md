@@ -23,10 +23,43 @@ https://gokulkarthik.gitbook.io/pentesting-checklist
 **Already de-duplicated for you:** `dudisamarel.gitbook.io/crtp-notes/crtp-methodology` was also
 supplied — it is a subpage of the space already listed, so it is covered.
 
-**CHECK THIS FIRST:** `dev-angelist.gitbook.io/ecpptv2-ptp-notes` is very likely published from
-`github.com/dev-angelist/eCPPTv2-PTP-Notes`, which the previous batch ALREADY ingested. GitBook
-commonly syncs from a GitHub repo. Diff the two before spending any effort; if the content
-matches, skip the space and record it as a duplicate. The same may be true of the CRTP space.
+---
+
+## WHAT BATCH 1 ALREADY PROVED — read `sources/repos-manifest.md` BEFORE fetching anything
+
+The repo batch ran 24 repos of this exact source class and **22 yielded nothing**. Its verdicts
+apply directly here, so do not re-derive them:
+
+* **`dev-angelist.gitbook.io/ecpptv2-ptp-notes` is ALREADY MINED.** Batch 1 ingested
+  `github.com/dev-angelist/eCPPTv2-PTP-Notes` at commit `a543e9167445` — 126k words, and its
+  `network-security/2.2-pivoting*.md` pair was the primary source for BOTH authored pivoting
+  entries, the only two the whole batch produced. The GitBook is near-certainly the same content
+  published. **Verify quickly against the manifest, then skip it.** Re-fetching it is pure waste.
+* **The three CRTP spaces are near-certain zeros.** Batch 1 ran two CRTP repos (~7.6k and ~7.9k
+  words, 243 and 193 code blocks) and probed DCSync, silver ticket, unconstrained delegation,
+  ACL abuse, GPO and SID history against the KB — all already covered by its `active-directory`
+  entries. A third, fourth and fifth pass over CRTP notes is not going to find what three passes
+  did not.
+* **`mqt.gitbook.io/oscp-notes` is a likely zero.** All four OSCP repos in batch 1 yielded nothing.
+
+**That leaves two genuine unknowns, and they are where your effort belongs:**
+1. **`dev-angelist.gitbook.io/ecpptv3-ptp-notes`** — a *different* author's eCPPTv3 repo was a
+   1.2k-word exam review and yielded zero, but dev-angelist's v2 was the one substantial source
+   in the entire batch. His v3 is worth a real look.
+2. **`gokulkarthik.gitbook.io/pentesting-checklist`** — a checklist is a different shape from
+   cert notes and batch 1 covered nothing like it. It may yield methodology structure rather than
+   techniques, which is still valuable.
+
+**Gate cheaply before fetching in full.** For each space, pull only the sitemap and page titles
+first, and apply batch 1's proof-of-saturation method — tokenise against all KB rows and check
+whether anything genuinely new appears. Batch 1 found 308 terms that were "new" and all 308 were
+URL slugs, hostnames and typos. If a space's index shows the same, do not fetch its pages at all;
+record it as a zero and move on. **Fetching seven spaces in full and then discovering they are
+duplicates is the failure mode to avoid** — it wastes your time and hammers someone's blog for
+nothing.
+
+A batch that fetches two spaces, ingests one, and reports five zeros with evidence is a
+**successful** run.
 
 ---
 

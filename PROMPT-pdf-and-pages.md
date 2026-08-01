@@ -108,19 +108,53 @@ Commit with `-F`, trailer
 `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`. Push
 `sandbox-kali-image`, fast-forward `main`.
 
-**This is batch 3 of 4 — do NOT write a series summary.** `PROMPT-fingerprint-corpus.md` runs
-after this one and closes out the series.
+**YOU ARE THE LAST BATCH — close out the whole series.** Everything else has run; check
+`git log` and the manifests in `sources/` rather than trusting this list.
 
-Fold a section for THIS batch into `docs/ASSESSMENT-2026-07-26.md`: sources taken, sources that
-yielded nothing and why, entries added, which thin categories moved, and whether the CPENT repo
-delivered on the IoT/pivoting expectation. Record **themastermindnotes declined** as a commercial
-product. **No strikethrough (`~~`).** Update Verification and Status, then
+**(a) This batch:** sources taken, sources that yielded nothing and why, entries added, and
+whether the CPENT repo delivered on the IoT/pivoting expectation.
+
+**(b) THE PREDICTION THIS BATCH TESTED.** The series measured cert notes at **31 sources → 2
+entries** and narrative writeups at **106 posts → 27**. On that evidence, batch 3 — five more
+cert-note sources — was predicted to yield ~0-1 entries, and that prediction was written into
+the assessment *before* you ran. **Report whether it held.** If you yielded more, say so plainly
+and revise the lesson; a prediction that survives its test is worth recording, and one that
+fails is worth more. (An earlier confident prediction in this series was wrong: CPENT was called
+the highest-yield cluster and its study guide left the IoT/SCADA modules as `[TBD]` stubs.)
+
+**(c) THE FULL SERIES SCOREBOARD**, measured, not assumed:
+```
+transcript corpus (687k chars)      13 entries
+batch 1 — 24 repos + gist            2 entries   (22 sources yielded zero)
+batch 2 — 7 GitBook spaces           0 entries
+batch 4 — 0xdf pass 1 / pass 2      19 + 8 entries
+batch 3 — this one                   ? entries
+```
+And the uncomfortable number, which must be stated: **the thin categories the series set out to
+fill did not move.** `services 9 · credentials 5 · persistence 4 · iot 2 · phishing 1` were all
+unchanged as of pass 2; only `pivoting 6 → 8`. The 27 fingerprints land in `category="writeup"`
+because `ingest_exploitation_writeups.py` forces it. They work — 2.7 keys on `meta.fingerprint`,
+not category — but **the series did not achieve its stated goal**, and the assessment must say so
+rather than reporting the entry total as though it did. Re-measure these yourself; do not copy
+the numbers above.
+
+**(d) Record:** **themastermindnotes declined** (commercial product); **mqt.gitbook.io refused
+itself** via `robots.txt`; **0xdf declined then reversed, then closed** on a declining tail
+(19/55 → 8/51); **the token diff nominates and never confirms** (`seshutdownprivilege` was
+already present as `SeShutdown`); **D22** proxychains laundering the red-confirm — found by
+cataloguing a tool, not by looking for it, and the single most valuable output of the series;
+**D24** the shared-predicate boundary convention, the **third** instance of that pattern (build
+#5 WinRM `argv[0]`, D22, D24) and worth watching for a fourth; and that **Windows Defender
+deleted files mid-run across multiple sessions**, including from fetched source trees — now a
+standing operational hazard for this repo, not an anecdote.
+
+**Do not describe 0xdf as declined.** That position was reversed: 0xdf is in scope, distilled
+rather than copied, and produced 27 of the series' entries.
+
+**No strikethrough (`~~`).** Update Verification and Status, then
 `backend/.venv/Scripts/python.exe docs/build-assessment.py`, and verify the PDF with a
-**positive control first** (extract with `pypdf` on system python, confirm "HackPit" is found
-before trusting any "missing" result).
-
-**Do not describe 0xdf as declined.** That position was reversed — 0xdf is in scope, distilled
-rather than copied, and is handled by batch 4.
+**positive control first** (extract with `pypdf` on the system python — the venv has no pip —
+confirm "HackPit" is found before trusting any "missing" result).
 
 ---
 

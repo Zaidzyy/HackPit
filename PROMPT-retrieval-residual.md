@@ -71,10 +71,14 @@ currently, all green).
 
 ---
 
-## TASK 2 — close out the enrichment series in the assessment
+## TASK 2 — record the series state so far. DO NOT close it out.
 
-The series is finished. **`PROMPT-pdf-and-pages.md` (batch 3) is deliberately NOT being run** —
-record that as a decision with its evidence, not as an omission.
+**`PROMPT-pdf-and-pages.md` (batch 3) is still PENDING — the operator has chosen to run it after
+this session.** So write a progress section, not a final summary, and **do not describe the
+series as complete or batch 3 as declined.** Batch 3's own prompt is the closer and will write
+the final scoreboard once it has real numbers to report.
+
+Say explicitly in your section that batch 3 is outstanding.
 
 ### The scoreboard, measured
 ```
@@ -83,17 +87,22 @@ batch 1 — 24 repos + gist            2 entries   (22 sources yielded zero)
 batch 2 — 7 GitBook spaces           0 entries
 batch 4 — 0xdf pass 1 (55 posts)    19 entries
           0xdf pass 2 (51 posts)     8 entries
-batch 3 — PDFs/pages/CPENT          NOT RUN, deliberately
-                                    ── 42 entries; KB 2,699 -> 2,741
+batch 3 — PDFs/pages/CPENT          PENDING — runs after this session
+                                    ── 42 entries so far; KB 2,699 -> 2,741
 ```
 
 ### The finding worth stating plainly
 **Cert notes: 31 sources → 2 entries. Narrative writeups: 106 posts → 27 entries.** Roughly a
 25× difference in yield per source. Exam notes are condensed and derivative and cover a syllabus
 the KB had already absorbed; writeups that start at a scan result and end at root supply a shape
-nothing else did. That is the reusable lesson for choosing future sources, and it is why batch 3
-— five more cert-note sources — is being closed unrun rather than executed to confirm what 31
-sources already established.
+nothing else did. That is the reusable lesson for choosing future sources.
+
+Note this as the **prediction batch 3 will test**: batch 3 is five more cert-note sources, so on
+this evidence it should yield ~0-1 entries. Frame it as a prediction on record, not as a verdict —
+it is about to be measured, and a prediction that is written down before the test is worth more
+than one adjusted afterwards. (An earlier confident prediction in this series was wrong: CPENT was
+called the highest-yield cluster and its study guide turned out to leave the IoT/SCADA modules as
+`[TBD]` stubs.)
 
 ### The uncomfortable number, which must also be stated
 **The thin categories the series set out to fill did not move.** Measured now against the start:

@@ -212,3 +212,88 @@ its size — which is the single most useful thing this session found.
 (2,733 rows on disk, 2,704 after `filter_excluded`; no ingester or embed run this session).
 Measurement harness used `reasoning.retrieval.retrieve` and `pipeline/search.py` directly — the
 same functions the loop calls — never a reimplementation.*
+
+---
+
+# After the fix (2026-08-01)
+
+*The two defects above are fixed. No KB entry was added or changed — the fixes are entirely in the
+matcher (`reasoning/retrieval.py`, `exploits/index.py`). Same test set, same real code path, so the
+delta is attributable to the plumbing alone.*
+
+## What changed
+
+* **D-A — the shared predicate now names its boundary convention explicitly.** `_version_verdict`
+  took an `inclusive` argument: `False` (exclusive `<`, the CVE→exploit index's fix-version
+  convention — its default and historical behaviour) or `True` (inclusive `<=`, the fingerprint
+  corpus's last-vulnerable convention). Every caller now states which it means —
+  `exploits.index.search_service` and `reasoning.critic` pass `inclusive=False`,
+  `retrieval._structured_match` passes `inclusive=True` — so **neither relies on an implied
+  default**. This is option (a) from the eval: it stops the bug recurring instead of papering over
+  the 35 entries, and it honours the `lte` kind name as the `<=` it literally reads.
+  **The CVE→exploit index is provably unchanged:** every one of its **110,695 verdicts across
+  47,108 entries** is byte-identical before and after (full snapshot diff), and `test_exploits.py`
+  stays green.
+* **D-B — `fingerprint()` resolves the product, not the vendor.** It drops generic descriptors
+  (`httpd`, `server`, `engine`…) and numeric edition tokens, then — if the first specific token is
+  an umbrella vendor and a product token follows — takes the product (`Apache Tomcat` → `tomcat`,
+  `Oracle WebLogic` → `weblogic`), while a vendor followed only by a descriptor stays the vendor
+  (`Apache httpd` → `apache`). The vendor set is small and stable; the **collision regression test
+  is the real guard**, and it already earned its keep — it flagged `ISC BIND` → `isc` mid-session,
+  which added `isc` to the vendor set (BIND is the product, ISC the org).
+
+## The measured delta — same test set as the baseline
+
+| metric | baseline | after fix |
+|---|---|---|
+| COVERED hit rate | 70% (21/30) | **93% (28/30)** |
+| COVERED precision when firing | 90% | **96% (27/28)** |
+| COVERED correct / total | 63% | **90% (27/30)** |
+| **exact-boundary versions fire** (the D-A core) | **0/4** | **4/4** |
+| **NEAR-MISS false-fire** | 0% | **0% (0/15)** — held |
+| NEAR-MISS *just above* the boundary | — | **0/3** — inclusive means `==`, not looser |
+| UNCOVERED false-fire | 20% | 20% — unchanged (separate cause, below) |
+| corpus-wide: fingerprints matching their own stored version | 62/97 | **97/97** |
+
+The safety number held: **inclusive `<=` at the exact boundary is the whole of the change** — a
+version one step above the boundary (`CUPS 1.6.2`, `OpenSMTPD 6.6.2`, `Solr 8.3.2`) still does not
+fire (0/3), so the matcher did not get looser, only correct at the boundary. Near-miss stayed 0%.
+
+## What the fix did NOT address (and why)
+
+Two residuals remain, both **outside D-A/D-B** and left deliberately so the improvement stays
+attributable:
+
+* **UNCOVERED false-fire still 20%** (`Pure-FTPd`→`pure`, `Node.js Express`→`node.js`,
+  `MinIO`→`minio`). All three are *version-less* banners caught by the non-structured **substring
+  fallback** in `rerank()`, a different code path from the vendor-normalisation this session fixed.
+  It did not get worse. A follow-up should require a stronger signal than a bare product substring
+  for a version-less query.
+* **2 of the 30 COVERED still miss** (`sudo 1.9.5`, `Jenkins 2.121`) — the fingerprint matches, but
+  the base retriever (`_resilient_search(q,5)`, `limit=2`) never surfaced the entry in its top-5, so
+  the reranker never saw it. Widening the base window past top-5 recovers these. A retriever-recall
+  issue, not a fingerprint one.
+
+## Regression locks added
+
+Two tests, wired into `run_safety_tests.sh` (52 → 54 files, all green), each iterating the **real**
+corpus and carrying a positive control that proves it can fail:
+
+* `test_fingerprint_versions.py` — every `meta.fingerprint` row in the live KB must match its own
+  stored version(s); 97 fingerprints / 49 exact-lte-range checks. Control: a planted out-of-range
+  version must be rejected *and* the exact boundary accepted.
+* `test_fingerprint_norm.py` — 16 real `nmap -sV` banners each resolve to the product not the
+  vendor, and no two distinct products share a key (`Apache Tomcat` ≠ `Apache httpd`). Control: a
+  reintroduced first-token normaliser is caught (verified by monkeypatch — it fails as it must).
+
+## Recommendation, updated
+
+The plumbing ceiling the baseline identified is lifted: the corpus now fires on **93%** of covered
+banners at **96%** precision with **0%** dangerous false-fire, and every fingerprint matches its own
+version. **A second 0xdf pass is now worth running** — new entries will fire at the fixed rate, not
+the suppressed one. The two residuals (substring fallback, base-retriever window) are worth a small
+follow-up but neither blocks growing the corpus.
+
+*Verification: `sh backend/run_safety_tests.sh` → **54 files, all exit 0** (52 + the two new locks).
+CVE→exploit index proven unchanged (110,695/110,695 verdicts identical). KB untouched. Same harness
+as the baseline — `reasoning.retrieval.retrieve` + `pipeline/search.py`, never a reimplementation.*

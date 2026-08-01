@@ -20,28 +20,69 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
+# Single-token normalisations: a scanner spelling on the left, the corpus's service key on the
+# right. NB: no ``httpd -> apache`` here — that generic web-server word is handled structurally
+# below (dropping it leaves the vendor ``apache`` as the head), which is what keeps
+# ``Apache httpd`` (-> apache) and ``Apache Tomcat`` (-> tomcat) on DIFFERENT keys.
 _ALIASES = {
-    "httpd": "apache", "apache2": "apache", "iis": "microsoft-iis",
+    "apache2": "apache", "iis": "microsoft-iis",
     "mysqld": "mysql", "postgres": "postgresql", "smbd": "samba",
 }
+# Irreducible multi-word product names where no single token is the service key. Matched as a
+# substring of the whole product string, so ``Microsoft SQL Server 2022`` resolves to ``mssql``.
+_PHRASE_ALIASES = {
+    "sql server": "mssql",
+    "internet information services": "microsoft-iis",
+}
+# Umbrella orgs that PREFIX a product in an nmap banner ("Apache Tomcat", "Oracle WebLogic").
+# When a vendor is the first token AND a more specific product token follows, the product wins.
+# Small and stable by design — the anti-collision regression test (test_fingerprint_norm.py) is
+# the real guard, so an omission here surfaces as a failing test, not a silent wrong key.
+_VENDORS = {"apache", "microsoft", "oracle", "atlassian", "eclipse", "sun",
+            "ibm", "vmware", "adobe", "redhat", "canonical", "isc", "the"}
+# Generic descriptors that are never the product — the words around the real name in a banner.
+_GENERIC = {"httpd", "http", "server", "daemon", "service", "engine", "framework",
+            "software", "jsp", "coyote", "the"}
 
 
 def fingerprint(product: str, version: str = "") -> str:
     """A normalized ``product/version`` key: ``("Apache httpd","2.4.49") -> "apache/2.4.49"``.
 
-    The product is reduced to its first meaningful token and de-aliased so a banner and a KB
-    entry agree; the version is kept verbatim (it is the selective part).
+    Resolves a vendor-prefixed banner to the PRODUCT, not the vendor, so ``Apache Tomcat`` keys
+    on ``tomcat`` (was ``apache``, colliding with ``Apache httpd``). The rule, from real nmap
+    ``-sV`` product strings rather than a per-product special-case list:
+
+      * drop generic descriptors (``httpd``, ``server``, ``engine`` …) and pure-numeric tokens
+        (edition years like ``2022``) — what remains are the "specific" tokens;
+      * if the first specific token is an umbrella VENDOR and another specific token follows, the
+        product is that following token (``Apache Tomcat`` -> ``tomcat``, ``Oracle WebLogic`` ->
+        ``weblogic``); otherwise the head is the first specific token (``Redis key-value store``
+        -> ``redis``, ``vsftpd`` -> ``vsftpd``);
+      * a vendor with only a generic descriptor after it IS the product (``Apache httpd`` ->
+        ``apache``), which is exactly what keeps it distinct from ``Apache Tomcat``.
+
+    The version is kept verbatim (it is the selective part).
     """
-    toks = [t for t in re.split(r"[\s/_-]+", (product or "").strip().lower()) if t]
-    head = ""
-    for t in toks:
-        if t in ("httpd", "server", "http", "the"):
-            continue
-        head = _ALIASES.get(t, t)
-        break
-    head = head or (toks[0] if toks else "")
+    p = (product or "").strip().lower()
     ver = (version or "").strip().lower()
-    return f"{head}/{ver}" if ver else head
+
+    def _key(head: str) -> str:
+        head = _ALIASES.get(head, head)
+        return f"{head}/{ver}" if ver else head
+
+    for phrase, key in _PHRASE_ALIASES.items():
+        if phrase in p:
+            return _key(key)
+
+    toks = [t for t in re.split(r"[\s/_-]+", p) if t]
+    specific = [t for t in toks if t not in _GENERIC and not t[0].isdigit()]
+    if specific and specific[0] in _VENDORS and len(specific) > 1:
+        head = specific[1]
+    elif specific:
+        head = specific[0]
+    else:
+        head = toks[0] if toks else ""
+    return _key(head)
 
 
 def service_fingerprint(service: Any) -> str:
@@ -85,6 +126,11 @@ def _structured_match(sfp: dict, product: str, version: str) -> tuple[bool, str]
     Reuses the CVE index's own ``_version_verdict`` on the entry's ``version_kind``/``versions``,
     so an in-range version matches and an OUT-OF-RANGE one does NOT — the version verdict
     outranks token similarity, and a wrong version cannot ride a product-name match to the top.
+
+    The fingerprint corpus stores the **last vulnerable** version (unlike the CVE index, which
+    stores the fix version), so the boundary is INCLUSIVE: a scan reporting exactly the stored
+    version is a hit. ``inclusive=True`` states that convention explicitly rather than leaning on
+    the predicate's default — the two callers genuinely need opposite boundaries.
     """
     service = str(sfp.get("service") or "").lower()
     if product and product not in service and service not in product:
@@ -99,7 +145,8 @@ def _structured_match(sfp: dict, product: str, version: str) -> tuple[bool, str]
         from exploits.index import ExploitIndex, version_tuple
 
         verdict = ExploitIndex()._version_verdict(
-            {"version_kind": kind, "versions": versions}, version, version_tuple(version)
+            {"version_kind": kind, "versions": versions}, version, version_tuple(version),
+            inclusive=True,
         )[0]
     except Exception:  # noqa: BLE001 — fall back to a plain product match if the index is odd
         return True, f"{service} (version verdict unavailable)"

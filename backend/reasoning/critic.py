@@ -101,7 +101,10 @@ def _cve_applies(index: Any, cve: str, state: Any) -> tuple[str, str]:
                 try:
                     from exploits.index import version_tuple
 
-                    verdict, _s, why = index._version_verdict(e, version, version_tuple(version))
+                    # CVE-index entries store the FIX version — exclusive boundary.
+                    verdict, _s, why = index._version_verdict(
+                        e, version, version_tuple(version), inclusive=False
+                    )
                 except Exception:  # noqa: BLE001
                     continue
                 detail = f"observed {product} {version}: {why}"

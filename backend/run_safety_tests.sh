@@ -68,6 +68,10 @@ run_test test_kali.py ":kali containment tests (human-only / hardcoded-open-cont
 
 run_test test_exploits.py "CVE -> exploit index (version comparison / tiered ranking / executes nothing)"
 
+run_test test_fingerprint_versions.py "fingerprint self-match (D-A: every corpus fingerprint matches its own stored version / inclusive boundary / can-fail)"
+
+run_test test_fingerprint_norm.py "fingerprint normalisation (D-B: vendor-prefixed banners resolve to the product / Tomcat != httpd / no collision / can-fail)"
+
 run_test test_search_ranking.py "relevance-first KB ranking (substance-gated tier boost / completeness nudge)"
 
 run_test test_terminal.py "raw PTY terminal containment (human-only / hardcoded open box / sentinel shell untouched)"

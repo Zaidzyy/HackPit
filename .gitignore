@@ -17,6 +17,7 @@
 !/sources/repos-manifest.md
 !/sources/gitbooks-manifest.md
 !/sources/0xdf-manifest.md
+!/sources/pdfs-pages-manifest.md
 
 # Secrets & env
 .env

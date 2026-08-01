@@ -62,6 +62,10 @@ SPACES = {
     "crtp-dudisamarel": "https://dudisamarel.gitbook.io/crtp-notes",
     "oscp-mqt": "https://mqt.gitbook.io/oscp-notes",
     "checklist-gokul": "https://gokulkarthik.gitbook.io/pentesting-checklist",
+    # Batch 3 pointed at this one as a "single web page". It is not: the sitemap resolves to
+    # 185 pages on a custom domain, so it belongs here rather than in the plain-page path.
+    # A GitBook space is a GitBook space whether or not it is served from gitbook.io.
+    "pnpt-adot8": "https://pnpt.adot8.com",
 }
 
 USER_AGENT = "HackPit-KB-ingest/1.0 (personal offline study index; contact via github.com/Zaidzyy)"

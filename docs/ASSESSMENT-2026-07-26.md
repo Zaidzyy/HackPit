@@ -879,6 +879,7 @@ Three properties matter and each is verified:
 - **KB enrichment batch 3 — 7 GitBook certification spaces** (2026-08-01) — the verification here is of a **zero**, which is a different claim and needs different evidence: not "the ingest did no damage" but "no entry was warranted." The KB is byte-unchanged at **2,714 rows**, and no ingester was run. Saturation was established at three independent levels. **Index level, before any page was requested**: the 545 page URLs the six reachable spaces publish were tokenised against all 2,714 rows, and of 109/88/59/37/56/166 slug words per space, the words absent from the KB number **6/5/3/1/2/2** — every one an author name, a certification acronym, or a typo (`foundamentals`, `accross`, `uncostrained`, `gnereral`). **Page level**, for the one space fetched in full: 175 distinct leading commands across its 214 code blocks, of which 10 appear nowhere in the KB and all 10 resolve to covered material. **Concept level**, for the two survivors that a token diff called new — and this is the leg that mattered, because `seshutdownprivilege` (11 occurrences, 0 in the KB) is a real technique that the KB **already carries under a different spelling**, `ex-windows-checking-services` step 4: *"reboot if you hold SeShutdown."* A token miss is not a coverage miss. Full hermetic suite green at **52 test files, every one exit 0**, run after the batch; `test_corpora.py` did not flake this time, which is consistent with its documented cause — no 22 MB KB rewrite happened to trigger the Defender sweep. Politeness is verifiable rather than claimed: `robots.txt` is parsed and honoured **before the first request**, and it refused a space during this batch rather than in theory.
 - **Fingerprint retrieval — measured, then fixed, then re-measured** (2026-08-01, `docs/FINGERPRINT-EVAL.md`) — a measurement session first drove the real 2.7 path (`orchestrator._fingerprint_reference` → `reasoning.retrieval.retrieve`) against a test set that was **not** drawn from the corpus alone: 30 covered service+version strings in real `nmap -sV` formatting, 15 near-miss versions outside the stated range, 15 uncovered services. It found the corpus firing at only **70%** on covered banners with two structural defects behind the misses (D24), and — the number that mattered — **0% false-fire on near-miss**, the safe direction. The fix session then lifted covered hit rate to **93%** at **96%** precision, took the exact-boundary case from **0/4 to 4/4** and the corpus-wide self-match from **62/97 to 97/97**, **held near-miss false-fire at 0%** (a version one step above the boundary still does not fire, 0/3 — the change is inclusive `<=` at the boundary and nothing looser), and left the CVE→exploit index **provably byte-identical** (110,695/110,695 verdicts unchanged, `test_exploits.py` green). Two residuals were left deliberately and named rather than folded in: a 20%-unchanged uncovered false-fire from the version-less substring fallback (a different code path), and 2 covered misses that are a base-retriever top-5 recall limit, not a fingerprint one. Locked by two new suites that iterate the real corpus with positive controls — `test_fingerprint_versions.py` (every fingerprint matches its own stored version) and `test_fingerprint_norm.py` (`Apache Tomcat` ≠ `Apache httpd`, no collision). **54 test files, every one exit 0.**
 - **Fingerprint retrieval — the last residual closed** (2026-08-01, D25) — the one gap the fix session named but left, a **20% false-fire on UNCOVERED services**, is now fixed and re-measured on the same three groups. It was the version-less substring fallback in `rerank()` setting `fingerprint_match=True` on a bare product-name substring; the eval was instrumented before the change to prove the fallback contributed **0 of the 28 covered fires** and was the **whole** of the false-fire, so demoting it (reserve `fingerprint_match` for structured hits; a product-name hit becomes a labelled, lower-ranked `fallback_match`; word-boundary match) cost nothing on hit rate. Measured before/after on all six: **UNCOVERED false-fire 20% → 0%**, COVERED hit rate **93% (unchanged)**, precision **96% (unchanged)**, NEAR-MISS **0% (held)**, corpus self-match **105/105 (held)**, fire-above-boundary **0/45 (held)** — a clean removal, not a stricter-matcher trade. Locked by `test_fingerprint_fallback.py` (live corpus + 15 real uncovered services + positive control, can-fail proven by monkeypatch). **55 test files, every one exit 0.** KB untouched — the fix is entirely in `reasoning/retrieval.py`.
+- **KB enrichment batch 3 — PDFs, pages, and the CPENT repo: the series close-out** (2026-08-01) — five sources, **2 entries added**, verified the four required ways. **Per-source counts diffed before/after**: only `hackpit-authored` moved, 27 → 29; every other source unchanged to the row, and the category deltas are exactly `ics 1 → 2` and `recon 69 → 70`. `data/kb/entries.jsonl` confirmed present after both ingest and embed (the Defender-quarantine check; the KB was backed up first, then the backup deleted once integrity was confirmed). `embed.py` reports **2 new, 2,741 cached** — the vector space grew by exactly the two entries. **Retrieval through `search.search(entries, query, top)` (positional, no `k=`)**: both new entries rank **first** on all four probes a command list cannot answer — "nmap scan an OT network with fragile embedded PLCs safely", "scan an ICS SCADA network without crashing controllers", "map firewall rules and enumerate an ACL with nmap", "bypass a packet filter with fragmentation decoys and spoofed source port". Saturation of the four zero-yield sources was measured, not assumed: every candidate technique (printer pass-back, IKE aggressive mode, open mail relay, ligolo/chisel/sshuttle pivoting, employee OSINT, o365 spray) grepped as already covered, several better than the source covers them — the two entries that landed came from the CPENT repo's two thinnest modules naming a scan-safety discipline the KB had never written down. Full hermetic suite green at **55 test files, every one exit 0**; `test_corpora.py` aborted the first run on the documented Defender/sidecar flake (the 22 MB KB rewrite) and passed on re-run. The 185-page PNPT space, both ebook PDFs and the parzival blog post all yielded **zero**; raw trees deleted, `sources/pdfs-pages-manifest.md` the only residue.
 
 ## Status
 
@@ -904,7 +905,7 @@ The follow-on the build flagged is now **landed**: the **KB exploitation-writeup
 
 **KB enrichment batch 2 (24 cert/CTF/pentest repos) — complete, and its honest result is two entries.** 24 repositories cloned, **22 yielded nothing**, one produced both entries. Under D21 that is the process working: the KB was already saturated in what these repos cover, and 308 candidate "new" terms turned out to be URL slugs and filenames rather than techniques. The batch's scoping prediction was **wrong in a way worth recording** — CPENT was expected to carry IoT and ICS/SCADA and carries neither; across all 24 repos exactly one file mentions ICS vocabulary and it is a CTF challenge named "Scada" that is really Jinja2 SSTI. `iot` (2) and `phishing` (1) remain the thinnest KB categories and now have a *reason* attached: exam notes are the wrong source class for them. The two entries fill the one genuine gap the batch did expose — every existing `pivoting` row is a command reference, and none teaches multi-hop chain discipline. The unplanned find was worth more than the planned one: the arsenal had **zero** pivoting tools despite `cockpit/tunnels.py` driving chisel, ligolo and proxychains since Phase 4, and cataloguing `proxychains` surfaced a **pre-existing gate hole** — the danger heuristic classified `argv[0]` only, so wrapping a dangerous command in a tunnel wrapper stripped its red-confirm, making the gate weaker the deeper you reached. Fixed in the predicate and regression-locked through `validate_request` (D22). Suite: **52 files, all green**; KB 2,712 → 2,714; arsenal 110 → 115. All 1.6 GB of clones deleted; `sources/repos-manifest.md` is the reproducibility record and required a deliberate, single-file gitignore exception to survive.
 
-**KB enrichment batch 4 (the 0xdf fingerprint corpus) — complete, and written at the time as the series close-out** (superseded: the operator has since restored batch 3 as the closer, so the series is NOT complete — see the *Series progress as of 2026-08-01* record, which is authoritative). This was the first non-cert-note source, and the first batch to add rows: **19 entries from 12 posts, `hackpit-distilled` 78 → 97, KB 2,714 → 2,733**, all in the thin categories a fingerprint corpus is for (services, pivoting, credentials, persistence, reversing/privesc). The standing ban on 0xdf was reviewed and reversed to the project-wide distil-not-parrot rule (D23), the ingester docstring was corrected to match, and the `consolidate.py` link-index skip was deliberately left alone. Phase 1 cost two requests and mapped 614 posts / 276 CVE tags, **175 of them never before in the KB** — the measurement that told us this source was unlike the cert notes before a page was read. 55 posts were selected by KB gap and fetched (Defender deleted 5 mid-triage; triage tolerated it and re-fetched), every candidate was concept-grepped before writing, and that grep killed ~43 shortlisted posts as already-covered and caught two pure slug collisions (`schallenge`→`XSSChallengeWiki`, `wsrep`→`wsrepl`) that a token count would have miscalled — the same `SeShutdown` trap batch 2 found. **The series, whole: five batches, of which the PDF/pages batch has NOT run** (it is written but never executed, and is not counted as complete). The four that ran added 34 entries (13 + 2 + 0 + 19). **The headline is the cert-note yield — 31 sources produced 2 entries** — a real measurement of the KB's maturity on exam-syllabus material, set against 19 from one narrative source that supplied the scan→root shape nothing else did. Carried forward: the token diff **nominates, never confirms** (grep the concept); themastermindnotes **declined** as a commercial product; `mqt.gitbook.io` **refused itself** by robots.txt; 0xdf **declined-then-reversed**. KB now at 2,733; suite 52 files all green.
+**KB enrichment batch 4 (the 0xdf fingerprint corpus) — complete, and written at the time as the series close-out** (superseded: batch 3 was restored as the actual closer and has since run — see the batch-3 records above, which are authoritative for the series' completion). This was the first non-cert-note source, and the first batch to add rows: **19 entries from 12 posts, `hackpit-distilled` 78 → 97, KB 2,714 → 2,733**, all in the thin categories a fingerprint corpus is for (services, pivoting, credentials, persistence, reversing/privesc). The standing ban on 0xdf was reviewed and reversed to the project-wide distil-not-parrot rule (D23), the ingester docstring was corrected to match, and the `consolidate.py` link-index skip was deliberately left alone. Phase 1 cost two requests and mapped 614 posts / 276 CVE tags, **175 of them never before in the KB** — the measurement that told us this source was unlike the cert notes before a page was read. 55 posts were selected by KB gap and fetched (Defender deleted 5 mid-triage; triage tolerated it and re-fetched), every candidate was concept-grepped before writing, and that grep killed ~43 shortlisted posts as already-covered and caught two pure slug collisions (`schallenge`→`XSSChallengeWiki`, `wsrep`→`wsrepl`) that a token count would have miscalled — the same `SeShutdown` trap batch 2 found. **The series, whole: five batches, of which the PDF/pages batch has NOT run** (it is written but never executed, and is not counted as complete). The four that ran added 34 entries (13 + 2 + 0 + 19). **The headline is the cert-note yield — 31 sources produced 2 entries** — a real measurement of the KB's maturity on exam-syllabus material, set against 19 from one narrative source that supplied the scan→root shape nothing else did. Carried forward: the token diff **nominates, never confirms** (grep the concept); themastermindnotes **declined** as a commercial product; `mqt.gitbook.io` **refused itself** by robots.txt; 0xdf **declined-then-reversed**. KB now at 2,733; suite 52 files all green.
 
 **0xdf pass 2 (2026-08-01) — the one amendment to that close-out.** Batch 4 read as the series end, but the retrieval eval it prompted found the corpus half-firing and the fix (`6c3ba42`) made new entries fire, so a final novel-CVE pass ran: **8 fingerprints from 51 posts** (HFS 2.3, IIS 6.0 WebDAV, Icinga Web 2, OpenTSDB, SQLPad, ES File Explorer, Next.js middleware bypass, Strapi), `hackpit-distilled` 97 → 105, KB 2,733 → 2,741, 0xdf total **27**. The yield is a declining tail (19/55 → 8/51) into a residue of web-CMS boxes the KB already covers, so **0xdf is now recommended closed as a fingerprint source**. Measured, not assumed: all 8 landed in `category="writeup"` (the ingester forces it), **not** the thin `services`/`pivoting` categories — correcting pass-1's claim about where its rows went; and the eval's UNCOVERED false-fire residual **held at 20% (3/15), zero delta**. Suite **54 files, all green** (the two fix-session locks now validate all 105 fingerprints).
 
@@ -912,7 +913,9 @@ The follow-on the build flagged is now **landed**: the **KB exploitation-writeup
 
 **Fingerprint retrieval (2.7) is measured, fixed, and locked (2026-08-01).** The eval that closed the 0xdf series asked the obvious unasked question — does the fingerprint corpus actually fire on real scanner output — and the answer was "half the time," behind two defects (D24): a shared version predicate with an unstated boundary convention that made **35 of 38 versioned fingerprints miss the exact version they were written about**, and a normaliser that collapsed `Apache Tomcat` and `Apache httpd` onto one key. Both are now fixed at the **predicate**, not the caller: `_version_verdict` names its boundary (`inclusive=`) so the CVE index (exclusive, fix-version) and the fingerprint corpus (inclusive, last-vulnerable) each state their own, and the CVE→exploit index is provably untouched (**110,695/110,695 verdicts identical**). Covered-banner hit rate went **70% → 93%** at **96%** precision; the exact-boundary case **0/4 → 4/4**; corpus-wide self-match **62/97 → 97/97**; and the safety number held — **near-miss false-fire stayed 0%**, with a version one notch above the boundary still refusing to fire. This is the **third shared-predicate defect** in the project (WinRM `argv[0]`, D22's proxychains laundering, now this), and it is called out as a pattern to watch. Two new regression suites iterate the real corpus with positive controls; **54 test files, all green**. Two residuals are named not hidden — a version-less substring-fallback false-fire and a base-retriever top-5 recall limit — neither blocking. No KB entry was touched: this was a matcher fix, and a second 0xdf pass is now worth running at the corrected rate.
 
-**The last retrieval residual is now closed too (D25, 2026-08-01).** A follow-on session fixed the version-less substring fallback that was the whole of the 20% UNCOVERED false-fire: `fingerprint_match` is now reserved for a structured `meta.fingerprint` match, and an unstructured product-name hit is a distinct, lower-ranked `fallback_match` that never claims the exact stack (word-boundary matched). The decision was measurement-led — the fallback was shown to contribute **0 of the 28 covered fires** before it was demoted, so **UNCOVERED false-fire went 20% → 0% with covered hit rate, precision, near-miss and self-match all unchanged**. `test_fingerprint_fallback.py` locks it; the suite is now **55 files, all green**. That closes the last known correctness gap in the 2.7 path. Separately, the enrichment series is **not** finished: batch 3 (PDF/pages/CPENT) is still pending and is the closer — see the *Series progress as of 2026-08-01* record.
+**The last retrieval residual is now closed too (D25, 2026-08-01).** A follow-on session fixed the version-less substring fallback that was the whole of the 20% UNCOVERED false-fire: `fingerprint_match` is now reserved for a structured `meta.fingerprint` match, and an unstructured product-name hit is a distinct, lower-ranked `fallback_match` that never claims the exact stack (word-boundary matched). The decision was measurement-led — the fallback was shown to contribute **0 of the 28 covered fires** before it was demoted, so **UNCOVERED false-fire went 20% → 0% with covered hit rate, precision, near-miss and self-match all unchanged**. `test_fingerprint_fallback.py` locks it; the suite is now **55 files, all green**. That closes the last known correctness gap in the 2.7 path. Separately, the enrichment series' last batch (batch 3 — PDF/pages/CPENT) has since **run and closed the series** — see the batch-3 Status paragraph below and the *Batch 3 — the close-out* record.
+
+**KB enrichment batch 3 (PDFs, pages, CPENT) — complete, and it closes the series.** The last batch ran its five sources — two redistributed cert-notes PDFs (OSCP, eCPPT), a 185-page PNPT GitBook space (mis-scoped in its own prompt as a "single web page"; its sitemap resolved to 185 pages, so it went through `fetch_gitbook.py`), an OSCP-notes blog post, and the CPENT cheat-sheet repo — and added **2 entries**, both distilled (D21) from the CPENT repo's two thinnest modules: `authored-perimeter-filter-mapping` [recon] (reading a packet filter as an object of enumeration — ACK/window scans, firewalking, scan-time evasion with the decoy caveat) and `authored-ot-safe-scanning` [ics] (scanning an ICS/OT segment without faulting a controller — never `-sV`/`-A`, `-sT` over `-sS`, `--max-parallelism 1`, abort path in the ROE). Both were **genuine gaps confirmed by retrieval**, not by a token count: `--spoof-mac`/`--data-length`/`firewalk`/`--mtu`/`nmap -f` and `--max-parallelism` were all 0 hits pre-ingest, and the `ics` category held one entry that was an operator persona. The four cert-*notes* sources — the two PDFs, the blog, the 185-page PNPT space — yielded **zero**, every candidate already covered (printer pass-back, IKE aggressive mode, open mail relay, pivoting, spraying, employee OSINT), several better than the source. **The prediction held:** batch 3 was five more cert-note sources, predicted ~0–1 entries before the run; it yielded 2, close enough that the lesson stands. The final scoreboard: **44 entries across the whole series; cert notes 36 sources → 4 entries vs narrative writeups 106 posts → 27** — the ~20× per-source difference that is the series' reusable lesson. The thin categories the series set out to fill still barely moved (`ics 1→2`, `recon 69→70`, `pivoting 6→8`; `services`/`credentials`/`persistence`/`phishing`/`iot` unchanged), and this record says so. KB 2,741 → 2,743; suite **55 files, all green** (`test_corpora` flaked on the 22 MB rewrite and passed on re-run, as documented). Records carried forward: the token diff **nominates but never confirms** (its top-two batch-3 nominations were both already covered); a prompt's description of a source's **scope is a claim to verify** (PNPT was 185 pages, not one); and **Defender deleted a file mid-run a fourth time** (`bypassing-amsi.md`, errno 22 while still on disk) — now a standing repo hazard, not an anecdote. `sources/pdfs-pages-manifest.md` is the reproducibility record; the raw trees are deleted.
 
 ## Build #9 — the Windows/AD path, driven live against a real domain (2026-07-31)
 
@@ -1288,24 +1291,24 @@ pivot. Retrieval was confirmed against realistic scan strings (`OpenSMTPD smtpd 
 top-three for its own banner, and the existing controls (`vsftpd 2.3.4`, `Apache 2.4.49`) still win
 theirs, so nothing was displaced.
 
-### The series, whole (five batches)
+### The series, whole (all batches)
 
 Checking `git log` and the manifests in `sources/` for what actually landed rather than assuming an
-order, the enrichment series ran as five batches:
+order, the enrichment series ran as six batches — batch 3 (this one) is the close-out:
 
 | Batch | Source | Sources | Entries | Note |
 |---|---|---|---|---|
 | Transcript corpus | live-hunting transcripts | 1 corpus | **13** | set D21; first external corpus |
 | Batch 1 — repos | 24 cert/CTF/pentest repos | 24 | **2** | both from one repo; exposed D22 |
 | Batch 2 — GitBooks | 7 GitBook cert spaces | 7 | **0** | index-gate; bounded the token diff |
-| PDF/pages | `PROMPT-pdf-and-pages.md` | — | **NOT RUN** | never executed — see below |
 | Batch 4 — 0xdf | 0xdf machine writeups | 55 posts | **19** | first non-cert source |
 | Batch 4b — 0xdf pass 2 | 0xdf, the novel-CVE tail | 51 posts | **8** | run after the retrieval fix; tail |
-| PDF/pages | `PROMPT-pdf-and-pages.md` | — | **NOT RUN** | never executed — see below |
+| Batch 3 — PDFs/pages/CPENT | `PROMPT-pdf-and-pages.md` | 5 | **2** | the close-out; ran 2026-08-01 |
 
-**The PDF/pages batch has not run.** `PROMPT-pdf-and-pages.md` is written but was never executed;
-it is not described as complete here because it is not. The batches that did run added **42
-entries total** (13 + 2 + 0 + 19 + 8).
+**Batch 3 has now run and closes the series.** Its five sources — two redistributed cert-notes PDFs
+(OSCP, eCPPT), one OSCP-notes blog post, one 185-page PNPT GitBook, and the CPENT cheat-sheet repo —
+yielded **2 entries**, both distilled from the CPENT repo. The series added **44 entries total**
+(13 + 2 + 0 + 19 + 8 + 2).
 
 **Amendment — 0xdf pass 2 (2026-08-01).** Batch 4 was written as the series close-out, but the
 retrieval eval it triggered found the fingerprint corpus half-firing, and the fix session that
@@ -1323,15 +1326,16 @@ it), **not** the thin `services`/`pivoting` categories — correcting pass-1's r
 went; and the eval's known **UNCOVERED false-fire residual held at 20% (3/15) with zero delta**, so
 the added substrings did not worsen the version-less fallback.
 
-**The stark, honest number is the cert-note yield: 31 sources produced 2 entries.** Twenty-four
-repositories and seven GitBook spaces of certification notes — the single most duplicated material
-in this KB — yielded two pivoting entries between them, both from one repo. That is not a failed
-series; it is a genuine measurement of the KB's maturity on exam-syllabus material, and it is why
-the series was worth running to its end: it told us, with evidence rather than assertion, that the
-KB is *saturated* on cert notes and *not* saturated on the service→technique fingerprint shape. The
-same effort spent on 0xdf — one source, narrative machine writeups — returned 19 entries against 2,
+**The stark, honest number is the cert-note yield: 36 sources produced 4 entries.** Twenty-four
+repositories, seven GitBook spaces, two ebook PDFs, one blog post and the CPENT repo — the single
+most duplicated material in this KB — yielded four entries between them (two pivoting from batch 1,
+two scan-discipline from batch 3), each cluster from a single repo. That is not a failed series; it
+is a genuine measurement of the KB's maturity on exam-syllabus material, and it is why the series
+was worth running to its end: it told us, with evidence rather than assertion, that the KB is
+*saturated* on cert notes and *not* saturated on the service→technique fingerprint shape. The same
+effort spent on 0xdf — one source, narrative machine writeups — returned 27 entries against 4,
 because it supplied a shape nothing else in the KB did. The lesson for any future batch is to weigh
-the **source class**, not the source count: 31 derivative syllabus sources are worth less than one
+the **source class**, not the source count: 36 derivative syllabus sources are worth less than one
 that maps scans to root.
 
 **Two records the series is required to carry forward, both confirmed:**
@@ -1353,14 +1357,37 @@ The fetched tree is deleted. `sources/0xdf-manifest.md` remains — the 55 URLs,
 which 12 produced an entry — under the same single-file gitignore negation the repo and GitBook
 manifests use.
 
-### Series progress as of 2026-08-01 — batch 3 is still outstanding
+### Batch 3 — PDFs, pages, and CPENT: the close-out (2026-08-01)
 
-This is a progress record, **not** the close-out. `PROMPT-pdf-and-pages.md` (batch 3 — five PDF/page
-cert sources including CPENT) is **pending**: the operator has chosen to run it after this session,
-and its own prompt is the closer that will write the final scoreboard against real numbers. Nothing
-here should be read as the series being complete, or batch 3 as declined.
+This is the close-out. `PROMPT-pdf-and-pages.md` ran against its five sources and the series is
+complete. Its two entries are **distilled** (D21) from the CPENT cheat sheet, written from scratch
+against a bare flag list — the entries are the mechanism and judgement, the source was the
+nomination:
 
-**The scoreboard, measured:**
+* `authored-perimeter-filter-mapping` [recon] — reading a packet filter as an object of enumeration:
+  the three-state model (`--reason`), ACK/window scans for ACL mapping, firewalking to locate the
+  device, and scan-time evasion with the decoy caveat spelled out. **Gap confirmed by measurement:**
+  `--spoof-mac`, `--data-length`, `firewalk`, `--mtu`, `nmap -f` and window-scan were all **0 hits**
+  before ingest, and retrieval for "map firewall rules with nmap" returned *cloud* firewall
+  enumeration.
+* `authored-ot-safe-scanning` [ics] — scanning an ICS/OT segment without faulting a controller:
+  never `-sV`/`-A`/`-O`, prefer `-sT` over `-sS`, passive-first, `--max-parallelism 1`, abort path
+  in the ROE. **Gap confirmed:** `--max-parallelism` was **0 hits**, and the `ics` category held
+  exactly one entry — an operator persona, not a technique.
+
+**The prediction held, and is worth recording because it survived its test.** Batch 3 was five more
+cert-note sources; the prediction written down *before* the run was ~0–1 entries. It yielded 2, close
+enough that the lesson stands rather than needing revision — and the two it produced are the
+exception that proves the rule, since neither came from the cert *notes* (the PDFs, the blog, the
+185-page PNPT space all yielded **zero**, every candidate already covered) but from a cheat-sheet
+repo's two thinnest modules, which happened to name a scan-safety discipline the KB had never written
+down. The earlier wrong prediction in this series was the mirror image: CPENT was called the
+highest-*yield* cluster on the strength of its IoT/SCADA coverage, and its study guide left those
+modules as `[TBD]` stubs — yet the *repo* version of CPENT, a different author, is exactly where the
+2 entries came from. So the corrected lesson: the CPENT syllabus is high-value, but which artifact of
+it you get matters more than the syllabus name.
+
+**The final scoreboard, measured:**
 
 ```
 transcript corpus (687k chars)      13 entries
@@ -1368,34 +1395,30 @@ batch 1 — 24 repos + gist            2 entries   (22 sources yielded zero)
 batch 2 — 7 GitBook spaces           0 entries
 batch 4 — 0xdf pass 1 (55 posts)    19 entries
           0xdf pass 2 (51 posts)     8 entries
-batch 3 — PDFs/pages/CPENT          PENDING — runs after this session
-                                    ── 42 entries so far; KB 2,699 -> 2,741
+batch 3 — PDFs/pages/CPENT           2 entries   (4 of 5 sources yielded zero)
+                                    ── 44 entries total; KB 2,699 -> 2,743
 ```
 
-**The finding worth stating plainly: cert notes 31 sources → 2 entries; narrative writeups 106 posts
-→ 27 entries — roughly a 25× yield-per-source difference.** Exam notes are condensed, derivative, and
+**The finding worth stating plainly: cert notes 36 sources → 4 entries; narrative writeups 106 posts
+→ 27 entries — roughly a 20× yield-per-source difference.** Exam notes are condensed, derivative, and
 cover a syllabus the KB had already absorbed; writeups that start at a scan result and end at root
-supply a shape nothing else did. That is the reusable lesson for choosing future sources.
-
-**A prediction on record, to be tested by batch 3.** Batch 3 is five more cert-note sources, so on
-this evidence it should yield **~0–1 entries**. This is written down *before* the test deliberately —
-a prediction recorded ahead of measurement is worth more than one adjusted afterwards. The caveat
-that keeps it honest: an earlier confident prediction in this series was **wrong** — CPENT was called
-the highest-yield cluster, and its study guide turned out to leave the IoT/SCADA modules as `[TBD]`
-stubs. So this is a prediction, not a verdict.
+supply a shape nothing else did. That is the reusable lesson for choosing future sources, and batch 3
+did not disturb it.
 
 **The uncomfortable number that must also be stated: the thin categories the series set out to fill
-did not move.** Measured now against the start:
+still barely moved.** Measured now against the start:
 
 ```
 services 9 (unchanged) · credentials 5 (unchanged) · persistence 4 (unchanged)
-iot 2 (unchanged) · phishing 1 (unchanged) · pivoting 6 -> 8
+phishing 1 (unchanged) · iot 2 (unchanged) · ics 1 -> 2 · pivoting 6 -> 8 · recon 69 -> 70
 ```
 
-All 27 fingerprint entries land in `category="writeup"` (173 → 200) because
+Batch 3's two entries nudged `ics` and `recon` by one each — the first movement in `ics` the whole
+series produced — but `services`, `credentials`, `persistence`, `phishing` and `iot` are exactly
+where they started. All 27 fingerprint entries land in `category="writeup"` (173 → 200) because
 `ingest_exploitation_writeups.py` forces it as part of its `no_merge` discipline. They **function** —
 2.7 keys on `meta.fingerprint`, not category — but the series **did not achieve its stated goal** of
-filling those thin categories, and this record says so rather than reporting 42 entries as if it had.
+filling those thin categories, and this record says so rather than reporting 44 entries as if it had.
 **Open question, recorded without acting on it:** is `category="writeup"` right for discoverability,
 or should a fingerprint entry carry the service category it describes? That is a contract change to
 the ingester and belongs in its own session.
@@ -1410,11 +1433,20 @@ the ingester and belongs in its own session.
 * **D25 — the retrieval residual**, closed this session: `fingerprint_match` reserved for structured
   hits, UNCOVERED false-fire 20%→0% with no covered-hit-rate cost.
 * **The token diff nominates, it never confirms** — `seshutdownprivilege` looked like a certain gap
-  and was already present spelled `SeShutdown`; grep the concept, never the token.
-* **Sources declined and why:** themastermindnotes (commercial product), `mqt.gitbook.io` (refused
-  itself via `robots.txt`), 0xdf (declined then reversed, D23), and **0xdf now closed** as a
-  fingerprint source on a declining tail (19/55 → 8/51).
-* **Windows Defender deleted files mid-run in three separate sessions**, from fetched source trees as
-  well as `data/kb/entries.jsonl` — it is now a **standing operational hazard for this repo**, not an
-  anecdote: back up the KB before any rewrite, and make every triage loop tolerant of a file
-  vanishing between listing and reading.
+  and was already present spelled `SeShutdown`; grep the concept, never the token. Batch 3 confirmed
+  it a third way: its top two token-diff nominations, printer *pass-back* and IKE *aggressive mode*,
+  were both already fully in the KB (the printer entry even carries the 2024/25 Xerox pass-back CVEs)
+  — the two entries that *did* land came from concepts the diff's noise had buried, found by
+  retrieval testing, not by the diff.
+* **Sources declined and why:** themastermindnotes (commercial product, batch 3 honoured the
+  exclusion — not fetched), `mqt.gitbook.io` (refused itself via `robots.txt`), 0xdf (declined then
+  reversed, D23), and **0xdf now closed** as a fingerprint source on a declining tail (19/55 → 8/51).
+* **A source's scope in a prompt is a claim to verify, not a fact.** Batch 3's prompt listed
+  `pnpt.adot8.com` as one of "two web pages"; its sitemap resolved to **185 pages** — a GitBook space
+  on a custom domain — and it was routed through `fetch_gitbook.py` accordingly. Resolve the sitemap
+  before trusting a source's described shape.
+* **Windows Defender deleted files mid-run in four separate sessions** now (batch 3 lost
+  `bypassing-amsi.md` to an errno-22 lock while it still showed 3,453 bytes on disk), from fetched
+  source trees as well as `data/kb/entries.jsonl` — it is a **standing operational hazard for this
+  repo**, not an anecdote: back up the KB before any rewrite, and make every triage loop tolerant of
+  a file vanishing between listing and reading.

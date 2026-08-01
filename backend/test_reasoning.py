@@ -218,20 +218,31 @@ def test_specialist_routing() -> None:
 # --------------------------------------------------------------------------- #
 def test_fingerprint_retrieval_outranks_token_match() -> None:
     assert retrieval.fingerprint("Apache httpd", "2.4.49") == "apache/2.4.49"
-    entries = [
-        {"title": "General Apache hardening guide", "text": "apache tips"},          # token only
-        {"title": "Apache 2.4.49 path traversal PoC", "text": "apache 2.4.49 exploit"},  # fingerprint
-        {"title": "nginx notes", "text": "nginx"},
-    ]
+    # Three tiers must be kept distinct: a STRUCTURED meta.fingerprint hit (the only thing that may
+    # claim fingerprint_match), an unstructured entry that merely NAMES the product+version (a
+    # weaker fallback — ranks above token-only but is NOT an exact-stack claim), and a token page.
+    structured = {"title": "Apache 2.4.49 writeup", "text": "path traversal",
+                  "meta": {"fingerprint": {"service": "apache", "version_kind": "exact",
+                                           "versions": ["2.4.49"]}}}
+    plain_pv = {"title": "Apache 2.4.49 path traversal PoC", "text": "apache 2.4.49 exploit"}
+    token_only = {"title": "General Apache hardening guide", "text": "apache tips"}
+    other = {"title": "nginx notes", "text": "nginx"}
+    entries = [token_only, plain_pv, other, structured]
     ranked = retrieval.rerank(entries, "apache/2.4.49")
-    assert ranked[0].fingerprint_match and "2.4.49" in ranked[0].entry["title"], \
-        "the exact service+version write-up must rank first"
-    assert not ranked[-1].fingerprint_match
-    # end-to-end with an injected base retriever
+    order = [r.entry for r in ranked]
+    assert ranked[0].entry is structured and ranked[0].fingerprint_match, \
+        "the structured meta.fingerprint write-up must rank first"
+    assert not any(r.fingerprint_match for r in ranked if r.entry is not structured), \
+        "ONLY a structured meta.fingerprint may claim a fingerprint match"
+    plain_r = next(r for r in ranked if r.entry is plain_pv)
+    assert plain_r.fallback_match and not plain_r.fingerprint_match, \
+        "an unstructured product+version hit is a fallback, not an exact-stack fingerprint"
+    assert order.index(plain_pv) < order.index(token_only), "the fallback still outranks token-only"
+    # end-to-end with an injected base retriever: the structured hit is what surfaces as a match
     svc = Service(SID, "h", 443, product="Apache httpd", version="2.4.49")
     out = retrieval.retrieve(svc, lambda q: entries)
-    assert out and out[0].fingerprint_match
-    print("  2.7 retrieval: exact fingerprint outranks token matches: PASS")
+    assert out and out[0].fingerprint_match and out[0].entry is structured
+    print("  2.7 retrieval: structured fingerprint leads; unstructured product hit is fallback-only: PASS")
 
 
 def test_fingerprint_range_alignment() -> None:

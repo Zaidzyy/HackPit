@@ -94,8 +94,10 @@ def service_fingerprint(service: Any) -> str:
 class Ranked:
     entry: Any
     base_rank: int
-    fingerprint_match: bool
+    fingerprint_match: bool          # a STRUCTURED meta.fingerprint match — the "exact stack" claim
     why: str
+    fallback_match: bool = False     # a weaker product-name signal on a non-structured entry;
+                                     # ranked below a structured match and NEVER claims exact-stack
 
 
 def _entry_blob(entry: Any) -> str:
@@ -160,15 +162,27 @@ def rerank(entries: list[Any], fp: str) -> list[Ranked]:
     each group. A fingerprint like ``apache/2.4.49`` matches an entry that names BOTH the product
     and the exact version — the version is what makes it a case match rather than a topic match.
 
-    Two matching paths: an entry carrying a STRUCTURED ``meta.fingerprint`` is range-matched via
-    the CVE index verdict (so an out-of-range version is correctly NOT a match); any other entry
-    falls back to the substring product+version test (backward-compatible with plain KB entries).
+    Two matching paths, with DIFFERENT confidence:
+
+    * an entry carrying a STRUCTURED ``meta.fingerprint`` is range-matched via the CVE index
+      verdict (an out-of-range version is correctly NOT a match). This is the only path that sets
+      ``fingerprint_match`` — the "this exact stack was solved by X" claim the grounding line makes.
+    * any other (plain) entry falls back to a product-name match. This is a WEAKER signal: a plain
+      entry has no version to verify against, so a bare product-name hit on a service the corpus
+      does not actually cover would otherwise be presented with the same confidence as a real
+      fingerprint (the measured 20% UNCOVERED false-fire: ``pure``/``node.js``/``minio``). It is
+      therefore marked ``fallback_match`` — ranked BELOW a structured hit and never
+      ``fingerprint_match`` — and tightened to a WORD-BOUNDARY match so a product token no longer
+      fires on any word that merely contains it. Measured: the fallback contributes 0 of the
+      covered fires (all 28 are structured), so demoting it costs nothing on hit rate.
     """
     if not fp:
         return [Ranked(e, i, False, "no fingerprint") for i, e in enumerate(entries)]
     parts = fp.split("/", 1)
     product = parts[0]
     version = parts[1] if len(parts) > 1 else ""
+    prod_re = re.compile(rf"\b{re.escape(product)}\b") if product else None
+    ver_re = re.compile(rf"(?<![\w.]){re.escape(version)}(?![\w.])") if version else None
     ranked: list[Ranked] = []
     for i, e in enumerate(entries):
         sfp = _structured_fp(e)
@@ -177,16 +191,20 @@ def rerank(entries: list[Any], fp: str) -> list[Ranked]:
             ranked.append(Ranked(e, i, match, why))
             continue
         blob = _entry_blob(e)
-        has_product = bool(product) and product in blob
-        has_version = bool(version) and version in blob
+        has_product = bool(prod_re) and bool(prod_re.search(blob))
+        has_version = bool(ver_re) and bool(ver_re.search(blob))
         if has_product and has_version:
-            ranked.append(Ranked(e, i, True, f"names {product} and version {version}"))
+            ranked.append(Ranked(e, i, False, f"names {product} and version {version} (unstructured)",
+                                 fallback_match=True))
         elif has_product and not version:
-            ranked.append(Ranked(e, i, True, f"names {product}"))
+            ranked.append(Ranked(e, i, False, f"names {product} (unstructured, no version)",
+                                 fallback_match=True))
         else:
             ranked.append(Ranked(e, i, False, "token match only"))
-    # fingerprint matches first, then original order within each bucket
-    ranked.sort(key=lambda r: (0 if r.fingerprint_match else 1, r.base_rank))
+    # structured fingerprint matches first, then unstructured product-name fallbacks, then the
+    # rest — preserving base order within each bucket.
+    ranked.sort(key=lambda r: (0 if r.fingerprint_match else (1 if r.fallback_match else 2),
+                               r.base_rank))
     return ranked
 
 

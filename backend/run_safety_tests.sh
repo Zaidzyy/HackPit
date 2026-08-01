@@ -72,6 +72,8 @@ run_test test_fingerprint_versions.py "fingerprint self-match (D-A: every corpus
 
 run_test test_fingerprint_norm.py "fingerprint normalisation (D-B: vendor-prefixed banners resolve to the product / Tomcat != httpd / no collision / can-fail)"
 
+run_test test_fingerprint_fallback.py "fingerprint fallback (uncovered services never claim a structured match / word-boundary / can-fail)"
+
 run_test test_search_ranking.py "relevance-first KB ranking (substance-gated tier boost / completeness nudge)"
 
 run_test test_terminal.py "raw PTY terminal containment (human-only / hardcoded open box / sentinel shell untouched)"

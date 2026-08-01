@@ -297,3 +297,69 @@ follow-up but neither blocks growing the corpus.
 *Verification: `sh backend/run_safety_tests.sh` → **54 files, all exit 0** (52 + the two new locks).
 CVE→exploit index proven unchanged (110,695/110,695 verdicts identical). KB untouched. Same harness
 as the baseline — `reasoning.retrieval.retrieve` + `pipeline/search.py`, never a reimplementation.*
+
+---
+
+# The last residual, closed (2026-08-01)
+
+*The two fixes above left one known gap named but unfixed: **20% false-fire on UNCOVERED services**,
+stable across the corpus's growth (0xdf pass 2 re-measured it at exactly 20% after adding 8 entries).
+This session closed it. No KB entry changed — the fix is entirely in `reasoning/retrieval.py`.*
+
+## What it was, measured before touching it
+
+The residual was a **different code path** from the structured matcher (`_structured_match`, now
+correct). It was the *version-less substring fallback* in `rerank()`: a plain (non-structured) entry
+matched when the scanned product merely appeared as a substring anywhere in its blob — `product in
+blob` — and that hit was marked `fingerprint_match=True`, the same field the grounding line filters
+on to make its "this exact stack was solved by X" claim. So `Pure-FTPd` (`pure`), `Node.js`
+(`node.js`) and `MinIO` (`minio`) each surfaced a precise-looking pointer to an unrelated entry.
+
+Before changing anything, the eval was instrumented to classify each covered fire as **structured**
+(a real `meta.fingerprint` match) vs **fallback** (the substring path):
+
+```
+COVERED fires: 28 STRUCTURED, 0 FALLBACK
+UNCOVERED false-fires: 3, ALL FALLBACK
+```
+
+That settled the design question the fix had to answer honestly — *is the fallback doing real work?*
+**It contributes 0 of the 28 covered fires** (every covered banner matches a structured fingerprint),
+and it is the **whole** of the false-fire. So this is not a stricter-matcher-vs-hit-rate trade-off:
+demoting the fallback costs nothing on covered and removes the entire residual.
+
+## The fix — reserve `fingerprint_match` for structured hits
+
+`fingerprint_match=True` is now set **only** by a structured `meta.fingerprint` match. An unstructured
+product-name hit becomes a distinct, lower-ranked `fallback_match` (new field on `Ranked`): it still
+ranks above pure token matches (so a version-less scan keeps *some* signal, which is legitimate), but
+it never claims the exact stack, so the grounding line — whose only consumer, `orchestrator.py:395`,
+filters on `fingerprint_match` — stops over-claiming. The fallback substring was also tightened to a
+**word boundary**, so a product token no longer fires on any word that merely contains it (`pure`
+inside `purely`). The fallback was **not deleted** — the prompt's caution, and the measurement,
+agree: it is kept and labelled honestly rather than removed.
+
+## The measured delta — same three groups, all six metrics
+
+| metric | before | after | bar |
+|---|---|---|---|
+| **UNCOVERED false-fire** | 20% (3/15) | **0% (0/15)** | materially lower ✓ |
+| COVERED hit rate | 93% (28/30) | **93% (28/30)** | must not drop ✓ |
+| precision when firing | 96% | **96%** | must not drop ✓ |
+| NEAR-MISS false-fire | 0% | **0%** | must stay 0% ✓ |
+| corpus self-match | 105/105 | **105/105** | must stay 105/105 ✓ |
+| fire above boundary | 0/45 | **0/45** | must stay 0/45 ✓ |
+
+No metric regressed. This is a clean removal of the residual, not one defect traded for another.
+
+## Regression lock
+
+`test_fingerprint_fallback.py`, wired into `run_safety_tests.sh` (54 → **55 files**, all green):
+iterates the live corpus plus 15 real uncovered services and asserts none get a structured
+fingerprint claim from the fallback. Positive controls: a covered service (`vsftpd 2.3.4`) still
+produces a structured match; a planted unstructured `MinIO` entry is a `fallback_match` not a
+`fingerprint_match`; and `pure` inside `purely` matches neither. Verified can-fail by monkeypatching
+the old fallback-as-fingerprint behavior back — the test fails, as it must.
+
+*This is the last known correctness gap in the 2.7 path. `sh backend/run_safety_tests.sh` → 55 files,
+all exit 0. KB untouched; same harness as every table above.*

@@ -2,11 +2,29 @@
 
 Repo `C:\Users\zaid_\Downloads\HackPit`, branch `sandbox-kali-image`. `git pull --rebase` first.
 
-**RUN `PROMPT-fingerprint-eval.md` BEFORE THIS ONE.** That session measures whether the 97
-fingerprints actually fire on real scanner output. If it reports that retrieval is inert or has
-a normalisation bug, **this batch is a waste of time until that is fixed** — more entries in a
-corpus that never fires buys nothing. Read `docs/FINGERPRINT-EVAL.md` first and say in your
-opening summary what it concluded and why you are proceeding anyway.
+**THE PREREQUISITES ARE DONE — this batch is now unblocked.** Both gating sessions have run:
+
+* `dcbf5dd` — the eval measured the corpus and found it half-firing, with two structural defects.
+* `6c3ba42` — both defects fixed **at the predicate**, verified independently:
+
+```
+corpus self-match failures     35 → 0        (D-A: lte/range now inclusive at the boundary)
+Apache Tomcat → tomcat,  Apache httpd → apache          (D-B: collision gone)
+COVERED hit rate               70% → 93%
+precision when firing          90% → 96%
+near-miss false-fire           0% → 0%       (HELD — 0/37 fire one notch above the boundary)
+```
+
+Retrieval now works, so entries you write will actually fire. **That was not true before.**
+
+**ONE RESIDUAL YOU MUST WATCH.** The eval left a known issue unfixed, deliberately, to keep the
+fix delta attributable: **~20% false-fire on UNCOVERED services**, via a version-less substring
+fallback that is a different code path from the structured matcher. It means retrieval can
+surface a "this exact stack was solved by X" pointer for a service the corpus does not actually
+cover. **More entries give that fallback more substrings to match on, so this batch may make it
+worse.** Re-measure it against the eval's UNCOVERED group before and after your ingest and
+report the delta. If it climbs materially, stop and say so — that becomes the next fix, ahead of
+any further growth.
 
 ---
 

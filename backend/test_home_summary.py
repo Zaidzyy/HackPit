@@ -41,6 +41,14 @@ import sessions as sessions_db  # noqa: E402
 # A value no real store would ever hold, used to prove each check CAN fail.
 PLANT = "hackpit-planted-secret-3f9a1c"
 
+# Checks that could not run in THIS environment, reported at the end. Invariant 1 draws its
+# inputs from the operator's real stores (WinRM secrets, the LLM key, captured credentials) —
+# all gitignored, so on a clean checkout there is nothing to leak and the check cannot mean
+# anything. It says so rather than passing: "no offenders" from an empty store is exactly the
+# vacuous pass this file's own assertion at the bottom exists to forbid. Invariant 2 is
+# structural (an AST pass over the real source) and runs everywhere, CI included.
+NOT_RUN: list[str] = []
+
 
 # --------------------------------------------------------------------------- #
 # 1. no secret reaches the browser
@@ -62,6 +70,19 @@ def _real_secrets() -> dict[str, list[str]]:
         "llm-api-key": [],
         "state-credentials": [],
     }
+
+    # The sessions DB is gitignored, so a CLEAN CHECKOUT (CI, a fresh clone) has no schema and
+    # `list_sessions()` raised `no such table: sessions` — this file claimed to be hermetic and
+    # was in fact relying on a database that only existed on the author's machine. Found by the
+    # first CI run, which is exactly the class of bug it exists to find.
+    #
+    # `init_db()` is CREATE TABLE IF NOT EXISTS, so this is a no-op where the DB already exists
+    # and creates an empty one where it does not. Deliberately NOT a try/except around the loop:
+    # swallowing the error would make the leg silently empty, whereas an initialised empty DB
+    # makes it a real check that finds zero rows — which the caller then REPORTS as having
+    # checked nothing. The lifespan that would normally do this does not help here, because
+    # `_real_secrets()` runs before the TestClient block below.
+    sessions_db.init_db()
 
     # WinRM profile secrets — the raw accessor the endpoint must never call.
     for profile in winprofiles.list_profiles():
@@ -107,6 +128,20 @@ def test_home_summary_returns_no_secret() -> None:
     by_source = _real_secrets()
     secrets = [s for values in by_source.values() for s in values]
 
+    # A CLEAN CHECKOUT (CI, a fresh clone) holds no WinRM profile, no llm_config.json and no
+    # engagement state — every store this check draws from is gitignored. With nothing to leak
+    # the check proves nothing, and booting the app to say so would additionally require a KB
+    # that a clean checkout also does not have. Report NOT-RUN and return: the structural
+    # invariant below still runs here, and this one runs in full on any machine that has ever
+    # configured a target. Silence would be the failure — see the assertion this replaces.
+    if not secrets:
+        NOT_RUN.append(
+            "invariant 1, the real-secret leak check — no WinRM secret, LLM key or captured "
+            "credential exists in this environment (expected on a clean checkout / CI)"
+        )
+        print("  NOT-RUN invariant 1: no real secret in any store to check against")
+        return
+
     with TestClient(main.app) as client:
         response = client.get("/home-summary")
     assert response.status_code == 200, response.text
@@ -114,10 +149,6 @@ def test_home_summary_returns_no_secret() -> None:
 
     hits = _leaks(payload, secrets)
     assert not hits, f"/home-summary leaked {len(hits)} real secret value(s)"
-
-    # The whole test must not be able to go vacuous: if EVERY store is empty there is
-    # nothing to leak and "PASS" would mean nothing.
-    assert secrets, "no real secret found in any store — this test proved nothing"
 
     # POSITIVE CONTROL. "No offenders" is what a working check reports AND what a
     # broken one reports. Plant a REAL secret (not a synthetic string) into a payload:
@@ -236,5 +267,11 @@ if __name__ == "__main__":
     test_home_summary_returns_no_secret()
     test_summary_uses_only_the_masked_accessors()
     test_home_summary_cannot_execute()
+    if NOT_RUN:
+        # Loud, never silent. A suite that quietly drops a leak check on the environment where
+        # it happens to have no inputs is the same defect test_proof_honesty.py exists to stop.
+        print("\n  NOT-RUN in this environment:")
+        for item in NOT_RUN:
+            print(f"    - {item}")
     print("all /home-summary safety tests passed")
     sys.exit(0)

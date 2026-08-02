@@ -92,8 +92,15 @@ def test_browser_never_sees_osid_or_email() -> None:
     cfg = operator_identity.load()
     secret_fields = {k: cfg[k] for k in ("osid", "email") if cfg[k]}
 
-    with TestClient(main.app) as client:
-        response = client.get("/operator")
+    # NO `with`, deliberately — entering the context runs the app's LIFESPAN, which loads the
+    # KB and hard-fails when `data/kb/entries.jsonl` is absent. That file is gitignored, so on a
+    # clean checkout (CI, a fresh clone) this test died on app startup for a reason with nothing
+    # to do with the identity leak it guards. `/operator` reads `operator_identity` directly and
+    # needs no lifespan-loaded state, so skipping startup costs the check nothing and lets it run
+    # everywhere. This is the same construction test_sliver_safety and test_obfuscation_safety
+    # already use for their endpoint assertions.
+    client = TestClient(main.app)
+    response = client.get("/operator")
     assert response.status_code == 200, response.text
     body = response.json()
     payload = json.dumps(body)

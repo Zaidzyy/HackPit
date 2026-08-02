@@ -4,12 +4,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ApiError,
+  draftWebExploit,
   fillCredential,
   getSessionState,
+  ingestPrivesc,
   seedSessionTasks,
+  type PrivescDraft,
+  type PrivescVector,
   type SessionState,
   type StateCredential,
   type StateTask,
+  type WebExploitDraft,
 } from "@/lib/api";
 
 /**
@@ -74,8 +79,56 @@ export function CockpitState({
   const [revealed, setRevealed] = useState<Set<number>>(new Set());
   // A one-shot note under the credentials after a fill, e.g. "filled <user>, <password>".
   const [fillNote, setFillNote] = useState<string | null>(null);
+  // Build #8 Task 3 — a drafted exploit per finding fingerprint. DATA only: the human
+  // still fires it through the gated executor/repeater.
+  const [drafts, setDrafts] = useState<Record<string, WebExploitDraft | null>>({});
+  const [draftBusy, setDraftBusy] = useState("");
+  // Build #8 Task 4 — pasted linpeas/winpeas output → vectors + a drafted escalation.
+  const [peas, setPeas] = useState("");
+  const [peasOpen, setPeasOpen] = useState(false);
+  const [peasBusy, setPeasBusy] = useState(false);
+  const [peasOut, setPeasOut] = useState<{
+    vectors: PrivescVector[];
+    draft: PrivescDraft;
+  } | null>(null);
+  const [peasNote, setPeasNote] = useState<string | null>(null);
 
   const canFill = typeof onFillArgs === "function" && typeof argsDraft === "string";
+
+  // Both handlers set state only from a promise callback — never an effect body — so the
+  // repo's accepted react-hooks lint baseline is unaffected.
+  const askDraft = useCallback(
+    (fingerprint: string) => {
+      if (drafts[fingerprint] !== undefined) {
+        setDrafts((prev) => {
+          const next = { ...prev };
+          delete next[fingerprint];
+          return next;
+        });
+        return;
+      }
+      setDraftBusy(fingerprint);
+      draftWebExploit(sessionId, { fingerprint })
+        .then((d) => setDrafts((prev) => ({ ...prev, [fingerprint]: d })))
+        .catch(() => setDrafts((prev) => ({ ...prev, [fingerprint]: null })))
+        .finally(() => setDraftBusy(""));
+    },
+    [sessionId, drafts]
+  );
+
+  const askPrivesc = useCallback(() => {
+    const text = peas.trim();
+    if (!text) return;
+    setPeasBusy(true);
+    setPeasNote(null);
+    ingestPrivesc(sessionId, text)
+      .then((r) => setPeasOut(r))
+      .catch((err: unknown) => {
+        setPeasOut(null);
+        setPeasNote(err instanceof ApiError ? err.message : "Could not read that output.");
+      })
+      .finally(() => setPeasBusy(false));
+  }, [sessionId, peas]);
 
   const applyCredential = useCallback(
     (cred: StateCredential) => {
@@ -400,11 +453,182 @@ export function CockpitState({
                 <b>{f.title}</b>
                 {f.target && <code className="hp-cs-ftarget">{f.target}</code>}
                 {f.reference && <span className="hp-cs-fref">{f.reference}</span>}
+                <button
+                  type="button"
+                  className="hp-cs-draft"
+                  disabled={draftBusy === f.fingerprint}
+                  onClick={() => askDraft(f.fingerprint)}
+                  title="Draft the concrete exploit for this finding, grounded in the KB. Returns a DRAFT — you still fire it through the gated surface."
+                >
+                  {draftBusy === f.fingerprint
+                    ? "drafting…"
+                    : drafts[f.fingerprint] !== undefined
+                      ? "hide draft"
+                      : "draft exploit"}
+                </button>
+
+                {drafts[f.fingerprint] !== undefined && (
+                  <div className="hp-cs-draftout">
+                    {drafts[f.fingerprint] === null ? (
+                      <p className="hp-cs-draftnote">Could not draft an exploit for this one.</p>
+                    ) : !drafts[f.fingerprint]!.applicable ? (
+                      <p className="hp-cs-draftnote">
+                        No drafted exploit for this bug class — said plainly rather than
+                        invented.
+                      </p>
+                    ) : (
+                      <>
+                        <div className="hp-cs-drafthead">
+                          <span className="hp-cs-draftclass">
+                            {drafts[f.fingerprint]!.bug_class}
+                          </span>
+                          <span className="hp-cs-draftvia">
+                            fire through :{drafts[f.fingerprint]!.delivery}
+                          </span>
+                          {drafts[f.fingerprint]!.dangerous && (
+                            <span className="hp-cs-draftdanger">needs the red confirm</span>
+                          )}
+                        </div>
+                        {drafts[f.fingerprint]!.hypothesis && (
+                          <p className="hp-cs-drafthyp">
+                            {drafts[f.fingerprint]!.hypothesis}
+                          </p>
+                        )}
+                        {drafts[f.fingerprint]!.command && (
+                          <pre className="hp-cs-draftcmd">
+                            <code>
+                              {[
+                                drafts[f.fingerprint]!.command,
+                                ...drafts[f.fingerprint]!.args,
+                              ].join(" ")}
+                            </code>
+                          </pre>
+                        )}
+                        {drafts[f.fingerprint]!.request && (
+                          <pre className="hp-cs-draftcmd">
+                            <code>{drafts[f.fingerprint]!.request}</code>
+                          </pre>
+                        )}
+                        {drafts[f.fingerprint]!.explanation && (
+                          <p className="hp-cs-draftnote">
+                            {drafts[f.fingerprint]!.explanation}
+                          </p>
+                        )}
+                        {drafts[f.fingerprint]!.citations.length > 0 && (
+                          <p className="hp-cs-draftcites">
+                            grounded in:{" "}
+                            {drafts[f.fingerprint]!.citations.map((c, i) => (
+                              <span key={c.entry_id ?? i}>
+                                {i > 0 && ", "}
+                                {c.entry_id ? (
+                                  <Link href={`/entry/${encodeURIComponent(c.entry_id)}`}>
+                                    {c.title || c.entry_id}
+                                  </Link>
+                                ) : (
+                                  c.title
+                                )}
+                              </span>
+                            ))}
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
               </li>
             ))}
           </ul>
         </div>
       )}
+
+      {/* --- privesc: paste the peas output, get the vectors + a drafted escalation ---- */}
+      <div className="hp-cs-block">
+        <h4>
+          Privesc
+          <button
+            type="button"
+            className="hp-cs-peastoggle"
+            onClick={() => setPeasOpen((o) => !o)}
+          >
+            {peasOpen ? "hide" : "paste linpeas / winpeas"}
+          </button>
+        </h4>
+
+        {peasOpen && (
+          <>
+            <textarea
+              className="hp-cs-peas"
+              value={peas}
+              onChange={(e) => setPeas(e.target.value)}
+              placeholder="Paste the linpeas / winpeas output from the foothold…"
+              spellCheck={false}
+              rows={5}
+            />
+            <div className="hp-cs-peasrow">
+              <button
+                type="button"
+                className="hp-cs-draft"
+                disabled={peasBusy || !peas.trim()}
+                onClick={askPrivesc}
+              >
+                {peasBusy ? "reading…" : "identify vectors"}
+              </button>
+              <span className="hp-cs-draftnote">
+                Parsed and drafted only — the escalation runs when you approve it, like any
+                other command.
+              </span>
+            </div>
+            {peasNote && <p className="hp-cs-draftnote">{peasNote}</p>}
+
+            {peasOut && (
+              <div className="hp-cs-draftout">
+                {peasOut.vectors.length === 0 ? (
+                  <p className="hp-cs-draftnote">
+                    No known escalation vector in that output.
+                  </p>
+                ) : (
+                  <ul className="hp-cs-vectors">
+                    {peasOut.vectors.map((v, i) => (
+                      <li key={`${v.kind}-${i}`}>
+                        <span className={`hp-cs-sev hp-cs-sev-${v.severity}`}>
+                          {v.severity}
+                        </span>
+                        <b>{v.kind}</b>
+                        <code className="hp-cs-ftarget">{v.detail}</code>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {peasOut.draft.applicable && (
+                  <>
+                    <div className="hp-cs-drafthead">
+                      <span className="hp-cs-draftclass">
+                        {peasOut.draft.vector?.kind ?? "escalation"}
+                      </span>
+                      {peasOut.draft.dangerous && (
+                        <span className="hp-cs-draftdanger">needs the red confirm</span>
+                      )}
+                    </div>
+                    {peasOut.draft.hypothesis && (
+                      <p className="hp-cs-drafthyp">{peasOut.draft.hypothesis}</p>
+                    )}
+                    <pre className="hp-cs-draftcmd">
+                      <code>
+                        {peasOut.draft.shell_line ||
+                          [peasOut.draft.command, ...peasOut.draft.args].join(" ")}
+                      </code>
+                    </pre>
+                    {peasOut.draft.explanation && (
+                      <p className="hp-cs-draftnote">{peasOut.draft.explanation}</p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </section>
   );
 }

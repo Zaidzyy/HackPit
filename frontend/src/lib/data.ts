@@ -216,6 +216,13 @@ export const SURFACE_BANDS: SurfaceBand[] = [
         desc: "Reusable one-liners and enumeration snippets.",
         countKey: "scripts",
       },
+      {
+        key: "detection",
+        icon: "◉",
+        label: ":detection",
+        href: "/detection",
+        desc: "The curated ATT&CK / Sigma map — what a defender sees.",
+      },
     ],
   },
 ];

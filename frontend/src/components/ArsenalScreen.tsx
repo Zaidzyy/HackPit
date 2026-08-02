@@ -4,7 +4,14 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { PageShell } from "./PageShell";
 import { CopyButton } from "./CopyButton";
-import { getArsenal, getToolReconciliation, type ArsenalTool } from "@/lib/api";
+import {
+  getArsenal,
+  getToolReconciliation,
+  renderArsenalTool,
+  suggestArsenal,
+  type ArsenalInvocation,
+  type ArsenalTool,
+} from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 
 const ARSENAL_COLOR = "#e0c15a";
@@ -34,6 +41,16 @@ export function ArsenalScreen() {
   const recon = useApi(getToolReconciliation, []);
   const [q, setQ] = useState("");
   const [cat, setCat] = useState<string>("all");
+  // The target every template is rendered against. Empty = show the raw <placeholder> form.
+  const [target, setTarget] = useState("");
+  // Server-rendered invocations, keyed by tool. Fetched on demand — rendering all ~115
+  // tools eagerly would be 115 requests for output you would read one tool of.
+  const [rendered, setRendered] = useState<Record<string, ArsenalInvocation[]>>({});
+  const [renderBusy, setRenderBusy] = useState<string>("");
+  // "What would the planner reach for here" — the /arsenal/suggest selection.
+  const [phase, setPhase] = useState<string>("");
+  const [suggested, setSuggested] = useState<ArsenalTool[] | null>(null);
+  const [suggestBusy, setSuggestBusy] = useState(false);
 
   // Only trust a probe that actually ran — an unavailable probe must mark nothing missing.
   const missing = useMemo(
@@ -73,6 +90,46 @@ export function ArsenalScreen() {
 
   const categories = arsenal.data?.categories ?? [];
   const total = arsenal.data?.total ?? 0;
+
+  // Phases come from the catalog itself rather than a hardcoded list, so a phase added to
+  // tools.json shows up here without a frontend change.
+  const phases = useMemo(() => {
+    const seen = new Set<string>();
+    for (const t of arsenal.data?.tools ?? []) for (const p of t.phases) seen.add(p);
+    return [...seen];
+  }, [arsenal.data]);
+
+  // Both handlers set state only from an async callback / event handler — never from an
+  // effect body — so the repo's accepted react-hooks lint baseline stays where it is.
+  const askSuggest = async (next: string) => {
+    if (!next) {
+      setPhase("");
+      setSuggested(null);
+      return;
+    }
+    setPhase(next);
+    setSuggestBusy(true);
+    try {
+      const res = await suggestArsenal({ phase: next, q: needle || null, limit: 8 });
+      setSuggested(res.tools);
+    } catch {
+      setSuggested(null);
+    } finally {
+      setSuggestBusy(false);
+    }
+  };
+
+  const renderFor = async (name: string) => {
+    setRenderBusy(name);
+    try {
+      const res = await renderArsenalTool(name, target.trim() || null);
+      setRendered((prev) => ({ ...prev, [name]: res.invocations }));
+    } catch {
+      setRendered((prev) => ({ ...prev, [name]: [] }));
+    } finally {
+      setRenderBusy("");
+    }
+  };
 
   return (
     <PageShell crumbs={[{ label: "home", href: "/" }, { label: "Tool arsenal" }]}>
@@ -127,6 +184,63 @@ export function ArsenalScreen() {
             ))}
           </div>
         </div>
+
+        {/*
+          TARGET + PHASE. Two questions the catalog could not answer before: "give me this
+          tool's command for THIS host" (server-side render, placeholders that cannot be
+          filled stay visible) and "what would the planner reach for in this phase"
+          (/arsenal/suggest — the same selection its prompt reference uses).
+        */}
+        <div className="hp-ta-controls hp-ta-controls2">
+          <input
+            type="text"
+            className="hp-ta-search"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            placeholder="render templates against a target — 10.10.11.42, example.com…"
+            spellCheck={false}
+            aria-label="Target to render invocation templates against"
+          />
+          <div className="hp-ta-cats">
+            {phases.map((p) => (
+              <button
+                key={p}
+                type="button"
+                className={`hp-ta-cat${phase === p ? " hp-on" : ""}`}
+                onClick={() => void askSuggest(phase === p ? "" : p)}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {phase && (
+          <section className="hp-ta-suggest">
+            <h2 className="hp-ta-suggesthead">
+              {suggestBusy
+                ? `picking tools for ${phase}…`
+                : `what to reach for in ${phase}`}
+              <span>the planner&apos;s own shortlist</span>
+            </h2>
+            {suggested && suggested.length > 0 ? (
+              <ul className="hp-ta-suggestlist">
+                {suggested.map((t) => (
+                  <li key={t.name}>
+                    <span className="hp-ta-suggestname">{t.name}</span>
+                    <span className="hp-ta-suggestwhy">{t.purpose}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              !suggestBusy && (
+                <p className="hp-ta-empty">
+                  No suggestion for that phase{needle ? " with this filter" : ""}.
+                </p>
+              )
+            )}
+          </section>
+        )}
 
         {/*
           AVAILABILITY (D7). The catalog used to imply every entry was runnable while the
@@ -208,19 +322,76 @@ export function ArsenalScreen() {
                 <p className="hp-ta-purpose">{tool.purpose}</p>
 
                 <ul className="hp-ta-templates">
-                  {tool.templates.map((tpl) => (
-                    <li key={tpl.label}>
-                      <div className="hp-ta-tplhead">
-                        <span className="hp-ta-tpllabel">{tpl.label}</span>
-                        <CopyButton text={tpl.template} />
-                      </div>
-                      <pre className="hp-ta-cmd">
-                        <code>{tpl.template}</code>
-                      </pre>
-                      {tpl.note && <p className="hp-ta-tplnote">{tpl.note}</p>}
-                    </li>
-                  ))}
+                  {(rendered[tool.name] ?? []).length > 0
+                    ? rendered[tool.name].map((inv) => (
+                        <li key={inv.label}>
+                          <div className="hp-ta-tplhead">
+                            <span className="hp-ta-tpllabel">{inv.label}</span>
+                            {!inv.ready && (
+                              <span
+                                className="hp-ta-unfilled"
+                                title={`Still unfilled: ${inv.unfilled.join(", ")}. Left visible rather than guessed.`}
+                              >
+                                {inv.unfilled.length} unfilled
+                              </span>
+                            )}
+                            <CopyButton text={inv.cmd} />
+                          </div>
+                          <pre className="hp-ta-cmd">
+                            <code>{inv.cmd}</code>
+                          </pre>
+                          {inv.note && <p className="hp-ta-tplnote">{inv.note}</p>}
+                        </li>
+                      ))
+                    : tool.templates.map((tpl) => (
+                        <li key={tpl.label}>
+                          <div className="hp-ta-tplhead">
+                            <span className="hp-ta-tpllabel">{tpl.label}</span>
+                            <CopyButton text={tpl.template} />
+                          </div>
+                          <pre className="hp-ta-cmd">
+                            <code>{tpl.template}</code>
+                          </pre>
+                          {tpl.note && <p className="hp-ta-tplnote">{tpl.note}</p>}
+                        </li>
+                      ))}
                 </ul>
+
+                {tool.templates.length > 0 && (
+                  <div className="hp-ta-renderrow">
+                    <button
+                      type="button"
+                      className="hp-ta-render"
+                      disabled={renderBusy === tool.name}
+                      onClick={() => void renderFor(tool.name)}
+                    >
+                      {renderBusy === tool.name
+                        ? "rendering…"
+                        : target.trim()
+                          ? `fill for ${target.trim()}`
+                          : "render invocations"}
+                    </button>
+                    {rendered[tool.name] && (
+                      <button
+                        type="button"
+                        className="hp-ta-render hp-ta-renderclear"
+                        onClick={() =>
+                          setRendered((prev) => {
+                            const next = { ...prev };
+                            delete next[tool.name];
+                            return next;
+                          })
+                        }
+                      >
+                        show templates
+                      </button>
+                    )}
+                    <span className="hp-ta-rendernote">
+                      Rendering produces a <b>string</b>. It reaches a target only through
+                      the gated executor, approved.
+                    </span>
+                  </div>
+                )}
 
                 <div className="hp-ta-meta">
                   {tool.techniques.map((t) => (

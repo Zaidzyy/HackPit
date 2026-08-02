@@ -1163,6 +1163,34 @@ export const exploitsForService = (
     signal
   );
 
+/** Every exploit naming this CVE — an EXACT keyed lookup, no ranking involved.
+ *  Distinct from `searchExploits("CVE-…")`, which ranks and can surface near-misses:
+ *  when you already hold the CVE id, the table answer is the one you want. */
+export const exploitsForCve = (cve: string, signal?: AbortSignal) =>
+  getJSON<ExploitHit[]>(`/exploits/cve/${encodeURIComponent(cve.trim())}`, signal);
+
+/** One CVE affecting a product, and how many catalogued exploits name it. */
+export type CveRow = {
+  cve: string;
+  exploits: number;
+  /** How the product/version matched — same vocabulary as ExploitHit.version_match. */
+  best_match: string;
+};
+
+/** The distinct CVEs affecting a product/version, most-exploited first.
+ *  Answers "what is this service vulnerable to", which the exploit list alone does not:
+ *  twelve exploits can all name one CVE, and one CVE can have none. */
+export const cvesForService = (
+  product: string,
+  version?: string | null,
+  signal?: AbortSignal
+) =>
+  getJSON<CveRow[]>(
+    `/exploits/cves?product=${encodeURIComponent(product)}` +
+      (version ? `&version=${encodeURIComponent(version)}` : ""),
+    signal
+  );
+
 // --- :terminal — raw PTY into the SAME open sandbox (a second surface, not a swap) ---
 
 /** Availability of the raw-terminal surface (GET /cockpit/terminal/status).
@@ -2210,6 +2238,124 @@ export const detectionRuns = (sessionId: string, signal?: AbortSignal) =>
 export const detectionSources = (signal?: AbortSignal) =>
   getJSON<DetectionSources>("/detection/sources", signal);
 
+// --- build #8 Tasks 3 & 4: web-exploit + privesc drafting ------------------------
+//
+// PROPOSE / GROUND / DRAFT ONLY. Both endpoints return DATA. Neither sends a request nor
+// runs a command: the human fires the drafted step through the already-gated executor or
+// repeater, where scope + approval + the danger red-confirm are re-checked (D18 unchanged).
+
+/** A drafted web exploit for one finding. `dangerous` mirrors what the red-confirm will say. */
+export type WebExploitDraft = {
+  /** False when the finding's bug class has no drafted exploit — say so, never invent one. */
+  applicable: boolean;
+  /** sqli | ssrf | idor | xss | param-pollution | lfi | "" */
+  bug_class: string;
+  command: string;
+  args: string[];
+  /** A raw HTTP request to fire through the repeater, when that is the right delivery. */
+  request: string;
+  explanation: string;
+  citations: { entry_id?: string; title?: string }[];
+  /** "executor" | "repeater" — which gated surface the human fires this through. */
+  delivery: string;
+  dangerous: boolean;
+  hypothesis: string;
+};
+
+/** Draft the concrete exploit for a web finding already in state (by fingerprint). */
+export const draftWebExploit = (
+  sessionId: string,
+  body: { fingerprint?: string; finding?: Record<string, unknown> },
+  signal?: AbortSignal
+) =>
+  postJSON<WebExploitDraft>(
+    `/sessions/${encodeURIComponent(sessionId)}/webexploit/draft`,
+    body,
+    signal
+  );
+
+/** One privesc vector parsed out of pasted linpeas/winpeas output. */
+export type PrivescVector = {
+  /** suid | sudo | capabilities | pwnkit | kernel | writable-passwd | se-impersonate | … */
+  kind: string;
+  detail: string;
+  severity: string;
+  evidence: string;
+  platform: string;
+};
+
+export type PrivescDraft = {
+  applicable: boolean;
+  vector: PrivescVector | null;
+  command: string;
+  args: string[];
+  /** Set when the escalation is a shell one-liner run on the foothold rather than a tool. */
+  shell_line: string;
+  explanation: string;
+  hypothesis: string;
+  citations: { entry_id?: string; title?: string }[];
+  dangerous: boolean;
+};
+
+/** Paste linpeas/winpeas output; get the identified vectors + a drafted escalation. */
+export const ingestPrivesc = (sessionId: string, output: string, signal?: AbortSignal) =>
+  postJSON<{ vectors: PrivescVector[]; draft: PrivescDraft }>(
+    `/sessions/${encodeURIComponent(sessionId)}/privesc/ingest`,
+    { output },
+    signal
+  );
+
+/** One curated command family as the catalog holds it. */
+export type DetectionSpec = {
+  key: string;
+  label: string;
+  techniques: string[];
+  loudness: Loudness;
+  loudness_score: number;
+  /** The defender-side description. Guarded server-side against drifting into evasion. */
+  blue_view: string;
+  why_rating: string;
+  telemetry: string[];
+  sigma: SigmaRuleRef[];
+  /** The offensive half (D10), when this family has a curated OPSEC note. */
+  opsec: {
+    loud_because: string;
+    quieter: string[];
+    /** Never empty — the honesty invariant. */
+    still_recorded: string;
+    tradeoff: string;
+  } | null;
+};
+
+/** The WHOLE curated map — every command family and argument signal HackPit knows. */
+export type DetectionCatalog = {
+  specs: DetectionSpec[];
+  signals: DetectionSignal[];
+  sources: Pick<DetectionSources, "attack" | "attack_attribution" | "sigma" | "sigma_license">;
+};
+
+export const detectionCatalog = (signal?: AbortSignal) =>
+  getJSON<DetectionCatalog>("/detection/catalog", signal);
+
+/** One ATT&CK technique as the panel renders it, with the Sigma rules that reference it. */
+export type DetectionTechniqueDetail = DetectionTechnique & {
+  sigma?: SigmaRuleRef[];
+};
+
+export const detectionTechnique = (id: string, signal?: AbortSignal) =>
+  getJSON<DetectionTechniqueDetail>(
+    `/detection/technique/${encodeURIComponent(id.trim().toUpperCase())}`,
+    signal
+  );
+
+/** The COMPACT ATT&CK tag for one command — deterministic, catalog-only, never the LLM.
+ *  `tag: null` means the curated map does not cover it; ask for the full footprint then. */
+export const detectionTag = (
+  body: { command?: string; args?: string[]; argv?: string },
+  signal?: AbortSignal
+) =>
+  postJSON<{ argv: string; tag: DetectionTag | null }>("/detection/tag", body, signal);
+
 // --- live sessions: catch + drive ONE shell by hand (see backend/cockpit/session.py) ---
 //
 // TWO GATES, both server-side and both load-bearing:
@@ -2647,6 +2793,46 @@ export type ArsenalResponse = {
 
 export const getArsenal = (signal?: AbortSignal) =>
   getJSON<ArsenalResponse>("/arsenal", signal);
+
+/** The tools worth reaching for in a phase / for a technique — the SAME selection the
+ *  planner's prompt reference uses, so the catalog can show what the planner would pick. */
+export const suggestArsenal = (
+  opts: { phase?: string | null; q?: string | null; limit?: number },
+  signal?: AbortSignal
+) => {
+  const p = new URLSearchParams();
+  if (opts.phase) p.set("phase", opts.phase);
+  if (opts.q) p.set("q", opts.q);
+  if (opts.limit) p.set("limit", String(opts.limit));
+  return getJSON<ArsenalResponse>(`/arsenal/suggest?${p.toString()}`, signal);
+};
+
+/** One rendered invocation. `ready: false` means a placeholder is still unfilled — it stays
+ *  VISIBLE rather than being guessed, which is the whole point of rendering server-side. */
+export type ArsenalInvocation = {
+  tool: string;
+  label: string;
+  cmd: string;
+  note: string;
+  /** Placeholders with no value — still visible in `cmd`. */
+  unfilled: string[];
+  ready: boolean;
+};
+
+export type ArsenalRender = { tool: string; invocations: ArsenalInvocation[] };
+
+/** Render a tool's templates against a target. Returns STRINGS — nothing is executed.
+ *  A rendered command still reaches a target only through the gated executor. */
+export const renderArsenalTool = (
+  name: string,
+  target?: string | null,
+  signal?: AbortSignal
+) =>
+  getJSON<ArsenalRender>(
+    `/arsenal/render/${encodeURIComponent(name)}` +
+      (target ? `?target=${encodeURIComponent(target)}` : ""),
+    signal
+  );
 
 // ---- Windows targets (WinRM driver — saved connection profiles) ----------- //
 

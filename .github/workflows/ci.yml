@@ -1,0 +1,162 @@
+# HackPit CI — run the guards on a machine that is not Zaid's laptop.
+#
+# WHY THIS EXISTS. The project's value rests on gates that fire. The 2026-07-27 gate audit
+# probed 24 guards and found SEVEN that existed and never fired; build #5 found a red-confirm
+# you could defeat by moving a cmdlet one token right; build #10 found the suite runner could be
+# disarmed by an edit as innocent as adding `| tee`. Until now the only thing running the 56
+# safety files was remembering to. A refactor that silently unlocks a gate should fail a build,
+# not wait to be noticed.
+#
+# WHAT IS DELIBERATELY *NOT* HERE.
+#   * Docker. The safety suite is hermetic by design (`--with-proof` is the Docker half and
+#     stays local) — so CI needs no stack, no privileged runner, and no sandbox.
+#   * The live upstream drift check. `pipeline/detection_sources.py --verify` calls ATT&CK and
+#     SigmaHQ over the network; an upstream outage or rename would block merges for something
+#     nobody broke. It runs on a schedule below instead, where drift is reported without
+#     gating anything.
+#   * Anything that needs a secret. Every job here runs on a public fork's PR unchanged.
+#
+# THE KB. `/data/` is gitignored, so CI has no `data/kb/entries.jsonl`. The three fingerprint
+# locks still run for real against `backend/test_support/kb_fixture.jsonl` — the COMPLETE corpus
+# projected onto the fields the matcher reads. `test_kb_fixture.py` proves that projection is
+# verdict-identical to the live KB (locally, where the KB exists) and reports NOT-RUN for the
+# checks it cannot make here. A green CI badge therefore does not silently mean "4 checks were
+# skipped" — the job summary says exactly what did not run.
+
+name: CI
+
+on:
+  push:
+    branches: [main, sandbox-kali-image]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Mondays 06:00 UTC — the drift job only. Upstream ATT&CK/Sigma changes on their schedule,
+    # not on yours, so this reports rather than gates.
+    - cron: "0 6 * * 1"
+
+# A new push supersedes an in-flight run on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  safety:
+    name: safety suite (hermetic)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # backend/pyproject.toml declares requires-python = ">=3.14".
+          python-version: "3.14"
+
+      - name: Install backend dependencies
+        # Derived from an AST scan of every third-party import the suite actually reaches, not
+        # from the full pyproject: `fastapi` (+ `httpx`, which starlette's TestClient needs),
+        # `pydantic`, `pyyaml` (test_codescan_rules), `numpy` (pipeline/search's vector half).
+        #
+        # pywinrm is deliberately ABSENT. `cockpit/winrm_transport.py` imports it lazily inside
+        # a try/except precisely so the suite stays hermetic — no VM, no network, no pywinrm.
+        # Installing it here would stop CI from testing that property.
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi httpx pydantic pyyaml numpy
+
+      - name: Run the hermetic safety suite
+        # PY= points the runner at this job's interpreter instead of the Windows venv path it
+        # defaults to. Every test is gated by run_test()'s explicit exit-code check, so the
+        # first failure aborts the suite and fails the job.
+        run: PY=python sh backend/run_safety_tests.sh
+
+      - name: Report what could not run here
+        if: always()
+        # A green badge must not quietly mean "and four checks were skipped". This is the same
+        # discipline test_proof_honesty.py enforces on the offensive proof harness: an unfilled
+        # slot reports NOT-RUN, never a pass.
+        run: |
+          {
+            echo "### Safety suite"
+            echo ""
+            echo "Ran on a clean checkout with **no live KB** (\`/data/\` is gitignored)."
+            echo ""
+            echo "**Ran for real:**"
+            echo "- All 56 hermetic test files, gated on explicit exit codes."
+            echo "- The three fingerprint locks, against the committed corpus projection"
+            echo "  (\`backend/test_support/kb_fixture.jsonl\` — every entry, all 105 structured"
+            echo "  fingerprints, proven verdict-identical to the live KB)."
+            echo ""
+            echo "**NOT run here, by design:**"
+            echo "- \`test_kb_fixture.py\`'s completeness / staleness / equivalence checks —"
+            echo "  they need the live KB and are enforced locally, on every suite run."
+            echo "- Parts of \`test_corpora.py\` — it prints \`(skipped — no built KB)\` for the"
+            echo "  sidecar-hash checks that need the built corpus."
+            echo "- The live Docker isolation proof (\`--with-proof\`), local-only by design."
+            echo ""
+            echo "Reproduce this environment locally:"
+            echo '```sh'
+            echo "HACKPIT_FORCE_KB_FIXTURE=1 sh backend/run_safety_tests.sh"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  frontend:
+    name: frontend build + lint baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Lint against the accepted baseline
+        working-directory: frontend
+        # frontend/AGENTS.md documents an ACCEPTED react-hooks baseline — deliberate patterns
+        # Next 16 flags (matchMedia init, fetch-reset on dep change, reveal animations). It is
+        # not zero and must not be "fixed" blindly, so this asserts the count has not GROWN.
+        # It had already drifted 10 -> 11 unnoticed, which is the whole argument for pinning it.
+        run: |
+          set +e
+          npm run lint 2>&1 | tee lint.txt
+          set -e
+          errors=$(grep -oE '[0-9]+ problems \([0-9]+ errors' lint.txt | grep -oE '\([0-9]+' | tr -d '(' || echo 0)
+          echo "eslint errors: ${errors:-0} (baseline 11)"
+          if [ "${errors:-0}" -gt 11 ]; then
+            echo "::error::eslint errors rose above the accepted baseline (${errors} > 11)."
+            echo "New setState-in-effect errors are not accepted — route new state through an"
+            echo "async callback, per frontend/AGENTS.md."
+            exit 1
+          fi
+
+  drift:
+    name: ATT&CK / Sigma upstream drift
+    # Scheduled + manual ONLY — never a merge gate. This calls live upstream, so a failure here
+    # means "the world changed", not "this PR is wrong". Reported, not blocking.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install httpx pyyaml
+      - name: Verify every technique id and Sigma rule still exists upstream
+        run: python pipeline/detection_sources.py --verify

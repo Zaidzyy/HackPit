@@ -16,15 +16,13 @@ Run:  python test_fingerprint_fallback.py
 """
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pipeline"))
 
 from reasoning import retrieval  # noqa: E402
-
-KB_PATH = Path(__file__).resolve().parents[1] / "data" / "kb" / "entries.jsonl"
+from test_support import kb as kb_source  # noqa: E402
 
 # Real services the fingerprint corpus does NOT cover — the eval's UNCOVERED group plus the three
 # that actually false-fired. A hit claiming fingerprint_match for any of these is the defect.
@@ -41,17 +39,11 @@ COVERED = ("vsftpd", "2.3.4")
 
 
 def _load() -> list[dict]:
-    out: list[dict] = []
-    with KB_PATH.open(encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                out.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    return out
+    """The real corpus — live KB locally, the committed projection of it in CI. The provenance
+    is printed so a green run can never hide which corpus it actually iterated."""
+    entries, provenance = kb_source.load()
+    print(f"  corpus: {provenance}")
+    return entries
 
 
 def _corpus_service_keys(entries: list[dict]) -> set[str]:
@@ -65,7 +57,7 @@ def _corpus_service_keys(entries: list[dict]) -> set[str]:
 
 def test_fallback_never_claims_a_structured_fingerprint_match() -> None:
     entries = _load()
-    assert entries, f"no KB entries loaded from {KB_PATH}"
+    assert entries, "no KB entries loaded"
     keys = _corpus_service_keys(entries)
     assert keys, "no structured fingerprint service keys in the corpus"
 

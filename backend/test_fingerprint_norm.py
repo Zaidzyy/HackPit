@@ -14,15 +14,13 @@ Run:  python test_fingerprint_norm.py
 """
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pipeline"))
 
 from reasoning.retrieval import fingerprint  # noqa: E402
-
-KB_PATH = Path(__file__).resolve().parents[1] / "data" / "kb" / "entries.jsonl"
+from test_support import kb as kb_source  # noqa: E402
 
 # Real `nmap -sV` product strings, paired with the corpus service key each MUST resolve to.
 # These are the banners scanners actually emit — vendor-prefixed forms are the whole point.
@@ -47,19 +45,16 @@ NMAP_BANNERS = {
 
 
 def _corpus_service_keys() -> set[str]:
+    """Every structured fingerprint service key in the corpus — live KB locally, its committed
+    projection in CI (`/data/` is gitignored). The projection keeps every fingerprint, and the
+    provenance is printed so a green run cannot hide which corpus it iterated."""
+    entries, provenance = kb_source.load()
+    print(f"  corpus: {provenance}")
     keys: set[str] = set()
-    with KB_PATH.open(encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                e = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            fp = ((e.get("meta") or {}).get("fingerprint")) if isinstance(e.get("meta"), dict) else None
-            if isinstance(fp, dict) and fp.get("service"):
-                keys.add(str(fp["service"]).lower())
+    for e in entries:
+        fp = ((e.get("meta") or {}).get("fingerprint")) if isinstance(e.get("meta"), dict) else None
+        if isinstance(fp, dict) and fp.get("service"):
+            keys.add(str(fp["service"]).lower())
     return keys
 
 

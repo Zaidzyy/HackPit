@@ -15,39 +15,35 @@ Run:  python test_fingerprint_versions.py
 """
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pipeline"))
 
 from reasoning.retrieval import _structured_match  # noqa: E402
-
-KB_PATH = Path(__file__).resolve().parents[1] / "data" / "kb" / "entries.jsonl"
+from test_support import kb as kb_source  # noqa: E402
 
 
 def _fingerprint_entries() -> list[dict]:
-    """Every entry in the live KB that carries a structured meta.fingerprint. The real
-    population — a fingerprint added tomorrow is covered without anyone editing this test."""
+    """Every structured meta.fingerprint in the corpus. The real population — a fingerprint
+    added tomorrow is covered without anyone editing this test.
+
+    Corpus is the live KB locally and its committed projection in CI (`/data/` is gitignored);
+    the projection keeps every entry and every fingerprint, and the provenance is printed so a
+    green run cannot hide which one it iterated."""
+    entries, provenance = kb_source.load()
+    print(f"  corpus: {provenance}")
     out: list[dict] = []
-    with KB_PATH.open(encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                e = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            fp = ((e.get("meta") or {}).get("fingerprint")) if isinstance(e.get("meta"), dict) else None
-            if isinstance(fp, dict) and fp.get("service"):
-                out.append(fp)
+    for e in entries:
+        fp = ((e.get("meta") or {}).get("fingerprint")) if isinstance(e.get("meta"), dict) else None
+        if isinstance(fp, dict) and fp.get("service"):
+            out.append(fp)
     return out
 
 
 def test_every_fingerprint_matches_its_own_stored_version() -> None:
     fps = _fingerprint_entries()
-    assert fps, f"no fingerprint entries found in {KB_PATH} — the corpus or path is wrong"
+    assert fps, "no fingerprint entries found in the corpus — the corpus or path is wrong"
 
     checked = 0
     failures: list[str] = []

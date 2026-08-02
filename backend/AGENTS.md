@@ -14,6 +14,25 @@ sh backend/run_safety_tests.sh                                  # the whole suit
 `run_safety_tests.sh` `cd`s to its own directory, so it only works with the repo root as cwd
 despite the path starting with `backend/`.
 
+### The KB the fingerprint locks iterate
+
+`/data/` is gitignored, so a clean checkout (CI, a fresh clone) has no `data/kb/entries.jsonl`.
+Three locks iterate that corpus by design (§1 below), so they read it through
+`test_support/kb.py`, which prefers the live KB and falls back to
+`test_support/kb_fixture.jsonl` — the **complete** corpus projected onto the fields
+`reasoning.retrieval` actually reads. Every entry and every fingerprint survives; the projection
+is what makes 22 MB affordable as 1.1 MB. **The provenance is always printed**, so a green run
+can never hide which corpus it iterated.
+
+`test_kb_fixture.py` runs before those three and proves the fixture is complete, byte-current
+and verdict-identical to the live KB, with a positive control. **Regenerate it whenever the KB
+gains or loses a fingerprint**, or that test fails:
+
+```sh
+backend/.venv/Scripts/python.exe backend/test_support/make_kb_fixture.py
+HACKPIT_FORCE_KB_FIXTURE=1 sh backend/run_safety_tests.sh   # reproduce CI locally
+```
+
 ---
 
 # THE SAFETY-TEST RULE

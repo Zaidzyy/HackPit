@@ -68,6 +68,12 @@ run_test test_kali.py ":kali containment tests (human-only / hardcoded-open-cont
 
 run_test test_exploits.py "CVE -> exploit index (version comparison / tiered ranking / executes nothing)"
 
+# Runs BEFORE the three fingerprint locks, for the same reason test_scans.py runs first: those
+# three iterate a corpus that is the live KB locally and a committed projection of it in CI
+# (`/data/` is gitignored). This proves the projection is complete, current and verdict-identical
+# before anything depends on it — and reports NOT-RUN, loudly, for the checks that need the live KB.
+run_test test_kb_fixture.py "KB fixture integrity (complete + current + verdict-identical to the live KB / can-fail)"
+
 run_test test_fingerprint_versions.py "fingerprint self-match (D-A: every corpus fingerprint matches its own stored version / inclusive boundary / can-fail)"
 
 run_test test_fingerprint_norm.py "fingerprint normalisation (D-B: vendor-prefixed banners resolve to the product / Tomcat != httpd / no collision / can-fail)"

@@ -78,3 +78,8 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+
+# --- Claude Code (machine-local) ---
+# settings.local.json holds per-machine tool permissions with absolute home paths.
+# This repo is PUBLIC; a home directory in git history is permanent (see D20).
+.claude/settings.local.json

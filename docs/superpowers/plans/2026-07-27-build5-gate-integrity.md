@@ -1,6 +1,7 @@
 # Build #5 — Gate Integrity (Criticals 2 and 3 from the gate audit)
 
-> Run AFTER build #4 is pushed. Source: `GATE-AUDIT-FINDINGS.md` at the repo root.
+> Run AFTER build #4 is pushed. Source: `docs/GATE-AUDIT-FINDINGS.md` (was at the repo root
+> when this plan was written; moved into `docs/` in the 2026-08-03 housekeeping pass).
 > Critical 1 (the danger-heuristic/catalog gap) is folded into build #4's fix wave and is NOT here.
 
 **Goal:** close the two bypasses the gate audit demonstrated, and — more importantly — remove the

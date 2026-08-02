@@ -214,6 +214,15 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#batch-3-pdfs-pages-and-cpent-the-close-out-2026-08-01">Batch 3 — PDFs, pages, and CPENT: the close-out (2026-08-01)</a></li>
 </ul>
 </li>
+<li><a href="#build-12-the-capabilities-nothing-could-reach-and-the-first-ci-2026-08-03">Build #12 — the capabilities nothing could reach, and the first CI (2026-08-03)</a><ul>
+<li><a href="#ten-endpoints-that-existed-and-could-not-be-reached">Ten endpoints that existed and could not be reached</a></li>
+<li><a href="#the-first-ci-and-the-corpus-problem-it-exposed">The first CI, and the corpus problem it exposed</a></li>
+<li><a href="#a-latent-finding-recorded-not-fixed">A latent finding, recorded not fixed</a></li>
+<li><a href="#housekeeping-and-a-document-that-had-been-wrong-for-a-year">Housekeeping, and a document that had been wrong for a year</a></li>
+<li><a href="#deferred-to-a-later-session-deliberately">Deferred to a later session, deliberately</a></li>
+<li><a href="#status_1">Status</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -223,6 +232,7 @@ a { color: var(--accent); text-decoration: none; }
 <p><strong>Date:</strong> 2026-07-26
 <strong>Scope:</strong> every backend module, the frontend, the pipeline, the docker stack, the docs, and the live KB
 <strong>Targets this is measured against:</strong> OSCP · PNPT · eCPPT · HTB CPTS · CRTP · HTB boxes/CTF · bug bounty · real-world client pentests.</p>
+<p><strong>Latest (build #12, 2026-08-03).</strong> A frontend-to-backend coverage sweep found <strong>ten endpoints with no caller at all</strong> — D19's "built and then invisible" one layer deeper, including both depth halves of build #8 — and all ten are now reachable. The project also has its <strong>first CI</strong>: the 56-file hermetic suite, the frontend build and an eslint-baseline check run on every push, with the corpus those tests need supplied by a derived, equivalence-proven fixture rather than skipped (<strong>D26</strong>). See Build #12 at the end of Part III.</p>
 <p><strong>Status note (updated).</strong> This began as an assessment (Part I) and an agreed plan (Part II). <strong>All four phases of that plan have since been built</strong>, and a fifth followed — the execution substrate (Phase 1), the state model (Phase 2), the drive-speed gaps (Phase 3), the content-and-goal-specific work (Phase 4: KB Route-B ingest, the evasion/OPSEC channel, the HTTP repeater, pivot/tunnel routing, exam-mode report templates), and <strong>Phase 5</strong>, which closed the two things Part I had left standing: a real PTY (added as a <em>second</em> surface, so the auditable one survives) and the recommended KB enrichment (PortSwigger Academy, HackTricks Cloud, the HTB slice, and a CVE→exploit index). Part I has been trimmed to what genuinely remains; the completed blockers, decisions and phases live in <strong>Part III — Build Log</strong>.</p>
 <hr />
 <h2 id="0-verdict">0. Verdict</h2>
@@ -742,6 +752,8 @@ a { color: var(--accent); text-decoration: none; }
 <li><strong>Kali VM as an execution target; HexStrike as an execution backend; risk-tiered / batch approval</strong> — <strong>rejected, not deferred</strong> (D8, D5, §1.2).</li>
 <li><strong>Authentication before any non-localhost deployment</strong> (§6) — no decision needed until a VPS enters the picture, but a hard blocker the moment it does. <code>:terminal</code> makes this sharper: an unauthenticated <em>interactive terminal</em> onto a box that reaches the host and LAN. <strong>Still outstanding, and now quantified (2026-07-31).</strong> A Cloudflare Tunnel + Access + app-level-auth build was scoped in full and then deliberately not taken. The scoping established the exact state of the gap: <code>backend/main.py</code> has <strong>no authentication of any kind on any route</strong> — no <code>Depends</code>, no HTTPBasic, no API key — and the CORS allowlist is a <em>browser</em> policy that stops nothing which is not a browser. The sharpest edge is the single WebSocket route <code>/cockpit/terminal/ws</code>, a live PTY into the Kali container: gating HTTP alone would leave a free shell. Localhost-only remains the default and the mitigation.</li>
 <li>Screenshot capture, recon diffing/monitoring, checklist-driven runs.</li>
+<li><strong>A README refresh</strong> (build #12) — three items, held for a session of their own: state plainly that <code>data/kb</code> (the ~2,743-entry technique/workflow dataset) is <strong>gitignored and not in the repo</strong>, so a fresh clone's search is empty until the KB is obtained from the author; mention the CI now that the suite runs on every push; and correct the stale counters (README says 2,621 entries / 110 tools / 42 test files — measured: <strong>2,743 / 115 / 56</strong>).</li>
+<li><strong>Continuous integration</strong> — <strong>DONE</strong> (build #12, no longer outstanding). <code>.github/workflows/ci.yml</code> runs the 56-file hermetic suite, <code>next build</code> and an eslint-baseline check on every push and PR, with the live ATT&amp;CK/Sigma drift verifier on a weekly schedule rather than the merge path. The KB the fingerprint locks need is supplied by a derived, equivalence-proven fixture (D26) rather than skipped.</li>
 </ul>
 <h2 id="reconftw-recon-gaps-mined-and-what-to-skip">reconFTW — recon gaps mined, and what to skip</h2>
 <p>reconFTW (six2dez, MIT) was reviewed for what HackPit's <em>recon</em> was missing — its thinnest area (the incorporation narrative is in Part III). Respecting the constraint that governs everything here — HackPit is human-gated, so "incorporate" means adopt reconFTW's <strong>knowledge</strong>, never its auto-runner — the concrete gaps, where each landed, and rough effort:</p>
@@ -800,6 +812,9 @@ a { color: var(--accent); text-decoration: none; }
 </li>
 <li>
 <p><strong>D25 — <code>fingerprint_match</code> is reserved for a STRUCTURED match; a bare product-name hit is a distinct, weaker signal.</strong> The last measured gap in 2.7 retrieval was a <strong>20% false-fire on services the corpus does not cover</strong> (<code>pure</code>→Pure-FTPd, <code>node.js</code>→Node.js, <code>minio</code>→MinIO), stable across the corpus's growth. Its cause was a <em>second</em> code path from the structured matcher: the version-less substring fallback in <code>rerank()</code> set <code>fingerprint_match=True</code> whenever the scanned product merely appeared as a substring anywhere in a plain entry — so an entry that had nothing to do with the service was surfaced with the same confidence as a real fingerprint, and the grounding line claimed "this exact stack was solved by X" unearned. The decision was made from measurement, not taste: the eval was first instrumented to split covered fires into structured vs fallback, and it showed the fallback contributes <strong>0 of the 28 covered fires</strong> while being the <strong>whole</strong> of the false-fire — so this was never a stricter-matcher-vs-hit-rate trade-off, and the fallback could be demoted at no cost. <code>fingerprint_match</code> now means a structured <code>meta.fingerprint</code> match only; an unstructured product-name hit becomes a labelled <code>fallback_match</code> that still outranks a pure token match (a version-less scan keeps some signal, which is legitimate) but never claims the exact stack, and the substring was tightened to a word boundary. The fallback was <strong>not deleted</strong> — the instruction and the measurement agreed to keep and label it rather than drive a number to zero by removing real behaviour. Result: UNCOVERED false-fire <strong>20%→0%</strong> with covered hit rate, precision, near-miss and self-match all unchanged. Regression-locked by <code>test_fingerprint_fallback.py</code> (real corpus + 15 real uncovered services + positive control), the last of the retrieval-path correctness gaps to close. <em>Built (residual fix, 2026-08-01).</em></p>
+</li>
+<li>
+<p><strong>D26 — a corpus CI needs is DERIVED from the real one and proven equivalent; it is never authored.</strong> Set while wiring the first CI. Three fingerprint locks iterate the live KB deliberately (<code>backend/AGENTS.md</code> §1: draw from the real population, so a fingerprint added tomorrow is covered without anyone editing a test) — but <code>/data/</code> is gitignored, so on a clean checkout they did not skip, they <strong>crashed</strong>. The obvious fix, a small hand-written sample KB, is precisely what §1 forbids and for a documented reason: the gate audit's worst finding was a test asserting on a synthetic value the real system never produces, which stayed green while eight dangerous tools passed the danger gate. The decision is the third option. One measurement made it available: <code>retrieval._entry_blob</code> reads <code>title, text, body, summary, tags, product</code>, and the live KB carries <strong>no <code>text</code>, <code>body</code> or <code>product</code> field at all</strong> (it stores <code>body_md</code> and <code>steps</code>, which that function never consults) — so the fingerprint path only ever sees title + summary + tags. The committed fixture is therefore the <strong>complete</strong> corpus — all 2,743 entries, all 105 structured fingerprints — projected onto the fields the matcher provably reads: 22 MB becomes 1.1 MB with <strong>zero</strong> information loss for these tests. It is not a sample and answers to nobody's judgement about what was "representative". The claim is checked rather than asserted: <code>test_kb_fixture.py</code> re-derives the fixture from the live KB and requires byte-identity (staleness), compares <strong>20 probes × 2,743 entries</strong> verdict-for-verdict between the two corpora (equivalence), reads the matcher's field tuple <strong>out of <code>retrieval.py</code> by AST</strong> so teaching <code>_entry_blob</code> a new field fails the test instead of silently blinding the fixture (faithfulness), and carries a positive control that a truncated fixture is caught. The two checks that need the live KB report <strong>NOT-RUN</strong>, loudly, in both the test output and the CI job summary — the <code>test_proof_honesty</code> discipline applied to CI itself, because a green badge that quietly means "and four checks were skipped" is the same defect as an unfilled proof slot scoring as a pass. <em>Built (build #12, 2026-08-03).</em></p>
 </li>
 </ul>
 <h2 id="phase-1-reach-a-real-target">Phase 1 — reach a real target</h2>
@@ -939,7 +954,7 @@ query-time / config / ranking changes — <strong>no KB re-ingest, no 15 MB rewr
 actually fire?</em> Not "is a guard present" — the build had already shown that a guard can be present,
 look correct, pass its tests, and never trigger. <strong>24 guards were probed by constructing a
 deliberate violation for each. Seven silently failed to fire.</strong> Full detail in
-<code>GATE-AUDIT-FINDINGS.md</code>; the three criticals were:</p>
+<code>docs/GATE-AUDIT-FINDINGS.md</code>; the three criticals were:</p>
 <ol>
 <li><strong>Eight catalogued tools passed the danger gate with no red-confirm</strong> — demonstrated end to end
    through <code>executor.validate_request</code>. <code>weevely</code> (which both generates a webshell <em>and</em> drives it),
@@ -1799,5 +1814,68 @@ the ingester and belongs in its own session.</p>
   repo</strong>, not an anecdote: back up the KB before any rewrite, and make every triage loop tolerant of
   a file vanishing between listing and reading.</li>
 </ul>
+<hr />
+<h2 id="build-12-the-capabilities-nothing-could-reach-and-the-first-ci-2026-08-03">Build #12 — the capabilities nothing could reach, and the first CI (2026-08-03)</h2>
+<p>Two findings drove this build, and the first is D19 one level deeper.</p>
+<h3 id="ten-endpoints-that-existed-and-could-not-be-reached">Ten endpoints that existed and could not be reached</h3>
+<p>D19 fixed surfaces that were <em>built and then invisible</em> — a dozen routes reachable only by typing the URL, cured by putting the index on the home page. This build found the same failure one layer further down: <strong>capabilities with no route at all.</strong> A frontend-to-backend coverage sweep (every one of the 112 source endpoints matched against every call site in <code>frontend/src</code>) found ten with no caller:</p>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Backing module</th>
+<th>Consequence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /exploits/cve/{cve}</code>, <code>/exploits/cves</code></td>
+<td><code>exploits/index.py</code></td>
+<td>"I have CVE-2021-41773, show me exploits" was unanswerable in the UI over a 25k-CVE index — you could search by <em>service</em> only</td>
+</tr>
+<tr>
+<td><code>GET /arsenal/suggest</code>, <code>/arsenal/render/{name}</code></td>
+<td><code>arsenal/router.py</code></td>
+<td>the planner's own tool shortlist, and server-side template rendering, were API-only</td>
+</tr>
+<tr>
+<td><code>GET /detection/catalog</code>, <code>/technique/{id}</code>, <code>POST /tag</code>, <code>GET /sources</code></td>
+<td><code>detection/</code></td>
+<td>the whole curated map — 133 command families, 19 techniques — was unbrowsable</td>
+</tr>
+<tr>
+<td><code>POST /sessions/{id}/webexploit/draft</code></td>
+<td><code>reasoning/webexploit.py</code></td>
+<td><strong>build #8 Task 3 shipped backend-only</strong></td>
+</tr>
+<tr>
+<td><code>POST /sessions/{id}/privesc/ingest</code></td>
+<td><code>reasoning/privesc.py</code></td>
+<td><strong>build #8 Task 4 shipped backend-only</strong></td>
+</tr>
+</tbody>
+</table>
+<p><code>detectionSources</code> is the sharpest instance: it had a typed client function in <code>api.ts</code> and no component ever called it, so the About box it was written for never existed. Two of the ten were the <em>depth</em> half of build #8 — the work was done, reviewed and locked, and no human could reach it.</p>
+<p>All ten are now wired: CVE-id lookup takes the exact keyed path (labelled "unranked", distinct from ranked search) with a "N CVEs affect this service" band beside it; the arsenal renders any tool against a target with unfilled placeholders left <strong>visible</strong> and badged rather than guessed; a new <code>:detection</code> route browses the map, expands a technique with its Sigma rules, and offers a deterministic tag probe with no model in the loop; and the two build-#8 reasoning surfaces appear in the engagement-state panel — a per-finding <em>draft exploit</em> action and a linpeas/winpeas paste box. Both are styled deliberately as proposals: no approve affordance anywhere, and a <code>needs the red confirm</code> chip stating what the gate will demand. <strong>D18 is untouched</strong> — every drafted step is data the human fires through the already-gated surface.</p>
+<p><code>:detection</code> was registered on the home launcher rather than left as a bare route, because D19's own lesson is that a page you must navigate to fixes discoverability only if you remember to navigate to it.</p>
+<h3 id="the-first-ci-and-the-corpus-problem-it-exposed">The first CI, and the corpus problem it exposed</h3>
+<p>Until this build the only thing running the safety suite was remembering to. That is the wrong resting place for a project whose value is that gates fire — the gate audit probed 24 guards and found <strong>seven that never fired</strong>; build #5 found a red-confirm defeated by moving a cmdlet one token right; build #10 found the runner disarmable by adding a pipe. A refactor that silently unlocks a gate should fail a build.</p>
+<p><code>.github/workflows/ci.yml</code> runs three jobs. Blocking on every push and PR: the <strong>56-file hermetic suite</strong> (gated per-file on explicit exit codes), <code>next build</code>, and an eslint <strong>baseline</strong> check — pinned at 11 rather than 0, because <code>frontend/AGENTS.md</code> documents those errors as accepted deliberate patterns, and because the baseline had already crept 10 to 11 unnoticed, which is the argument for pinning it. Non-blocking, weekly: <code>pipeline/detection_sources.py --verify</code>, the live ATT&amp;CK/SigmaHQ drift check, kept off the merge path because a failure there means the world changed, not that a PR is wrong.</p>
+<p>Wiring it surfaced the corpus problem D26 records: <code>/data/</code> is gitignored, three fingerprint locks iterate the live KB by design, and on a clean checkout they crashed rather than skipped. The fix is the derived, complete, equivalence-proven projection described in D26 — <strong>not</strong> a hand-written sample, which <code>backend/AGENTS.md</code> §1 forbids for exactly the reason that would have bitten here.</p>
+<p><strong>Verified against the real CI condition, not an approximation.</strong> A clean virtualenv carrying only the five dependencies CI installs — <em>deliberately without pywinrm</em>, so the suite's hermetic claim is genuinely under test rather than papered over — combined with <code>HACKPIT_FORCE_KB_FIXTURE=1</code> to hide the live KB: <strong>56 test files, every one exited 0</strong>, with the three fingerprint locks running for real on the fixture (105 fingerprints self-matched, 56 version checks, 15 uncovered services) rather than skipping. The same env var reproduces CI on any machine that has the KB, and is documented in <code>backend/AGENTS.md</code>.</p>
+<h3 id="a-latent-finding-recorded-not-fixed">A latent finding, recorded not fixed</h3>
+<p>Measuring the fixture projection surfaced something about the matcher itself. <code>retrieval._entry_blob</code> reads <code>title, text, body, summary, tags, product</code>, and the live KB has <strong>none of <code>text</code>, <code>body</code>, <code>product</code></strong> — it stores <code>body_md</code> and <code>steps</code>. So the unstructured fallback path has never searched the body of any entry; it sees titles, summaries and tags only. That may well be correct — matching titles and summaries is the more precise behaviour, and D25 tightened this path deliberately after measuring it — but the <code>body</code> / <code>body_md</code> near-miss looks accidental rather than chosen. It is <strong>left alone and written down</strong> rather than "fixed" in passing: changing which fields the fallback reads would move retrieval behaviour that was just carefully measured to a 0% false-fire, and that is a decision to take deliberately with an eval beside it, not a drive-by.</p>
+<h3 id="housekeeping-and-a-document-that-had-been-wrong-for-a-year">Housekeeping, and a document that had been wrong for a year</h3>
+<p><code>GATE-AUDIT-FINDINGS.md</code> moved from the repo root into <code>docs/</code> (both stale references updated — the build-5 plan literally said "at the repo root"). <code>fix-vmnet8.ps1</code>, the host-side VMware NAT repair for the build #9 lab, was <strong>parameterized before being tracked</strong>: it carried a hardcoded <code>C:\Users\zaid_\…</code> transcript path, and this repo is public — the same class of thing cleaned up before it was published. It now takes <code>param()</code> defaults and <code>$PSScriptRoot</code>, and sits in <code>docker/proof/</code> beside <code>dc_prereq_probe.py</code>, its natural companion (the probe reports the DC unreachable; this fixes the commonest cause). Two superseded KB snapshots were deleted after verifying the live corpus parses to 2,743 valid objects — <code>data/kb</code> 88 MB to 58 MB. <code>exploitdb.json</code> was <strong>kept</strong>: an earlier pass in this session wrongly grouped it with the stale backups, and it is the live CVE index <code>backend/exploits/index.py</code> reads.</p>
+<p><code>docs/build-notes.md</code> was rewritten. It had opened with "<strong>The Cockpit does not exist yet</strong>" and closed calling the execution engine "still ahead of me" — true when written, false for about a year, across eleven builds and a live DCSync against a real domain. The correction is kept <strong>in</strong> the document as a dated note rather than quietly applied, because the failure is worth naming: a doc written to guard against overselling ended up underselling by a year, and the mechanism is the same either way — it stopped tracking the code. The five original "what broke" stories survive; three better ones were added (the six live-fire defects invisible to a green suite, the shared-predicate pattern across three subsystems, and the DA password leaking into the LLM proposer context), and the closing admission is now four honest ones led by the real one: the headline was autonomous hacking and the project deliberately built the opposite.</p>
+<h3 id="deferred-to-a-later-session-deliberately">Deferred to a later session, deliberately</h3>
+<p>Two README items, noted here so they are not lost:</p>
+<ol>
+<li><strong>State plainly that the KB is not in the repo.</strong> <code>data/kb</code> — the ~2,743-entry dataset of techniques, workflows and payload corpora — is gitignored and always will be (it is rebuildable, and third-party corpora are never committed). A reader who clones this and expects search to work will find it <strong>empty and non-functional</strong>, and the README does not currently say so, or say that the KB is available on request from the author.</li>
+<li><strong>Mention the CI.</strong> It is a genuine engineering signal — a public repo whose safety suite runs on every push, with a corpus fixture proven equivalent to the real one — and the README still describes the suite as something run by hand.</li>
+</ol>
+<p>The README's counters are also stale (it claims 2,621 KB entries, a 110-tool catalog, and "42 test files, 459 assertions"; the measured values are <strong>2,743</strong>, <strong>115</strong> and <strong>56</strong>). All three are one editing pass, held for a session of their own.</p>
+<h3 id="status_1">Status</h3>
+<p>Suite <strong>56 files, 0 failures</strong>, green both with the live KB and under the CI simulation. Frontend builds clean at 23 routes; eslint holds at the accepted 11-error baseline. Every one of the ten previously-unreachable endpoints now has a real component caller, verified by re-running the sweep that found them.</p>
 </body>
 </html>

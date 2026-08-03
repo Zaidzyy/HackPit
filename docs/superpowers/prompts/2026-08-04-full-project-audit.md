@@ -18,19 +18,77 @@ Everything below serves that question.
 |---|---|
 | Real target | **He is naming one.** See `[[TARGET]]` below. |
 | Latitude | **Fix + commit + push.** Fix what you find, run the suite, update the assessment, push to `main`. He wants to wake to green CI and a report. |
-| Windows/AD VM | **Will be up.** Drive the live WinRM / AD path as build #9 did. |
+| Windows/AD VM | **UP and reachable** — `192.168.13.140:5985`, `Administrator@CORP`, secret set, connection tested. Drive the live WinRM / AD path as build #9 did. |
+| LLM | **Ollama is running.** Use it, never the Agent SDK. |
 | Classifier | **Work around it.** Do everything you can directly; for anything the real-time cyber classifier refuses, write a **self-verifying `.sh`** and leave it for him to run in a plain shell. Do not stall waiting for permission. |
 | Scope | **The entire HackPit project** — every surface, not just build #14. |
 
-### `[[TARGET]]`
+### The targets — CONFIRMED AVAILABLE
+
+**Windows / AD — full latitude.** `192.168.13.140:5985`, WinRM, `Administrator@CORP`, password
+auth, secret already stored, connection tested and reaching. Zaid's own VM. Drive the entire
+Windows/AD path against it as build #9 did — collection, graph, the gated abuse edges, DCSync,
+the detection describe-side. Nothing is off limits here.
+
+**Lab — full latitude.** `hackpit-lab-target` (Juice Shop) in the isolated sandbox. All
+intrusive testing belongs here.
+
+**LLM — Ollama is running.** Use it (never the Agent SDK).
+
+**Real bug bounty program — Majid Al Futtaim Lifestyle (Bugcrowd), RetailSafe safe harbor,
+ongoing since 2019.** In scope:
+
 ```
-REAL TARGET (fill in before starting):  ____________________
-WINDOWS/AD VM (host + profile id):      ____________________
+www.crateandbarrel.me            Cloudflare CDN, MySQL
+https://api-prod.thatconceptstore.com/     API testing
+https://thatconceptstore.com     API + website testing
+https://www.cb2.ae/en            Akamai CDN
+https://www.allsaints.me/        Akamai CDN
+www.lululemon.me                 Akamai CDN
+lapi.yellowblocks.me             Akamai CDN
+https://www.shiseido.me/         Akamai CDN
+lego.me
+psychobunny.me                   Akamai CDN, Algolia
+fashion4less.me
+THAT Concept Store iOS / Android  (mobile app testing)
 ```
-**If `[[TARGET]]` is still blank, do NOT invent one and do NOT point anything at a third party.**
-Fall back to: lab + a second locally-stood-up vulnerable container, and mark every real-target
-conclusion as *reasoned, not proven*. Say so loudly in the report. An unauthorised scan is the one
-mistake that cannot be undone in the morning.
+
+### 1.1 RULES OF ENGAGEMENT for the bug bounty targets — read twice
+
+These are production retail sites belonging to a third party. In-scope testing is authorised by
+the program; **an unattended overnight scanner is not what that authorisation contemplates**, and
+it is also bad practice — it breaches the automation clauses most programs carry, gets the source
+IP banned, and produces submissions that get rejected. It is additionally at odds with HackPit's
+own central design: **every command is human-approved**, and Zaid is asleep.
+
+So the split is deliberate, and it is not a limitation of the audit — it is the audit:
+
+**DO, freely — this is where the real answer lives:**
+- Scope modelling: load this program into an engagement. Wildcards? Out-of-scope lists? Mobile
+  targets? Does the scope model even *fit* a real program? **This is hypothesis #6 and the most
+  valuable thing you can test tonight.**
+- Passive recon and OSINT: subdomain enumeration, DNS, certificate transparency, `httpx`
+  fingerprinting, `waybackurls` / `gau`, JS endpoint mining, technology detection.
+- Surface mapping into engagement state, then a rendered report.
+- Everything that reads rather than attacks.
+
+**DO NOT, under any circumstance:**
+- Unattended active scanning. No `zaproxy -quickurl`, no `sqlmap`, no `ffuf`/`feroxbuster`
+  brute-forcing, no `nuclei` with intrusive templates against these hosts.
+- Anything that could degrade service, lock an account, or write data.
+- Volume. If you probe at all, single requests at human pace.
+- Chasing the CDN. Most of these sit behind **Akamai or Cloudflare** — naive scanning hits the
+  edge, not the origin, and teaches you nothing except that a WAF exists.
+- Continuing after any sign of blocking (403 wall, captcha, rate-limit). Stop and record it.
+- Submitting anything anywhere. Findings are drafted for Zaid, never filed.
+
+**Any active testing you believe is genuinely warranted goes into a `.sh` for Zaid to run and
+approve in the morning** — which is exactly the workflow HackPit is built around, so exercising
+that path *is* a valid test of the product.
+
+If a target is unreachable, geo-blocked or otherwise not cooperating, do not fight it: note it,
+move on, and use the lab and the DC. Zaid's words: *"if this target is not happening or smth let
+claude do whatever it wants but do everything."*
 
 ---
 
@@ -117,8 +175,17 @@ tool output and confirm the finding reaches a rendered report **with secrets red
 
 Give a direct verdict per item, with evidence. "Probably fine" is not an answer.
 
-1. **Can it run a full bug bounty today?** Walk a real program end to end: scope → recon →
-   surface discovery → vuln hunting → validation → report. Where does it stop being usable?
+1. **Can it run a full bug bounty today?** Walk the **real Majid Al Futtaim program** end to end
+   within the §1.1 rules: load the scope → recon → surface discovery → map into state → draft a
+   report. For the intrusive half, walk the same workflow against the **lab** and reason honestly
+   about what would differ against production. Where does it stop being usable?
+   Answer these specifically:
+   - Can you even **express** this program's scope? 11 web/API targets, several wildcarded in
+     practice, **two mobile apps**, a CDN in front of most of them.
+   - HackPit has **no mobile execution surface** — iOS/Android are 2 of 4 scope categories here.
+     Is that a gap worth closing, or correctly out of scope for this product?
+   - Does anything model **known issues** / duplicate suppression, which every mature program has?
+   - Is the report output shaped for **Bugcrowd/H1 (VRT, P1–P4, CVSS)**, or only for exams?
 2. **What is limited *by the lab* rather than by design?** Zaid's explicit instruction: *if a
    feature is only limited because of the lab, we can skip the lab case and implement it for
    engagements only.* Name every such case.
@@ -196,3 +263,5 @@ than stated.
 - `sh backend/run_safety_tests.sh` green; all live proofs green or explicitly NOT-RUN with a reason.
 - Report + punch list written; fixes pushed; CI green.
 - `data/kb/entries.jsonl` still **2743** entries.
+- **Nothing was submitted anywhere, and no unattended active scan touched a third-party host.**
+  If §1.1 was breached in any way, say so at the top of the report in plain words.

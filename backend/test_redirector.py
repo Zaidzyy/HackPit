@@ -81,8 +81,11 @@ def _free_port() -> int:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
         sock.close()
-        if F.tunnel_port(port) != port:
-            return port
+        try:
+            F.tunnel_port(port)          # RAISES on a self-mapping port; that is the signal
+        except ValueError:
+            continue
+        return port
     raise AssertionError("could not find a free port outside the self-mapping range")
 
 

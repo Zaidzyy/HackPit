@@ -145,16 +145,46 @@ EXPOSABLE: dict[str, str] = {
 }
 
 
+# WHERE the ports are published. The field that makes part 4 an extension of this module
+# rather than a second one beside it.
+#
+#   local  — an interface on THIS machine. Everything below behaves exactly as it did before
+#            the field existed; the rendered override, the ack markers and the published-port
+#            scanner are untouched. Regression-locked, because part 1's invariants may not be
+#            softened by part 4.
+#   remote — the ports are published on the CONFIGURED VPS (build #13 part 3's config store).
+#            There is no local bind address at all, so `ip` is not read: the address is resolved
+#            server-side, which is what keeps a remote profile host-locked the same way the
+#            deploy is.
+#
+# The two are not one path with a flag. "Apply" means different operations — a local profile
+# recreates a container and never touches SSH; a remote profile ships a file and never touches
+# `docker compose` — and the validation rules genuinely differ (see :func:`validate`).
+DESTINATIONS = ("local", "remote")
+
+
 class ListenerProfile(BaseModel):
     """One published-port posture. Inert until rendered, written and applied."""
 
-    ip: str = Field(..., description="Host bind address, or a wildcard token with ack_wildcard.")
+    ip: str = Field(
+        "",
+        description="Host bind address (local only). Ignored — and not read — when "
+                    "destination='remote'.",
+    )
+    destination: str = Field("local", description="local (an interface here) | remote (the VPS).")
     container: str = Field("engage-sandbox", description="engage-sandbox | kali-open.")
     kinds: list[str] = Field(default_factory=list, description="Kinds to derive ports from.")
     extra: list[tuple[int, str]] = Field(default_factory=list, description="Explicit (port, proto).")
     engagement: str | None = Field(None, description="Recorded for audit. Scopes nothing.")
     ack_wildcard: bool = Field(False, description="Acknowledge binding EVERY interface.")
     ack_public: bool = Field(False, description="Acknowledge binding a publicly routable address.")
+
+    @field_validator("destination")
+    @classmethod
+    def _known_destination(cls, v: str) -> str:
+        if v not in DESTINATIONS:
+            raise ValueError(f"destination must be one of {DESTINATIONS}, got {v!r}")
+        return v
 
     @field_validator("extra", mode="before")
     @classmethod
@@ -200,6 +230,9 @@ def validate(profile: ListenerProfile) -> Validation:
     things: a binding that survives a VPN or DHCP address change, and a fallback when a
     specific bind misbehaves under Docker Desktop's networking.
     """
+    if profile.destination == "remote":
+        return _validate_remote(profile)
+
     v = Validation()
 
     if profile.container not in EXPOSABLE:
@@ -247,6 +280,69 @@ def validate(profile: ListenerProfile) -> Validation:
     return v
 
 
+def _validate_remote(profile: ListenerProfile) -> Validation:
+    """The gates for a REMOTE profile — the ports land on a VPS, not on this machine.
+
+    Deliberately its own function rather than the local rules with exceptions carved out,
+    because almost every rule above is about a property a remote destination does not have:
+
+      * **No bind address.** ``ip`` is not read at all. The address comes from the canary
+        config store, resolved server-side — the same thing that makes the deploy host-locked.
+        A profile that carried its own remote address would put the destination back into a
+        request field, which is the mistake part 2 made and part 3 was built not to repeat.
+      * **No liveness probe.** "Can something bind this address on this host" is meaningless
+        for a port on someone else's machine, and answering it locally would produce a
+        confident wrong answer.
+      * **The public acknowledgement is UNCONDITIONAL.** Locally, `ack_public` distinguishes a
+        deliberate public bind from a private one. There is no private case here: a port on a
+        VPS is reachable by anyone who scans that address, always. So the acknowledgement is
+        not conditional on classifying an address — there is no address to classify.
+      * **No container.** Nothing is published locally, so `container` is not read either.
+    """
+    v = Validation()
+
+    if not profile.ack_public:
+        v.needs_ack.append("public")
+        v.refusals.append(
+            "a remote profile publishes ports on a PUBLIC address, reachable by anyone who "
+            "scans it — not only by the target you are testing — and relays what arrives into "
+            "this machine. Acknowledge with ack_public=true"
+        )
+
+    try:
+        v.ports = derive_ports(profile.kinds, profile.extra)
+    except ExposureRefused as exc:
+        v.refusals.append(exc.reason)
+
+    if not v.ports and not v.refusals:
+        v.refusals.append("a profile with no ports publishes nothing — tick a kind or add a port")
+
+    if profile.ip:
+        v.warnings.append(
+            f"the bind address {profile.ip!r} is ignored for a remote profile — the ports are "
+            f"published on the configured VPS, whose address is resolved server-side"
+        )
+
+    return v
+
+
+def _refuse_remote(profile: ListenerProfile, what: str) -> None:
+    """Refuse to run a LOCAL-path operation on a remote profile.
+
+    Every function below this line publishes a port on this machine by writing a compose
+    override and recreating a container. None of that is what a remote profile means, and the
+    failure of silently doing it anyway would be quiet and wrong in both directions: a compose
+    file that publishes on `''`, and an operator believing a VPS is exposed when nothing was
+    shipped to it. Refusing at the door keeps the two paths from ever half-mixing.
+    """
+    if profile.destination == "remote":
+        raise ExposureRefused(
+            f"a remote profile cannot be {what} — it publishes on the configured VPS, not on "
+            f"this machine. Deploy it through the gated redirector path instead.",
+            gate="destination",
+        )
+
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROFILE_PATH = REPO_ROOT / "docker" / "listener-profile.yml"
 DEFAULT_COMPOSE_PATH = REPO_ROOT / "docker" / "docker-compose.yml"
@@ -287,6 +383,7 @@ def render(profile: ListenerProfile, *, at: str) -> str:
     it. With the marker, the one small file a reviewer reads states what is exposed AND that it
     was chosen deliberately, by whom and when.
     """
+    _refuse_remote(profile, "rendered as a compose override")
     ports = derive_ports(profile.kinds, profile.extra)
     eng = profile.engagement or "-"
     out = [_HEADER.format(service=profile.container, at=at, eng=eng)]
@@ -307,6 +404,7 @@ def compose_command(profile: ListenerProfile) -> list[str]:
     would bring the service up with no image, and omitting the second is the whole exposure
     silently not happening. The same pair is needed on teardown.
     """
+    _refuse_remote(profile, "applied with docker compose")
     return [
         "docker", "compose",
         "-f", str(DEFAULT_COMPOSE_PATH),
@@ -322,6 +420,7 @@ def write(profile: ListenerProfile, *, at: str) -> Path:
     loudly on one, and refusing would break the real case of writing a profile while off the
     VPN, intending to connect before applying it.
     """
+    _refuse_remote(profile, "written as a compose override")
     result = validate(profile)
     if not result.ok:
         raise ExposureRefused("; ".join(result.refusals))
@@ -374,6 +473,18 @@ def observe(
     """
     if profile is None:
         return {"state": "none", "published": {}, "expected": [], "note": "no profile written"}
+
+    if profile.destination == "remote":
+        # The same rule this function exists to enforce, applied to itself: never report a
+        # state you have not looked at. `docker inspect` says nothing whatsoever about a
+        # process on someone else's machine, and running it here would return "pending-restart"
+        # for a redirector that is up, or "active" for one that is not.
+        return {
+            "state": "remote", "published": {},
+            "expected": derive_ports(profile.kinds, profile.extra),
+            "note": "published on the configured VPS — local docker inspect cannot observe it; "
+                    "use the redirector's own status",
+        }
 
     container = EXPOSABLE.get(profile.container, profile.container)
     call = runner or (lambda _argv: _docker_ports(container))
@@ -461,6 +572,76 @@ PRESETS: dict[str, ListenerProfile] = {
         ip="192.168.13.1", container="engage-sandbox", kinds=["dns-tunnel"],
     ),
 }
+
+# --------------------------------------------------------------------------- #
+# Remote profile persistence
+# --------------------------------------------------------------------------- #
+# A remote profile is not a compose override, so it cannot live in one. It gets its own
+# gitignored file for the same reason the local one does: the FILE is the source of truth, it
+# survives a backend restart, and a hand-edit is visible instead of masked by cached state.
+#
+# JSON rather than YAML because nothing consumes it but this module — there is no second tool
+# on the other end whose format it has to match, which is the only reason the local one is YAML.
+REMOTE_PROFILE_PATH = REPO_ROOT / "docker" / "redirector-profile.json"
+
+
+def write_remote(profile: ListenerProfile, *, at: str) -> Path:
+    """Validate and persist a remote profile. Raises ExposureRefused on any refusal.
+
+    Writing it publishes NOTHING — exactly like the local path, where the rendered override is
+    inert until it is applied. Nothing reaches the VPS until the gated deploy runs.
+    """
+    if profile.destination != "remote":
+        raise ExposureRefused(
+            "write_remote() takes a remote profile — a local one belongs in the compose override",
+            gate="destination",
+        )
+    result = validate(profile)
+    if not result.ok:
+        raise ExposureRefused("; ".join(result.refusals), gate="exposure")
+    REMOTE_PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    REMOTE_PROFILE_PATH.write_text(
+        json.dumps(
+            {
+                "_comment": "HackPit — GENERATED redirector profile. DO NOT COMMIT. "
+                            "Writing this publishes nothing; the gated deploy does.",
+                "at": at,
+                "profile": profile.model_dump(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return REMOTE_PROFILE_PATH
+
+
+def live_remote_profile() -> "ListenerProfile | None":
+    """The remote profile currently on disk, or None. Read back, never cached."""
+    if not REMOTE_PROFILE_PATH.exists():
+        return None
+    try:
+        raw = json.loads(REMOTE_PROFILE_PATH.read_text(encoding="utf-8"))
+        return ListenerProfile(**raw["profile"])
+    except (ValueError, KeyError, TypeError):
+        # A hand-mangled file reads as "no profile" rather than crashing the panel that exists
+        # to show what is exposed. It is visible as absent, which is the safe direction.
+        return None
+
+
+def clear_remote() -> bool:
+    """Forget the remote profile. True if one was there.
+
+    Removes HackPit's record of it. It does NOT stop a redirector already running on the VPS —
+    the panel says so, because a delete that read as "the listener is down" would leave a
+    public forwarder nobody is watching.
+    """
+    if REMOTE_PROFILE_PATH.exists():
+        REMOTE_PROFILE_PATH.unlink()
+        return True
+    return False
+
 
 _PORT_LINE = re.compile(
     r'^-\s*"(?P<ip>[^:]+):(?P<host>\d+):(?P<cont>\d+)/(?P<proto>tcp|udp)"$'

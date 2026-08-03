@@ -32,9 +32,12 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel, Field, field_validator
 
 from . import config
-from .obfuscation import DNS_TUNNEL_PORT
-from .sliver import SLIVER_DEFAULT_PORT
-from .tunnels import CHISEL_DEFAULT_PORT, LIGOLO_DEFAULT_PORT
+from .listener_ports import (
+    CHISEL_DEFAULT_PORT,
+    DNS_TUNNEL_PORT,
+    LIGOLO_DEFAULT_PORT,
+    SLIVER_DEFAULT_PORT,
+)
 
 
 class ExposureRefused(RuntimeError):

@@ -130,10 +130,10 @@ IODINE_CLIENT_BIN = "iodine"
 
 KINDS = ("dnscat2", "iodine")
 
-# The port a DNS tunnel server binds. Named (build #13) so cockpit/exposure.py IMPORTS it
-# rather than repeating the literal — a listener profile must publish the port the listener
-# actually uses, and a constant is the only way that stays true when one of them changes.
-DNS_TUNNEL_PORT = 53
+# The port a DNS tunnel server binds. Lives in cockpit/listener_ports.py so cockpit/exposure.py
+# can learn it without importing this module — see that file. Re-exported so existing
+# references stand.
+from .listener_ports import DNS_TUNNEL_PORT  # noqa: E402
 
 # The tunnel interface's own range. A private range by definition — it belongs to the tunnel,
 # not to anybody's network, least of all the engagement's.

@@ -162,7 +162,9 @@ run_test test_evasion.py "evasion engine (generate-only / gated / forced honest 
 
 run_test test_evasion_safety.py "evasion engine SAFETY invariants (no agent path / never runs what it builds / footprint has no off switch)"
 
-run_test test_exposure_safety.py "published-port exposure invariants (default publishes nothing / opt-in override is IP-bound)"
+run_test test_exposure_safety.py "published-port exposure invariants (default publishes nothing / every bind IP-bound or acknowledged)"
+
+run_test test_exposure.py "listener profiles (bind gates / ack rendering / observed state / vmnet8 preset equivalence)"
 
 run_test test_proof_honesty.py "proof-harness HONESTY (an unfilled offensive slot reports NOT-RUN, never a fake pass)"
 

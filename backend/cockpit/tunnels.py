@@ -93,9 +93,14 @@ MAX_LIVE_TUNNELS = int(__import__("os").environ.get("HACKPIT_MAX_TUNNELS", "4"))
 
 # Default ports. chisel: reverse SOCKS server; the agent's R:socks exposes a SOCKS5 on the
 # SERVER at 127.0.0.1:1080, which proxychains then points at. ligolo: the proxy control port.
-CHISEL_DEFAULT_PORT = 8080
-CHISEL_SOCKS_PORT = 1080
-LIGOLO_DEFAULT_PORT = 11601
+# Defined in cockpit/listener_ports.py so cockpit/exposure.py can learn a listener's port
+# WITHOUT importing this module — the human-only scan below allows only two files to reach it,
+# and a port is configuration, not behaviour. Re-exported so every existing reference stands.
+from .listener_ports import (  # noqa: E402
+    CHISEL_DEFAULT_PORT,
+    CHISEL_SOCKS_PORT,
+    LIGOLO_DEFAULT_PORT,
+)
 
 
 def _now() -> str:

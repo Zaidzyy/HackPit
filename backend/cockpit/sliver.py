@@ -124,7 +124,9 @@ SLIVER_CLIENT_BIN = "sliver-client"
 _LISTENER_RE = re.compile(r"^(?!-)[A-Za-z0-9._:\[\]<>-]{1,255}$")
 
 # The server's default daemon port (Sliver's own default multiplayer port).
-SLIVER_DEFAULT_PORT = 31337
+# Defined in cockpit/listener_ports.py so cockpit/exposure.py can learn this port without
+# importing this module — see that file. Re-exported so existing references stand.
+from .listener_ports import SLIVER_DEFAULT_PORT  # noqa: E402
 
 # Bounds. A C2 server is heavyweight; one is normal, a pile of them is a mistake.
 MAX_LIVE_SERVERS = int(_os.environ.get("HACKPIT_MAX_SLIVER_SERVERS", "2"))

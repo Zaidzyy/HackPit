@@ -18,6 +18,13 @@ Endpoints:
                                        output, then follow it live. Reconnect-safe.
 * ``GET  /cockpit/jobs``             — backgrounded runs still in flight.
 * ``GET  /cockpit/loot``             — where run artefacts land on the host.
+* ``GET  /cockpit/exposure``         — the live listener profile + what is ACTUALLY published
+                                       (build #13: WHERE a callback lands).
+* ``POST /cockpit/exposure/profile`` — validate + write a profile. 403 names the gate and the
+                                       missing acknowledgement; warnings are returned, not fatal.
+* ``POST /cockpit/exposure/apply``   — recreate the service so the profile takes effect.
+                                       Requires approval: it kills everything in the container.
+* ``DEL  /cockpit/exposure/profile`` — remove the profile file (does NOT close a port).
 
 NOTE: tool reconciliation (which catalogued tools the sandbox actually has) is served from
 ``GET /tools`` in main.py, NOT from here. The cockpit package stays blind to the tool
@@ -38,6 +45,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import allowlist, config, engagement, executor, jobs, loot, runstore
+from . import exposure as exposure_mod
 from . import session as live_session
 from . import kali as kali_mod
 from . import repeater as repeater_mod
@@ -878,3 +886,94 @@ def list_jobs() -> dict[str, Any]:
 def get_loot() -> dict[str, Any]:
     """Where run artefacts land on the host, and which sandboxes have a loot mount."""
     return loot.describe()
+
+
+# --------------------------------------------------------------------------- #
+# Listener profiles (build #13) — WHERE a callback lands.
+#
+# Pure cockpit concern, so these live here rather than in main.py; only cross-cutting
+# endpoints belong there. Nothing here executes attack tooling: writing a profile touches one
+# gitignored file, and applying it recreates a container behind an approval gate.
+# --------------------------------------------------------------------------- #
+class ProfileRequest(BaseModel):
+    """A listener profile plus the acknowledgements its bind address may need."""
+
+    ip: str = Field(..., description="Host bind address, or a wildcard token with ack_wildcard.")
+    container: str = Field("engage-sandbox", description="engage-sandbox | kali-open.")
+    kinds: list[str] = Field(default_factory=list, description="chisel | ligolo | dns-tunnel | sliver.")
+    extra: list[tuple[int, str]] = Field(default_factory=list, description="Explicit (port, proto).")
+    engagement: str | None = Field(None, description="Recorded for audit. Scopes nothing.")
+    ack_wildcard: bool = Field(False, description="Acknowledge binding EVERY interface.")
+    ack_public: bool = Field(False, description="Acknowledge binding a publicly routable address.")
+    approved: bool = Field(False, description="Required by /exposure/apply — it recreates the container.")
+
+
+def _profile_from(req: ProfileRequest) -> exposure_mod.ListenerProfile:
+    return exposure_mod.ListenerProfile(**req.model_dump(exclude={"approved"}))
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+@router.get("/exposure")
+def get_exposure() -> dict[str, Any]:
+    """The live profile and what is ACTUALLY published — never what was assumed."""
+    profile = exposure_mod.live_profile()
+    state = exposure_mod.observe(profile)
+    return {
+        "profile": profile.model_dump() if profile else None,
+        "presets": sorted(exposure_mod.PRESETS),
+        "exposable": sorted(exposure_mod.EXPOSABLE),
+        "kinds": {k: {"port": p, "proto": proto} for k, (p, proto) in exposure_mod.KIND_PORTS.items()},
+        **state,
+    }
+
+
+@router.post("/exposure/profile")
+def post_exposure_profile(req: ProfileRequest) -> dict[str, Any]:
+    """Validate and write. 403 names the gate and which acknowledgement is missing.
+
+    Warnings are RETURNED, not fatal — a bind address that is not live right now is a real
+    thing to do deliberately (write the profile, then connect the VPN, then apply).
+    """
+    profile = _profile_from(req)
+    result = exposure_mod.validate(profile)
+    if not result.ok:
+        raise HTTPException(status_code=403, detail={
+            "gate": "exposure",
+            "refusals": result.refusals,
+            "needs_ack": result.needs_ack,
+            "warnings": result.warnings,
+        })
+    path = exposure_mod.write(profile, at=_now_iso())
+    return {
+        "written": str(path),
+        "ports": result.ports,
+        "warnings": result.warnings,
+        "command": exposure_mod.compose_command(profile),
+        "note": "the profile is inert until it is applied — nothing is published yet",
+    }
+
+
+@router.post("/exposure/apply")
+def post_exposure_apply(req: ProfileRequest) -> dict[str, Any]:
+    """Recreate the service so the profile takes effect. Requires approved=true."""
+    profile = _profile_from(req)
+    try:
+        applied = exposure_mod.apply(profile, approved=req.approved)
+    except exposure_mod.ExposureRefused as exc:
+        raise HTTPException(status_code=403, detail={"gate": exc.gate, "reason": exc.reason})
+    return {**applied, **exposure_mod.observe(profile)}
+
+
+@router.delete("/exposure/profile")
+def delete_exposure_profile() -> dict[str, Any]:
+    """Remove the profile file. Does NOT close a port on its own."""
+    removed = exposure_mod.clear()
+    return {
+        "removed": removed,
+        "note": "the container keeps its bindings until it is recreated — bring it up again "
+                "with the base compose file alone to drop them",
+    }

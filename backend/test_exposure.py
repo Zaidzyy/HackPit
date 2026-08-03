@@ -310,6 +310,48 @@ def test_apply_surfaces_a_compose_failure() -> None:
     raise AssertionError("a failing compose was reported as success")
 
 
+def test_vmnet8_preset_matches_what_build10_hand_wrote() -> None:
+    """The generalisation must expose exactly what the file it replaces exposed.
+
+    Compared on PARSED exposure, not bytes: build #10's file opens with 27 lines of prose
+    explaining why VMnet8 and why UDP/53, and no generator reproduces prose. The guarantee
+    wanted is "same effective exposure", not "same comments".
+    """
+    import tempfile
+    from pathlib import Path as _P
+    from test_exposure_safety import published_ports
+
+    golden = exposure.REPO_ROOT / "backend" / "test_support" / "c2-lab.golden.yml"
+    assert golden.exists(), golden
+    with tempfile.TemporaryDirectory() as d:
+        gen = _P(d) / "listener-profile.yml"
+        gen.write_text(exposure.render(exposure.PRESETS["vmnet8-dns"], at=_AT), encoding="utf-8")
+        got = [e for _, e in published_ports(gen)]
+        want = [e for _, e in published_ports(golden)]
+        assert got == want, (got, want)
+        assert "engage-sandbox:" in gen.read_text(encoding="utf-8")
+    print(f"  the vmnet8-dns preset exposes exactly what c2-lab.yml exposed ({want}): PASS")
+
+
+def test_live_profile_round_trips() -> None:
+    import tempfile
+    from pathlib import Path as _P
+    original = exposure.PROFILE_PATH
+    with tempfile.TemporaryDirectory() as d:
+        exposure.PROFILE_PATH = _P(d) / "listener-profile.yml"
+        try:
+            assert exposure.live_profile() is None
+            exposure.write(_profile(ip="127.0.0.1", kinds=["dns-tunnel"]), at=_AT)
+            back = exposure.live_profile()
+            assert back is not None
+            assert back.ip == "127.0.0.1", back.ip
+            assert back.container == "engage-sandbox", back.container
+            assert back.extra == [(53, "udp")], back.extra
+        finally:
+            exposure.PROFILE_PATH = original
+    print("  the written profile reads back off disk: PASS")
+
+
 if __name__ == "__main__":
     print("== listener profiles (build #13) ==")
     test_ports_derive_from_kinds()
@@ -337,5 +379,7 @@ if __name__ == "__main__":
     test_apply_requires_approval()
     test_apply_runs_the_compose_command_it_showed()
     test_apply_surfaces_a_compose_failure()
+    test_vmnet8_preset_matches_what_build10_hand_wrote()
+    test_live_profile_round_trips()
     print("all listener-profile tests passed")
     sys.exit(0)

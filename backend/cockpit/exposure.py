@@ -447,3 +447,48 @@ def apply(
     if rc != 0:
         raise ExposureRefused(f"compose failed (rc {rc}): {err or out}", gate="compose")
     return {"applied": True, "command": argv}
+
+
+PRESETS: dict[str, ListenerProfile] = {
+    # Build #10's hand-written case, expressed as a profile. The lab DC's subnet can reach
+    # exactly one address on this machine — the VMware VMnet8 host adapter — and a DNS tunnel
+    # needs exactly one port. Locked against the original by test_exposure, so the
+    # generalisation stays provably faithful to the file it replaced.
+    "vmnet8-dns": ListenerProfile(
+        ip="192.168.13.1", container="engage-sandbox", kinds=["dns-tunnel"],
+    ),
+}
+
+_PORT_LINE = re.compile(
+    r'^-\s*"(?P<ip>[^:]+):(?P<host>\d+):(?P<cont>\d+)/(?P<proto>tcp|udp)"$'
+)
+
+
+def live_profile() -> "ListenerProfile | None":
+    """The profile currently on disk, reconstructed from the rendered file, or None.
+
+    Read back rather than cached in memory: the file is the source of truth, it survives a
+    backend restart, and a hand-edit is then visible instead of being masked by stale state.
+    Ports come back as `extra` because the rendering is lossy about WHICH kind asked for a
+    port — that only matters for the UI's tick-boxes, never for what is published.
+    """
+    if not PROFILE_PATH.exists():
+        return None
+    service = ""
+    ip = ""
+    extra: list[tuple[int, str]] = []
+    for raw in PROFILE_PATH.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        m = _PORT_LINE.match(line)
+        if m:
+            ip = m.group("ip")
+            extra.append((int(m.group("cont")), m.group("proto")))
+        elif line.endswith(":") and line[:-1] in EXPOSABLE:
+            service = line[:-1]
+    if not ip or not service:
+        return None
+    kind = classify_ip(ip)
+    return ListenerProfile(
+        ip=ip, container=service, kinds=[], extra=extra,
+        ack_wildcard=kind == "wildcard", ack_public=kind == "public",
+    )

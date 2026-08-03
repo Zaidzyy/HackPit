@@ -21,7 +21,9 @@ command. Exposure and lab isolation are mutually exclusive by construction, not 
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
+from pathlib import Path
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field, field_validator
@@ -237,3 +239,56 @@ def validate(profile: ListenerProfile) -> Validation:
         v.refusals.append("a profile with no ports publishes nothing — tick a kind or add a port")
 
     return v
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PROFILE_PATH = REPO_ROOT / "docker" / "listener-profile.yml"
+DEFAULT_COMPOSE_PATH = REPO_ROOT / "docker" / "docker-compose.yml"
+
+# The marker that makes a broad bind auditable in the file itself. The published-port scanner
+# requires one of these covering EVERY wildcard or public binding it finds.
+ACK_RE = re.compile(
+    r"^#\s*hackpit-ack:\s*(?P<why>wildcard|public)\s+bind=(?P<ip>\S+)\s+engagement=(?P<eng>\S+)"
+)
+
+_HEADER = """\
+# HackPit — GENERATED listener profile. DO NOT COMMIT.
+#
+# Written by backend/cockpit/exposure.py. This is the ONE file that publishes a host port;
+# `docker compose -f docker/docker-compose.yml up` on its own still exposes nothing.
+#
+# Apply:     docker compose -f docker/docker-compose.yml -f docker/listener-profile.yml up -d {service}
+# Tear down: the same two -f flags plus `down`, or delete this file and recreate the service.
+#
+# A published port is NOT an open port — the host firewall can still drop inbound. If a
+# callback does not land, check that before anything else.
+#
+# Generated {at} for engagement {eng}.
+name: hackpit-cockpit
+
+services:
+  {service}:
+"""
+
+
+def render(profile: ListenerProfile, *, at: str) -> str:
+    """Profile -> compose override text. PURE: builds a string, touches no disk.
+
+    A wildcard or public bind renders a `hackpit-ack` line above the ports block. That is not
+    decoration. test_exposure_safety is a STATIC TEXT SCAN, so without a marker in the file it
+    has no way to tell a bind the operator consciously chose from one that slipped through, and
+    simply teaching the scanner to accept wildcards would DELETE invariant 3 rather than relax
+    it. With the marker, the one small file a reviewer reads states what is exposed AND that it
+    was chosen deliberately, by whom and when.
+    """
+    ports = derive_ports(profile.kinds, profile.extra)
+    eng = profile.engagement or "-"
+    out = [_HEADER.format(service=profile.container, at=at, eng=eng)]
+
+    kind = classify_ip(profile.ip)
+    if kind in ("wildcard", "public"):
+        out.append(f"    # hackpit-ack: {kind}  bind={profile.ip}  engagement={eng}  at={at}\n")
+    out.append("    ports:\n")
+    for port, proto in ports:
+        out.append(f'      - "{profile.ip}:{port}:{port}/{proto}"\n')
+    return "".join(out)

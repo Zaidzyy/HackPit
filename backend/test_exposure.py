@@ -145,6 +145,37 @@ def test_a_profile_with_no_ports_is_refused() -> None:
     print("  a profile that would publish nothing is refused: PASS")
 
 
+_AT = "2026-08-03T09:12:04Z"
+
+
+def test_render_publishes_exactly_the_derived_ports() -> None:
+    text = exposure.render(_profile(ip="10.10.14.7", kinds=["dns-tunnel", "sliver"]), at=_AT)
+    assert '"10.10.14.7:53:53/udp"' in text, text
+    assert '"10.10.14.7:31337:31337/tcp"' in text, text
+    assert "engage-sandbox:" in text
+    assert text.count('- "') == 2, text
+    print("  render publishes exactly the derived ports: PASS")
+
+
+def test_ack_line_is_rendered_only_when_needed() -> None:
+    """The scanner is a static text scan, so without a marker IN the file it cannot tell a
+    deliberate broad bind from one that slipped through."""
+    plain = exposure.render(_profile(ip="10.10.14.7"), at=_AT)
+    assert "hackpit-ack" not in plain, plain
+    wild = exposure.render(
+        _profile(ip="0.0.0.0", ack_wildcard=True, engagement="e-4417"), at=_AT)
+    assert "# hackpit-ack: wildcard  bind=0.0.0.0  engagement=e-4417" in wild, wild
+    pub = exposure.render(_profile(ip="8.8.8.8", ack_public=True), at=_AT)
+    assert "# hackpit-ack: public  bind=8.8.8.8  engagement=-" in pub, pub
+    print("  the ack line is rendered only for a wildcard or public bind: PASS")
+
+
+def test_render_is_deterministic() -> None:
+    p = _profile(ip="10.10.14.7", kinds=["sliver", "dns-tunnel"])
+    assert exposure.render(p, at=_AT) == exposure.render(p, at=_AT)
+    print("  render is deterministic for a given profile and timestamp: PASS")
+
+
 if __name__ == "__main__":
     print("== listener profiles (build #13) ==")
     test_ports_derive_from_kinds()
@@ -160,5 +191,8 @@ if __name__ == "__main__":
     test_lab_sandbox_is_never_exposable()
     test_port_ranges_are_refused()
     test_a_profile_with_no_ports_is_refused()
+    test_render_publishes_exactly_the_derived_ports()
+    test_ack_line_is_rendered_only_when_needed()
+    test_render_is_deterministic()
     print("all listener-profile tests passed")
     sys.exit(0)

@@ -140,6 +140,10 @@ run_test test_zap.py "ZAP report parser (report dug out of progress noise / 4 ri
 
 run_test test_zap_safety.py "ZAP gating split (active fires + passive does not, with both controls / verdict survives every spelling / proxychains cannot launder it / COMMAND and SCRIPT heuristics agree)"
 
+run_test test_zap_proxy.py "ZAP recording proxy history (REAL captured message -> exchange / malformed response keeps the request / bodies stay RAW / endpoints + params / report redaction with a control / routes registered, history GET-only)"
+
+run_test test_zap_proxy_safety.py "ZAP recording proxy GATING (approval + red-confirm with controls / gated argv == spawned argv / loopback-only bind / lab declares the lab, engagement declares nothing / no stdin writer / gate before spawn / stop ungated / per-tool proxy flag, unknown tool untouched / the rewrite cancels a stale prevalidated verdict)"
+
 run_test test_scope_hostcheck.py "Phase-3 scope host-check (no false-reject of files/versions; real hosts still caught)"
 
 run_test test_credvault.py "Phase-3 credential vault (fills user/pass/hash/domain; wrong-kind + non-cred left alone)"

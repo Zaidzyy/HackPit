@@ -1805,3 +1805,56 @@ A full active scan runs for tens of minutes against the executor's 180-second de
 ### Deferred to part 2
 
 The proxy surface — ZAP as a live intercepting proxy feeding the repeater and state — with its own spec and safety review. The daemon question belongs there, and it splits by sandbox: the engage sandbox is already open and breaks no property by hosting one, while the lab keeps `internal: true` and keeps command-path scanning. A *recording* proxy may reuse the existing listener pattern almost directly (gate the start, hold liveness, expose no writer); a scan-control channel would need the `tunnels.py` treatment, where one derivation function sits behind both the gate and the action.
+
+## Build #14 part 2 — the recording proxy (2026-08-03)
+
+Part 1 gave HackPit a scanner. This gives it the thing the tool had never had: **the raw HTTP of every run**. Until now a `ffuf` run's findings were parsed and its actual requests were thrown away — you could see that `/admin` existed, never the request that found it or what came back.
+
+### The daemon part 1 refused, built anyway — because the transport changed
+
+Part 1 excluded a ZAP daemon for two reasons: an HTTP control channel bypasses `validate_request`, and reaching one inside the lab sandbox would mean opening the `internal: true` network `assert_isolation_proven()` exists to deny.
+
+Both objections are about **a socket from the backend to the container**. Neither survives if there isn't one. Measured against the running sandbox before any of this was designed:
+
+| Check | Result |
+|---|---|
+| `zaproxy -daemon -host 127.0.0.1 -port 8090` | API answers after ~7 s |
+| `curl 127.0.0.1:8090/JSON/core/view/version/` **from the host** | **refused — unreachable** |
+| the same call via `docker exec` | `{"version":"2.17.0"}` |
+| a request proxied from inside the sandbox | recorded, with full bodies |
+
+The daemon binds loopback **inside** the container and no port is published. So the API exists, and the only way to reach it is `docker exec` — the same channel every other execution uses, and the one the gates already classify. Part 1's objection was to an *ungated* control channel; this is a gated one.
+
+`docker/proof/zap_proxy_proof.sh` asserts host-unreachability directly, because it is a property of the network rather than of the code and no hermetic test can see it. **7 passed, 0 failed.**
+
+### Four defects the guards caught, none of them test bugs
+
+**The gate refused the operator's own socket.** The first `_gate_request` passed the real argv, and the scope extractor reads `127.0.0.1` as an out-of-scope host. `tunnels.py` documents this exact trap for `-laddr`; my code carried a comment saying the port was excluded while passing it anyway.
+
+**Lab mode refuses target-less commands** — a locked invariant, and very likely the real reason `tunnels.py` is engagement-only. Copying that would have been worse than the feature: engagement mode runs in the fully-open sandbox, so "make an engagement for the lab" would push practice traffic out of the sealed box. Resolved by declaring the lab as the gate surface, which is a true statement of scope rather than a workaround — the lab proxy runs in the isolated sandbox, whose network has no route off the bridge, so the lab target *is* everything it can reach. `check_target_lock` is untouched.
+
+**The red-confirm would have been decorative.** Part 1's rule is argument-based and keys on `-quickurl`, which a daemon argv does not carry — and a gate surface holding only the binary name cannot fire a flag-based rule at all. Either omission alone left `dangerous_ack` unenforced: gate-audit finding I2's exact shape. `-daemon` now sits in both the attack flags and the surface, for a stated reason — it attacks nothing, but it starts a listener that records credentials in cleartext.
+
+**The repeater lock refused the module.** `proxy.py` first imported `RepeaterExchange`; `test_repeater.py` bans *any* import of the repeater, not just `repeater.send`, because a module that can import it is one line from calling it. The tempting fix was adding `proxy.py` to the allow-list — the exact anti-pattern build #5 was about. The models are local instead, with field names deliberately matching so the panel still renders a captured exchange with no translation layer.
+
+### Two things only a live process could find
+
+**The spawned argv is not the running argv.** `zaproxy` is a wrapper that exec's the JVM, so the process on the box is `java -jar /usr/share/zaproxy/zap-2.17.0.jar -daemon …`. The string "zaproxy -daemon" appears nowhere in it, so `pkill -f` matched nothing and the daemon survived every stop. No unit test can catch that — a hermetic test has no process to fail to kill.
+
+**`pkill -f` matches its own command line.** The fixed pattern then killed the killer: the probe shell exited 143 having reaped nothing. The pattern is written `[z]aproxy` for that reason — it matches the literal "zaproxy" in the JVM's argv, while the killer's own argv contains "[z]aproxy", which does not.
+
+### Secrets: raw in the panel, masked in reports
+
+Captured bodies hold passwords, `Authorization` headers and session cookies. Redacting on ingest was considered and rejected: the request that matters is usually the one carrying the token, and this is the operator's own data on their own disk. Masking lands at the **report** boundary instead — the artefact handed to a client or a grader — reusing `secretargs`' `REDACTED` marker rather than inventing a second convention. It masks the value and keeps the parameter name, and its test carries a positive control, because a redactor that blanks everything would satisfy "the password is gone" while making every report useless.
+
+### One invariant with nothing behind it, stated plainly
+
+The history read is deliberately **ungated** — a panel that refreshes cannot demand approval per refresh. That makes it the one path in this build with no human checkpoint, so what it can reach matters. It issues two fixed URL constants and takes no endpoint parameter, so an `action/` call is not expressible without writing a visibly new function.
+
+**Nothing enforces that.** Both candidate guards — a runtime allowlist and a three-line static test — were considered and declined (2026-08-03). It is a convention, and the spec records the consequence and a review rule: any change to `cockpit/proxy.py` that introduces a URL parameter reopens the decision rather than quietly satisfying it.
+
+### Verification
+
+Suite **68 files, 0 failures**, up from 66. `zap_proxy_proof.sh` 7/0. The `:proxy` screen ships **with** its endpoints — build #13 part 1 shipped four `/cockpit/exposure` endpoints with no caller and closing that took a whole later build. `tsc --noEmit` and `next build` both exit 0, and the screen adds zero lint errors.
+
+**Not built, deliberately:** browser interception (it needs a published port, which breaks the lab sandbox's isolation — its own exposure decision), and driving ZAP's scanner through the API (scanning stays on part 1's gated command path).

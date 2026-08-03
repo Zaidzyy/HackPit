@@ -270,6 +270,15 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#deferred-to-part-2">Deferred to part 2</a></li>
 </ul>
 </li>
+<li><a href="#build-14-part-2-the-recording-proxy-2026-08-03">Build #14 part 2 — the recording proxy (2026-08-03)</a><ul>
+<li><a href="#the-daemon-part-1-refused-built-anyway-because-the-transport-changed">The daemon part 1 refused, built anyway — because the transport changed</a></li>
+<li><a href="#four-defects-the-guards-caught-none-of-them-test-bugs">Four defects the guards caught, none of them test bugs</a></li>
+<li><a href="#two-things-only-a-live-process-could-find">Two things only a live process could find</a></li>
+<li><a href="#secrets-raw-in-the-panel-masked-in-reports">Secrets: raw in the panel, masked in reports</a></li>
+<li><a href="#one-invariant-with-nothing-behind-it-stated-plainly">One invariant with nothing behind it, stated plainly</a></li>
+<li><a href="#verification_2">Verification</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -2081,5 +2090,54 @@ the ingester and belongs in its own session.</p>
 <p>A full active scan runs for tens of minutes against the executor's 180-second default. No global was raised — <code>MAX_TIMEOUT_SECONDS</code> is already 3600 and clamps rather than refuses, so the two full-scan templates simply say to raise <code>timeout_seconds</code> on the request. Raising a default for one tool changes behaviour for every tool that relies on it.</p>
 <h3 id="deferred-to-part-2">Deferred to part 2</h3>
 <p>The proxy surface — ZAP as a live intercepting proxy feeding the repeater and state — with its own spec and safety review. The daemon question belongs there, and it splits by sandbox: the engage sandbox is already open and breaks no property by hosting one, while the lab keeps <code>internal: true</code> and keeps command-path scanning. A <em>recording</em> proxy may reuse the existing listener pattern almost directly (gate the start, hold liveness, expose no writer); a scan-control channel would need the <code>tunnels.py</code> treatment, where one derivation function sits behind both the gate and the action.</p>
+<h2 id="build-14-part-2-the-recording-proxy-2026-08-03">Build #14 part 2 — the recording proxy (2026-08-03)</h2>
+<p>Part 1 gave HackPit a scanner. This gives it the thing the tool had never had: <strong>the raw HTTP of every run</strong>. Until now a <code>ffuf</code> run's findings were parsed and its actual requests were thrown away — you could see that <code>/admin</code> existed, never the request that found it or what came back.</p>
+<h3 id="the-daemon-part-1-refused-built-anyway-because-the-transport-changed">The daemon part 1 refused, built anyway — because the transport changed</h3>
+<p>Part 1 excluded a ZAP daemon for two reasons: an HTTP control channel bypasses <code>validate_request</code>, and reaching one inside the lab sandbox would mean opening the <code>internal: true</code> network <code>assert_isolation_proven()</code> exists to deny.</p>
+<p>Both objections are about <strong>a socket from the backend to the container</strong>. Neither survives if there isn't one. Measured against the running sandbox before any of this was designed:</p>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>zaproxy -daemon -host 127.0.0.1 -port 8090</code></td>
+<td>API answers after ~7 s</td>
+</tr>
+<tr>
+<td><code>curl 127.0.0.1:8090/JSON/core/view/version/</code> <strong>from the host</strong></td>
+<td><strong>refused — unreachable</strong></td>
+</tr>
+<tr>
+<td>the same call via <code>docker exec</code></td>
+<td><code>{"version":"2.17.0"}</code></td>
+</tr>
+<tr>
+<td>a request proxied from inside the sandbox</td>
+<td>recorded, with full bodies</td>
+</tr>
+</tbody>
+</table>
+<p>The daemon binds loopback <strong>inside</strong> the container and no port is published. So the API exists, and the only way to reach it is <code>docker exec</code> — the same channel every other execution uses, and the one the gates already classify. Part 1's objection was to an <em>ungated</em> control channel; this is a gated one.</p>
+<p><code>docker/proof/zap_proxy_proof.sh</code> asserts host-unreachability directly, because it is a property of the network rather than of the code and no hermetic test can see it. <strong>7 passed, 0 failed.</strong></p>
+<h3 id="four-defects-the-guards-caught-none-of-them-test-bugs">Four defects the guards caught, none of them test bugs</h3>
+<p><strong>The gate refused the operator's own socket.</strong> The first <code>_gate_request</code> passed the real argv, and the scope extractor reads <code>127.0.0.1</code> as an out-of-scope host. <code>tunnels.py</code> documents this exact trap for <code>-laddr</code>; my code carried a comment saying the port was excluded while passing it anyway.</p>
+<p><strong>Lab mode refuses target-less commands</strong> — a locked invariant, and very likely the real reason <code>tunnels.py</code> is engagement-only. Copying that would have been worse than the feature: engagement mode runs in the fully-open sandbox, so "make an engagement for the lab" would push practice traffic out of the sealed box. Resolved by declaring the lab as the gate surface, which is a true statement of scope rather than a workaround — the lab proxy runs in the isolated sandbox, whose network has no route off the bridge, so the lab target <em>is</em> everything it can reach. <code>check_target_lock</code> is untouched.</p>
+<p><strong>The red-confirm would have been decorative.</strong> Part 1's rule is argument-based and keys on <code>-quickurl</code>, which a daemon argv does not carry — and a gate surface holding only the binary name cannot fire a flag-based rule at all. Either omission alone left <code>dangerous_ack</code> unenforced: gate-audit finding I2's exact shape. <code>-daemon</code> now sits in both the attack flags and the surface, for a stated reason — it attacks nothing, but it starts a listener that records credentials in cleartext.</p>
+<p><strong>The repeater lock refused the module.</strong> <code>proxy.py</code> first imported <code>RepeaterExchange</code>; <code>test_repeater.py</code> bans <em>any</em> import of the repeater, not just <code>repeater.send</code>, because a module that can import it is one line from calling it. The tempting fix was adding <code>proxy.py</code> to the allow-list — the exact anti-pattern build #5 was about. The models are local instead, with field names deliberately matching so the panel still renders a captured exchange with no translation layer.</p>
+<h3 id="two-things-only-a-live-process-could-find">Two things only a live process could find</h3>
+<p><strong>The spawned argv is not the running argv.</strong> <code>zaproxy</code> is a wrapper that exec's the JVM, so the process on the box is <code>java -jar /usr/share/zaproxy/zap-2.17.0.jar -daemon …</code>. The string "zaproxy -daemon" appears nowhere in it, so <code>pkill -f</code> matched nothing and the daemon survived every stop. No unit test can catch that — a hermetic test has no process to fail to kill.</p>
+<p><strong><code>pkill -f</code> matches its own command line.</strong> The fixed pattern then killed the killer: the probe shell exited 143 having reaped nothing. The pattern is written <code>[z]aproxy</code> for that reason — it matches the literal "zaproxy" in the JVM's argv, while the killer's own argv contains "[z]aproxy", which does not.</p>
+<h3 id="secrets-raw-in-the-panel-masked-in-reports">Secrets: raw in the panel, masked in reports</h3>
+<p>Captured bodies hold passwords, <code>Authorization</code> headers and session cookies. Redacting on ingest was considered and rejected: the request that matters is usually the one carrying the token, and this is the operator's own data on their own disk. Masking lands at the <strong>report</strong> boundary instead — the artefact handed to a client or a grader — reusing <code>secretargs</code>' <code>REDACTED</code> marker rather than inventing a second convention. It masks the value and keeps the parameter name, and its test carries a positive control, because a redactor that blanks everything would satisfy "the password is gone" while making every report useless.</p>
+<h3 id="one-invariant-with-nothing-behind-it-stated-plainly">One invariant with nothing behind it, stated plainly</h3>
+<p>The history read is deliberately <strong>ungated</strong> — a panel that refreshes cannot demand approval per refresh. That makes it the one path in this build with no human checkpoint, so what it can reach matters. It issues two fixed URL constants and takes no endpoint parameter, so an <code>action/</code> call is not expressible without writing a visibly new function.</p>
+<p><strong>Nothing enforces that.</strong> Both candidate guards — a runtime allowlist and a three-line static test — were considered and declined (2026-08-03). It is a convention, and the spec records the consequence and a review rule: any change to <code>cockpit/proxy.py</code> that introduces a URL parameter reopens the decision rather than quietly satisfying it.</p>
+<h3 id="verification_2">Verification</h3>
+<p>Suite <strong>68 files, 0 failures</strong>, up from 66. <code>zap_proxy_proof.sh</code> 7/0. The <code>:proxy</code> screen ships <strong>with</strong> its endpoints — build #13 part 1 shipped four <code>/cockpit/exposure</code> endpoints with no caller and closing that took a whole later build. <code>tsc --noEmit</code> and <code>next build</code> both exit 0, and the screen adds zero lint errors.</p>
+<p><strong>Not built, deliberately:</strong> browser interception (it needs a published port, which breaks the lab sandbox's isolation — its own exposure decision), and driving ZAP's scanner through the API (scanning stays on part 1's gated command path).</p>
 </body>
 </html>

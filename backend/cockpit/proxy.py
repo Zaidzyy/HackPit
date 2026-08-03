@@ -194,6 +194,33 @@ def server_argv_for(req: ProxyStartRequest) -> list[str]:
     ]
 
 
+def kill_pattern_for(port: int) -> list[str]:
+    """The ``pkill -f`` pattern that matches the RUNNING process, joined by lifecycle.kill.
+
+    *** THE SPAWNED ARGV IS NOT THE RUNNING ARGV, AND THIS IS WHY. ***
+    ``zaproxy`` is a wrapper script that exec's the JVM, so the process actually on the box is::
+
+        java -Xmx2738m -jar /usr/share/zaproxy/zap-2.17.0.jar -daemon -host 127.0.0.1 -port 8090
+
+    The literal string "zaproxy -daemon" never appears in that command line. Passing
+    :func:`server_argv_for` to ``pkill -f`` therefore matched NOTHING and the daemon survived
+    every stop — found by the proof's teardown check, not by any unit test, because a hermetic
+    test has no process to fail to kill.
+
+    The pattern matches on the install path and the PORT, so it is version-agnostic (no
+    ``zap-2.17.0.jar`` to rot) and cannot reap a proxy running on a different port.
+
+    *** THE ``[z]`` IS LOad-BEARING, NOT A TYPO. ***
+    ``docker exec <c> pkill -f <pattern>`` runs pkill INSIDE the container, so the pattern is
+    part of pkill's own command line and ``-f`` matches full command lines — a plain
+    ``zaproxy...`` pattern matches the killer as well as the daemon, and pkill SIGTERMs itself.
+    Observed directly: the probe shell exited 143 having killed nothing useful. ``[z]aproxy``
+    matches the literal text "zaproxy" in the JVM's argv while the killer's own argv contains
+    "[z]aproxy", which does not.
+    """
+    return [rf"[z]aproxy.*-daemon.*-port {int(port)}\b"]
+
+
 def _gate_request(req: ProxyStartRequest):
     """The ExecRequest the real gates run against.
 
@@ -370,9 +397,7 @@ def stop_proxy(pid: str) -> Proxy:
 
     if watched is not None:
         try:
-            watched.kill(container=model.container, server_argv=server_argv_for(
-                ProxyStartRequest(port=model.port, approved=True, dangerous_ack=True)
-            ))
+            watched.kill(container=model.container, server_argv=kill_pattern_for(model.port))
         except Exception:  # noqa: BLE001 - a failed teardown must still mark it down
             pass
 

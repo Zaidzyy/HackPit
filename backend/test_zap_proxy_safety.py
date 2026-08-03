@@ -141,6 +141,51 @@ def test_the_lab_surface_declares_the_lab_and_nothing_else() -> None:
     print("  lab declares exactly the lab; engagement declares nothing: PASS")
 
 
+def test_the_daemon_gets_no_stdin_writer() -> None:
+    """A daemon needs no stdin, so it is spawned interactive=False and proc.stdin is None.
+    lifecycle's own lock covers the mechanism; this asserts THIS caller opted out — the C2
+    console binaries need a held-open stdin and a daemon must not inherit that by copy-paste."""
+    import inspect
+
+    src = inspect.getsource(proxy.start_proxy)
+    assert "interactive=False" in src, (
+        "start_proxy does not spawn with interactive=False — a daemon needs no stdin, and an "
+        "interactive spawn would hand it a pipe nobody should hold"
+    )
+    assert "interactive=True" not in src, f"start_proxy spawns interactively somewhere: {src[:200]}"
+    print("  the daemon is spawned with no stdin writer: PASS")
+
+
+def test_a_refused_start_spawns_nothing() -> None:
+    """*** NOTHING RUNS ON A REFUSAL. *** The gate must be checked BEFORE any spawn call.
+    Source-level, because the alternative is spawning a real daemon in a unit test."""
+    import inspect
+
+    src = inspect.getsource(proxy.start_proxy)
+    gate_at = src.find("validate_start")
+    spawn_at = src.find("spawn_watched")
+    assert gate_at != -1, "start_proxy never calls validate_start"
+    assert spawn_at != -1, "start_proxy never calls spawn_watched"
+    assert gate_at < spawn_at, (
+        "start_proxy spawns before it gates — a refused start would leave a live daemon"
+    )
+    print("  the gate is checked before anything spawns: PASS")
+
+
+def test_stopping_is_not_gated() -> None:
+    """Stopping a listener REMOVES capability. A gate that can refuse to stop one is a gate that
+    makes the system less safe — the position tunnels.py takes, restated here so a later 'for
+    consistency' edit has to argue with it."""
+    import inspect
+
+    src = inspect.getsource(proxy.stop_proxy)
+    assert "validate_start" not in src and "validate_request" not in src, (
+        "stop_proxy runs a gate — refusing to stop a running proxy leaves capability up that "
+        "the operator asked to remove"
+    )
+    print("  stopping is not gated: PASS")
+
+
 def test_the_container_follows_the_mode() -> None:
     """Lab runs in the isolated sandbox; an engagement run in the open one. Picking the wrong
     container would either put a real-target proxy in the egress-less box (it would capture
@@ -159,5 +204,8 @@ if __name__ == "__main__":
     test_the_daemon_binds_loopback_only()
     test_both_modes_are_reachable()
     test_the_lab_surface_declares_the_lab_and_nothing_else()
+    test_the_daemon_gets_no_stdin_writer()
+    test_a_refused_start_spawns_nothing()
+    test_stopping_is_not_gated()
     test_the_container_follows_the_mode()
     print("ALL ZAP proxy gating locks pass")

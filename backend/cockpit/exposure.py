@@ -22,7 +22,11 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+from dataclasses import dataclass, field
 
+from pydantic import BaseModel, Field, field_validator
+
+from . import config
 from .obfuscation import DNS_TUNNEL_PORT
 from .sliver import SLIVER_DEFAULT_PORT
 from .tunnels import CHISEL_DEFAULT_PORT, LIGOLO_DEFAULT_PORT
@@ -119,3 +123,117 @@ def address_is_live(ip: str) -> bool:
         return False
     finally:
         sock.close()
+
+
+# Compose SERVICE names that may publish a port, mapped to the container they become.
+#
+# `kali-sandbox` is absent and must stay absent: its network is `internal: true`, so publishing
+# a port would attach it to a non-internal network and assert_isolation_proven() would then
+# refuse EVERY lab command. Exposure and lab isolation are mutually exclusive by construction —
+# this is not a policy knob. Locked by test_exposure.test_lab_sandbox_is_never_exposable.
+EXPOSABLE: dict[str, str] = {
+    "engage-sandbox": config.ENGAGE_SANDBOX_CONTAINER,
+    "kali-open": config.KALI_OPEN_CONTAINER,
+}
+
+
+class ListenerProfile(BaseModel):
+    """One published-port posture. Inert until rendered, written and applied."""
+
+    ip: str = Field(..., description="Host bind address, or a wildcard token with ack_wildcard.")
+    container: str = Field("engage-sandbox", description="engage-sandbox | kali-open.")
+    kinds: list[str] = Field(default_factory=list, description="Kinds to derive ports from.")
+    extra: list[tuple[int, str]] = Field(default_factory=list, description="Explicit (port, proto).")
+    engagement: str | None = Field(None, description="Recorded for audit. Scopes nothing.")
+    ack_wildcard: bool = Field(False, description="Acknowledge binding EVERY interface.")
+    ack_public: bool = Field(False, description="Acknowledge binding a publicly routable address.")
+
+    @field_validator("extra", mode="before")
+    @classmethod
+    def _no_ranges(cls, v: list) -> list:
+        """Individual ports only.
+
+        A range is how one typo publishes hundreds of ports, and it makes the exposure summary
+        unreadable — which defeats the invariant that a reviewer can see the whole surface at a
+        glance. `mode="before"` so a string like "4000-4100" is caught here rather than dying in
+        pydantic's int coercion with a message that explains nothing.
+        """
+        out = []
+        for port, proto in v or []:
+            if isinstance(port, str) and ("-" in port or ":" in port):
+                raise ValueError(f"port range {port!r} is not allowed — list ports individually")
+            if proto not in ("tcp", "udp"):
+                raise ValueError(f"protocol {proto!r} is not tcp or udp")
+            out.append((int(port), proto))
+        return out
+
+
+@dataclass
+class Validation:
+    """What the gates said. Refusals stop the write; warnings do not."""
+
+    refusals: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    needs_ack: list[str] = field(default_factory=list)
+    ports: list[tuple[int, str]] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not self.refusals
+
+
+def validate(profile: ListenerProfile) -> Validation:
+    """Run the bind rules. Returns refusals and warnings SEPARATELY.
+
+    Public and wildcard binds are RED-CONFIRMS, not refusals. This codebase's danger gate
+    already sets the pattern — "NEVER blocks outright; requires the confirm. Over-inclusive
+    assist — human is the gate" — and a broad bind is exactly that shape. Inventing a second,
+    stricter pattern here would be inconsistent for no gain, because a wildcard buys real
+    things: a binding that survives a VPN or DHCP address change, and a fallback when a
+    specific bind misbehaves under Docker Desktop's networking.
+    """
+    v = Validation()
+
+    if profile.container not in EXPOSABLE:
+        if profile.container == "kali-sandbox":
+            v.refusals.append(
+                "the lab sandbox runs on an isolated network — publishing a port would break "
+                "its isolation gate and refuse every lab command; it can never be exposed"
+            )
+        else:
+            v.refusals.append(
+                f"unknown container {profile.container!r} — "
+                f"exposable: {', '.join(sorted(EXPOSABLE))}"
+            )
+
+    kind = classify_ip(profile.ip)
+    if kind == "invalid":
+        v.refusals.append(f"{profile.ip!r} is not a literal IP address")
+    elif kind == "wildcard" and not profile.ack_wildcard:
+        v.needs_ack.append("wildcard")
+        v.refusals.append(
+            f"{profile.ip} binds EVERY interface on this machine, including whatever network "
+            "you are on right now — acknowledge with ack_wildcard=true, or name the interface"
+        )
+    elif kind == "public" and not profile.ack_public:
+        v.needs_ack.append("public")
+        v.refusals.append(
+            f"{profile.ip} is publicly routable — acknowledge with ack_public=true"
+        )
+
+    if kind in ("private", "public") and not address_is_live(profile.ip):
+        v.warnings.append(
+            f"{profile.ip} is not an address on this host right now — `docker compose up` will "
+            "fail with 'bind: cannot assign requested address' unless you are on that network "
+            "by then"
+        )
+
+    try:
+        v.ports = derive_ports(profile.kinds, profile.extra)
+    except ExposureRefused as exc:
+        v.refusals.append(exc.reason)
+
+    if not v.ports and not v.refusals:
+        v.refusals.append("a profile with no ports publishes nothing — tick a kind or add a port")
+
+    return v

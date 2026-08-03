@@ -78,6 +78,73 @@ def test_liveness_probe() -> None:
     print("  the bind probe reports which addresses exist on this host: PASS")
 
 
+def _profile(**kw):
+    base = dict(ip="192.168.13.1", container="engage-sandbox", kinds=["dns-tunnel"],
+                extra=[], engagement=None, ack_wildcard=False, ack_public=False)
+    base.update(kw)
+    return exposure.ListenerProfile(**base)
+
+
+def test_private_live_address_needs_no_ack() -> None:
+    """The control. Without this, a confirm that fired on everything would still look correct."""
+    v = exposure.validate(_profile(ip="127.0.0.1"))
+    assert v.refusals == [], v.refusals
+    assert v.needs_ack == [], v.needs_ack
+    print("  a private, live address needs no acknowledgement: PASS")
+
+
+def test_wildcard_needs_ack_both_directions() -> None:
+    without = exposure.validate(_profile(ip="0.0.0.0"))
+    assert any("wildcard" in r.lower() or "every interface" in r for r in without.refusals), \
+        without.refusals
+    with_ack = exposure.validate(_profile(ip="0.0.0.0", ack_wildcard=True))
+    assert with_ack.refusals == [], with_ack.refusals
+    print("  a wildcard bind is refused without the ack and permitted with it: PASS")
+
+
+def test_public_needs_ack_both_directions() -> None:
+    without = exposure.validate(_profile(ip="8.8.8.8"))
+    assert any("public" in r for r in without.refusals), without.refusals
+    with_ack = exposure.validate(_profile(ip="8.8.8.8", ack_public=True))
+    assert with_ack.refusals == [], with_ack.refusals
+    print("  a public bind is refused without the ack and permitted with it: PASS")
+
+
+def test_dead_address_warns_but_does_not_refuse() -> None:
+    """Docker fails LOUDLY on a dead bind ('cannot assign requested address'), so this check
+    buys a better error earlier — not safety. Refusing would be wrong for the real case of
+    writing a profile while off the VPN, intending to connect before applying it."""
+    v = exposure.validate(_profile(ip="8.8.8.8", ack_public=True))
+    assert v.refusals == [], v.refusals
+    assert any("not an address on this host" in w for w in v.warnings), v.warnings
+    live = exposure.validate(_profile(ip="127.0.0.1"))
+    assert not any("not an address on this host" in w for w in live.warnings), live.warnings
+    print("  an address that is not live warns and still writes: PASS")
+
+
+def test_lab_sandbox_is_never_exposable() -> None:
+    v = exposure.validate(_profile(container="kali-sandbox"))
+    assert any("isolat" in r for r in v.refusals), v.refusals
+    assert "kali-sandbox" not in exposure.EXPOSABLE
+    print("  the isolated lab sandbox can never be exposed: PASS")
+
+
+def test_port_ranges_are_refused() -> None:
+    try:
+        _profile(extra=[("4000-4100", "tcp")])
+    except Exception as exc:
+        assert "range" in str(exc).lower(), exc
+        print("  a port range is refused: PASS")
+        return
+    raise AssertionError("a port range was accepted")
+
+
+def test_a_profile_with_no_ports_is_refused() -> None:
+    v = exposure.validate(_profile(kinds=[], extra=[]))
+    assert any("no ports" in r for r in v.refusals), v.refusals
+    print("  a profile that would publish nothing is refused: PASS")
+
+
 if __name__ == "__main__":
     print("== listener profiles (build #13) ==")
     test_ports_derive_from_kinds()
@@ -86,5 +153,12 @@ if __name__ == "__main__":
     test_unknown_kind_is_refused()
     test_ip_classification()
     test_liveness_probe()
+    test_private_live_address_needs_no_ack()
+    test_wildcard_needs_ack_both_directions()
+    test_public_needs_ack_both_directions()
+    test_dead_address_warns_but_does_not_refuse()
+    test_lab_sandbox_is_never_exposable()
+    test_port_ranges_are_refused()
+    test_a_profile_with_no_ports_is_refused()
     print("all listener-profile tests passed")
     sys.exit(0)

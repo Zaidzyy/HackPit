@@ -268,6 +268,48 @@ def test_observe_mentions_the_firewall_when_active() -> None:
     print("  an active profile says a published port is not an open port: PASS")
 
 
+def test_apply_requires_approval() -> None:
+    """Recreating a container kills every listener, session and background job inside it."""
+    calls = []
+
+    def runner(argv):
+        calls.append(argv)
+        return 0, "", ""
+    try:
+        exposure.apply(_profile(), approved=False, runner=runner)
+    except exposure.ExposureRefused as exc:
+        assert exc.gate == "approval", exc.gate
+        assert calls == [], "compose ran despite the refusal"
+        print("  applying a profile without approval refuses and runs nothing: PASS")
+        return
+    raise AssertionError("apply ran without approval")
+
+
+def test_apply_runs_the_compose_command_it_showed() -> None:
+    calls = []
+
+    def runner(argv):
+        calls.append(argv)
+        return 0, "", ""
+    exposure.apply(_profile(), approved=True, runner=runner)
+    assert calls, "compose never ran"
+    assert calls[0] == exposure.compose_command(_profile()), calls[0]
+    print("  an approved apply runs exactly the compose command it showed: PASS")
+
+
+def test_apply_surfaces_a_compose_failure() -> None:
+    def runner(_argv):
+        return 1, "", "bind: cannot assign requested address"
+    try:
+        exposure.apply(_profile(), approved=True, runner=runner)
+    except exposure.ExposureRefused as exc:
+        assert exc.gate == "compose", exc.gate
+        assert "cannot assign" in exc.reason, exc.reason
+        print("  a compose failure surfaces its real error: PASS")
+        return
+    raise AssertionError("a failing compose was reported as success")
+
+
 if __name__ == "__main__":
     print("== listener profiles (build #13) ==")
     test_ports_derive_from_kinds()
@@ -292,5 +334,8 @@ if __name__ == "__main__":
     test_observe_reports_what_is_true()
     test_observe_never_claims_active_on_a_mismatch()
     test_observe_mentions_the_firewall_when_active()
+    test_apply_requires_approval()
+    test_apply_runs_the_compose_command_it_showed()
+    test_apply_surfaces_a_compose_failure()
     print("all listener-profile tests passed")
     sys.exit(0)

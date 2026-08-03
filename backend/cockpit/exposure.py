@@ -406,3 +406,44 @@ def observe(
 
     return {"state": "drifted", "published": seen, "expected": expected,
             "note": "the container publishes something other than this profile — recreate it"}
+
+
+def _run(argv: list[str]) -> tuple[int, str, str]:
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=180.0)
+        return p.returncode, p.stdout.strip(), p.stderr.strip()
+    except FileNotFoundError:
+        return 127, "", "docker CLI not found on PATH"
+    except subprocess.TimeoutExpired:
+        return 124, "", "docker compose timed out"
+
+
+def apply(
+    profile: ListenerProfile,
+    *,
+    approved: bool,
+    runner: "Callable[[list[str]], tuple[int, str, str]] | None" = None,
+) -> dict[str, Any]:
+    """Recreate the service so the profile takes effect. REQUIRES approval.
+
+    A published port can only be set when a container is CREATED, so applying a profile
+    recreates the service — which kills every listener, session and background job inside it.
+    That is destructive to work in flight, so the operator is told before it happens rather
+    than after. Same reason every other destructive action here carries a gate.
+
+    A non-zero compose exit is raised with its real stderr rather than swallowed: the commonest
+    failure is `bind: cannot assign requested address`, which names precisely what is wrong
+    (the bind address is not on this host right now) and would be useless as "apply failed".
+    """
+    if not approved:
+        raise ExposureRefused(
+            "applying a listener profile recreates the container and kills every listener, "
+            "session and background job inside it — set approved=true",
+            gate="approval",
+        )
+    argv = compose_command(profile)
+    call = runner or _run
+    rc, out, err = call(argv)
+    if rc != 0:
+        raise ExposureRefused(f"compose failed (rc {rc}): {err or out}", gate="compose")
+    return {"applied": True, "command": argv}

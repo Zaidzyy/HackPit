@@ -64,6 +64,29 @@ RUN apt-get update \
         assetfinder dnsx naabu hakrawler arjun paramspider \
     && rm -rf /var/lib/apt/lists/*
 
+# --- 3b. Web application scanner (ZAP) ---------------------------------------
+# OWASP ZAP + a headless JRE. Its own layer because it is large and stable: an edit to the
+# tool layers around it must not force it to rebuild.
+#
+# Add-ons are baked at build time on purpose. The lab sandbox joins an `internal: true`
+# network and has NO egress, so it can never fetch one at runtime — the same reason
+# nuclei-templates is baked in layer 9 rather than `-update-templates`d.
+#
+# THE SMOKE TEST IS THREE CHECKS, NOT ONE, because they fail separately. The package can
+# install while shipping the scan scripts under a different name or leaving them off PATH,
+# and that mismatch is INVISIBLE until a live run ingests nothing: backend/state/parsers.py
+# keys STDOUT_PARSERS on `zap-baseline.py` / `zap-full-scan.py` exactly, and a key that never
+# matches is the build #9 ingest gap (a live DCSync dumped krbtgt and ingested none of it).
+# `command -v` alone is NOT a smoke test (build #4's lesson) — `zap.sh -version` is the check
+# that proves the JVM actually starts.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        zaproxy default-jre-headless \
+    && rm -rf /var/lib/apt/lists/* \
+    && zap.sh -version \
+    && command -v zap-baseline.py \
+    && command -v zap-full-scan.py
+
 # --- 4. Network / Active Directory (from Linux) ------------------------------
 # The AD graph + AD orchestration modules generate commands from exactly this set;
 # without these packages every proposed AD step failed "executable not found".
@@ -532,14 +555,20 @@ RUN getcap -r /usr /bin /sbin /opt 2>/dev/null | awk '{print $1}' | xargs -r -n1
 # process is root but holds ONLY NET_RAW/NET_ADMIN — no CAP_DAC_OVERRIDE — so a 700 directory
 # owned by someone else is genuinely unreadable to it and tools that chdir (find, git, msf)
 # fail there. 0755 makes the shared working directory usable by both users.
+# ZAP writes its session/config state to $HOME/.ZAP and REFUSES TO START if that path is not
+# writable, so both users get one here — created at build time rather than discovered at
+# runtime as a scan that dies instantly. Same shape as the nuclei $HOME/.local case above; it
+# belongs in THIS layer and not the ZAP install layer, because `sandbox` does not exist until
+# the useradd on the first line below.
 RUN useradd -m -s /bin/bash sandbox \
     && chmod 0755 /home/sandbox \
     && mkdir -p /root/.local /home/sandbox/.local /home/sandbox/.config \
+                /root/.ZAP /home/sandbox/.ZAP \
     && ln -s /usr/share/nuclei-templates /root/.local/nuclei-templates \
     && ln -s /usr/share/nuclei-templates /home/sandbox/.local/nuclei-templates \
     && ln -sfn /usr/share/gf-patterns /home/sandbox/.gf \
     && chown -h sandbox:sandbox /home/sandbox/.gf \
-    && chown -R sandbox:sandbox /home/sandbox/.local /home/sandbox/.config
+    && chown -R sandbox:sandbox /home/sandbox/.local /home/sandbox/.config /home/sandbox/.ZAP
 
 # A tiny baked wordlist kept from the pre-Kali image so any command still referencing it
 # keeps working. For real work use /usr/share/seclists.

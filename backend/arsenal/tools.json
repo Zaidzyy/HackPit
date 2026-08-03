@@ -599,12 +599,12 @@
         {
           "label": "Full active scan (report to stdout)",
           "template": "zap-full-scan.py -t <target> -J /dev/stdout",
-          "note": "ACTIVE: sends real SQLi/XSS/command-injection payloads at every discovered parameter. Requires the red-confirm. Loud, and can take tens of minutes."
+          "note": "ACTIVE: sends real SQLi/XSS/command-injection payloads at every discovered parameter. Requires the red-confirm. Takes tens of minutes, so raise timeout_seconds on the request — the 180s default will kill it (ceiling is 3600)."
         },
         {
           "label": "Full active scan (report to the loot dir)",
           "template": "zap-full-scan.py -t <target> -J <output>-zap.json",
-          "note": "Engagement form: the -zap.json suffix is what the loot ingester keys on. ACTIVE — same red-confirm as above."
+          "note": "Engagement form: the -zap.json suffix is what the loot ingester keys on. ACTIVE — same red-confirm, and the same timeout_seconds caveat as above."
         }
       ],
       "flags": [

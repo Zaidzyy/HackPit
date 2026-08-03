@@ -1561,6 +1561,34 @@ The bind classifier keys off `ipaddress.is_global`, not the obvious `is_private`
 
 A published port is **not** an open port — the host firewall can still drop inbound, so `observe()` says so rather than leaving the operator guessing. And 1c does nothing for an internet-facing target: `192.168.13.1` means nothing to a host on the internet, which is the whole reason parts 1a and 1b exist and need infrastructure. Suite **57 files, 0 failures**, up from 56.
 
+## Build #13 part 2 — the evasion engine can now deploy (2026-08-03)
+
+**This is a policy reversal and should be read as one.** The evasion engine opened with *"GENERATES ONLY, never runs or deploys"*, and two tests enforced it. That property is gone by decision. HackPit can now put an artifact built to evade detection onto a real host and run it.
+
+The argument for it is the project's own precedent: the Sliver server and the pivot/DNS listeners were once refused outright and became **gated-and-allowed** in build #7 / I2, on the reasoning that the gate — not the absence of the feature — is the control. The artifact always landed in a loot directory mounted into the sandbox and sitting on the host, so an operator could already copy it out and run it by hand. What changed is that the step no longer has to leave the tool. The argument against it is simply the plain fact above, and it is recorded here rather than argued away.
+
+**What did not change: the mandatory footprint.** `deliver` computes the honest half first and raises rather than act without it, exactly as `generate` does, and the route guard now asserts `DeliveryResult` carries it too. An evasion tool that told you only how to be quieter, and never what still sees you, would be an evasion how-to — that is what makes this purple-team, and it is what justified lifting the OPSEC sensor-tamper ban in D16.
+
+### Two primitives, deliberately separated
+
+Putting an artifact somewhere and **running** it are different acts with different blast radii, and one `deploy()` would have left the gate unable to tell them apart. So `deliver()` takes a **closed set** — `winrm` (chunked base64) or `smb` (argv `smbclient`) — and never a free-form delivery command, which would have handed the package a general execution path with none of the executor's gates. `invoke` is **WinRM-only**, and a sandbox invoke is **refused rather than merely unimplemented**: running the artifact inside HackPit's own box detonates it on the operator's machine, never the target.
+
+The red-confirm is required **unconditionally** rather than left to the heuristic to notice — build #5 found a red-confirm you could defeat by moving a cmdlet one token right, so a gate that depends on a classifier spotting a name is a gate a rename defeats.
+
+### The guard that fired found a design mistake, not an import
+
+`test_winrm_safety` scans the whole tree and allows only the executor and the router to reach `winrm_transport` — the orchestrator proposes, it must never fire WinRM. The first implementation of `deliver` imported the transport directly and tripped it.
+
+Adding the evasion engine to that allow-list would have been wrong twice over: a **third** module able to fire WinRM, and that module re-implementing gates beside the ones already living in the executor. The real problem was architectural — `deliver` was duplicating gate logic and then reaching *around* the gated execution point. So the capability moved to `executor.send_windows_scripts`, where every other Windows command already goes.
+
+That also resolved a genuine tension. Per-command human approval is the floor on a real target, but a chunked upload is not N commands anyone could sanely approve one at a time. Treating the whole sequence as **one gated act** — one approval for one transfer, chunking an implementation detail of it — keeps the floor intact without making it unusable. This is the second time in one build that the right answer to a whole-tree guard was to remove the dependency rather than be added to its allow-list.
+
+### Smaller things the tests forced
+
+A **short write is checked** against the far side's own reported file length, because a truncated payload that reported success is the failure mode chunking introduces — and it is worse than a failed transfer, since the operator would run it. The SMB credential is **masked by construction** in the audited argv, so the run store does not become a key store — obfuscation.py's rule for its pre-shared tunnel key. And the route-set guard caught the new `/api/evasion/deliver` endpoint, which is exactly its job: the set is pinned so a new evasion surface cannot appear without someone deciding it should.
+
+Suite **57 files, 0 failures**.
+
 ### Deferred to a later session, deliberately
 
 Two README items, noted here so they are not lost:

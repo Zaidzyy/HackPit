@@ -136,6 +136,10 @@ run_test test_phase1_runtime.py "Phase-1 runtime (timeout clamp / background job
 
 run_test test_state.py "Phase-2 state (parsers / upserts / task tree / prompt grounding / executes-nothing)"
 
+run_test test_zap.py "ZAP report parser (report dug out of progress noise / 4 risk codes / registry keys match program_name's .py spelling / -zap.json does not claim every json / detection covers the names that run)"
+
+run_test test_zap_safety.py "ZAP gating split (active fires + passive does not, with both controls / verdict survives every spelling / proxychains cannot launder it / COMMAND and SCRIPT heuristics agree)"
+
 run_test test_scope_hostcheck.py "Phase-3 scope host-check (no false-reject of files/versions; real hosts still caught)"
 
 run_test test_credvault.py "Phase-3 credential vault (fills user/pass/hash/domain; wrong-kind + non-cred left alone)"

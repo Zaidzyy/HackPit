@@ -1741,3 +1741,53 @@ The first draft of the destination scan read `args[0]` for every addressing call
 `:exposure` at `/exposure` — and this is where part 1's four `/cockpit/exposure` endpoints finally get a caller, having shipped with none. That was the same gap build #12 existed to close, and adding a second orphan surface beside it would have compounded it. The panel walks both destinations from one port selection, keeps the approval explicit for every destructive or exposing action, and renders the reverse-tunnel command, the socat bridges and the teardown with copy buttons. eslint holds at the accepted baseline of 11.
 
 Suite **64 files, 0 failures**, up from 62.
+
+## Build #14 part 1 — ZAP, the first web vulnerability scanner (2026-08-03)
+
+The arsenal catalogued 115 tools and shipped an HTTP repeater, but nothing in it systematically probed a discovered parameter for an injection class. Recon found endpoints; nuclei matched known templates; the gap in between was the one a web assessment actually lives in. This closes it with OWASP ZAP.
+
+### Why not Burp Suite Professional
+
+Burp Pro is $499/user/year and its REST API is a scan-launcher — start a scan, poll it, fetch issues. Anything richer needs a Montoya extension loaded inside a running Burp, which is not drivable over a wire. Its licence is a named-user seat and the process assumes a desktop session, so running it as a shared service backend is the case PortSwigger sells Burp DAST for. ZAP is Apache 2.0, headless-first, and has no activation to break when a container is rebuilt.
+
+A cracked Burp distribution was considered and rejected outright. Beyond being pirated software and a takedown risk to a public repo, it means running an unaudited third-party patch as the interception proxy that sees every credential pushed through it.
+
+### The whole build is seven touch points and no new architecture
+
+ZAP is modelled on nuclei: a catalogued tool the executor gates and the ingest parses. No new module, no new endpoint, no frontend, and — the point — **no new execution capability**. Scans run through `POST /cockpit/exec` as ordinary commands, so all four lab gates and all three engagement gates apply on day one without a line of code protecting them.
+
+**The daemon and its REST API are excluded, and the reasoning is structural rather than cautious.** Every gate here inspects *a command*. Once "scan this target" is an HTTP call, it bypasses all of them unless a second, parallel gate system is built — and a second copy of a safety predicate is this codebase's most-repeated defect: the WinRM `argv[0]` classification, the proxychains-laundered confirm, the collector FQDN classifier. Worse, the only channel into a sandbox is `docker exec`; the lab sandbox sits on an `internal: true` network precisely so no route exists between it and the host. Reaching an HTTP API in there means opening the path `assert_isolation_proven()` exists to deny.
+
+`zap.sh -cmd -autorun plan.yaml` is excluded for a related reason: whether the run is passive or active lives *inside the plan file*, so the gate would classify a string that does not describe what executes. The packaged scan scripts are self-describing, which lets the existing danger gate split them unmodified.
+
+### The split, and an inconsistency stated rather than hidden
+
+`zap-full-scan.py` sends live SQLi/XSS/command-injection payloads at every discovered parameter and demands the red-confirm. `zap-baseline.py` spiders and observes, and does not — gating both identically would make the confirm meaningless for the tool, the same argument the AD-enumeration note has always made.
+
+This makes ZAP **stricter than the rest of its family**: `sqlmap`, `nikto`, `dalfox` and `nuclei` remain unflagged, and sqlmap is arguably more intrusive. That is a recorded decision, not an oversight. Erring safe on a new tool changes no existing behaviour, and the rationale is written at the point of use so a future reader does not quietly "fix" it.
+
+### Two things the existing guards caught that the plan had not anticipated
+
+**A fourth shared-predicate defect, prevented.** `dangerous_script_heuristic` shares its tool groups with the command heuristic — its docstring says so explicitly, "two lists would drift, and drift is what produced this bug." Adding the active-scanner set to only the command side would have been the fourth instance of exactly that failure. It went into both, and a test now locks the two paths to the same verdict on the same tool.
+
+**A tool's own name needs a verdict too.** `_catalog_invocations()` covers the catalog's `name` field, not just template `argv[0]`s, so bare `zap` failed the suite until classified. It landed in `_ARGUMENT_DEPENDENT`, whose stated shape it matches exactly: the bare binary is clean, at least one catalogued template fires.
+
+### The trap that would have shipped silently
+
+**Two normalisers exist and they disagree.** `allowlist._tool_name()` strips `.py`; `state.ingest.program_name()` strips only `.exe`. So the danger sets must be keyed `zap-full-scan` and the parser registry `zap-full-scan.py`. Key either the other way and nothing matches: zero findings, no error, green suite. That is the build #9 ingest gap exactly, where a live DCSync dumped four NTLM hashes including krbtgt and ingested none of them. A test pins each side against its own normaliser.
+
+A second, smaller version of the same lesson: `_json_objects()` cannot reach a ZAP report, and the way it fails matters. It does not return nothing — its line-delimited fallback matches the alert *instance* fragments that happen to sit on one line. A parser resting on it would emit quiet rubbish rather than obvious nothing. The spec claimed "neither path works"; implementation measured otherwise and the spec was corrected in the same commit.
+
+### Verified, and what is not
+
+**Hermetically, for real:** the report is extracted from surrounding progress output, all four risk codes map, the registry keys match what `program_name` actually produces, `-zap.json` is claimed while a plain `.json` loot file is not, both heuristics agree on both verdicts, proxychains cannot launder the confirm, and the catalog genuinely ships both invocations. Every one carries a control in the same test. Suite **66 files, 0 failures**, up from 64.
+
+**Reported NOT-RUN, not folded into a pass:** the image build, the installed-name verification, and a live scan of the lab target. The Docker daemon was down on the build host. These are the only checks that can confirm Kali installs the scan scripts under the names the parser registry and the catalog templates both hardcode — and no hermetic test can stand in, because it feeds the parser a string it chose itself. `docker/proof/zap_install_proof.sh` runs all of them and fails loudly per check. **Until it passes, the ingest path is unverified end to end.**
+
+### Timeout, resolved without touching a global
+
+A full active scan runs for tens of minutes against the executor's 180-second default. No global was raised — `MAX_TIMEOUT_SECONDS` is already 3600 and clamps rather than refuses, so the two full-scan templates simply say to raise `timeout_seconds` on the request. Raising a default for one tool changes behaviour for every tool that relies on it.
+
+### Deferred to part 2
+
+The proxy surface — ZAP as a live intercepting proxy feeding the repeater and state — with its own spec and safety review. The daemon question belongs there, and it splits by sandbox: the engage sandbox is already open and breaks no property by hosting one, while the lab keeps `internal: true` and keeps command-path scanning. A *recording* proxy may reuse the existing listener pattern almost directly (gate the start, hold liveness, expose no writer); a scan-control channel would need the `tunnels.py` treatment, where one derivation function sits behind both the gate and the action.

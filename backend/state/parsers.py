@@ -254,6 +254,89 @@ def parse_nuclei(text: str, session_id: str, run_id: str | None = None) -> Parse
 
 
 # --------------------------------------------------------------------------- #
+# ZAP — the traditional-JSON report
+# --------------------------------------------------------------------------- #
+#: ZAP risk codes. Emitted as STRINGS in the JSON report. ZAP has no "critical".
+_ZAP_RISK = {"0": "info", "1": "low", "2": "medium", "3": "high"}
+
+
+def _zap_report(text: str) -> dict[str, Any] | None:
+    """Dig the ZAP report object out of a stream that also carries progress lines.
+
+    :func:`_json_objects` cannot do this and is deliberately not extended to: the scan scripts
+    print progress before the report, so the whole document does not parse, and the report is
+    pretty-printed across many lines, so no single line parses either. Both of its branches
+    miss. Scan for a '{' that begins a decodable object carrying a "site" key.
+    """
+    blob = (text or "").strip()
+    if not blob:
+        return None
+    decoder = json.JSONDecoder()
+    idx = blob.find("{")
+    while idx != -1:
+        try:
+            obj, _end = decoder.raw_decode(blob, idx)
+        except ValueError:
+            idx = blob.find("{", idx + 1)
+            continue
+        if isinstance(obj, dict) and "site" in obj:
+            return obj
+        idx = blob.find("{", idx + 1)
+    return None
+
+
+def parse_zap(text: str, session_id: str, run_id: str | None = None) -> Parsed:
+    """ZAP alerts -> Findings; alert instances -> Endpoints."""
+    out = Parsed()
+    report = _zap_report(text)
+    if report is None:
+        return out
+    sites = report.get("site")
+    if not isinstance(sites, list):
+        return out
+    for site in sites:
+        if not isinstance(site, dict):
+            continue
+        alerts = site.get("alerts")
+        if not isinstance(alerts, list):
+            continue
+        for alert in alerts:
+            if not isinstance(alert, dict):
+                continue
+            name = str(alert.get("name") or alert.get("alert") or "").strip()
+            if not name:
+                continue
+            instances = [i for i in (alert.get("instances") or []) if isinstance(i, dict)]
+            first = instances[0] if instances else {}
+            plugin = str(alert.get("pluginid") or "").strip()
+            out.findings.append(
+                Finding(
+                    session_id=session_id, title=name,
+                    severity=_ZAP_RISK.get(str(alert.get("riskcode") or "").strip(), "info"),
+                    target=str(first.get("uri") or site.get("@name") or ""),
+                    tool="zap",
+                    reference=f"pluginid:{plugin}" if plugin else "",
+                    evidence=str(first.get("evidence") or first.get("attack") or "")[:2000],
+                    source_run_id=run_id,
+                )
+            )
+            for inst in instances:
+                uri = str(inst.get("uri") or "")
+                if not uri.startswith("http"):
+                    continue
+                param = str(inst.get("param") or "").strip()
+                out.endpoints.append(
+                    Endpoint(
+                        session_id=session_id, url=uri,
+                        method=str(inst.get("method") or "GET").upper(),
+                        params=[param] if param else [],
+                        source_run_id=run_id,
+                    )
+                )
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # secretsdump — the impacket credential dump format
 # --------------------------------------------------------------------------- #
 # user:rid:lmhash:nthash:::            (SAM / NTDS dump)
@@ -313,6 +396,9 @@ def parse_secretsdump(text: str, session_id: str, run_id: str | None = None) -> 
 #: filename suffix -> parser, for files that appear in a run's loot directory.
 FILE_PARSERS = {
     ".xml": parse_nmap_xml,
+    # NOT ".json" — that would claim every JSON loot file any tool ever writes. ZAP's report
+    # filename is set by the catalog templates, which always end it in -zap.json.
+    "-zap.json": parse_zap,
 }
 
 #: tool program name -> parser, for a run's stdout.
@@ -323,6 +409,11 @@ STDOUT_PARSERS = {
     "nuclei": parse_nuclei,
     "secretsdump.py": parse_secretsdump,
     "secretsdump": parse_secretsdump,
+    # ingest.program_name() strips .exe but NOT .py, so these keys keep the suffix — unlike
+    # allowlist._tool_name(), which strips both. The two normalisers genuinely differ; keying
+    # these "zap-full-scan" would match nothing and ingest nothing, silently.
+    "zap-baseline.py": parse_zap,
+    "zap-full-scan.py": parse_zap,
 }
 
 

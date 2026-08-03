@@ -213,11 +213,19 @@ never needs an `_ARGUMENT_DEPENDENT` verdict it could not honestly be given.
 
 **A real problem the existing helper does not solve.** `_json_objects()` tries a whole-document
 parse and falls back to line-delimited. ZAP's scan scripts interleave progress text with a
-pretty-printed multi-line report, so *neither* path works — the document does not parse whole,
-and the report's lines do not individually parse either. `parse_zap` therefore performs its own
-extraction: locate the report object and `raw_decode` it out of the surrounding noise.
-Self-contained in the new parser. `_json_objects()` is not modified, so no existing parser
-changes behaviour.
+pretty-printed multi-line report, so the whole-document branch fails outright.
+
+**The fallback branch is worse than failing** — measured during implementation, not assumed. It
+does not return nothing: it matches the alert *instance* fragments that happen to sit on a
+single line, and returns those. On the test fixture it yields exactly one object, carrying
+`{method, param, uri}` and no `site` key. A parser resting on it would therefore emit quiet
+rubbish rather than obvious nothing, which is the harder failure to notice.
+
+`parse_zap` performs its own extraction instead: locate the object carrying a `site` key and
+`raw_decode` it out of the surrounding noise. Self-contained in the new parser.
+`_json_objects()` is not modified, so no existing parser changes behaviour. The regression test
+asserts the fallback never reaches the *report* — not that it returns nothing, which would be a
+false claim that later broke.
 
 Two delivery paths, because the sandboxes genuinely differ and that difference is a safety
 property:

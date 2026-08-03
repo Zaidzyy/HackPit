@@ -48,9 +48,9 @@ jobs:
     name: safety suite (hermetic)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # backend/pyproject.toml declares requires-python = ">=3.14".
           python-version: "3.14"
@@ -111,9 +111,9 @@ jobs:
     name: frontend build + lint baseline
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -150,12 +150,19 @@ jobs:
     name: ATT&CK / Sigma upstream drift
     # Scheduled + manual ONLY — never a merge gate. This calls live upstream, so a failure here
     # means "the world changed", not "this PR is wrong". Reported, not blocking.
+    #
+    # `continue-on-error` is what keeps it from gating — and it is also what made the first
+    # version of this job unable to say anything. A `--verify` that came back with real drift
+    # would exit non-zero, be swallowed, and paint the job green; the finding lived only in a log
+    # nobody opens on a Monday. Non-blocking has to mean REPORTED, not silent, so the outcome is
+    # captured explicitly and written to the run summary as a warning annotation either way.
+    # Same rule the safety job's "Report what could not run here" step exists to enforce.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install
@@ -163,4 +170,37 @@ jobs:
           python -m pip install --upgrade pip
           pip install httpx pyyaml
       - name: Verify every technique id and Sigma rule still exists upstream
-        run: python pipeline/detection_sources.py --verify
+        id: verify
+        # The pipe to tee would otherwise hand the step `tee`'s exit code — the same way build #10
+        # found `| tee` could disarm the safety runner. Read PIPESTATUS, not $?.
+        run: |
+          set +e
+          python pipeline/detection_sources.py --verify 2>&1 | tee drift.txt
+          echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Report the verdict
+        if: always()
+        run: |
+          ok='${{ steps.verify.outputs.status }}'
+          {
+            if [ "$ok" = "0" ]; then
+              echo "### Upstream drift: none"
+              echo ""
+              echo "Every ATT&CK technique id and SigmaHQ rule cited by the detection catalog and"
+              echo "the defensive KB pages still exists upstream and is not revoked."
+            else
+              echo "### :warning: Upstream drift detected"
+              echo ""
+              echo "**This does not mean the repo is broken** — this job never gates a merge."
+              echo "Upstream renamed, revoked, or removed something the catalog cites. Someone has"
+              echo "to look and re-pin it."
+            fi
+            echo ""
+            echo '```'
+            cat drift.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # An annotation is the only part of this that shows up without opening the run.
+          if [ "$ok" != "0" ]; then
+            echo "::warning::ATT&CK/Sigma upstream drift detected — see the job summary. Not a merge blocker."
+          fi

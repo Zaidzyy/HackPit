@@ -60,11 +60,30 @@ class _Target:
 
 
 def _free_port() -> int:
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
+    """A free loopback port whose tunnel port is a DIFFERENT port.
+
+    *** THIS SKIPS A RANGE, AND THE RANGE IS A REAL DEFECT. ***
+    `tunnel_port(p) == TUNNEL_PORT_BASE + (p % 10000)` with a base of 40000, so for every port
+    in 40000-49999 the tunnel port IS the public port. That is 10,000 ports on which a
+    redirector forwards to itself, and they sit inside Linux's default ephemeral range
+    (32768-60999) — which is why CI hit `EADDRINUSE` here and a Windows dev box never did: the
+    test bound the stand-in backend on the target port, then the redirector tried to bind the
+    same number.
+
+    Skipping the range keeps these tests testing the intended topology (public != tunnel)
+    instead of the collision. It does NOT fix the underlying defect: an operator who picks a
+    public port in 40000-49999 still gets a redirector whose `ssh -R` port collides with its own
+    listener. That is logged for build #13 to settle, because changing the arithmetic changes
+    every rendered reverse-tunnel command.
+    """
+    for _ in range(50):
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        if F.tunnel_port(port) != port:
+            return port
+    raise AssertionError("could not find a free port outside the self-mapping range")
 
 
 # --------------------------------------------------------------------------- #

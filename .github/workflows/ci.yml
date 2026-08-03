@@ -27,7 +27,13 @@ name: CI
 
 on:
   push:
-    branches: [main, sandbox-kali-image]
+    # Single-branch repo. `sandbox-kali-image` was the working branch for twelve builds and was
+    # deleted once it had been sitting at parity with main for good — it named the build #2 Kali
+    # image work and had described nothing since, and landing-then-fast-forwarding within seconds
+    # was ceremony, not a review gate. The gate is this workflow plus the safety suite.
+    branches: [main]
+  # Left deliberately unfiltered: a PR from any branch or fork still runs the full gate, so
+  # anything cut for a one-off build is covered without editing this file.
   pull_request:
   workflow_dispatch:
   schedule:

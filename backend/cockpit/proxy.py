@@ -106,6 +106,49 @@ class Proxy(BaseModel):
     engagement_id: str | None = None
 
 
+class CapturedHeader(BaseModel):
+    name: str
+    value: str
+
+
+class CapturedRequest(BaseModel):
+    method: str = "GET"
+    url: str = ""
+    headers: list[CapturedHeader] = Field(default_factory=list)
+    #: RAW. Redaction happens in report.py and nowhere else — spec §6.
+    body: str = ""
+
+
+class CapturedResponse(BaseModel):
+    status: int | None = None
+    headers: list[CapturedHeader] = Field(default_factory=list)
+    body: str = ""
+    size_bytes: int = 0
+    time_ms: int = 0
+
+
+class CapturedExchange(BaseModel):
+    """One recorded request/response pair.
+
+    *** DELIBERATELY NOT `repeater.RepeaterExchange`, THOUGH THE SHAPE MATCHES. ***
+    The first version of this module imported those models, and `test_repeater.py` refused it:
+    the repeater is HUMAN-ONLY and its lock bans *any* import of the module, not just
+    ``repeater.send`` — because a module that can import it is one line from calling it.
+
+    The tempting fix was to add ``cockpit/proxy.py`` to that allow-list. That is the exact
+    anti-pattern build #5 was about: widening a safety allow-list so new code fits, rather than
+    working within it. The field NAMES match the repeater's on purpose, so the existing panel
+    renders a captured exchange with no translation layer and a "replay in repeater" action can
+    hand one straight over — the operator gets the reuse without the coupling.
+    """
+
+    id: str
+    request: CapturedRequest
+    response: CapturedResponse
+    sent_at: str = ""
+    container: str = ""
+
+
 class ProxyRefused(RuntimeError):
     """The proxy could not start / the request was invalid. NOTHING ran.
 
@@ -387,11 +430,9 @@ def parse_message(obj: Any, container: str):
     completed (the fixture carries a real one reading ``HTTP/1.0 0``), and the request half is
     still worth having — so the status becomes None and everything else survives.
 
-    Shaped as a RepeaterExchange rather than a new model, so the existing repeater UI renders it
-    and a captured request can be replayed without a translation layer.
+    Returns a :class:`CapturedExchange` — same field names as the repeater's model, but a local
+    class, because the repeater is human-only and its lock bans importing it. See that class.
     """
-    from .repeater import (RepeaterExchange, RepeaterHeader, RepeaterRequest,
-                           RepeaterResponse, RepeaterResponseHeader)
     try:
         if not isinstance(obj, dict):
             return None
@@ -414,18 +455,18 @@ def parse_message(obj: Any, container: str):
 
         body = str(obj.get("responseBody") or "")
         mid = str(obj.get("id", ""))
-        return RepeaterExchange(
-            id=f"zap-{mid}", run_id=f"zap-{mid}",
-            request=RepeaterRequest(
+        return CapturedExchange(
+            id=f"zap-{mid}",
+            request=CapturedRequest(
                 method=method, url=url,
-                headers=[RepeaterHeader(name=n, value=v)
+                headers=[CapturedHeader(name=n, value=v)
                          for n, v in _headers_from(obj.get("requestHeader"))],
                 # RAW, deliberately. Redaction happens in report.py and nowhere else — spec §6.
                 body=str(obj.get("requestBody") or ""),
             ),
-            response=RepeaterResponse(
+            response=CapturedResponse(
                 status=status,
-                headers=[RepeaterResponseHeader(name=n, value=v)
+                headers=[CapturedHeader(name=n, value=v)
                          for n, v in _headers_from(obj.get("responseHeader"))],
                 body=body, size_bytes=len(body), time_ms=rtt,
             ),

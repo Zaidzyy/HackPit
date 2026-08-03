@@ -1762,15 +1762,25 @@ ZAP is modelled on nuclei: a catalogued tool the executor gates and the ingest p
 
 ### The split, and an inconsistency stated rather than hidden
 
-`zap-full-scan.py` sends live SQLi/XSS/command-injection payloads at every discovered parameter and demands the red-confirm. `zap-baseline.py` spiders and observes, and does not — gating both identically would make the confirm meaningless for the tool, the same argument the AD-enumeration note has always made.
+`zaproxy -cmd -quickurl` spiders and then sends live SQLi/XSS/command-injection payloads at every discovered parameter, and demands the red-confirm. `zaproxy -cmd -zapit` crawls and fingerprints, and does not — gating both identically would make the confirm meaningless for the tool, the same argument the AD-enumeration note has always made.
+
+**The verdict is argument-based, not name-based**, because Kali ships one launcher that does both jobs, so the binary was never the tell. `_TOOL_ATTACK_FLAGS` mirrors the `_TOOL_EXEC_FLAGS` pattern already used for `netexec -x`.
 
 This makes ZAP **stricter than the rest of its family**: `sqlmap`, `nikto`, `dalfox` and `nuclei` remain unflagged, and sqlmap is arguably more intrusive. That is a recorded decision, not an oversight. Erring safe on a new tool changes no existing behaviour, and the rationale is written at the point of use so a future reader does not quietly "fix" it.
 
 ### Two things the existing guards caught that the plan had not anticipated
 
-**A fourth shared-predicate defect, prevented.** `dangerous_script_heuristic` shares its tool groups with the command heuristic — its docstring says so explicitly, "two lists would drift, and drift is what produced this bug." Adding the active-scanner set to only the command side would have been the fourth instance of exactly that failure. It went into both, and a test now locks the two paths to the same verdict on the same tool.
+**A fourth shared-predicate defect, prevented.** `dangerous_script_heuristic` shares its tool groups with the command heuristic — its docstring says so explicitly, "two lists would drift, and drift is what produced this bug." Adding the active-scan rule to only the command side would have been the fourth instance of exactly that failure. It went into both — and after the rework the script heuristic **derives** its markers from the same `_TOOL_ATTACK_FLAGS` dict the command heuristic reads, rather than restating them, so the two cannot drift even in principle. A test locks them to the same verdict on the same tool.
 
 **A tool's own name needs a verdict too.** `_catalog_invocations()` covers the catalog's `name` field, not just template `argv[0]`s, so bare `zap` failed the suite until classified. It landed in `_ARGUMENT_DEPENDENT`, whose stated shape it matches exactly: the bare binary is clean, at least one catalogued template fires.
+
+### The image build caught what the whole test suite could not
+
+This is the finding worth keeping. Everything was first written against `zap-baseline.py` and `zap-full-scan.py` — upstream's documented packaged scan scripts, and the names the parser registry, the catalog templates, the danger sets and four test files all hardcoded. **Kali's `zaproxy` package ships neither.** `dpkg -L zaproxy` on 2.17.0-0kali1 gives exactly `/usr/bin/zaproxy`, `/usr/bin/owasp-zap` and `/usr/share/zaproxy/zap.sh`. Those scripts exist only inside OWASP's own Docker image, and they hardcode `/zap/zap-x.sh`, so adopting them would have meant faking that image's directory layout and fetching three unpinned files from GitHub `main` into a safety-critical image — rejected, given how often upstream drift has already bitten this project (dnscat2, ScareCrow, trufflehog).
+
+Every one of those keys would have matched nothing, forever, with a green suite. That is the build #9 ingest gap in a new place, and it is the *third* time in this build that the same root cause surfaced: **a hermetic test feeds the parser a string the test itself chose.** Nothing in 66 test files could have found it. The image build's own smoke test did, on the first run, because it checks the names against the package rather than the documentation.
+
+The replacement is the package-native CLI, and it was verified before being adopted rather than after: a real ZAP 2.17 scan was run inside the Kali image against a live throwaway app, and `-quickurl`'s report turned out to be shaped exactly like the one `parse_zap` already handled — **so the parser needed no change at all.** That verbatim report is now committed as `test_support/zap_report_fixture.json` and a test parses it for 4 findings and 13 endpoints, with severities mapped from ZAP's *string* risk codes. The synthetic fixture is kept beside it, because the real report happens to carry only risk codes 1-2 and the four-way mapping still needs covering.
 
 ### The trap that would have shipped silently
 
@@ -1782,7 +1792,7 @@ A second, smaller version of the same lesson: `_json_objects()` cannot reach a Z
 
 **Hermetically, for real:** the report is extracted from surrounding progress output, all four risk codes map, the registry keys match what `program_name` actually produces, `-zap.json` is claimed while a plain `.json` loot file is not, both heuristics agree on both verdicts, proxychains cannot launder the confirm, and the catalog genuinely ships both invocations. Every one carries a control in the same test. Suite **66 files, 0 failures**, up from 64.
 
-**Reported NOT-RUN, not folded into a pass:** the image build, the installed-name verification, and a live scan of the lab target. The Docker daemon was down on the build host. These are the only checks that can confirm Kali installs the scan scripts under the names the parser registry and the catalog templates both hardcode — and no hermetic test can stand in, because it feeds the parser a string it chose itself. `docker/proof/zap_install_proof.sh` runs all of them and fails loudly per check. **Until it passes, the ingest path is unverified end to end.**
+**Reported NOT-RUN, not folded into a pass:** the full image rebuild and a live scan of the lab target through the gated executor. The installed-name verification HAS now run — it is what produced the correction above. These are the only checks that can confirm Kali installs the scan scripts under the names the parser registry and the catalog templates both hardcode — and no hermetic test can stand in, because it feeds the parser a string it chose itself. `docker/proof/zap_install_proof.sh` runs all of them and fails loudly per check. **Until it passes, the ingest path is unverified end to end.**
 
 ### Timeout, resolved without touching a global
 

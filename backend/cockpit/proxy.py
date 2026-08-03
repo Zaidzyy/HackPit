@@ -362,9 +362,119 @@ def status() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # history — READ-ONLY and UNGATED
 # --------------------------------------------------------------------------- #
+def _first_line(raw: Any) -> str:
+    return str(raw or "").replace("\r\n", "\n").split("\n", 1)[0].strip()
+
+
+def _headers_from(raw: Any) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for line in str(raw or "").replace("\r\n", "\n").split("\n")[1:]:
+        if not line.strip() or ":" not in line:
+            continue
+        name, _, value = line.partition(":")
+        out.append((name.strip(), value.strip()))
+    return out
+
+
+def parse_message(obj: Any, container: str):
+    """One ZAP message -> a RepeaterExchange. NEVER raises; returns None if unusable.
+
+    MEASURED shape (ZAP 2.17.0): ``id, requestHeader, requestBody, responseHeader, responseBody,
+    rtt, timestamp, type, tags, note, cookieParams``. ``requestHeader``'s first line is
+    ``METHOD URL HTTP/x``; ``responseHeader``'s is ``HTTP/x STATUS REASON``.
+
+    A MALFORMED RESPONSE LINE DOES NOT DISCARD THE RECORD. ZAP logs exchanges that never
+    completed (the fixture carries a real one reading ``HTTP/1.0 0``), and the request half is
+    still worth having — so the status becomes None and everything else survives.
+
+    Shaped as a RepeaterExchange rather than a new model, so the existing repeater UI renders it
+    and a captured request can be replayed without a translation layer.
+    """
+    from .repeater import (RepeaterExchange, RepeaterHeader, RepeaterRequest,
+                           RepeaterResponse, RepeaterResponseHeader)
+    try:
+        if not isinstance(obj, dict):
+            return None
+        parts = _first_line(obj.get("requestHeader")).split()
+        if len(parts) < 2 or not parts[1].startswith("http"):
+            return None
+        method, url = parts[0], parts[1]
+
+        status = None
+        resp_parts = _first_line(obj.get("responseHeader")).split()
+        if len(resp_parts) >= 2 and resp_parts[1].isdigit():
+            code = int(resp_parts[1])
+            # ZAP writes "HTTP/1.0 0" for an exchange that never got a response.
+            status = code if 100 <= code <= 599 else None
+
+        try:
+            rtt = int(str(obj.get("rtt") or "0"))
+        except (TypeError, ValueError):
+            rtt = 0
+
+        body = str(obj.get("responseBody") or "")
+        mid = str(obj.get("id", ""))
+        return RepeaterExchange(
+            id=f"zap-{mid}", run_id=f"zap-{mid}",
+            request=RepeaterRequest(
+                method=method, url=url,
+                headers=[RepeaterHeader(name=n, value=v)
+                         for n, v in _headers_from(obj.get("requestHeader"))],
+                # RAW, deliberately. Redaction happens in report.py and nowhere else — spec §6.
+                body=str(obj.get("requestBody") or ""),
+            ),
+            response=RepeaterResponse(
+                status=status,
+                headers=[RepeaterResponseHeader(name=n, value=v)
+                         for n, v in _headers_from(obj.get("responseHeader"))],
+                body=body, size_bytes=len(body), time_ms=rtt,
+            ),
+            sent_at=str(obj.get("timestamp") or ""),
+            container=container,
+        )
+    except Exception:  # noqa: BLE001 - a parser must never break a completed run
+        return None
+
+
+def endpoints_from(exchanges, session_id: str, run_id: str | None = None):
+    """Captured requests -> Endpoint records. Existing model, no schema change."""
+    from urllib.parse import parse_qs, urlparse
+
+    from state.models import Endpoint
+
+    out = []
+    for ex in exchanges:
+        if ex is None or not ex.request.url.startswith("http"):
+            continue
+        out.append(Endpoint(
+            session_id=session_id, url=ex.request.url, method=ex.request.method,
+            status=ex.response.status,
+            params=sorted(parse_qs(urlparse(ex.request.url).query).keys()),
+            source_run_id=run_id,
+        ))
+    return out
+
+
 def captured_count(container: str, port: int) -> int:
     raw = _api_get(container, port, _VIEW_COUNT)
     try:
         return int(json.loads(raw).get("numberOfMessages", 0))
     except (ValueError, AttributeError, TypeError):
         return 0
+
+
+def history(container: str, port: int, start: int = 0, count: int = 50):
+    """Recent captured exchanges.
+
+    READ-ONLY and UNGATED. A panel that refreshes cannot demand approval per refresh, and
+    ``lifecycle.port_is_bound()`` sets the precedent by running ``ss`` the same way. See the
+    note on the URL constants: this path reaching ZAP means reaching it unapproved, so it issues
+    only the two fixed view URLs.
+    """
+    raw = _api_get(container, port, f"{_VIEW_MSGS}?start={int(start)}&count={int(count)}")
+    try:
+        msgs = json.loads(raw).get("messages") or []
+    except (ValueError, AttributeError, TypeError):
+        return []
+    parsed = [parse_message(m, container) for m in msgs]
+    return [e for e in parsed if e is not None]

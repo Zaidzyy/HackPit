@@ -1529,6 +1529,38 @@ Measuring the fixture projection surfaced something about the matcher itself. `r
 
 `docs/build-notes.md` was rewritten. It had opened with "**The Cockpit does not exist yet**" and closed calling the execution engine "still ahead of me" — true when written, false for about a year, across eleven builds and a live DCSync against a real domain. The correction is kept **in** the document as a dated note rather than quietly applied, because the failure is worth naming: a doc written to guard against overselling ended up underselling by a year, and the mechanism is the same either way — it stopped tracking the code. The five original "what broke" stories survive; three better ones were added (the six live-fire defects invisible to a green suite, the shared-predicate pattern across three subsystems, and the DA password leaking into the LLM proposer context), and the closing admission is now four honest ones led by the real one: the headline was autonomous hacking and the project deliberately built the opposite.
 
+## Build #13 — where a callback lands (2026-08-03)
+
+HackPit reaches **out** to anything: the engage sandbox is fully open by decision. Being reached **in** is a different problem, and it is the one real capability gap a review of the whole build surfaced. A callback is the target dialling *you*, and for that to land a container port must be published on a host address the target can route to. Exactly one file did that — hand-written, opt-in, and hardcoded to the VMware VMnet8 address of one laptop.
+
+**This is one of four parts, and the decomposition is the first decision.** The callback gap splits into local listener profiles (no infrastructure), an out-of-band confirmation canary and a public C2 listener (both needing a VPS and a domain that do not exist yet), plus an unrelated safety-model change — reversing the evasion engine's generate-only rule into a gated deploy. Cramming those into one spec would have produced a document too vague to implement and a plan too big to verify, so each gets its own spec → plan → build cycle. Part 1 is first because it is free, verifiable today, and it is where the callback-destination abstraction gets designed, so the remote parts slot into an existing shape rather than being bolted on.
+
+### What was built
+
+`backend/cockpit/exposure.py` owns the surface end to end: validate → render → write → apply → observe. A profile names a bind address, a container (`engage-sandbox` or `kali-open` — never the lab sandbox), and the listener kinds it will use; ports are derived from each kind's default and explicit extras merge in. `docker/proof/c2-lab.yml` is gone, replaced by a `vmnet8-dns` preset locked against it by a test.
+
+### Three decisions went against the first draft, all from pushing back on it
+
+**Public and wildcard binds are red-confirms, not refusals.** The first design refused both. But this codebase already has the pattern — the danger gate "never blocks outright; requires the confirm. Over-inclusive assist — human is the gate" — and inventing a second, stricter one would be inconsistent for no gain. A wildcard buys two real things: a binding that survives a VPN or DHCP address change, where a named bind leaves a container that will not restart, and a fallback when a specific bind misbehaves under Docker Desktop's networking.
+
+**Arbitrary ports are allowed.** The first design derived ports only from the four known listener kinds. Those four omit a **plain reverse shell** — netcat or pwncat on 443 or 4444, an msfconsole handler — which is the commonest callback there is, so the restriction would have been hit on first use. Ticking a kind now fills in its port as a convenience rather than acting as a cage. Ranges stay refused: a range is how one typo publishes hundreds of ports, and it makes the exposure summary unreadable.
+
+**A non-live bind address warns rather than refuses — and the claim that motivated refusing it was wrong.** The first draft said a mistyped address would start fine and silently receive nothing. It does not: Docker refuses to start the container with `bind: cannot assign requested address`. The check buys a better error, earlier — not safety — and refusing would break the real case of writing a profile while off the VPN, intending to connect before applying it.
+
+### The hole self-review found, and the one the suite found
+
+**Permitting an acknowledged wildcard broke the scanner.** `test_exposure_safety` is a static text scan, and it had no way to tell a wildcard the operator consciously chose from one that slipped through — so simply teaching it to accept wildcards would have *deleted* invariant 3 rather than relaxed it. The acknowledgement is therefore rendered **into the file**, as a `# hackpit-ack: wildcard bind=0.0.0.0 engagement=…` line, and the rule becomes **covered** rather than **absent**: every broad binding needs a marker naming that exact address. This makes invariant 2 stronger, not weaker — the one small file a reviewer reads now states what is exposed *and* that it was chosen deliberately, by whom and when. A marker for a different address covers nothing, which is the case that keeps the rule from degrading into "contains the string `hackpit-ack` somewhere".
+
+**A guard fired on the first full-suite run, and the fix was to remove the dependency rather than excuse it.** `exposure.py` needs to know which port a listener binds, and the obvious way to get it is `from .tunnels import CHISEL_DEFAULT_PORT`. That trips the whole-tree scan that allows exactly two files to reference the tunnel module, so no agent path can raise a pivot listener; `sliver` and `obfuscation` carry the same guard. Adding `exposure.py` to those allow-lists would have been wrong twice — it narrows the file set instead of fixing the predicate, the mistake build #5 records, and it would have left the module free to call `start_tunnel` with nothing watching. The scan matches the *import* rather than the call precisely so a module cannot get within reach and then be trusted not to use it. So the constants moved to `cockpit/listener_ports.py` and the dependency disappeared. The drift lock came out stronger: one definition instead of one per owner.
+
+### Measured, not assumed
+
+The bind classifier keys off `ipaddress.is_global`, not the obvious `is_private`, because a test caught `is_private` being wrong twice over on Python 3.14: it is **False** for CGNAT `100.64/10` (Tailscale, mobile hotspots) and **True** for the RFC 5737 documentation ranges. The first is the one that would have hurt — every Tailscale address would have been called public and demanded an acknowledgement, on the interface most likely to be right for a remote internal engagement. Liveness is probed by binding a throwaway UDP socket rather than enumerating interfaces, which would need a third-party package the hermetic suite forbids, and which asks a weaker question than "can a listener actually bind here".
+
+### What it still cannot do
+
+A published port is **not** an open port — the host firewall can still drop inbound, so `observe()` says so rather than leaving the operator guessing. And 1c does nothing for an internet-facing target: `192.168.13.1` means nothing to a host on the internet, which is the whole reason parts 1a and 1b exist and need infrastructure. Suite **57 files, 0 failures**, up from 56.
+
 ### Deferred to a later session, deliberately
 
 Two README items, noted here so they are not lost:
@@ -1540,7 +1572,7 @@ The README's counters are also stale (it claims 2,621 KB entries, a 110-tool cat
 
 ### Status
 
-Suite **56 files, 0 failures**, green both with the live KB and under the CI simulation. Frontend builds clean at 23 routes; eslint holds at the accepted 11-error baseline. Every one of the ten previously-unreachable endpoints now has a real component caller, verified by re-running the sweep that found them.
+Suite **57 files, 0 failures** (build #13), green both with the live KB and under the CI simulation. Frontend builds clean at 23 routes; eslint holds at the accepted 11-error baseline. Every one of the ten previously-unreachable endpoints now has a real component caller, verified by re-running the sweep that found them.
 
 CI is complete: **all three jobs have now actually executed on GitHub's machines and passed** — the two gating jobs on every push, and the drift job by dispatch, which was the last piece of this workflow that had only ever been reasoned about. No deprecation warnings remain.
 

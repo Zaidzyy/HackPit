@@ -145,6 +145,22 @@ export const SURFACE_BANDS: SurfaceBand[] = [
         desc: "Craft and replay HTTP from inside the sandbox.",
         needsStack: true,
       },
+      // OPERATE, not INFRASTRUCTURE, and the band hints are what decide it — they are a posture
+      // claim about everything in the band, not decoration. Infrastructure reads "gated start ·
+      // human-only stdin"; the proxy's start IS gated, but it has NO stdin at all (spawned
+      // interactive=False, deliberately), so half that claim would be false for this tile.
+      // Operate reads "every command human-approved · needs the stack", which is exactly true of
+      // both halves: the gated start and the red-confirmed scan. Sitting next to :repeater also
+      // makes the capture -> replay path discoverable, which is why the captured-exchange model
+      // deliberately mirrors the repeater's field names.
+      {
+        key: "proxy",
+        icon: "⊡",
+        label: ":proxy",
+        href: "/proxy",
+        desc: "Record what your tools send — then actively scan it.",
+        needsStack: true,
+      },
     ],
   },
   {

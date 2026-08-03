@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel, Field, field_validator
 
 from . import config
+from . import redirector as _redirector
 from .listener_ports import (
     CHISEL_DEFAULT_PORT,
     DNS_TUNNEL_PORT,
@@ -202,6 +203,14 @@ class ListenerProfile(BaseModel):
                 raise ValueError(f"port range {port!r} is not allowed — list ports individually")
             if proto not in ("tcp", "udp"):
                 raise ValueError(f"protocol {proto!r} is not tcp or udp")
+            # A public port that maps to its own reverse-tunnel port would produce a redirector
+            # relaying to itself. `redirector.tunnel_port` refuses it outright; catching it HERE
+            # turns that into a 422 naming the port the operator typed, rather than an exception
+            # surfacing later from inside command rendering.
+            try:
+                _redirector.tunnel_port(int(port))
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
             out.append((int(port), proto))
         return out
 

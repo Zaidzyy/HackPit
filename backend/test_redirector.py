@@ -267,7 +267,28 @@ def test_both_sides_derive_the_same_tunnel_port() -> None:
         )
     assert F.TUNNEL_PORT_BASE == render.TUNNEL_PORT_BASE
     assert F.TARGET_HOST == render.TARGET_HOST == "127.0.0.1"
-    print("  the deployable and the renderer agree on the tunnel port for 11 ports: PASS")
+
+    # THE SELF-MAPPING RANGE. The sweep above is all conventional ports and never touched
+    # 40000-49999, which is exactly why this defect survived: every port in that range mapped
+    # to ITSELF, so the forwarder would bind the public listener and the tunnel on one socket.
+    # Both sides must refuse, and refuse identically — a renderer that emitted an `ssh -R` the
+    # forwarder would reject is the drift this whole test exists to prevent.
+    for port in (40000, 44444, 45000, 49999):
+        for name, fn in (("deployable", F.tunnel_port), ("renderer", render.tunnel_port)):
+            try:
+                got = fn(port)
+            except ValueError:
+                continue
+            raise AssertionError(
+                f"the {name} returned {got} for public port {port} instead of refusing: that is "
+                "a redirector forwarding to its own listener"
+            )
+    # ...and the ports either side of the range are still perfectly legal, so the guard is a
+    # scalpel and not a blanket
+    for port in (39999, 50000):
+        assert F.tunnel_port(port) == render.tunnel_port(port) != port
+    print("  the two sides agree on 11 ports, both refuse all 4 self-mapping ports, "
+          "and the boundaries either side still work: PASS")
 
 
 # --------------------------------------------------------------------------- #

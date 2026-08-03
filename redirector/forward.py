@@ -84,8 +84,29 @@ def tunnel_port(public_port: int) -> int:
     ``ssh -R`` command and this forwarder have to agree, and a mismatch produces a redirector
     that accepts connections and drops every one of them — which looks exactly like a target
     that never called back.
+
+    *** THE SELF-MAPPING RANGE IS REFUSED, NOT SILENTLY RETURNED. ***
+    ``BASE + (p % 10000)`` lands in [40000, 49999], so for a public port already in that range
+    the tunnel port IS the public port. The forwarder would then bind the public listener and
+    the reverse tunnel on one socket and relay to itself, and the rendered ``ssh -R`` would
+    collide with the listener it is meant to feed. 10,000 ports do this, and they sit inside
+    Linux's default ephemeral range (32768-60999), which is how the redirector tests hit it as
+    an intermittent EADDRINUSE on CI and never on a Windows box.
+
+    Refusing is the whole fix and it costs nothing real: every port outside 40000-49999 —
+    including every conventional C2 port, 80/443/53/8080/4444 — keeps the exact tunnel port it
+    had before, so no already-rendered command changes. Raising here rather than at the call
+    sites means no caller, present or future, can compute a self-mapping pair.
     """
-    return TUNNEL_PORT_BASE + (int(public_port) % 10000)
+    port = int(public_port)
+    mapped = TUNNEL_PORT_BASE + (port % 10000)
+    if mapped == port:
+        raise ValueError(
+            f"public port {port} maps to itself ({mapped}): a redirector on any port in "
+            f"{TUNNEL_PORT_BASE}-{TUNNEL_PORT_BASE + 9999} would forward to its own listener. "
+            "Pick a public port outside that range."
+        )
+    return mapped
 
 
 def _now() -> str:

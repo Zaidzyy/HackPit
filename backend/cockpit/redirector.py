@@ -54,8 +54,27 @@ TUNNEL_SSH_OPTIONS = (
 
 
 def tunnel_port(public_port: int) -> int:
-    """The loopback port a given public port's reverse tunnel terminates on."""
-    return TUNNEL_PORT_BASE + (int(public_port) % 10000)
+    """The loopback port a given public port's reverse tunnel terminates on.
+
+    *** MUST STAY BYTE-EQUIVALENT TO redirector/forward.py::tunnel_port, GUARD INCLUDED. ***
+    The two are duplicated because the forwarder is deployed standalone to the VPS and cannot
+    import the backend; `test_redirector.py::test_both_sides_derive_the_same_tunnel_port` holds
+    them together, and now checks the refusal as well as the arithmetic.
+
+    A public port already inside [40000, 49999] maps to ITSELF, which would render an `ssh -R`
+    whose loopback port is the public listener's own port. Refused rather than returned — see
+    the long note in redirector/forward.py. Every port outside that range is unaffected, so no
+    previously-rendered command changes.
+    """
+    port = int(public_port)
+    mapped = TUNNEL_PORT_BASE + (port % 10000)
+    if mapped == port:
+        raise ValueError(
+            f"public port {port} maps to itself ({mapped}): a redirector on any port in "
+            f"{TUNNEL_PORT_BASE}-{TUNNEL_PORT_BASE + 9999} would forward to its own listener. "
+            "Pick a public port outside that range."
+        )
+    return mapped
 
 
 def split_ports(ports: list[tuple[int, str]]) -> tuple[list[int], list[int]]:

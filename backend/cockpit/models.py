@@ -52,6 +52,14 @@ class ExecRequest(BaseModel):
     session_id: str | None = Field(
         None, description="Optional engagement to attach the run-record to."
     )
+    proxy: bool = Field(
+        False,
+        description="Route this run through the recording proxy so its requests and responses "
+        "are captured (cockpit/proxy.py). Adds the tool's own proxy flag — an argument rewrite "
+        "on an already-gated request, introducing no new capability and no new gate. The "
+        "REWRITTEN argv is what the gates classify. A tool with no known proxy flag runs "
+        "UNCHANGED and the response says so, rather than pretending it was captured.",
+    )
     step_id: str | None = Field(
         None, description="Optional attack-path step id ({phase}-{n}) this run realizes."
     )

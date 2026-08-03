@@ -539,6 +539,68 @@ def _danger_recheck(mode: str, request: ExecRequest) -> dict[str, Any] | None:
     }
 
 
+#: How each tool spells "send your traffic through this proxy". Keyed on the NORMALISED binary
+#: name (allowlist._tool_name), because the spelling is not guessable and getting it wrong is
+#: worse than not offering it: the run would silently bypass the proxy while the operator
+#: believed it was captured. Only tools whose flag was verified against their own help output are
+#: listed; everything else falls through to the honest "not captured" path.
+_PROXY_FLAGS: dict[str, tuple[str, str]] = {
+    # name          -> (flag, joiner)   joiner "" = separate argv token, "=" = glued
+    "curl": ("-x", ""),
+    "ffuf": ("-x", ""),
+    "nuclei": ("-proxy", ""),
+    "katana": ("-proxy", ""),
+    "httpx": ("-http-proxy", ""),
+    "httpx-toolkit": ("-http-proxy", ""),
+    "sqlmap": ("--proxy", "="),
+    "feroxbuster": ("--proxy", ""),
+    "gobuster": ("--proxy", ""),
+    "wpscan": ("--proxy", ""),
+}
+
+
+def apply_proxy(command: str, args: list[str], port: int) -> tuple[list[str], str]:
+    """Point one tool at the recording proxy. Returns ``(args, note)``. PURE.
+
+    An ARGUMENT REWRITE on a request that still passes every gate — the same shape as
+    ``tunnels.wrap_command``, which "adds a prefix; it introduces NO new execution capability and
+    no new gate".
+
+    A TOOL WITH NO KNOWN FLAG IS RETURNED UNCHANGED AND THE NOTE SAYS SO. Silently dropping the
+    flag would hand the operator a run they believe was captured and was not, which is worse
+    than not offering the option — the same honesty the lifecycle module applies to a listener
+    whose bind it could not confirm.
+    """
+    from .allowlist import _tool_name
+
+    url = f"http://127.0.0.1:{int(port)}"
+    entry = _PROXY_FLAGS.get(_tool_name(command))
+    if entry is None:
+        return list(args), (
+            f"{command} has no known proxy flag — this run was NOT captured, it went direct"
+        )
+    flag, joiner = entry
+    prefix = [f"{flag}={url}"] if joiner == "=" else [flag, url]
+    return [*prefix, *args], f"{command} routed through the recording proxy on {url}"
+
+
+def apply_proxy_to_request(request: ExecRequest) -> tuple[ExecRequest, str]:
+    """Apply :func:`apply_proxy` to a request, if it asked for it. Returns (request, note).
+
+    Returns the request UNCHANGED (and an empty note) when ``proxy`` is off or the tool has no
+    known flag, so the caller can tell "nothing happened" from "rewritten" and only discard a
+    prevalidated verdict in the second case.
+    """
+    if not getattr(request, "proxy", False):
+        return request, ""
+    from . import proxy as proxy_mod
+
+    new_args, note = apply_proxy(request.command, list(request.args), proxy_mod.DEFAULT_PROXY_PORT)
+    if new_args == list(request.args):
+        return request, ""
+    return request.model_copy(update={"args": new_args}), note
+
+
 def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[str, Any]]:
     """Validate then stream a run as events.
 
@@ -553,6 +615,17 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
     regardless, so the two gates that are the sole floor on a real target cannot be lost by a
     caller that forgets to validate first. Regression-locked in test_prevalidated_gates.py.
     """
+    # THE PROXY REWRITE HAPPENS FIRST, AND IT CANCELS `prevalidated`.
+    # Pointing a tool at the recording proxy changes the argv. A caller that validated the
+    # ORIGINAL request has a verdict about a DIFFERENT command line than the one about to run —
+    # which is Critical 2 wearing a new hat. So when the rewrite actually changes something, the
+    # earlier verdict is discarded and the REWRITTEN request is validated here. Adding an
+    # argument can only ever make the danger classifier fire MORE, never less, so re-validating
+    # is strictly safe; skipping it would not be.
+    request, proxy_note = apply_proxy_to_request(request)
+    if proxy_note:
+        prevalidated = False
+
     if not prevalidated:
         rejected = validate_request(request)
         if rejected is not None:

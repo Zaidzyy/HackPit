@@ -186,6 +186,84 @@ def test_stopping_is_not_gated() -> None:
     print("  stopping is not gated: PASS")
 
 
+def test_the_proxy_flag_is_per_tool_and_never_silent() -> None:
+    """Each tool spells its proxy flag differently, and a tool we do not know is run UNCHANGED
+    with the note SAYING SO — silently dropping the flag would hand the operator a run they
+    believe was captured and was not."""
+    from cockpit import executor
+
+    args, note = executor.apply_proxy("curl", ["http://x"], 8090)
+    assert args[:2] == ["-x", "http://127.0.0.1:8090"], args
+    assert "http://x" in args, "the original args were dropped"
+    assert note and "not captured" not in note.lower(), note
+
+    args, _ = executor.apply_proxy("nuclei", ["-u", "http://x"], 8090)
+    assert args[:2] == ["-proxy", "http://127.0.0.1:8090"], args
+
+    args, _ = executor.apply_proxy("sqlmap", ["-u", "http://x"], 8090)
+    assert args[0] == "--proxy=http://127.0.0.1:8090", args
+
+    # normalisation: a path-prefixed spelling must still be recognised
+    args, _ = executor.apply_proxy("/usr/bin/curl", ["http://x"], 8090)
+    assert args[0] == "-x", f"a path-prefixed binary lost its proxy flag: {args}"
+
+    # THE HONEST CASE
+    unknown_args, unknown_note = executor.apply_proxy("someunknowntool", ["-a"], 8090)
+    assert unknown_args == ["-a"], f"an unknown tool's args were rewritten: {unknown_args}"
+    assert "not captured" in unknown_note.lower(), (
+        f"an unknown tool was left unproxied with no warning: {unknown_note!r}"
+    )
+    print("  per-tool proxy flags, path-normalised, unknown tool left alone and reported: PASS")
+
+
+def test_the_rewrite_cancels_a_prevalidated_verdict() -> None:
+    """*** CRITICAL 2, WEARING A NEW HAT. ***
+
+    A caller that validated the ORIGINAL request holds a verdict about a DIFFERENT command line
+    than the one about to run. iter_run therefore discards `prevalidated` whenever the rewrite
+    actually changed the argv, and re-validates what will execute.
+    """
+    import inspect
+
+    src = inspect.getsource(proxy_executor().iter_run)
+    rewrite_at = src.find("apply_proxy_to_request")
+    validate_at = src.find("validate_request(request)")
+    assert rewrite_at != -1, "iter_run does not apply the proxy rewrite at all"
+    assert validate_at != -1, "iter_run does not validate"
+    assert rewrite_at < validate_at, (
+        "iter_run validates BEFORE rewriting the argv — the gate would classify a command line "
+        "different from the one that runs"
+    )
+    assert "prevalidated = False" in src, (
+        "the rewrite does not cancel a prevalidated verdict — a router that validated the "
+        "original request would let the rewritten one through ungated"
+    )
+    print("  the rewrite precedes validation and cancels a stale verdict: PASS")
+
+
+def proxy_executor():
+    from cockpit import executor
+    return executor
+
+
+def test_a_request_that_did_not_ask_is_untouched() -> None:
+    """proxy=False must be byte-identical to before this feature existed."""
+    from cockpit.models import ExecRequest
+
+    req = ExecRequest(command="curl", args=["http://x"], approved=True)
+    out, note = proxy_executor().apply_proxy_to_request(req)
+    assert out is req and note == "", f"a non-proxy request was altered: {out.args!r} {note!r}"
+
+    # and an unknown tool WITH proxy=True is also untouched, so `prevalidated` survives
+    unknown = ExecRequest(command="someunknowntool", args=["-a"], approved=True, proxy=True)
+    out2, note2 = proxy_executor().apply_proxy_to_request(unknown)
+    assert out2 is unknown and note2 == "", (
+        "an unrewritten request reported a change, which would needlessly discard a "
+        f"prevalidated verdict: {note2!r}"
+    )
+    print("  proxy=False and unknown-tool requests are returned untouched: PASS")
+
+
 def test_the_container_follows_the_mode() -> None:
     """Lab runs in the isolated sandbox; an engagement run in the open one. Picking the wrong
     container would either put a real-target proxy in the egress-less box (it would capture
@@ -207,5 +285,8 @@ if __name__ == "__main__":
     test_the_daemon_gets_no_stdin_writer()
     test_a_refused_start_spawns_nothing()
     test_stopping_is_not_gated()
+    test_the_proxy_flag_is_per_tool_and_never_silent()
+    test_the_rewrite_cancels_a_prevalidated_verdict()
+    test_a_request_that_did_not_ask_is_untouched()
     test_the_container_follows_the_mode()
     print("ALL ZAP proxy gating locks pass")

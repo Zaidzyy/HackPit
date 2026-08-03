@@ -169,29 +169,62 @@ def test_a_udp_datagram_crosses_the_forwarder() -> None:
     backend = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     backend.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     backend.bind(("127.0.0.1", target))
-    backend.settimeout(5)
+    backend.settimeout(0.5)
     seen: list[bytes] = []
+    serving = threading.Event()
+    done = threading.Event()
 
+    # *** WHY THIS RETRIES, AND WHY THAT IS NOT PAPERING OVER A BUG. ***
+    # The forwarder gives each upstream socket 200ms to answer (forward.py: sock.settimeout(0.2))
+    # and DROPS the datagram if it does not, which is correct: a relay loop must not block on a
+    # dead upstream. UDP has no retransmit, so a single send racing a backend thread that has not
+    # been scheduled yet is lost silently — and the client then sits until its own timeout. This
+    # test failed roughly two runs in three, locally and in CI, for exactly that reason.
+    # A real DNS client retries; so does this one. What is under test is that a datagram CROSSES
+    # the forwarder and the reply is matched back to its source — not that UDP is reliable.
     def _serve() -> None:
-        data, source = backend.recvfrom(1024)
-        seen.append(data)
-        backend.sendto(b"udp-reply", source)
+        serving.set()
+        while not done.is_set():
+            try:
+                data, source = backend.recvfrom(1024)
+            except OSError:            # socket.timeout is an OSError subclass
+                continue
+            seen.append(data)
+            try:
+                backend.sendto(b"udp-reply", source)
+            except OSError:
+                return
 
     server = threading.Thread(target=_serve, daemon=True)
     server.start()
+    assert serving.wait(timeout=5), "the stand-in backend thread never started"
 
     listener = F.UDPRedirector(public, bind="127.0.0.1")
     listener.start()
+    reply = b""
     try:
         client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        client.settimeout(5)
-        client.sendto(b"udp-query", ("127.0.0.1", public))
-        reply, _ = client.recvfrom(1024)
+        client.settimeout(1)
+        deadline = time.monotonic() + 20
+        attempts = 0
+        while time.monotonic() < deadline:
+            attempts += 1
+            client.sendto(b"udp-query", ("127.0.0.1", public))
+            try:
+                reply, _ = client.recvfrom(1024)
+                break
+            except OSError:
+                continue
         client.close()
-        server.join(timeout=5)
+        assert reply, (
+            f"no reply after {attempts} datagram(s) over 20s — this is no longer the "
+            "scheduling race the retry exists for; the forwarder is not relaying UDP"
+        )
     finally:
+        done.set()
         listener.stop()
         backend.close()
+        server.join(timeout=5)
 
     assert seen and seen[0] == b"udp-query", seen
     assert reply == b"udp-reply", reply

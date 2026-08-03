@@ -56,9 +56,11 @@ assessment.
   with its own spec — the same "both, X first" split part 1 used.
 - **Driving ZAP's scanner through the API.** Scanning stays on part 1's gated command path
   (`zaproxy -cmd -quickurl`). This surface records; it does not attack.
-- **A read-only API allowlist.** Considered and dropped as machinery (2026-08-03, Zaid). The
-  history reader needs exactly two fixed URLs and takes no endpoint parameter, so there is no
-  variable to constrain and nothing to allow-list — §7 states the resulting invariant plainly.
+- **Any enforcement that the history reader stays read-only.** Both candidates were declined
+  (2026-08-03, Zaid): a runtime allowlist validating URLs against ZAP's API surface, and a
+  three-line static test grepping the module for `action/`. The reader is still *written* to be
+  read-only — two module-level URL constants, no endpoint parameter anywhere — but that is a
+  convention with nothing behind it. §7.3 records the consequence and the review rule.
 
 ## 4. Components
 
@@ -170,16 +172,30 @@ So:
 1. **No published port.** The daemon binds `127.0.0.1` inside the container. `isolation_proof.sh`
    must still pass, and the proof in §9 asserts host-unreachability directly.
 2. **`docker exec` remains the only channel** into a sandbox. No socket from backend to container.
-3. **The history reader cannot act.** It issues two fixed URLs
-   (`core/view/numberOfMessages`, `core/view/messages`) and takes no endpoint parameter, so an
-   `action/` call is not expressible on that path.
+3. **The history reader cannot act — by construction, and NOTHING CHECKS THIS.**
 
-   **This is NOT the allowlist dropped in §3, and must not grow into it.** That was runtime
-   machinery validating URLs against ZAP's API surface. This is a property of writing the reader
-   the simplest way — no dynamic URL construction — plus a three-line static test that the
-   module's source contains no `action/` or `/OTHER/` string. If the reader ever *does* need a
-   variable endpoint, this invariant is void and the question reopens as its own decision rather
-   than being quietly satisfied by a scan.
+   The reader issues two fixed URLs, held as module-level constants:
+
+   ```python
+   _VIEW_COUNT = "/JSON/core/view/numberOfMessages/"
+   _VIEW_MSGS  = "/JSON/core/view/messages/"
+   ```
+
+   No function in the module takes a path, endpoint or URL argument, so an `action/` call is not
+   expressible without writing a visibly new function.
+
+   **BOTH enforcement options were considered and BOTH declined (2026-08-03, Zaid):** the runtime
+   allowlist (§3) and a static source test. This is therefore a *convention*, not a guarded
+   invariant — the only one in this build with nothing behind it.
+
+   **Why that placement matters, stated plainly rather than buried:** the history read is
+   deliberately ungated (§4.2), so it is the one path here with no human approval step. Anything
+   that reaches ZAP from it reaches ZAP unapproved. Today that is two read URLs and the risk is
+   zero. The exposure is entirely to a *future* edit adding an action call to this module.
+
+   **So the rule is a review rule:** any change to `cockpit/proxy.py` that introduces a URL
+   parameter, or any URL other than the two constants above, reopens this decision. It does not
+   get to be satisfied quietly.
 4. **The gated argv is the executed argv** — one derivation, asserted.
 5. **No new execution capability.** The `proxy` flag rewrites arguments on an already-gated
    request.
@@ -197,7 +213,6 @@ Hermetic (`test_zap_proxy.py`, `test_zap_proxy_safety.py`):
 - malformed/partial messages yield partial records and never raise
 - the per-tool proxy flag: correct spelling per binary, and an **unknown tool is left unchanged
   and reported**, with a control
-- the module's source contains no `action/` or `/OTHER/` URL (invariant 3)
 - a known secret in a captured body does not survive into a rendered report, with a control
 
 Proof (`docker/proof/zap_proxy_proof.sh`), for what no hermetic test can assert:

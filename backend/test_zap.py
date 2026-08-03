@@ -195,6 +195,21 @@ def test_the_file_registry_does_not_claim_every_json_file() -> None:
     print("  -zap.json is claimed, a plain .json file is not: PASS")
 
 
+def test_detection_describes_the_names_that_actually_run() -> None:
+    """ALIASES already maps 'zap'/'zaproxy', but runs are zap-baseline.py / zap-full-scan.py.
+    Without these the detection panel goes silent on every ZAP run while looking healthy —
+    a surface reporting nothing is indistinguishable from one with nothing to report."""
+    from detection.catalog import ALIASES
+
+    for name in ("zap-baseline.py", "zap-full-scan.py"):
+        assert name in ALIASES, f"{name} is not in detection ALIASES — the panel will be blank"
+        assert ALIASES[name] == "web_vuln_scan", f"{name} -> {ALIASES[name]!r}"
+
+    # positive control: the pre-existing spellings are untouched
+    assert ALIASES["zap"] == "web_vuln_scan" and ALIASES["zaproxy"] == "web_vuln_scan"
+    print("  detection covers the program names that actually execute: PASS")
+
+
 if __name__ == "__main__":
     test_alerts_become_findings_with_mapped_severity()
     test_instances_become_endpoints()
@@ -202,4 +217,5 @@ if __name__ == "__main__":
     test_garbage_never_raises_and_yields_nothing()
     test_the_stdout_registry_is_keyed_the_way_program_name_spells_it()
     test_the_file_registry_does_not_claim_every_json_file()
+    test_detection_describes_the_names_that_actually_run()
     print("ALL ZAP parser tests pass")

@@ -103,6 +103,53 @@ def test_history_survives_a_dead_daemon() -> None:
     print("  history against a dead container returns empty, never raises: PASS")
 
 
+def test_a_captured_secret_does_not_reach_a_report() -> None:
+    """*** THE ONE PLACE REDACTION APPLIES. ***
+
+    Bodies are raw in the store and the panel (spec §6). A report is the artefact handed to a
+    client or a grader, so that is where masking belongs. Asserted against the REAL captured
+    POST, which genuinely carries a password.
+    """
+    from report import redact_captured_body
+
+    real_body = proxy.parse_message(_by_method("POST"), "c").request.body
+    assert "hunter2" in real_body, "the fixture no longer carries a password — recapture it"
+
+    out = redact_captured_body(real_body)
+    assert "hunter2" not in out, f"a password survived into report text: {out!r}"
+    assert "password" in out, (
+        f"the parameter NAME was destroyed too: {out!r} — the reader must still see WHICH "
+        "parameter carried a credential, the same discipline secretargs.redact_argv follows"
+    )
+
+    # POSITIVE CONTROL: a redactor that blanks everything would satisfy the line above while
+    # making every report useless. Ordinary params must survive untouched.
+    plain = redact_captured_body("q=apple&page=2")
+    assert plain == "q=apple&page=2", f"redaction is eating ordinary parameters: {plain!r}"
+
+    # and the json shape, since ZAP captures API traffic too
+    js = redact_captured_body('{"user":"admin","token":"abc123"}')
+    assert "abc123" not in js and "admin" in js, js
+    print("  a captured password is redacted in reports; ordinary params survive: PASS")
+
+
+def test_the_routes_exist_and_history_is_read_only() -> None:
+    """The endpoints ship WITH the screen (build #13 part 1's lesson: four /cockpit/exposure
+    endpoints shipped with no caller and closing that took a whole later build)."""
+    from cockpit.router import router
+
+    paths = {r.path for r in router.routes}
+    for p in ("/cockpit/proxy", "/cockpit/proxy/status", "/cockpit/proxy/history",
+              "/cockpit/proxy/{pid}"):
+        assert p in paths, f"{p} is not registered; have: {sorted(x for x in paths if 'proxy' in x)}"
+
+    methods = {(r.path, m) for r in router.routes for m in getattr(r, "methods", set())}
+    assert ("/cockpit/proxy/history", "GET") in methods, "history is not a GET"
+    assert not any(p == "/cockpit/proxy/history" and m in {"POST", "PUT", "DELETE", "PATCH"}
+                   for p, m in methods), "history accepts a mutating method"
+    print("  4 proxy routes registered; history is GET-only: PASS")
+
+
 if __name__ == "__main__":
     test_a_real_message_becomes_an_exchange()
     test_a_malformed_response_line_still_yields_the_request()
@@ -110,4 +157,6 @@ if __name__ == "__main__":
     test_bodies_are_kept_raw()
     test_captured_requests_become_endpoints()
     test_history_survives_a_dead_daemon()
+    test_a_captured_secret_does_not_reach_a_report()
+    test_the_routes_exist_and_history_is_read_only()
     print("ALL ZAP proxy history tests pass")

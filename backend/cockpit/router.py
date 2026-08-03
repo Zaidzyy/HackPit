@@ -51,6 +51,7 @@ from . import session as live_session
 from . import kali as kali_mod
 from . import repeater as repeater_mod
 from . import terminal as terminal_mod
+from . import proxy as proxy_mod
 from . import tunnels as tunnels_mod
 from . import winprofiles as winprofiles_mod
 from . import winrm_transport
@@ -680,6 +681,71 @@ def stop_tunnel(tid: str) -> tunnels_mod.Tunnel:
         return tunnels_mod.stop_tunnel(tid)
     except tunnels_mod.TunnelRefused as exc:
         raise HTTPException(status_code=404, detail={"reason": str(exc)})
+
+
+# --------------------------------------------------------------------------- #
+# the recording proxy (build #14 part 2) — GATED start, READ-ONLY history
+# --------------------------------------------------------------------------- #
+@router.get("/proxy/status")
+def get_proxy_status() -> dict[str, Any]:
+    """Sandbox availability + live count — drives the UI banner. Read-only."""
+    return proxy_mod.status()
+
+
+@router.post("/proxy", response_model=proxy_mod.Proxy)
+def start_proxy(req: proxy_mod.ProxyStartRequest) -> proxy_mod.Proxy:
+    """Start the ZAP recording proxy inside a sandbox.
+
+    HUMAN-ONLY AND GATED. ``executor.validate_request`` runs before anything spawns, so an
+    unapproved or un-red-confirmed start leaves NOTHING running. The red-confirm is not
+    ceremonial here: the proxy records full request and response bodies, so it sees credentials,
+    session tokens and payloads in cleartext.
+
+    A SAFETY refusal (target / approval / danger / isolation) is **403** naming the gate; an
+    AVAILABILITY problem (sandbox down, one already live) is **409**. Nothing runs on either.
+
+    The daemon binds 127.0.0.1 INSIDE the container and no port is published, so the API it
+    exposes is unreachable from the host — verified by docker/proof/zap_proxy_proof.sh. That is
+    what keeps this from being the ungated control channel build #14 part 1 refused.
+    """
+    try:
+        return proxy_mod.start_proxy(req)
+    except proxy_mod.ProxyRefused as exc:
+        status_code = 409 if exc.gate in {"unavailable", "limit"} else 403
+        raise HTTPException(status_code=status_code, detail={
+            "gate": exc.gate,
+            "reason": exc.reason,
+            "dangerous_flags": exc.dangerous_flags,
+        })
+
+
+@router.get("/proxy", response_model=list[proxy_mod.Proxy])
+def list_proxies() -> list[proxy_mod.Proxy]:
+    """Every proxy (starting/listening/down). Read-only."""
+    return proxy_mod.list_proxies()
+
+
+@router.delete("/proxy/{pid}", response_model=proxy_mod.Proxy)
+def stop_proxy(pid: str) -> proxy_mod.Proxy:
+    """Stop a running proxy. NOT gated — stopping REMOVES capability, so a gate that could
+    refuse it would make the system less safe."""
+    try:
+        return proxy_mod.stop_proxy(pid)
+    except proxy_mod.ProxyRefused as exc:
+        raise HTTPException(status_code=404, detail={"reason": exc.reason})
+
+
+@router.get("/proxy/history", response_model=list[proxy_mod.CapturedExchange])
+def proxy_history(
+    container: str = Query(..., description="Sandbox container the proxy runs in."),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+    start: int = Query(0, ge=0),
+    count: int = Query(50, ge=1, le=500),
+) -> list[proxy_mod.CapturedExchange]:
+    """Captured exchanges, newest window first. READ-ONLY and deliberately UNGATED — a panel
+    that refreshes cannot demand approval per refresh, the same reason lifecycle's port probe
+    runs ungated. Bodies come back RAW; redaction applies only when a report is rendered."""
+    return proxy_mod.history(container, port, start=start, count=count)
 
 
 class RouteRequest(BaseModel):

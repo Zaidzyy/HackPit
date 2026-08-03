@@ -21,6 +21,8 @@ This module imports ``llm`` (the provider-swappable chat layer) but not FastAPI.
 
 from __future__ import annotations
 
+from cockpit.secretargs import REDACTED
+
 import re
 
 import llm
@@ -903,3 +905,51 @@ def _prepend_after_title(md: str, block: str) -> str:
         if ln.lstrip().startswith("#"):
             return "\n".join(lines[: i + 1] + ["", block, ""] + lines[i + 1:])
     return block + "\n\n" + md
+
+
+# --------------------------------------------------------------------------- #
+# captured-traffic redaction — THE ONE PLACE IT APPLIES (build #14 part 2)
+# --------------------------------------------------------------------------- #
+# The recording proxy stores request/response bodies RAW, deliberately: the request that matters
+# on an engagement is usually the one carrying the token, and hiding it from the operator would
+# defeat the feature. That decision (2026-08-03) put redaction HERE instead — a report is the
+# artefact handed to a client or a grader, and a session token pasted into an OSCP submission is
+# an easy and irreversible mistake.
+#
+# Masks VALUES whose parameter NAME looks secret, and nothing else. Blanking whole bodies would
+# make the evidence useless, which is the failure mode the secretargs module already warns about:
+# a redactor that eats the audit trail it exists to protect.
+_SECRET_PARAM_NAMES = (
+    "password", "passwd", "pwd", "pass", "secret", "token", "apikey", "api_key",
+    "access_token", "refresh_token", "session", "sessionid", "session_id", "auth",
+    "authorization", "cookie", "csrf", "private_key", "client_secret",
+)
+_SECRET_PARAM_RE = re.compile(
+    r"(?i)\b(" + "|".join(re.escape(n) for n in _SECRET_PARAM_NAMES) + r")\b"
+)
+# form-encoded  name=value   (value runs to & or end)
+_FORM_PAIR_RE = re.compile(r"(?i)([A-Za-z0-9_.\-\[\]]+)=([^&\s]*)")
+# json          "name": "value"
+_JSON_PAIR_RE = re.compile(r'(?i)("([A-Za-z0-9_.\-]+)"\s*:\s*)"([^"]*)"')
+
+
+def redact_captured_body(body: str) -> str:
+    """A captured request/response body with secret-looking VALUES masked. Never raises.
+
+    Only the value is replaced, so the reader still sees WHICH parameter carried a credential —
+    the same discipline ``secretargs.redact_argv`` follows for argv.
+    """
+    text = str(body or "")
+    if not text:
+        return text
+    try:
+        def _form(m: "re.Match[str]") -> str:
+            return f"{m.group(1)}={REDACTED}" if _SECRET_PARAM_RE.search(m.group(1)) else m.group(0)
+
+        def _json(m: "re.Match[str]") -> str:
+            return f'{m.group(1)}"{REDACTED}"' if _SECRET_PARAM_RE.search(m.group(2)) else m.group(0)
+
+        text = _JSON_PAIR_RE.sub(_json, text)
+        return _FORM_PAIR_RE.sub(_form, text)
+    except Exception:  # noqa: BLE001 - redaction must never break a report
+        return REDACTED

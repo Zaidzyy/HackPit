@@ -390,6 +390,42 @@ def _wait_ready(container: str, port: int) -> bool:
     return False
 
 
+def clash_refusal(container: str, port: int) -> ProxyRefused | None:
+    """The refusal a new proxy in ``container`` would earn from one already there. PURE.
+
+    *** ONE PROXY PER CONTAINER, NOT PER PORT — AND THE REASON IS ZAP'S, NOT OURS. ***
+
+    ZAP takes an exclusive lock on its HOME DIRECTORY (``$HOME/.ZAP``), not on its port, so a
+    second daemon in the same container dies at startup with "The home directory is already in
+    use" whatever port it was given. This check was port-scoped until build #14 part 3's proof
+    hit it: a leftover daemon on 8092 killed a fresh one on 8093, and the only evidence was a
+    line in the JVM's log inside the container.
+
+    Nothing was UNSAFE about the old behaviour — status is observed, so the dead proxy reported
+    itself down rather than lying. It was unexplainable, which is its own kind of defect: the
+    operator saw a proxy that would not start, and no reason anywhere in the UI.
+
+    Split out of :func:`start_proxy` so it can be tested WITHOUT Docker. The first version of its
+    test drove the whole of ``start_proxy`` and passed locally and failed in CI, where there is
+    no Docker and the isolation gate refuses first — a test that silently depended on the
+    developer's stack being up. A hermetic suite has to stay hermetic.
+    """
+    with _lock:
+        clash = next(
+            (p for p in _models.values() if p.container == container and p.status != "down"),
+            None,
+        )
+    if clash is None:
+        return None
+    return ProxyRefused(
+        f"a proxy is already live on {clash.container}:{clash.port} — stop it first"
+        + ("" if clash.port == port else
+           ". ZAP locks its home directory rather than its port, so a second daemon on "
+           f":{port} in the same container would fail to start"),
+        gate="limit",
+    )
+
+
 def start_proxy(req: ProxyStartRequest) -> Proxy:
     """Start the recording proxy in the sandbox. GATED — nothing spawns on a refusal."""
     from . import lifecycle
@@ -407,31 +443,9 @@ def start_proxy(req: ProxyStartRequest) -> Proxy:
         )
 
     pid = f"zapproxy-{container}-{req.port}"
-    # ONE PROXY PER CONTAINER, NOT PER PORT — and the reason is ZAP's, not ours.
-    #
-    # ZAP takes an exclusive lock on its HOME DIRECTORY ($HOME/.ZAP), not on its port. A second
-    # daemon in the same container therefore dies at startup with "The home directory is already
-    # in use", whatever port it was given. This check was port-scoped until build #14 part 3's
-    # proof hit it: a leftover daemon on 8092 killed a fresh one on 8093, and the only evidence
-    # was a line in the JVM's log inside the container.
-    #
-    # Nothing was UNSAFE about the old behaviour — status is observed, so the dead proxy reported
-    # itself down rather than lying. It was unexplainable, which is its own kind of defect: the
-    # operator saw a proxy that would not start and no reason anywhere in the UI.
-    with _lock:
-        clash = next(
-            (p for p in _models.values() if p.container == container and p.status != "down"),
-            None,
-        )
+    clash = clash_refusal(container, req.port)
     if clash is not None:
-        same_port = clash.port == req.port
-        raise ProxyRefused(
-            f"a proxy is already live on {clash.container}:{clash.port} — stop it first"
-            + ("" if same_port else
-               f". ZAP locks its home directory rather than its port, so a second daemon on "
-               f":{req.port} in the same container would fail to start"),
-            gate="limit",
-        )
+        raise clash
 
     argv = server_argv_for(req)
     # interactive=False: a daemon needs no stdin, so it gets DEVNULL and proc.stdin is None.

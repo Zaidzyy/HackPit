@@ -70,9 +70,15 @@ def test_an_off_lab_target_is_refused_by_the_real_scope_gate() -> None:
         "the scope extractor is not seeing the host inside the URL, and an out-of-scope scan "
         "would only be stopped by luck"
     )
-    assert proxy.validate_scan(_req()) is None, (
-        "the lab target is refused too — the gate is refusing everything, so the check above "
-        "proves nothing"
+    # CONTROL, written to stay HERMETIC. The lab target must not be refused at the TARGET gate —
+    # it may still be refused at `sandbox`, because the isolation gate asks whether Docker is up
+    # and CI has no Docker. Asserting `is None` here passed locally and would fail in CI, which
+    # is a test quietly depending on the developer's stack being up; part 2's locks phrase every
+    # control this way for the same reason.
+    other = proxy.validate_scan(_req())
+    assert other is None or other.gate != "target", (
+        "the lab target is refused at the target gate too — the gate is refusing every host, so "
+        "the check above proves nothing"
     )
     print("  an off-lab scan target is refused at the target gate, control holds: PASS")
 

@@ -207,7 +207,13 @@ def test_one_proxy_per_container_not_per_port() -> None:
     8093 to a leftover on 8092, and the only evidence was a line in the JVM's log inside the
     container. The refusal must therefore be container-scoped, and it must SAY why, since the
     operator's mental model ("different port, different daemon") is the wrong one here.
+
+    HERMETIC, and the first version of it was not: it drove the whole of ``start_proxy``, which
+    passed locally and failed in CI, where there is no Docker and the isolation gate refuses
+    first. The clash check is a pure function for exactly that reason.
     """
+    import inspect
+
     from cockpit import config
 
     live = proxy.Proxy(
@@ -218,25 +224,36 @@ def test_one_proxy_per_container_not_per_port() -> None:
         proxy._models.clear()
         proxy._models[live.id] = live
     try:
-        req = proxy.ProxyStartRequest(port=8099, approved=True, dangerous_ack=True)
-        try:
-            proxy.start_proxy(req)
-        except proxy.ProxyRefused as exc:
-            assert exc.gate == "limit", exc.gate
-            assert "home directory" in exc.reason, (
-                f"the refusal does not explain WHY a different port is refused: {exc.reason!r}. "
-                "Without that, the operator reads it as an off-by-one in our own bookkeeping."
-            )
-        else:
-            raise AssertionError(
-                "a second proxy on another port in the same container was ACCEPTED — it would "
-                "have died on ZAP's home-directory lock with no reason shown anywhere"
-            )
+        other_port = proxy.clash_refusal(live.container, 8099)
+        assert other_port is not None, (
+            "a second proxy on ANOTHER port in the same container was accepted — it would have "
+            "died on ZAP's home-directory lock with no reason shown anywhere"
+        )
+        assert other_port.gate == "limit", other_port.gate
+        assert "home directory" in other_port.reason, (
+            f"the refusal does not explain WHY a different port is refused: "
+            f"{other_port.reason!r}. Without that, the operator reads it as an off-by-one in "
+            "our own bookkeeping."
+        )
+
+        same_port = proxy.clash_refusal(live.container, 8090)
+        assert same_port is not None and same_port.gate == "limit"
+        assert "home directory" not in same_port.reason, (
+            "the same-port refusal blames the home-directory lock — that is not why a second "
+            f"proxy on the SAME port is refused: {same_port.reason!r}"
+        )
 
         # control: a DIFFERENT container is unaffected — the lock is per home directory, and the
         # engage sandbox has its own.
-        other = proxy.container_for(proxy.ProxyStartRequest(engagement_id="e1"))
-        assert other != live.container, "the two sandboxes collapsed to one container"
+        assert proxy.clash_refusal(config.ENGAGE_SANDBOX_CONTAINER, 8090) is None, (
+            "a proxy in the lab sandbox blocks one in the engage sandbox — they have separate "
+            "home directories, so the check has become container-blind"
+        )
+
+        # and the gated start must actually USE it, or the refusal above is decorative
+        assert "clash_refusal" in inspect.getsource(proxy.start_proxy), (
+            "start_proxy no longer calls clash_refusal — the check exists but never fires"
+        )
     finally:
         with proxy._lock:
             proxy._models.clear()

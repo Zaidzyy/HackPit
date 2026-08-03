@@ -1855,6 +1855,8 @@ The history read is deliberately **ungated** — a panel that refreshes cannot d
 
 ### Verification
 
-Suite **68 files, 0 failures**, up from 66. `zap_proxy_proof.sh` 7/0. The `:proxy` screen ships **with** its endpoints — build #13 part 1 shipped four `/cockpit/exposure` endpoints with no caller and closing that took a whole later build. `tsc --noEmit` and `next build` both exit 0, and the screen adds zero lint errors.
+Suite **68 files, 0 failures**, up from 66. `zap_proxy_proof.sh` 7/0.
+
+That count needed one more fix to be true, and the honest version is worth recording. `test_redirector.py` began failing four runs out of four with `WinError 10013` — its `_free_port()` helper picked a port by binding a **TCP** socket, and the UDP test then bound **UDP** on that same number. TCP-free proves nothing about UDP: Windows reserves large UDP ranges for Hyper-V/WSL (on this box `50000-50059` and everything from `53879` up). It had passed 8/8 earlier the same day, which is the tell — the exclusion table is environmental and moves. The helper now takes the socket kind and probes **both** the public port and its tunnel port for it. That is the second time a Windows/Linux ephemeral-range difference has broken this one file. The `:proxy` screen ships **with** its endpoints — build #13 part 1 shipped four `/cockpit/exposure` endpoints with no caller and closing that took a whole later build. `tsc --noEmit` and `next build` both exit 0, and the screen adds zero lint errors.
 
 **Not built, deliberately:** browser interception (it needs a published port, which breaks the lab sandbox's isolation — its own exposure decision), and driving ZAP's scanner through the API (scanning stays on part 1's gated command path).

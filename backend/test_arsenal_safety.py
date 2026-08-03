@@ -198,6 +198,11 @@ _MUST_FIRE = frozenset({
     "commix", "SSTImap", "weevely", "weevely3",
     # persistence that will execute a payload with no operator present
     "SharPersist", "SharPersist.exe",
+    # ACTIVE web scan — sends live injection payloads at every parameter it discovered. The
+    # PASSIVE sibling (zap-baseline.py) is in _MUST_NOT_FIRE below; that split is the point.
+    # ZAP is deliberately stricter than sqlmap/nikto/dalfox here — a recorded decision
+    # (2026-08-03), not an oversight. See cockpit/allowlist.py::_ACTIVE_WEB_SCANNERS.
+    "zap-full-scan.py",
     # remote code execution on a domain host
     "psexec", "psexec.py", "impacket-psexec", "wmiexec", "wmiexec.py", "impacket-wmiexec",
     "smbexec", "smbexec.py", "impacket-smbexec", "evil-winrm",
@@ -226,6 +231,9 @@ _MUST_NOT_FIRE = frozenset({
     "whatweb", "arjun", "paramspider", "katana", "gau", "getallurls", "waybackurls", "dirsearch",
     "wafw00f", "testssl", "testssl.sh", "jwt_tool", "jwt-tool", "jwt_tool.py", "wfuzz",
     "hakrawler", "sslscan", "nomore403", "crlfuzz", "getjs", "jsluice", "subjs",
+    # ZAP's PASSIVE pass: spider + passive rules, no attack traffic. Its ACTIVE sibling
+    # (zap-full-scan.py) is in _MUST_FIRE above.
+    "zap-baseline.py",
     "gf", "qsreplace", "unfurl",
     # pipeline heads the templates use — shell builtins, not tools
     "cat", "echo",
@@ -271,7 +279,14 @@ _MUST_NOT_FIRE = frozenset({
 # The bare binary is deliberately CLEAN (it has a legitimate read-only mode that must not train
 # the operator to click through) but at least one catalogued template MUST fire, because that
 # template mutates the directory or mints credentials. Both halves are asserted.
-_ARGUMENT_DEPENDENT = frozenset({"certipy", "certipy-ad", "bloodyAD", "rubeus", "Rubeus.exe"})
+_ARGUMENT_DEPENDENT = frozenset({"certipy", "certipy-ad", "bloodyAD", "rubeus", "Rubeus.exe",
+                                 # `zap` is the catalog's tool NAME, never a template argv[0].
+                                 # Bare, it is a launcher with passive modes and must stay clean;
+                                 # its zap-full-scan.py template fires. Exactly this bucket's
+                                 # shape. NOTE: `zap -cmd -autorun plan.yaml` would hide its own
+                                 # aggression inside the plan file, which is why the catalog
+                                 # ships no autorun template — see §4 of the design spec.
+                                 "zap"})
 
 # NOT a binary: a subcommand typed inside an interactive console (the sliver client, the Empire
 # console, mimikatz, the impacket mssql shell). These never appear as argv[0] of a docker exec.

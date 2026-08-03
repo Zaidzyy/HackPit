@@ -194,6 +194,20 @@ _RCE_TOOLS = frozenset({
 })
 # Installs something that will execute a payload later, without the operator present.
 _PERSISTENCE_TOOLS = frozenset({"sharpersist"})
+# ACTIVE web vulnerability scanners — these SEND live injection payloads (SQLi, XSS, command
+# injection, path traversal) at every parameter they discover. The PASSIVE sibling of the same
+# tool is deliberately NOT here: gating a spider-and-observe crawl identically to a full attack
+# run would make the confirm meaningless for the tool, which is the same argument the AD
+# ENUMERATION note in test_arsenal_safety._MUST_NOT_FIRE already makes.
+#
+# ZAP is deliberately STRICTER than the rest of its family here — sqlmap/nikto/dalfox/nuclei
+# remain unflagged. That inconsistency is a recorded decision (2026-08-03), not an oversight:
+# a ZAP full scan is the broadest of the set, and erring safe on a new tool changes no existing
+# behaviour. See docs/superpowers/plans/2026-08-03-zap-scanner-integration.md before "fixing" it.
+#
+# Keyed on _tool_name() output, so NO `.py` suffix — that normaliser strips it. The parser
+# registry in state/parsers.py is keyed the other way, because program_name() keeps `.py`.
+_ACTIVE_WEB_SCANNERS = frozenset({"zap-full-scan"})
 # Flags that mean "run this inline code / command".
 _EVAL_FLAGS = frozenset({"-c", "-e", "--command", "--eval", "--exec", "-code"})
 # Argument shapes that turn an otherwise-clean tool into OS command execution or a file write
@@ -373,6 +387,11 @@ def dangerous_command_heuristic(command: str, args: list[str]) -> list[str]:
         reasons.append(f"{cmd}: turns a vulnerability into command execution / a shell")
     if cmd in _PERSISTENCE_TOOLS:
         reasons.append(f"{cmd}: installs persistence that executes a payload")
+    if cmd in _ACTIVE_WEB_SCANNERS:
+        reasons.append(
+            f"{cmd}: active web scan — sends live injection payloads at every discovered "
+            "parameter"
+        )
 
     # Argument shapes that turn an otherwise-clean tool into remote command execution.
     exec_flags = sorted(flags & _TOOL_EXEC_FLAGS.get(cmd, frozenset()))
@@ -516,6 +535,8 @@ def _script_name_markers() -> tuple[tuple[str, str], ...]:
         (_TUNNEL_TOOLS, "covert tunnel / C2 channel — carries arbitrary traffic"),
         (_RCE_TOOLS, "turns a vulnerability into command execution / a shell"),
         (_PERSISTENCE_TOOLS, "installs persistence that executes a payload"),
+        (_ACTIVE_WEB_SCANNERS,
+         "active web scan — sends live injection payloads at every discovered parameter"),
         (_AD_CRED_DUMP, "dumps/replicates domain credentials"),
         (_AD_REMOTE_EXEC, "remote code execution on a domain host"),
         (_AD_DIR_WRITE, "modifies the directory / coerces or relays authentication"),

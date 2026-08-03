@@ -571,6 +571,66 @@
       ]
     },
     {
+      "name": "zap",
+      "category": "web",
+      "purpose": "OWASP ZAP — spiders a web application and reports vulnerabilities. The baseline scan crawls and analyses traffic passively; the full scan additionally sends live injection payloads at every parameter it discovered.",
+      "phases": [
+        "enumeration",
+        "exploitation"
+      ],
+      "techniques": [
+        "web crawling",
+        "passive vulnerability analysis",
+        "active injection scanning",
+        "OWASP Top 10 coverage"
+      ],
+      "docs": "https://www.zaproxy.org/docs/",
+      "templates": [
+        {
+          "label": "Baseline scan (passive, report to stdout)",
+          "template": "zap-baseline.py -t <target> -J /dev/stdout",
+          "note": "Spider + passive rules only. Sends no attack traffic, so it needs approval but no red-confirm. Start here."
+        },
+        {
+          "label": "Baseline scan with the AJAX spider (SPA targets)",
+          "template": "zap-baseline.py -t <target> -j -J /dev/stdout",
+          "note": "-j adds the AJAX spider. Slower, but the traditional spider finds almost nothing on a single-page app."
+        },
+        {
+          "label": "Full active scan (report to stdout)",
+          "template": "zap-full-scan.py -t <target> -J /dev/stdout",
+          "note": "ACTIVE: sends real SQLi/XSS/command-injection payloads at every discovered parameter. Requires the red-confirm. Loud, and can take tens of minutes."
+        },
+        {
+          "label": "Full active scan (report to the loot dir)",
+          "template": "zap-full-scan.py -t <target> -J <output>-zap.json",
+          "note": "Engagement form: the -zap.json suffix is what the loot ingester keys on. ACTIVE — same red-confirm as above."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-t",
+          "what": "target URL (include the scheme)"
+        },
+        {
+          "flag": "-J",
+          "what": "write the JSON report to this path"
+        },
+        {
+          "flag": "-j",
+          "what": "use the AJAX spider (needed for single-page apps)"
+        },
+        {
+          "flag": "-m",
+          "what": "minutes to spider before scanning"
+        },
+        {
+          "flag": "-I",
+          "what": "do not fail the run on warnings"
+        }
+      ]
+    },
+    {
       "name": "nikto",
       "category": "web",
       "purpose": "Classic web-server scanner for known-dangerous files, outdated versions and server misconfiguration.",

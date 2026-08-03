@@ -130,6 +130,11 @@ IODINE_CLIENT_BIN = "iodine"
 
 KINDS = ("dnscat2", "iodine")
 
+# The port a DNS tunnel server binds. Named (build #13) so cockpit/exposure.py IMPORTS it
+# rather than repeating the literal — a listener profile must publish the port the listener
+# actually uses, and a constant is the only way that stays true when one of them changes.
+DNS_TUNNEL_PORT = 53
+
 # The tunnel interface's own range. A private range by definition — it belongs to the tunnel,
 # not to anybody's network, least of all the engagement's.
 DEFAULT_TUNNEL_NET = "10.99.53.1/24"
@@ -585,7 +590,7 @@ def start_listener(req: ObfuscationRequest) -> ObfuscationListener:
     # listener that died is a refusal — the operator must not be handed a client one-liner for a
     # channel that does not exist.
     live = lifecycle.observe(
-        watched, container=config.ENGAGE_SANDBOX_CONTAINER, port=53, proto="udp"
+        watched, container=config.ENGAGE_SANDBOX_CONTAINER, port=DNS_TUNNEL_PORT, proto="udp"
     )
     if not live.alive:
         watched.kill()
@@ -651,7 +656,7 @@ def list_listeners() -> list[ObfuscationListener]:
             continue
         ll.model.status = lifecycle.refresh_status(
             ll.watched, ll.model.status,
-            container=config.ENGAGE_SANDBOX_CONTAINER, port=53, proto="udp",
+            container=config.ENGAGE_SANDBOX_CONTAINER, port=DNS_TUNNEL_PORT, proto="udp",
         )
     return [ll.model for ll in live]
 

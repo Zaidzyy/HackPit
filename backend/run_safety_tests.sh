@@ -144,6 +144,10 @@ run_test test_zap_proxy.py "ZAP recording proxy history (REAL captured message -
 
 run_test test_zap_proxy_safety.py "ZAP recording proxy GATING (approval + red-confirm with controls / gated argv == spawned argv / loopback-only bind / lab declares the lab, engagement declares nothing / no stdin writer / gate before spawn / stop ungated / per-tool proxy flag, unknown tool untouched / the rewrite cancels a stale prevalidated verdict)"
 
+run_test test_zap_scan.py "ZAP active-scan mapping (REAL API response -> alerts / High lands as high, not info / plugin ref matches parse_zap so one issue fingerprints once / attacked param survives as an endpoint / malformed never raises / THE REPORT PARSER AND THIS MAPPER ARE NOT INTERCHANGEABLE, with a control / RUNNING+PAUSED block a second scan, STOPPED does not)"
+
+run_test test_zap_scan_safety.py "ZAP active-scan GATING (approval + red-confirm + off-lab target, each with a control / THE SCOPED HOST IS THE ATTACKED HOST / a target carrying '&recurse=true' cannot broaden the scan / non-http refused at construction / gate before ZAP is contacted / concurrency bound read from ZAP not local state / stop ungated / the action URL is built once and reached only from the gated start)"
+
 run_test test_scope_hostcheck.py "Phase-3 scope host-check (no false-reject of files/versions; real hosts still caught)"
 
 run_test test_credvault.py "Phase-3 credential vault (fills user/pass/hash/domain; wrong-kind + non-cred left alone)"

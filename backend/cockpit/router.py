@@ -748,6 +748,122 @@ def proxy_history(
     return proxy_mod.history(container, port, start=start, count=count)
 
 
+# --------------------------------------------------------------------------- #
+# the ACTIVE SCANNER over the same API (build #14 part 3) — GATED start, UNGATED stop
+#
+# The scanner and the read-only history reader share cockpit/proxy.py by decision (2026-08-04,
+# Zaid; spec §6). These routes keep the two apart at the HTTP layer, which is where an operator
+# and a reviewer actually look: exactly one route below can send attack traffic, it is the only
+# POST that takes gate fields, and it is the only one that can answer 403.
+# --------------------------------------------------------------------------- #
+@router.post("/proxy/scan", response_model=proxy_mod.Scan)
+def start_scan(req: proxy_mod.ScanStartRequest) -> proxy_mod.Scan:
+    """Actively scan ONE URL the recording proxy already captured.
+
+    *** THIS SENDS REAL ATTACK TRAFFIC. *** Measured: 376 requests against a single endpoint,
+    carrying SQLi / XSS / command-injection payloads at every parameter — and finding a live
+    High SQL injection. HUMAN-ONLY AND GATED: ``executor.validate_request`` runs against the
+    equivalent command ``zaproxy -quickurl <target>`` BEFORE ZAP is contacted at all, so an
+    unapproved, un-red-confirmed or out-of-scope scan attacks nothing.
+
+    A SAFETY refusal (approval / danger / target / isolation) is **403** naming the gate. An
+    AVAILABILITY problem is **409**: sandbox down, a scan already running, or — the interesting
+    one — ``url_not_found``, which is ZAP refusing to attack a URL it has never seen. That last
+    is a containment property of the whole feature, not an error: the active scanner's reach is
+    bounded by what already passed through the proxy.
+    """
+    try:
+        return proxy_mod.start_scan(req)
+    except proxy_mod.ProxyRefused as exc:
+        status_code = 409 if exc.gate in {"unavailable", "limit", "notfound"} else 403
+        raise HTTPException(status_code=status_code, detail={
+            "gate": exc.gate,
+            "reason": exc.reason,
+            "dangerous_flags": exc.dangerous_flags,
+        })
+
+
+@router.get("/proxy/scan", response_model=list[proxy_mod.Scan])
+def list_scans(
+    container: str = Query(..., description="Sandbox container the proxy runs in."),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+) -> list[proxy_mod.Scan]:
+    """Every scan ZAP knows about, as ZAP reports it. Read-only, ungated — a progress bar polls.
+
+    Counts are OBSERVED from ZAP on every call, never cached: ``progress``, ``requests`` and
+    ``alerts`` are what the scanner has actually done. ``target_url`` is blank for a scan this
+    backend process did not start (ZAP does not record what a scan was aimed at) — blank is the
+    honest answer rather than a guess.
+    """
+    return proxy_mod.observed_scans(container, port)
+
+
+@router.delete("/proxy/scan/{scan_id}", response_model=proxy_mod.Scan | None)
+def stop_scan(
+    scan_id: str,
+    container: str = Query(...),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+) -> proxy_mod.Scan | None:
+    """Stop an in-flight scan. NOT GATED — this is the panic button.
+
+    Hundreds of attack requests per endpoint are in flight when this is called. A gate that could
+    refuse to stop them would make the system less safe, which is the position tunnels.py and
+    stop_proxy already take; it just matters more here.
+    """
+    return proxy_mod.stop_scan(container, port, scan_id)
+
+
+@router.get("/proxy/alerts", response_model=list[proxy_mod.ScanAlert])
+def scan_alerts(
+    container: str = Query(...),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+    base_url: str = Query("", description="Narrow to one site, e.g. http://host:3000"),
+    start: int = Query(0, ge=0),
+    count: int = Query(50, ge=1, le=500),
+) -> list[proxy_mod.ScanAlert]:
+    """Alerts ZAP is holding. READ-ONLY and UNGATED, like the history panel.
+
+    NOT scan-scoped: this includes PASSIVE alerts raised merely by traffic passing through the
+    proxy, with no active scan involved, and alerts survive a scan being removed. ``base_url`` is
+    the only scoping ZAP's API offers. All measured.
+    """
+    return proxy_mod.scan_alerts(container, port, base_url=base_url, start=start, count=count)
+
+
+class AlertIngestRequest(BaseModel):
+    """Fold ZAP's alerts into engagement state as Findings and Endpoints."""
+
+    session_id: str = Field(..., description="Engagement session to attribute the findings to.")
+    container: str
+    port: int = proxy_mod.DEFAULT_PROXY_PORT
+    base_url: str = ""
+    count: int = Field(200, ge=1, le=1000)
+
+
+@router.post("/proxy/alerts/ingest")
+def ingest_scan_alerts(req: AlertIngestRequest) -> dict[str, Any]:
+    """Persist ZAP's alerts as Findings + Endpoints. Reads ZAP, writes local state, attacks nothing.
+
+    A POST rather than a side effect of the alerts GET, because it WRITES: a read endpoint that
+    quietly mutates state is how a refresh ends up duplicating a report. Ungated for the same
+    reason every other ingest is — it executes nothing and adds no capability; the attack that
+    produced these alerts was gated when it started.
+
+    Findings carry ``pluginid:NNNNN`` in the same spelling ``state/parsers.py::parse_zap`` writes,
+    so an alert seen both here and in a ``-quickurl`` report fingerprints to ONE finding.
+    """
+    from state import store as state_store  # lazy: keep router import-light
+
+    alerts = proxy_mod.scan_alerts(req.container, req.port, base_url=req.base_url, count=req.count)
+    findings = proxy_mod.findings_from(alerts, session_id=req.session_id)
+    endpoints = proxy_mod.alert_endpoints_from(alerts, session_id=req.session_id)
+    return {
+        "alerts": len(alerts),
+        "findings": state_store.upsert_findings(findings),
+        "endpoints": state_store.upsert_endpoints(endpoints),
+    }
+
+
 class RouteRequest(BaseModel):
     """Ask which tunnel (if any) routes to a host, and get the rewritten command to approve."""
 

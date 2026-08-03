@@ -1592,6 +1592,117 @@ export const proxyHistory = (
     signal
   );
 
+/* -------------------------------------------------------------------------- */
+/* the ACTIVE SCANNER over the same API (build #14 part 3)                     */
+/*                                                                             */
+/* Everything above this line RECORDS. Everything below ATTACKS. `startScan` is */
+/* the only call in this file that sends attack traffic, and it is the only one */
+/* that carries gate fields.                                                    */
+/* -------------------------------------------------------------------------- */
+export type Scan = {
+  id: string;
+  container: string;
+  port: number;
+  /** Blank for a scan this backend process did not start — ZAP does not record the aim. */
+  target_url: string;
+  recurse: boolean;
+  /** ZAP's own word: RUNNING | PAUSED | FINISHED | STOPPED. Observed, never assumed. */
+  state: string;
+  progress: number;
+  /** Attack requests actually sent. 376 against one endpoint in the measurement. */
+  requests: number;
+  alerts: number;
+  started_at: string;
+  engagement_id: string | null;
+};
+
+export type ScanAlert = {
+  id: string;
+  name: string;
+  /** High | Medium | Low | Informational — ZAP's vocabulary, not the Finding severity scale. */
+  risk: string;
+  confidence: string;
+  url: string;
+  method: string;
+  param: string;
+  evidence: string;
+  attack: string;
+  plugin_id: string;
+  cwe_id: string;
+  description: string;
+  solution: string;
+};
+
+/**
+ * Actively scan ONE URL the proxy already captured. SENDS REAL ATTACK TRAFFIC.
+ *
+ * Both gate fields default false on the backend, so omitting them is a refusal rather than a
+ * silent grant. A 403 is a safety refusal naming the gate; a 409 is availability — including
+ * `url_not_found`, which is ZAP declining to attack a URL it has never seen.
+ */
+export const startScan = (
+  body: {
+    target_url: string;
+    port?: number;
+    recurse?: boolean;
+    engagement_id?: string | null;
+    approved?: boolean;
+    dangerous_ack?: boolean;
+  },
+  signal?: AbortSignal
+) => postJSON<Scan>("/cockpit/proxy/scan", body, signal);
+
+/** Every scan ZAP knows about, with live counts. Read-only — a progress bar polls this. */
+export const listScans = (container: string, port: number, signal?: AbortSignal) =>
+  getJSON<Scan[]>(
+    `/cockpit/proxy/scan?container=${encodeURIComponent(container)}&port=${port}`,
+    signal
+  );
+
+/** Stop an in-flight scan. NOT gated — this is the panic button while requests are in flight. */
+export const stopScan = (
+  scanId: string,
+  container: string,
+  port: number,
+  signal?: AbortSignal
+) =>
+  fetch(
+    `${API_URL}/cockpit/proxy/scan/${encodeURIComponent(scanId)}` +
+      `?container=${encodeURIComponent(container)}&port=${port}`,
+    { method: "DELETE", signal }
+  ).then((r) => r.json() as Promise<Scan | null>);
+
+/** Alerts ZAP holds. Includes PASSIVE alerts raised by proxied traffic, not just scan results. */
+export const scanAlerts = (
+  container: string,
+  port: number,
+  baseUrl = "",
+  count = 100,
+  signal?: AbortSignal
+) =>
+  getJSON<ScanAlert[]>(
+    `/cockpit/proxy/alerts?container=${encodeURIComponent(container)}&port=${port}` +
+      `&count=${count}${baseUrl ? `&base_url=${encodeURIComponent(baseUrl)}` : ""}`,
+    signal
+  );
+
+/** Persist ZAP's alerts as Findings + Endpoints in engagement state. Writes; attacks nothing. */
+export const ingestScanAlerts = (
+  body: {
+    session_id: string;
+    container: string;
+    port?: number;
+    base_url?: string;
+    count?: number;
+  },
+  signal?: AbortSignal
+) =>
+  postJSON<{ alerts: number; findings: number; endpoints: number }>(
+    "/cockpit/proxy/alerts/ingest",
+    body,
+    signal
+  );
+
 /** Resolve the tunnel for a host and get the rewritten command to APPROVE. Pure — nothing runs. */
 export type RouteResult = {
   routed: boolean;

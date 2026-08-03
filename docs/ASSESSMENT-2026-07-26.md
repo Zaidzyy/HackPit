@@ -1859,4 +1859,44 @@ Suite **68 files, 0 failures**, up from 66. `zap_proxy_proof.sh` 7/0.
 
 That count needed one more fix to be true, and the honest version is worth recording. `test_redirector.py` began failing four runs out of four with `WinError 10013` — its `_free_port()` helper picked a port by binding a **TCP** socket, and the UDP test then bound **UDP** on that same number. TCP-free proves nothing about UDP: Windows reserves large UDP ranges for Hyper-V/WSL (on this box `50000-50059` and everything from `53879` up). It had passed 8/8 earlier the same day, which is the tell — the exclusion table is environmental and moves. The helper now takes the socket kind and probes **both** the public port and its tunnel port for it. That is the second time a Windows/Linux ephemeral-range difference has broken this one file. The `:proxy` screen ships **with** its endpoints — build #13 part 1 shipped four `/cockpit/exposure` endpoints with no caller and closing that took a whole later build. `tsc --noEmit` and `next build` both exit 0, and the screen adds zero lint errors.
 
-**Not built, deliberately:** browser interception (it needs a published port, which breaks the lab sandbox's isolation — its own exposure decision), and driving ZAP's scanner through the API (scanning stays on part 1's gated command path).
+**Not built, deliberately:** browser interception (it needs a published port, which breaks the lab sandbox's isolation — its own exposure decision), and driving ZAP's scanner through the API (scanning stays on part 1's gated command path). *Part 3 built the second of those; the first is still blocked, for a reason measured immediately afterwards — see below.*
+
+## Build #14 part 3 — the scanner learns to aim (2026-08-04)
+
+Part 1 could scan a URL; part 2 could record traffic. Neither could attack **what you actually touched**. `zaproxy -cmd -quickurl` spiders a site and attacks whatever the crawl found, so an endpoint reached only by *using* the app — an API route nothing links to, a page behind a login, the exact request a `ffuf` run just made — was out of reach. Those are precisely what the proxy already records. This part joins the two halves and drives ZAP's active scanner over part 2's `docker exec` transport, aimed at the captured Sites tree.
+
+The measurement that justifies the feature: **one captured endpoint, 376 real attack requests, one live High SQL injection** — on a route `-quickurl`'s spider had no reliable path to.
+
+### The finding that came first, and still blocks the other half
+
+Before designing anything, `-config api.key=SECRETKEY123` was tested against the running daemon. It **enforces nothing**: `spider/action/scan` and `ascan/action/scan` both launched with no key at all. ZAP's proxy and its API share one listener, so publishing that port for **browser interception** would also publish an unauthenticated scan trigger to the host — and HackPit has no route auth. Browser interception therefore stays blocked, now for a measured reason rather than a suspected one. Scanner-over-API is unaffected: nothing is published, and the transport stays `docker exec`.
+
+### The gate: an honest surface, not a new one
+
+A scan start builds `zaproxy -quickurl <target>` and runs it through the **real** `executor.validate_request` before ZAP is contacted. No new gate exists. `-quickurl` is already defined in the attack-flag table as *spider then active scan*, and an API scan is that attack minus the spider — so the declared command describes strictly **more** aggression than what runs, which is the safe direction. Putting the full target URL in the surface is what matters: measured against the real validator, an unapproved scan is refused at `approval`, one without the red-confirm at `danger`, and `http://example.com/x` at `target` — the existing scope extractor reads the host out of a URL carrying a port and a query string.
+
+### Part 2's central lock could not be restated, so it was replaced
+
+Part 2 asserted *the gated argv is the spawned argv*. That is meaningless here: the gate classifies an **argv** and what executes is a **URL**, so string equality between them would be theatre. The property underneath it is what actually matters — *the thing the gate scoped is the thing that gets attacked* — and that is now the lock. One derivation feeds both sides, and a test decodes the API's `url=` parameter back out and asserts its host is the host the target gate read.
+
+**A defect class that did not exist before this build:** the operator-supplied target is interpolated into a URL that carries the scan's own parameters, so a target containing `&recurse=true` would broaden the scan the human approved. That is Critical 2 expressed in a query string. The target is percent-encoded with `quote(safe="")`, and the test carries a control proving recursion can still be set legitimately — otherwise it would also pass on a build where recursion never worked.
+
+### A second bound, enforced by ZAP rather than by us
+
+`ascan/action/scan` on a URL not already in the Sites tree answers `{"code":"url_not_found"}`. The active scanner's reach is therefore bounded by what already passed through the proxy: a host never captured cannot be attacked through this path even if every gate here were bypassed. It is a bound, not a control — the gates remain the control — but it means the worst case of a defect here is "it attacked something you already proxied". The proof asserts it live.
+
+### The shape trap, caught by measuring instead of assuming
+
+`state/parsers.py::parse_zap` reads the `-quickurl` **report**: nested `site[].alerts[]`, severity in `riskcode` (`"0"`–`"3"`), plugin in `pluginid`, URL down in `instances[].uri`. The API returns a **flat** list with `risk: "High"`, `pluginId`, and `url` on the alert itself. `_zap_report()` requires a `site` key, so feeding it an API response yields **zero findings, silently, forever, with a green suite** — part 1's headline defect in a new place. A separate mapper handles the API shape, tested against a real captured response committed as a fixture, and a test asserts the two parsers are **not** interchangeable, with a control proving the report parser does work on a real report. Someone will eventually try to merge them; that test is the argument they have to answer.
+
+The plugin reference is written in `parse_zap`'s exact `pluginid:NNNNN` spelling, so the same issue found by both paths fingerprints to one finding rather than two — asserted by comparing real fingerprints, not by eyeballing the format.
+
+### What the proof found that no test could
+
+ZAP locks its **home directory**, not its port. A daemon left running on any other port kills a new one at startup with a message that appears only in a log file inside the container. The proof hit this on its first run, and it exposed a latent part-2 defect: the "one proxy at a time" refusal was scoped per *port*, so a second proxy on a different port in the same container was accepted and then died. Nothing was unsafe — status is observed, so the dead proxy reported itself down rather than lying — but it was **unexplainable**, which is its own kind of defect. The refusal is now container-scoped and states ZAP's reason.
+
+### Verification
+
+Suite **70 files, 0 failures**, up from 68. `zap_scan_proof.sh` **8 passed, 0 failed** — including host-unreachability re-asserted (it matters more now that action URLs sit behind that boundary), ZAP's `url_not_found` refusal, a full scan to completion, and the live alert response mapping through the real mapper. `zap_proxy_proof.sh` still 7/0. `tsc --noEmit` exits 0 and the `:proxy` scan panel adds zero lint errors. The panel ships **with** its endpoints, and its "Aim scanner" button on a captured row sets the target without starting anything — a one-click path from a table row to live attack traffic is exactly the shape a red-confirm exists to prevent.
+
+**Still not built:** browser interception, blocked on the unauthenticated-API finding above; spidering via the API (that is `-quickurl`'s job and carries its confirm); scan-policy tuning (a policy that decides its own aggression is the `-autorun` shape part 1 excluded); and authenticated scanning.

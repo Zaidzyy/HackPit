@@ -138,9 +138,25 @@ Each captured request becomes an `Endpoint`: `url`, `method`, `status` from the 
 
 ## 5. Gating
 
-**Start requires engagement + approval + red-confirm**, identical to the three existing listeners
-(gate audit finding I2). A proxy deserves this at least as much as a pivot listener: it holds
-full request bodies, so it sees credentials, session tokens and payloads in cleartext.
+**Start requires approval + red-confirm**, like the three existing listeners (gate audit finding
+I2). A proxy earns the red-confirm at least as much as a pivot listener: it holds full request
+bodies, so it sees credentials, session tokens and payloads in cleartext.
+
+**But it runs in BOTH modes, and that is a deliberate divergence from `tunnels.py`.**
+`tunnels.validate_start` refuses a request with no `engagement_id`, and its docstring explains
+why: a pivot listener lives in the *engage* sandbox, so making the operator satisfy lab mode's
+isolation gate would be "firing a gate on an unrelated condition… the operator would be told to
+prove the lab is isolated in order to start a pivot into a client network."
+
+That reasoning does not transfer — it inverts. The ZAP proxy runs in **whichever sandbox the
+operator is working in**, so in lab mode the isolation gate is asking about the very container
+the proxy occupies. It is the relevant condition, not an unrelated one. Copying the
+engagement-only rule would also block the proxy from the lab, which is where most of its
+practice value is (capturing a `ffuf` run against Juice Shop).
+
+So `validate_start` here is simply `executor.validate_request(_gate_request(req))` with no
+engagement precondition: lab mode gets its four gates including isolation, engagement mode gets
+its three. Same function, same order, no new gate.
 
 The gate is built the `tunnels.py` way: `server_argv_for(req)` is **the single derivation**, and
 both `_gate_request()` and the spawn come through it. `validate_request` runs FIRST; on refusal

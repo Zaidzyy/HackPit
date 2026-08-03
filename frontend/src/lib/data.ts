@@ -192,6 +192,13 @@ export const SURFACE_BANDS: SurfaceBand[] = [
         href: "/oob",
         desc: "Canary for blind SSRF/XXE/RCE — the callback is the proof.",
       },
+      {
+        key: "exposure",
+        icon: "⊙",
+        label: ":exposure",
+        href: "/exposure",
+        desc: "Where a callback lands — a local interface, or a VPS redirector.",
+      },
     ],
   },
   {

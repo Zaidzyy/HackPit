@@ -3110,3 +3110,121 @@ export const deployOOB = (approved: boolean, signal?: AbortSignal) =>
 
 export const verifyOOB = (signal?: AbortSignal) =>
   postJSON<OOBVerifyResult>("/oob/verify", {}, signal);
+
+// ---- listener exposure: local profiles + the C2 redirector (build #13) ---- //
+
+export type ListenerProfile = {
+  ip: string;
+  /** local = an interface on this machine; remote = the configured VPS. */
+  destination: "local" | "remote";
+  container: string;
+  kinds: string[];
+  extra: [number, string][];
+  engagement: string | null;
+  ack_wildcard: boolean;
+  ack_public: boolean;
+};
+
+export type ExposureStatus = {
+  profile: ListenerProfile | null;
+  presets: string[];
+  exposable: string[];
+  kinds: Record<string, { port: number; proto: string }>;
+  /** Never claims a state it has not observed: none | pending-restart | active | drifted |
+   *  unknown | remote. */
+  state: string;
+  published: Record<string, [string, string]>;
+  expected: [number, string][];
+  note: string;
+};
+
+export type ExposureWriteResult = {
+  written: string;
+  ports: [number, string][];
+  warnings: string[];
+  command?: string[];
+  note: string;
+};
+
+/** What a remote profile actually makes reachable, in the words it needs to be said in. */
+export type RedirectorDescribe = {
+  host: string;
+  remote_dir: string;
+  tcp_ports: number[];
+  udp_ports: number[];
+  tunnel_map: { public: number; tunnel: number; proto: string }[];
+  forwarder: string[];
+  reverse_tunnel: string[];
+  udp_bridges: { port: string; where: string; command: string; why: string }[];
+  exposure: string;
+  aup: string;
+  not_authenticated: string;
+  teardown: string;
+};
+
+export type RemoteExposureStatus = {
+  profile: ListenerProfile | null;
+  remote_dir: string;
+  ports?: [number, string][];
+  warnings?: string[];
+  describe?: RedirectorDescribe;
+  note?: string;
+};
+
+export type RedirectorDeployResult = {
+  ok: boolean;
+  artifact: string;
+  target: { host: string; user: string; port: number; remote_dir: string; zone: string };
+  bytes_sent?: number;
+  steps: OOBDeployStep[];
+  describe?: RedirectorDescribe;
+};
+
+export type ProfileInput = {
+  ip?: string;
+  container?: string;
+  kinds?: string[];
+  extra?: [number, string][];
+  engagement?: string | null;
+  ack_wildcard?: boolean;
+  ack_public?: boolean;
+  approved?: boolean;
+};
+
+export const getExposure = (signal?: AbortSignal) =>
+  getJSON<ExposureStatus>("/cockpit/exposure", signal);
+
+export const writeExposureProfile = (input: ProfileInput, signal?: AbortSignal) =>
+  postJSON<ExposureWriteResult>("/cockpit/exposure/profile", input, signal);
+
+/** Recreates the container — kills every listener, session and job inside it. */
+export const applyExposureProfile = (input: ProfileInput, signal?: AbortSignal) =>
+  postJSON<{ applied: boolean; command: string[] } & ExposureStatus>(
+    "/cockpit/exposure/apply",
+    input,
+    signal
+  );
+
+export const deleteExposureProfile = (signal?: AbortSignal) =>
+  delJSON<{ removed: boolean; note: string }>("/cockpit/exposure/profile", signal);
+
+export const getRemoteExposure = (signal?: AbortSignal) =>
+  getJSON<RemoteExposureStatus>("/cockpit/exposure/remote", signal);
+
+export const writeRemoteExposure = (input: ProfileInput, signal?: AbortSignal) =>
+  postJSON<{ written: string; ports: [number, string][]; note: string }>(
+    "/cockpit/exposure/remote",
+    input,
+    signal
+  );
+
+export const deleteRemoteExposure = (signal?: AbortSignal) =>
+  delJSON<{ removed: boolean; note: string }>("/cockpit/exposure/remote", signal);
+
+/** GATED. Carries only an approval — the host and the port list are both resolved
+ *  server-side, so a request can never widen what becomes publicly reachable. */
+export const deployRedirector = (approved: boolean, signal?: AbortSignal) =>
+  postJSON<RedirectorDeployResult>("/cockpit/exposure/remote/deploy", { approved }, signal);
+
+export const stopRedirector = (approved: boolean, signal?: AbortSignal) =>
+  postJSON<RedirectorDeployResult>("/cockpit/exposure/remote/stop", { approved }, signal);

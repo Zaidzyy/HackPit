@@ -46,6 +46,7 @@ from pydantic import BaseModel, Field
 
 from . import allowlist, config, engagement, executor, jobs, loot, runstore
 from . import exposure as exposure_mod
+from . import redirector as redirector_mod
 from . import session as live_session
 from . import kali as kali_mod
 from . import repeater as repeater_mod
@@ -898,7 +899,11 @@ def get_loot() -> dict[str, Any]:
 class ProfileRequest(BaseModel):
     """A listener profile plus the acknowledgements its bind address may need."""
 
-    ip: str = Field(..., description="Host bind address, or a wildcard token with ack_wildcard.")
+    ip: str = Field(
+        "",
+        description="Host bind address, or a wildcard token with ack_wildcard. Not read by the "
+                    "REMOTE routes — those publish on the configured VPS.",
+    )
     container: str = Field("engage-sandbox", description="engage-sandbox | kali-open.")
     kinds: list[str] = Field(default_factory=list, description="chisel | ligolo | dns-tunnel | sliver.")
     extra: list[tuple[int, str]] = Field(default_factory=list, description="Explicit (port, proto).")
@@ -906,6 +911,18 @@ class ProfileRequest(BaseModel):
     ack_wildcard: bool = Field(False, description="Acknowledge binding EVERY interface.")
     ack_public: bool = Field(False, description="Acknowledge binding a publicly routable address.")
     approved: bool = Field(False, description="Required by /exposure/apply — it recreates the container.")
+
+
+class ApprovalRequest(BaseModel):
+    """An approval and nothing else.
+
+    Deliberately empty apart from the flag. The redirector routes below deploy to a host and
+    publish a port set, and NEITHER may come from here — the address is resolved from the
+    canary config store and the ports from the saved profile. A body with somewhere to put them
+    is the first step toward a public forwarder aimed by a request.
+    """
+
+    approved: bool = Field(False, description="Per-call human approval. Required.")
 
 
 def _profile_from(req: ProfileRequest) -> exposure_mod.ListenerProfile:
@@ -977,3 +994,102 @@ def delete_exposure_profile() -> dict[str, Any]:
         "note": "the container keeps its bindings until it is recreated — bring it up again "
                 "with the base compose file alone to drop them",
     }
+
+
+# --------------------------------------------------------------------------- #
+# REMOTE listener profiles — the C2 redirector (build #13 part 4).
+#
+# The same abstraction pointed at a VPS instead of a local interface. These routes carry NO
+# address and NO port list to the deploy: the address comes from the canary config store and
+# the ports from the saved remote profile, both resolved server-side. That is what keeps a
+# public forwarder from being aimed by a request.
+# --------------------------------------------------------------------------- #
+@router.get("/exposure/remote")
+def get_remote_exposure() -> dict[str, Any]:
+    """The saved remote profile and, if there is one, exactly what it exposes.
+
+    The description is returned WITH the profile rather than on demand, so a panel cannot show
+    that a redirector is configured without also showing what it makes publicly reachable.
+    """
+    profile = exposure_mod.live_remote_profile()
+    payload: dict[str, Any] = {
+        "profile": profile.model_dump() if profile else None,
+        "remote_dir": redirector_mod.REMOTE_DIR,
+    }
+    if profile is None:
+        return payload
+    result = exposure_mod.validate(profile)
+    payload["ports"] = result.ports
+    payload["warnings"] = result.warnings
+    try:
+        from oob import config as oob_config
+
+        target = oob_config.deploy_target()
+    except Exception:  # pragma: no cover - a missing store is "not configured", not an error
+        target = None
+    if target is None:
+        payload["note"] = ("no VPS is configured yet — set one on the :oob canary screen; the "
+                           "redirector ships to the same box")
+    else:
+        payload["describe"] = redirector_mod.describe(target, result.ports)
+    return payload
+
+
+@router.post("/exposure/remote")
+def post_remote_exposure(req: ProfileRequest) -> dict[str, Any]:
+    """Save a remote profile. 403 names the gate and the missing acknowledgement.
+
+    Writing it publishes NOTHING — the same rule the local path follows. Nothing reaches the
+    VPS until the gated deploy runs.
+    """
+    profile = _profile_from(req).model_copy(update={"destination": "remote"})
+    try:
+        path = exposure_mod.write_remote(profile, at=_now_iso())
+    except exposure_mod.ExposureRefused as exc:
+        result = exposure_mod.validate(profile)
+        raise HTTPException(status_code=403, detail={
+            "gate": exc.gate,
+            "refusals": result.refusals or [exc.reason],
+            "needs_ack": result.needs_ack,
+            "warnings": result.warnings,
+        })
+    return {
+        "written": str(path),
+        "ports": exposure_mod.validate(profile).ports,
+        "note": "saved — nothing is published yet; deploy the redirector to make it live",
+    }
+
+
+@router.delete("/exposure/remote")
+def delete_remote_exposure() -> dict[str, Any]:
+    """Forget the remote profile. Does NOT stop a redirector already running."""
+    return {
+        "removed": exposure_mod.clear_remote(),
+        "note": "HackPit has forgotten the profile; a forwarder already running on the VPS is "
+                "still running and still publicly reachable. Stop it before you rely on this.",
+    }
+
+
+@router.post("/exposure/remote/deploy")
+def post_remote_deploy(req: ApprovalRequest) -> dict[str, Any]:
+    """GATED: ship the forwarder to the configured VPS and start it.
+
+    Carries only an approval. The destination and the port list are both resolved server-side.
+    """
+    try:
+        return executor.deploy_c2_redirector(approved=req.approved)
+    except executor.OOBDeployRefused as exc:
+        raise HTTPException(status_code=403, detail={"gate": exc.gate, "reason": exc.reason})
+
+
+@router.post("/exposure/remote/stop")
+def post_remote_stop(req: ApprovalRequest) -> dict[str, Any]:
+    """GATED: kill the forwarder on the configured VPS.
+
+    As easy to reach as the deploy, deliberately — a start without an equally reachable stop is
+    how a public forwarder outlives the engagement it was built for.
+    """
+    try:
+        return executor.stop_c2_redirector(approved=req.approved)
+    except executor.OOBDeployRefused as exc:
+        raise HTTPException(status_code=403, detail={"gate": exc.gate, "reason": exc.reason})

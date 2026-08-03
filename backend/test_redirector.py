@@ -59,34 +59,56 @@ class _Target:
     key_path = "/home/op/.ssh/id_ed25519"
 
 
-def _free_port() -> int:
-    """A free loopback port whose tunnel port is a DIFFERENT port.
+def _bindable(port: int, kind: int) -> bool:
+    """Can we ACTUALLY bind this port for this socket kind, right now?"""
+    probe = socket.socket(socket.AF_INET, kind)
+    try:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        probe.bind(("127.0.0.1", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
 
-    *** THIS SKIPS A RANGE, AND THE RANGE IS A REAL DEFECT. ***
-    `tunnel_port(p) == TUNNEL_PORT_BASE + (p % 10000)` with a base of 40000, so for every port
-    in 40000-49999 the tunnel port IS the public port. That is 10,000 ports on which a
-    redirector forwards to itself, and they sit inside Linux's default ephemeral range
-    (32768-60999) — which is why CI hit `EADDRINUSE` here and a Windows dev box never did: the
-    test bound the stand-in backend on the target port, then the redirector tried to bind the
-    same number.
 
-    Skipping the range keeps these tests testing the intended topology (public != tunnel)
-    instead of the collision. It does NOT fix the underlying defect: an operator who picks a
-    public port in 40000-49999 still gets a redirector whose `ssh -R` port collides with its own
-    listener. That is logged for build #13 to settle, because changing the arithmetic changes
-    every rendered reverse-tunnel command.
+def _free_port(kind: int = socket.SOCK_STREAM) -> int:
+    """A loopback port that is bindable FOR ``kind``, and whose tunnel port is a different port.
+
+    TWO CONSTRAINTS, EACH LEARNED FROM A FAILURE.
+
+    1. NOT A SELF-MAPPING PORT. ``tunnel_port(p) = 40000 + (p % 10000)``, so for every port in
+       40000-49999 the tunnel port IS the public port — a redirector that forwards to itself.
+       Those 10,000 ports sit inside Linux's ephemeral range, which is why CI hit `EADDRINUSE`
+       and a Windows box did not. `tunnel_port` now REFUSES them, so the ValueError is the
+       signal. (The underlying defect is fixed in redirector/forward.py; this keeps the tests
+       exercising the intended topology, public != tunnel.)
+
+    2. BINDABLE FOR THE PROTOCOL ACTUALLY USED. Picking a port by binding a TCP socket proves
+       nothing about UDP. Windows reserves large UDP ranges for Hyper-V/WSL — on this box,
+       50000-50059 and everything from 53879 up — so the UDP test drew a TCP-free port that
+       UDP could not bind and died with WinError 10013, four runs out of four. It had passed
+       8/8 earlier the same day: the exclusion table is environmental and moves.
+
+       So the caller says which kind it needs, and BOTH the public port and its tunnel port are
+       probed — the tests bind the stand-in backend on the tunnel port, so a port that is only
+       half-bindable is no use.
     """
-    for _ in range(50):
-        sock = socket.socket()
+    for _ in range(80):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
         sock.close()
         try:
-            F.tunnel_port(port)          # RAISES on a self-mapping port; that is the signal
+            target = F.tunnel_port(port)   # RAISES on a self-mapping port; that is the signal
         except ValueError:
             continue
-        return port
-    raise AssertionError("could not find a free port outside the self-mapping range")
+        if _bindable(port, kind) and _bindable(target, kind):
+            return port
+    raise AssertionError(
+        f"no bindable port for kind={kind} outside the self-mapping range — check "
+        "`netsh interface ipv4 show excludedportrange protocol=udp` on Windows"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -185,7 +207,7 @@ def test_the_forwarder_stops_cleanly_and_releases_its_port() -> None:
 
 def test_a_udp_datagram_crosses_the_forwarder() -> None:
     """The DNS-tunnel shape: a datagram out, a reply matched back to its source."""
-    public = _free_port()
+    public = _free_port(socket.SOCK_DGRAM)
     target = F.tunnel_port(public)
 
     backend = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

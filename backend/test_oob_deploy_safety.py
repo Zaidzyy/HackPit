@@ -56,11 +56,25 @@ HOST = "203.0.113.10"
 ZONE = "oob.example.net"
 SECRET = "canary-read-secret-0123456789"
 
-# Only these two may reach the deploy. The executor DEFINES it (it is the gated execution
-# point); the canary's own route CALLS it and passes nothing but the approval flag.
-_ALLOWED = {"cockpit/executor.py", "oob/router.py"}
-_PATTERNS = [r"\bdeploy_oob_canary\b", r"\b_ssh_argv\b"]
-_AST_TARGETS = ["deploy_oob_canary"]
+# Only these may reach a deploy. The executor DEFINES them (it is the gated execution point);
+# the canary's route and the cockpit's exposure routes CALL them and pass nothing but an
+# approval flag. Build #13 part 4 added a second artifact — the C2 redirector — through the
+# SAME engine, so it is covered by the same patterns rather than by a second lock.
+_ALLOWED = {"cockpit/executor.py", "oob/router.py", "cockpit/router.py"}
+_PATTERNS = [
+    r"\bdeploy_oob_canary\b", r"\bdeploy_c2_redirector\b", r"\bstop_c2_redirector\b",
+    r"\b_ssh_argv\b",
+]
+_AST_TARGETS = ["deploy_oob_canary", "deploy_c2_redirector", "stop_c2_redirector"]
+
+# Every public deploy wrapper, and what each is allowed to take. Drawn from the module rather
+# than hand-listed would be better still, but these ARE the enumeration — a third wrapper that
+# is not added here is caught by test_every_deploy_wrapper_is_listed below.
+_WRAPPERS = {
+    "deploy_oob_canary": ["approved", "restart"],
+    "deploy_c2_redirector": ["approved", "restart"],
+    "stop_c2_redirector": ["approved"],
+}
 
 
 def _configured() -> None:
@@ -110,18 +124,25 @@ _DESTINATION_WORDS = (
 )
 
 
-def test_the_deploy_signature_carries_no_destination() -> None:
-    """THE containment claim, asserted on the parameter list rather than on a docstring."""
-    tree = ast.parse(EXECUTOR_PATH.read_text(encoding="utf-8"))
-    params = _params(tree, "deploy_oob_canary")
-    assert params == ["approved", "restart"], (
-        f"deploy_oob_canary{tuple(params)} — it must take an approval and a restart flag and "
-        f"NOTHING else; anything addressable here is a request field one refactor later"
-    )
-    offending = [p for p in params if any(w in p.lower() for w in _DESTINATION_WORDS)]
-    assert not offending, f"deploy_oob_canary takes destination-shaped parameters: {offending}"
+def test_no_deploy_signature_carries_a_destination() -> None:
+    """THE containment claim, asserted on the parameter list rather than on a docstring.
 
-    # The other half: the resolver it uses takes no arguments either, so there is nowhere in
+    Applies to EVERY public deploy wrapper. Part 4 added a second artifact through the same
+    engine, and the temptation there was a `path` or `ports` parameter — which would turn a
+    deploy button into an arbitrary write, or let a request widen what becomes publicly
+    reachable. Neither is expressible if the signature has nowhere to put it.
+    """
+    tree = ast.parse(EXECUTOR_PATH.read_text(encoding="utf-8"))
+    for name, expected in _WRAPPERS.items():
+        params = _params(tree, name)
+        assert params == expected, (
+            f"{name}{tuple(params)} — it must take {expected} and NOTHING else; anything "
+            f"addressable here is a request field one refactor later"
+        )
+        offending = [p for p in params if any(w in p.lower() for w in _DESTINATION_WORDS)]
+        assert not offending, f"{name} takes destination-shaped parameters: {offending}"
+
+    # The other half: the resolver they share takes no arguments either, so there is nowhere in
     # the chain to express a different destination.
     config_tree = ast.parse((BACKEND / "oob" / "config.py").read_text(encoding="utf-8"))
     assert _params(config_tree, "deploy_target") == [], (
@@ -134,7 +155,32 @@ def test_the_deploy_signature_carries_no_destination() -> None:
     assert [p for p in planted_params if any(w in p.lower() for w in _DESTINATION_WORDS)], (
         "the signature check cannot fail — it would pass on a deploy that takes a host"
     )
-    print("  deploy_oob_canary(approved, restart) takes no destination; resolver takes none: PASS")
+    print(f"  all {len(_WRAPPERS)} deploy wrappers take no destination; resolver takes none: PASS")
+
+
+def test_every_deploy_wrapper_is_listed() -> None:
+    """A third wrapper added without a line in `_WRAPPERS` would go unchecked.
+
+    The enumeration above is the only hand-written list in this file, so it is the only thing
+    that can rot — and rotting silently is exactly the failure the safety-test rule exists to
+    stop (backend/AGENTS.md §1). So it is reconciled against the real module.
+    """
+    tree = ast.parse(EXECUTOR_PATH.read_text(encoding="utf-8"))
+    public = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and not node.name.startswith("_")
+        and ("deploy" in node.name or node.name.startswith("stop_"))
+    }
+    missing = sorted(public - set(_WRAPPERS))
+    assert not missing, (
+        f"{missing} look like deploy wrappers and are not in _WRAPPERS — they were never "
+        f"signature-checked. Add them (with the parameters they are allowed to take)."
+    )
+    stale = sorted(set(_WRAPPERS) - public)
+    assert not stale, f"_WRAPPERS names {stale}, which no longer exist — the checks are vacuous"
+    print(f"  the wrapper enumeration reconciles against the real module ({len(public)}): PASS")
 
 
 # --------------------------------------------------------------------------- #
@@ -150,7 +196,7 @@ def test_no_agent_orchestrator_or_loop_can_reach_the_deploy() -> None:
         must_have_scanned=[
             "orchestrator.py", "adgraph/orchestrator.py", "cockpit/session.py",
             "reasoning/specialists.py", "reasoning/frontier.py", "evasion/engine.py",
-            "cockpit/router.py", "cockpit/kali.py", "chat.py",
+            "cockpit/kali.py", "cockpit/exposure.py", "cockpit/redirector.py", "chat.py",
         ],
         min_checked=60,
     )
@@ -337,7 +383,8 @@ def test_every_interpolated_value_reaches_the_remote_command_quoted() -> None:
 
 if __name__ == "__main__":
     print("== OOB canary deploy SAFETY invariants (spec §3.5, §4) ==")
-    test_the_deploy_signature_carries_no_destination()
+    test_no_deploy_signature_carries_a_destination()
+    test_every_deploy_wrapper_is_listed()
     test_no_agent_orchestrator_or_loop_can_reach_the_deploy()
     test_the_deploy_scan_can_fail()
     test_an_unapproved_deploy_is_refused_and_sends_nothing()

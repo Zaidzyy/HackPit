@@ -1119,46 +1119,48 @@ def _run_script(target: Any) -> bytes:
     ).encode("utf-8")
 
 
-def deploy_oob_canary(*, approved: bool, restart: bool = True) -> dict[str, Any]:
-    """Ship `oob/server.py` to the CONFIGURED canary host and start it. ONE gated act.
+class _Artifact(NamedTuple):
+    """WHAT gets shipped, as a value the ENGINE consumes and no caller constructs.
 
-    Takes no destination of any kind — see the block comment above. The three remote steps are
-    one approved operation for the same reason a chunked upload is: "write the file", "write
-    the launcher" and "start it" are not three things a human could meaningfully approve
-    separately, they are one deploy, and stopping between any two of them leaves a canary that
-    is half-installed rather than one that is safely not installed.
+    Build #13 part 4 needed to ship a second file to the same box, and there were three ways to
+    do it. A second deploy function with its own transport would have been part 2's mistake
+    again — two places implementing the same gates. A `path` parameter would have been worse:
+    it turns a deploy button into an arbitrary-write primitive on a machine the operator
+    reaches over SSH.
+
+    So the transport, the target resolution, the gates and the step orchestration are ONE
+    engine, and the thing that varies is this — built inside a wrapper from repository
+    constants and the server-side config, never from anything a request carried. The public
+    wrappers stay free of any parameter naming a destination, a path or a file, which is what
+    keeps `test_oob_deploy_safety`'s signature assertion meaningful for both of them.
+    """
+
+    label: str          # for messages: "canary" | "redirector"
+    filename: str       # what it is called on the VPS
+    source: Path        # the repository file to ship — never a caller's bytes
+    remote_dir: str
+    launcher: bytes     # the 0700 run.sh, which may carry a secret (so it rides stdin)
+    log_name: str
+
+
+def _deploy_artifact(*, approved: bool, artifact: _Artifact, target: Any,
+                     restart: bool) -> dict[str, Any]:
+    """THE deploy engine. Ship one repository file to the configured VPS and start it.
+
+    The remote steps are ONE approved operation for the same reason a chunked upload is:
+    "write the file", "write the launcher" and "start it" are not three things a human could
+    meaningfully approve separately, and stopping between any two leaves something
+    half-installed rather than safely not installed.
 
     Stops at the first non-zero status. Returns a record with NO secret in it.
     """
-    if not approved:
-        raise OOBDeployRefused(
-            "canary deploy: every deploy needs an individual human approval (approved=true) — "
-            "this starts a listener on the public internet",
-            "approval",
-        )
-    # Imported here rather than at module scope so that `cockpit` keeps no import-time
-    # dependency on the oob package: the executor is loaded by every gate check in the suite,
-    # and the canary store is only ever touched on this one path.
-    from oob import config as oob_config
-
-    target = oob_config.deploy_target()
-    if target is None:
-        raise OOBDeployRefused(
-            "no canary is configured — set the zone, VPS address and read secret first",
-            "oob",
-        )
-    if not target.secret:
-        raise OOBDeployRefused(
-            "the canary has no read secret stored — the server refuses to start without one, "
-            "because its hit log holds a target's internal hostnames",
-            "oob",
-        )
     try:
-        payload = _OOB_SERVER_SOURCE.read_bytes()
+        payload = artifact.source.read_bytes()
     except OSError as exc:
-        raise OOBDeployRefused(f"cannot read {_OOB_SERVER_SOURCE.name}: {exc}", "oob") from exc
+        raise OOBDeployRefused(f"cannot read {artifact.source.name}: {exc}", "oob") from exc
 
-    quoted_dir = f"'{target.remote_dir}'"
+    quoted_dir = f"'{artifact.remote_dir}'"
+    name = artifact.filename
     steps: list[tuple[str, str, bytes]] = [
         (
             "install",
@@ -1166,42 +1168,208 @@ def deploy_oob_canary(*, approved: bool, restart: bool = True) -> dict[str, Any]
             # interpreter surfaces two steps later as "started, then died", with the reason
             # only in a log file on a box the operator reaches once.
             f"command -v python3 >/dev/null || {{ echo 'python3 is not installed on the VPS' "
-            f">&2; exit 1; }}; mkdir -p {quoted_dir} && cat > {quoted_dir}/server.py && "
-            f"chmod 0644 {quoted_dir}/server.py && echo installed",
+            f">&2; exit 1; }}; mkdir -p {quoted_dir} && cat > {quoted_dir}/{name} && "
+            f"chmod 0644 {quoted_dir}/{name} && echo installed",
             payload,
         ),
         (
             "configure",
             f"cat > {quoted_dir}/run.sh && chmod 0700 {quoted_dir}/run.sh && echo configured",
-            _run_script(target),
+            artifact.launcher,
         ),
     ]
     if restart:
         steps.append((
             "start",
             # pkill by the full path so a restart cannot take down an unrelated python3.
-            f"pkill -f {quoted_dir}/server.py >/dev/null 2>&1; sleep 1; "
-            f"setsid nohup {quoted_dir}/run.sh >> {quoted_dir}/canary.log 2>&1 < /dev/null & "
-            f"sleep 2; pgrep -f {quoted_dir}/server.py >/dev/null && echo started || "
-            f"(tail -n 20 {quoted_dir}/canary.log >&2; exit 1)",
+            f"pkill -f {quoted_dir}/{name} >/dev/null 2>&1; sleep 1; "
+            f"setsid nohup {quoted_dir}/run.sh >> {quoted_dir}/{artifact.log_name} 2>&1 "
+            f"< /dev/null & sleep 2; pgrep -f {quoted_dir}/{name} >/dev/null && echo started "
+            f"|| (tail -n 20 {quoted_dir}/{artifact.log_name} >&2; exit 1)",
             b"",
         ))
 
     results: list[dict[str, Any]] = []
-    for name, remote_command, stdin in steps:
+    for step_name, remote_command, stdin in steps:
         outcome = _ssh(target, remote_command, stdin)
-        results.append({"step": name, **outcome})
+        results.append({"step": step_name, **outcome})
         if outcome["exit_code"] != 0:
             break
 
     ok = bool(results) and all(r["exit_code"] == 0 for r in results)
-    if ok:
-        oob_config.mark_deployed()
     return {
         "ok": ok,
+        "artifact": artifact.label,
         # describe() carries the destination and NOT the secret, so this record is safe to
         # return to the browser and safe to keep.
         "target": target.describe(),
         "bytes_sent": len(payload),
         "steps": results,
+    }
+
+
+def _resolve_target(what: str) -> Any:
+    """THE destination, resolved server-side. Takes no address — see the block comment above."""
+    # Imported here rather than at module scope so that `cockpit` keeps no import-time
+    # dependency on the oob package: the executor is loaded by every gate check in the suite,
+    # and the canary store is only ever touched on these paths.
+    from oob import config as oob_config
+
+    target = oob_config.deploy_target()
+    if target is None:
+        raise OOBDeployRefused(
+            f"no VPS is configured — set the zone, address and read secret before deploying "
+            f"the {what}",
+            "oob",
+        )
+    return target
+
+
+def deploy_oob_canary(*, approved: bool, restart: bool = True) -> dict[str, Any]:
+    """Ship `oob/server.py` to the CONFIGURED host and start it. ONE gated act.
+
+    Takes no destination of any kind — see the block comment above.
+    """
+    if not approved:
+        raise OOBDeployRefused(
+            "canary deploy: every deploy needs an individual human approval (approved=true) — "
+            "this starts a listener on the public internet",
+            "approval",
+        )
+    target = _resolve_target("canary")
+    if not target.secret:
+        raise OOBDeployRefused(
+            "the canary has no read secret stored — the server refuses to start without one, "
+            "because its hit log holds a target's internal hostnames",
+            "oob",
+        )
+    artifact = _Artifact(
+        label="canary",
+        filename="server.py",
+        source=_OOB_SERVER_SOURCE,
+        remote_dir=target.remote_dir,
+        launcher=_run_script(target),
+        log_name="canary.log",
+    )
+    result = _deploy_artifact(
+        approved=approved, artifact=artifact, target=target, restart=restart
+    )
+    if result["ok"]:
+        from oob import config as oob_config
+
+        oob_config.mark_deployed()
+    return result
+
+
+# --------------------------------------------------------------------------- #
+# GATED C2 REDIRECTOR DEPLOY (build #13 part 4, spec §3.4)
+#
+# The SAME engine, the SAME target resolution, the SAME gates — a second artifact, not a second
+# path. Note what this wrapper does NOT take: no host, no port list, no file. The ports come
+# from the stored remote profile, resolved server-side exactly like the address, so a request
+# cannot widen what becomes publicly reachable.
+#
+# And note `stop_c2_redirector` below. It exists because this one starts a PUBLIC listener that
+# relays into the operator's own machine, and a start button without an equally reachable stop
+# is how a redirector outlives the engagement it was built for.
+# --------------------------------------------------------------------------- #
+_REDIRECTOR_SOURCE = Path(__file__).resolve().parent.parent.parent / "redirector" / "forward.py"
+
+
+def _redirector_launcher(ports: list[tuple[int, str]], remote_dir: str) -> bytes:
+    """The 0700 launcher for the forwarder. Carries no secret — there is none to carry.
+
+    Written through the same 0700 path as the canary's anyway, so there is one shape of
+    launcher on that box rather than two, and a secret added here later inherits the handling
+    instead of needing it remembered.
+    """
+    from . import redirector as redirector_mod
+
+    argv = redirector_mod.forwarder_argv(ports)
+    return (
+        "#!/bin/sh\n"
+        "# Written by HackPit. A PUBLIC forwarder: it relays inbound connections down the\n"
+        "# operator's reverse tunnel. Take it down when the engagement ends.\n"
+        f"cd '{remote_dir}' || exit 1\n"
+        "exec " + " ".join(f"'{a}'" for a in argv) + "\n"
+    ).encode("utf-8")
+
+
+def deploy_c2_redirector(*, approved: bool, restart: bool = True) -> dict[str, Any]:
+    """Ship `redirector/forward.py` to the CONFIGURED host and start it. ONE gated act.
+
+    Takes no destination and no port list. Both are resolved server-side — the address from the
+    canary config store, the ports from the stored remote listener profile.
+    """
+    if not approved:
+        raise OOBDeployRefused(
+            "redirector deploy: every deploy needs an individual human approval "
+            "(approved=true) — this starts a PUBLIC listener that relays inbound traffic into "
+            "this machine",
+            "approval",
+        )
+    from . import exposure as exposure_mod
+    from . import redirector as redirector_mod
+
+    profile = exposure_mod.live_remote_profile()
+    if profile is None:
+        raise OOBDeployRefused(
+            "no remote listener profile is saved — choose the ports that become publicly "
+            "reachable before shipping anything",
+            "exposure",
+        )
+    result = exposure_mod.validate(profile)
+    if not result.ok:
+        # The saved profile is re-validated at deploy time, not only at write time: the
+        # acknowledgement that made it writable has to still be true of the thing being
+        # shipped, and a hand-edited profile file must not reach the VPS unchecked.
+        raise OOBDeployRefused("; ".join(result.refusals), "exposure")
+
+    target = _resolve_target("redirector")
+    artifact = _Artifact(
+        label="redirector",
+        filename="forward.py",
+        source=_REDIRECTOR_SOURCE,
+        remote_dir=redirector_mod.REMOTE_DIR,
+        launcher=_redirector_launcher(result.ports, redirector_mod.REMOTE_DIR),
+        log_name="redirector.log",
+    )
+    shipped = _deploy_artifact(
+        approved=approved, artifact=artifact, target=target, restart=restart
+    )
+    # What is now reachable, in the words it needs to be said in — returned with the result so
+    # a panel cannot render a successful deploy without also rendering what it exposed.
+    shipped["describe"] = redirector_mod.describe(target, result.ports)
+    return shipped
+
+
+def stop_c2_redirector(*, approved: bool) -> dict[str, Any]:
+    """Kill the forwarder on the configured host. Gated like the start.
+
+    Approval-gated even though it CLOSES a public port rather than opening one, for the same
+    reason applying a listener profile is: it kills a live session path, and an operator who
+    did not mean it loses whatever was riding it. It is deliberately as easy to reach as the
+    deploy — a start button without an equally reachable stop is how a public forwarder
+    outlives the engagement it was built for.
+    """
+    if not approved:
+        raise OOBDeployRefused(
+            "stopping the redirector kills any session riding it — set approved=true",
+            "approval",
+        )
+    from . import redirector as redirector_mod
+
+    target = _resolve_target("redirector")
+    quoted_dir = f"'{redirector_mod.REMOTE_DIR}'"
+    outcome = _ssh(
+        target,
+        f"pkill -f {quoted_dir}/forward.py >/dev/null 2>&1; sleep 1; "
+        f"pgrep -f {quoted_dir}/forward.py >/dev/null && "
+        f"{{ echo 'still running' >&2; exit 1; }} || echo stopped",
+    )
+    return {
+        "ok": outcome["exit_code"] == 0,
+        "artifact": "redirector",
+        "target": target.describe(),
+        "steps": [{"step": "stop", **outcome}],
     }

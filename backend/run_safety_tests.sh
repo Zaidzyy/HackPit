@@ -182,6 +182,10 @@ run_test test_oob_templates.py "OOB payload templates (token left of the zone pe
 
 run_test test_oob_deploy_safety.py "OOB deploy SAFETY invariants (signature carries NO destination / no agent path / refusal sends nothing / secret never in an argv)"
 
+run_test test_redirector.py "C2 redirector (LIVE loopback forward both ways / the two ends agree on the tunnel port / UDP gets socat, never a bogus ssh -R)"
+
+run_test test_redirector_safety.py "C2 redirector SAFETY invariants (one loopback destination / no name resolution / remote ack unconditional / paths never half-mix)"
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="
@@ -195,6 +199,11 @@ if [ "$1" = "--with-proof" ]; then
   echo
   echo "== OOB canary LOOPBACK end-to-end proof (real sockets, no infrastructure — must exit 0) =="
   "$PY" ../docker/proof/oob_loopback_proof.py
+  # Same shape: real sockets, no Docker, nothing beyond 127.0.0.1. A redirector relaying
+  # 127.0.0.1:A -> 127.0.0.1:B IS the whole mechanism; only public reachability is NOT-RUN.
+  echo
+  echo "== C2 redirector LOOPBACK end-to-end proof (real sockets, no VPS — must exit 0) =="
+  "$PY" ../docker/proof/redirector_loopback_proof.py
 else
   echo
   echo "Hermetic safety tests passed ($FILES_RUN test files, every one exited 0)."

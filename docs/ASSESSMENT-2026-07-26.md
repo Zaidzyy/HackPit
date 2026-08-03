@@ -1693,3 +1693,51 @@ Suite **62 files, 0 failures**, up from 59.
 ### What is not built yet
 
 Part 1a is now complete. The public C2 redirector remains **part 4**; this server records hits and never forwards, and nothing in it can be turned into a redirector — an outbound-connect ban is asserted over its AST.
+
+## Build #13 part 4 — the public C2 redirector (2026-08-03)
+
+The last piece of "where a callback lands". Part 1 made the destination configurable but every destination it can express is an interface **on this machine** — so an implant inside an internet-facing target has nowhere to call, because a laptop behind NAT has no address anyone can dial. Part 3 made the *proof* of a blind vulnerability reachable and deliberately cannot carry a session. This adds the remaining shape: a redirector on a VPS the operator already owns, which accepts an inbound connection on a public port and relays it down a reverse tunnel that was dialled **outward**. The implant talks to the VPS; the VPS talks down a tunnel established from the inside; nothing is traversed inbound.
+
+### This one carries real AUP weight, and the safety argument had to be rebuilt
+
+Part 3's canary is safe to expose because of an **absence** — it records, never executes, never forwards, and answers a constant. Reusing that shape here would be dishonest, because this component *forwards by design*: it is the exact thing `test_oob_server.py` has an AST-asserted ban against the canary becoming. What is actually being stood up is an always-on listener on a public IP, reachable by anyone who scans that address rather than only by the target under test, relaying traffic it did not authenticate, **into the operator's own machine**. That last direction is the one that matters — a misconfigured redirector is an inbound path from the internet to a laptop, not just an exposed service on a rented box.
+
+So the claim is **bounded forwarding**, and the bounds are structural rather than advisory:
+
+* **One destination, and it is loopback.** `TARGET_HOST` is a module constant in the deployable. A test walks every addressing call in the file and asserts each one uses it — with the answering half held to its own non-empty rule, since replying to the source of a datagram is not choosing a destination. Nothing in the file resolves a hostname. An open forwarder on a public IP is precisely what a stranger scanning that address wants to find, so "it cannot be pointed elsewhere" had to be a property of the code.
+* **An enumerated port set.** No ranges, the same rule part 1 already applies, for the same reason: a reviewer has to be able to read the whole exposed surface at a glance.
+* **Off unless the tunnel is up.** With nothing attached, the loopback target is a closed port, so a client is accepted and dropped. That is the right failure direction, and the proof asserts it *first* — before any listener exists — because it is the state a redirector spends most of its life in.
+* **Deploy and stop are both gated, and equally reachable.** A start button without an equally reachable stop is how a public forwarder outlives the engagement it was built for.
+* **The panel says all of this in those words.** The exposure sentence, the AUP position and the teardown command are returned *with* the profile, so a panel cannot render a configured redirector without also rendering what it exposes.
+
+**Authentication is deliberately not built, and the reason is written down.** It would be theatre: a shared secret would have to live inside the implant, which is a binary the target holds. A fake control standing beside a real one is worse than no control, because it invites trusting the wrong thing.
+
+### Extending part 1 rather than sitting beside it
+
+`ListenerProfile` gains a `destination` of `local` (unchanged, and regression-locked — part 1's tests and its published-port scanner pass untouched) or `remote`. The two are not one path with a flag, and the validation genuinely differs rather than being reused with exceptions carved out: a remote profile has no bind address to check liveness on, no container, and **no private case** — a port on a VPS is reachable by anyone, so the public acknowledgement is unconditional rather than conditional on classifying an address there is none of. `render`, `write`, `compose_command` and `apply` all refuse a remote profile at the door, and `write_remote` refuses a local one, so the two paths cannot half-mix into a compose file that publishes on `''` or an operator believing a VPS is exposed when nothing was shipped to it. `observe()` reports `remote` and does not guess — `docker inspect` says nothing about a process on someone else's machine, and answering anyway would be the exact defect `lifecycle.py` exists to prevent.
+
+### One deploy engine, not a second path
+
+Part 3's deploy ships one file to the configured VPS behind an approval and takes no destination. Part 4 needed to ship a different file to the same box, and two of the three available answers were wrong: a second deploy function would repeat part 2's mistake of two places implementing the same gates, and a `path` parameter would turn a deploy button into an arbitrary-write primitive on a machine reached over SSH once. So the transport, target resolution, gates, stdin-not-argv secret discipline and step orchestration became **one private engine**, with the artifact as a module-level constant built inside each wrapper from repository paths and server-side config. The public surface is three thin wrappers that take an approval and nothing addressable, and the signature assertion now runs over **all three** — plus a new check that reconciles the wrapper list against the real module, so a fourth one added without a line in the enumeration fails rather than going unchecked.
+
+### The one awkward fact, stated rather than papered over
+
+**SSH reverse tunnels carry TCP only.** A Sliver implant or a reverse shell rides `ssh -R` end to end; a DNS tunnel does not. Rendering an `-R` line for UDP would produce a command that runs cleanly and carries nothing — indistinguishable from a target that never called back, which is the precise class of silent failure part 3 exists to remove. So the UDP case renders a `socat` pair with each end labelled by *where it runs*, and says why. The tunnel itself terminates on `127.0.0.1` on the VPS rather than `0.0.0.0`: the alternative needs `GatewayPorts yes` and would put the tunnel endpoint on a public interface with no forwarder in front of it — an unbounded relay straight into the operator's machine.
+
+The reverse tunnel is **rendered and never run**, the same boundary the DNS-tunnel client one-liner draws. It is a long-lived outbound process on the operator's own machine, and starting it deliberately is the approval.
+
+### A test bug worth recording
+
+The first draft of the destination scan read `args[0]` for every addressing call — correct for `connect`, wrong for `sendto`, whose signature is `(data, address)`. It inspected the *payload* and reported every legitimate relay as an unknown destination. That is the kind of false alarm that gets a guard loosened rather than fixed, so the predicate now records which argument carries the address per call shape, and a control asserts specifically that `sendto`'s address slot is the one being read.
+
+### Verification
+
+**On loopback, for real.** A redirector relaying `127.0.0.1:A → 127.0.0.1:B` is the entire mechanism; the only thing a public IP adds is that a stranger can reach A. So the proof runs a real forwarder, a real listener standing in for the far end of the tunnel, and a real client standing in for an implant: a full exchange in both directions over TCP, the same over UDP, the accept-and-drop behaviour with nothing attached, survival of a client that vanishes mid-stream, and agreement between the rendered `ssh -R` port and the port the running forwarder actually relayed to. Hermetically, two new test files cover the live forward, the rendering, and the four safety invariants with a control each.
+
+**Reported NOT-RUN, named individually, never folded into a pass:** that a connection from the internet reaches the forwarder on its public address, one real implant session through the full chain, and the SSH transfer itself. Only the first is a property of this component that nothing local can stand in for; the deploy's *gates* are covered hermetically and what is missing there is a remote box, not an untested control.
+
+### Frontend
+
+`:exposure` at `/exposure` — and this is where part 1's four `/cockpit/exposure` endpoints finally get a caller, having shipped with none. That was the same gap build #12 existed to close, and adding a second orphan surface beside it would have compounded it. The panel walks both destinations from one port selection, keeps the approval explicit for every destructive or exposing action, and renders the reverse-tunnel command, the socat bridges and the teardown with copy buttons. eslint holds at the accepted baseline of 11.
+
+Suite **64 files, 0 failures**, up from 62.

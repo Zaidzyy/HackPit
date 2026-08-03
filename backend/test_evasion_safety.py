@@ -6,8 +6,20 @@ list of properties, and these tests exist so that list cannot quietly erode:
 
   1. NO AGENT PATH — no orchestrator / loop / agent module can reach it. A human invokes it
      through the HTTP endpoint or not at all.
-  2. GENERATE-ONLY — it never runs or deploys what it builds. The produced artifact path is
-     never argv[0], and no deploy/execute primitive exists in the package.
+  2. DELIVERY IS A CLOSED SET, AND INVOKE IS WinRM-ONLY (build #13 part 2 — CHANGED).
+     This used to read "GENERATE-ONLY — it never runs or deploys what it builds", enforced by
+     two tests. That property was removed ON PURPOSE, following the precedent set when the
+     Sliver server and the pivot/DNS listeners went from refused-outright to
+     gated-and-allowed: the GATE, not the absence of the feature, is the control. The artifact
+     always landed in a loot directory mounted into the sandbox and sitting on the host, so an
+     operator could already copy it out and run it; what changed is that the step no longer has
+     to leave the tool.
+
+     What replaces it, asserted just as hard: `kind` is a CLOSED SET and no request field is a
+     command (a free-form delivery string would be a general exec path with none of the
+     executor's gates); the artifact is a program ONLY on the gated WinRM invoke path, and a
+     sandbox invoke is REFUSED rather than merely unimplemented; and `generate` itself is
+     unchanged — it still never puts the artifact in a program position.
   3. GATED — every build runs the SAME gates a one-shot command does: approval, scope, and
      the heuristic red-confirm. Both generators are in allowlist._FRAMEWORKS so the
      red-confirm always fires.
@@ -175,17 +187,48 @@ def test_the_engine_imports_no_agent_module() -> None:
 # --------------------------------------------------------------------------- #
 # 2. GENERATE-ONLY
 # --------------------------------------------------------------------------- #
-def test_the_package_has_no_deploy_or_execute_primitive() -> None:
-    for banned in ("def deploy", "def run_artifact", "def execute", "def upload",
-                   "def deliver", "docker cp", "scp ", "Invoke-WebRequest"):
-        assert banned not in SRC, f"the engine must have no delivery primitive (found {banned!r})"
-    # argv-form too: a list-built `docker cp` would not match the substring above.
-    for node in ast.walk(TREE):
-        if isinstance(node, ast.List):
-            lits = [e.value for e in node.elts
-                    if isinstance(e, ast.Constant) and isinstance(e.value, str)]
-            assert lits[:2] != ["docker", "cp"], "argv-form `docker cp` is a delivery primitive"
-    print("  no deploy / execute / delivery primitive exists in the package: PASS")
+def test_delivery_is_a_closed_set() -> None:
+    """REPLACES test_the_package_has_no_deploy_or_execute_primitive (build #13 part 2).
+
+    The engine now HAS a delivery primitive — a deliberate policy reversal, following the
+    Sliver / listener precedent that the gate, not the absence of the feature, is the control.
+    The property that replaces "no primitive exists" is that delivery is a CLOSED SET: `kind`
+    comes from a fixed tuple, and no request value can become a command. A
+    `deliver(command=...)` taking an arbitrary delivery string would hand this package a
+    general execution path with none of the executor's gates, which is exactly the hole the
+    whole-tree scans exist to catch.
+    """
+    assert G.DELIVERY_KINDS == ("winrm", "smb"), G.DELIVERY_KINDS
+
+    # No request field is a command, and none reaches a shell.
+    fields = set(G.DeliveryRequest.model_fields)
+    for banned in ("command", "cmd", "script", "argv", "shell"):
+        assert banned not in fields, f"DeliveryRequest.{banned} would be a free-form command"
+
+    # An unknown kind is refused at construction.
+    try:
+        G.DeliveryRequest(kind="curl", artifact_path="/a", techniques=["donut-pack"], dest="//h/s")
+        raise AssertionError("an unknown delivery kind was accepted")
+    except Exception as exc:
+        assert "unknown delivery kind" in str(exc), exc
+
+    # smb argv is a LIST, built from constants plus bounded fields — never a shell string.
+    argv = G.smb_argv(
+        G.DeliveryRequest(kind="smb", artifact_path="/loot/a.bin", techniques=["donut-pack"],
+                          dest="//h/s"), "/loot/a.bin")
+    assert isinstance(argv, list) and argv[0] == "smbclient", argv
+    assert not any("shell=True" in line for line in SRC.splitlines()), "no shell anywhere"
+    print("  delivery is a closed set; no request field is a command: PASS")
+
+
+def test_the_smb_credential_is_masked_in_the_audit_record() -> None:
+    """The run store must not become a key store — obfuscation.py's rule for its tunnel key."""
+    req = G.DeliveryRequest(kind="smb", artifact_path="/loot/a.bin", techniques=["donut-pack"],
+                            dest="//h/s", smb_credential="corp\\svc%Sup3rSecret!")
+    masked = G._masked_argv(G.smb_argv(req, "/loot/a.bin"))
+    assert "Sup3rSecret!" not in " ".join(masked), masked
+    assert "***" in masked, masked
+    print("  the SMB credential is masked out of the audited argv: PASS")
 
 
 def test_the_artifact_is_never_executed() -> None:
@@ -213,6 +256,92 @@ def test_the_artifact_is_never_executed() -> None:
     # ...and nothing after `docker exec <container>` is the artifact.
     assert res.artifact_path != argv[3], "the artifact must never be the executed program"
     print("  only the generator runs; the artifact is an output value, never a program: PASS")
+
+
+def test_the_artifact_is_only_a_program_on_the_gated_invoke_path() -> None:
+    """REPLACES the absolute form of test_the_artifact_is_never_executed (build #13 part 2).
+
+    The artifact MAY now be a program — but only through `invoke`, only over WinRM, and only
+    past the gates. `generate` is unchanged and still never puts it in a program position
+    (asserted directly above). The asymmetry below is the deliberate one: there is no sandbox
+    invoke, because detonating the payload inside HackPit's own box is never what the operator
+    wants, so it is REFUSED rather than merely unimplemented.
+    """
+    # The only script that puts the artifact in a program position is the WinRM invoke.
+    assert G.winrm_invoke_script("C:/a.exe").startswith("& '"), G.winrm_invoke_script("C:/a.exe")
+    for other in (G.winrm_write_script("C:/a.exe", "QQ==", first=True),
+                  G.winrm_verify_script("C:/a.exe")):
+        assert not other.lstrip().startswith("&"), other
+
+    # Sandbox invoke is refused outright — on the `windows` gate, because the honest statement
+    # is that invoke REQUIRES the WinRM path (ExecRejected.gate is a closed Literal shared by
+    # every caller, and widening it for one module would be the wrong trade).
+    rejected = G.validate_delivery(_delivery(kind="smb", invoke=True, dangerous_ack=True))
+    assert rejected is not None and rejected.gate == "windows", rejected
+    assert "no sandbox invoke" in rejected.reason, rejected.reason
+    print("  the artifact is a program only on the gated WinRM invoke path: PASS")
+
+
+def _delivery(**kw):
+    base = dict(kind="winrm", artifact_path="/loot/a.bin", techniques=["donut-pack"],
+                dest="C:/Windows/Temp/a.exe", windows_profile_id="p1", engagement_id=None,
+                approved=False, dangerous_ack=False, invoke=False)
+    base.update(kw)
+    return G.DeliveryRequest(**base)
+
+
+def test_delivery_always_needs_the_red_confirm() -> None:
+    """Unconditionally — NOT left to the heuristic to notice.
+
+    Build #5 found a red-confirm you could defeat by moving a cmdlet one token right. A gate
+    that depends on a classifier spotting a name is a gate a rename defeats, so delivering or
+    running an evasion artifact asks for the acknowledgement itself.
+    """
+    rejected = G.validate_delivery(_delivery(approved=True, dangerous_ack=False))
+    assert rejected is not None and rejected.gate == "danger", rejected
+    # ...and WITH the ack it gets past this gate and on to the real executor gates.
+    onward = G.validate_delivery(_delivery(approved=True, dangerous_ack=True))
+    assert onward is None or onward.gate != "danger", onward
+    print("  delivery always requires the red-confirm, whatever the heuristic thinks: PASS")
+
+
+def test_delivery_routes_through_the_real_executor_gate() -> None:
+    """The gate must be executor.validate_request itself, never a local copy."""
+    calls = _call_names(_fn(TREE, "validate_delivery"))
+    assert "validate_request" in calls, calls
+    print("  delivery is gated by the REAL executor.validate_request: PASS")
+
+
+def test_delivery_needs_approval() -> None:
+    rejected = G.validate_delivery(_delivery(approved=False, dangerous_ack=True))
+    assert rejected is not None and rejected.gate in ("approval", "windows"), rejected
+    print("  an unapproved delivery is refused: PASS")
+
+
+def test_delivery_computes_the_footprint_before_the_gate() -> None:
+    """The honest half is computed FIRST, so an artifact the engine cannot describe is never
+    delivered — not even to a scoped, approved, red-confirmed target."""
+    body = _fn(TREE, "deliver").body
+    names = []
+    for node in ast.walk(ast.Module(body=body, type_ignores=[])):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            names.append(node.func.id)
+    assert "_honest_footprint" in names, names
+    assert names.index("_honest_footprint") < names.index("validate_delivery"), names
+    print("  deliver computes the mandatory footprint BEFORE the gate: PASS")
+
+
+def test_chunking_is_correct_and_a_short_write_is_caught() -> None:
+    """A truncated payload that reported success would be worse than a failed transfer."""
+    data = b"\x00\x01\x02" * 4000  # 12000 bytes -> more than one chunk
+    chunks = G._b64_chunks(data)
+    assert len(chunks) > 1, len(chunks)
+    import base64 as _b64
+    assert b"".join(_b64.b64decode(c) for c in chunks) == data, "chunks do not reassemble"
+    # first chunk truncates, the rest append — a re-run never concatenates onto a stale file
+    assert "FileMode]::Create" in G.winrm_write_script("d", chunks[0], first=True)
+    assert "FileMode]::Append" in G.winrm_write_script("d", chunks[1], first=False)
+    print(f"  the artifact chunks and reassembles exactly ({len(chunks)} chunks): PASS")
 
 
 def test_stub_techniques_execute_nothing_at_all() -> None:
@@ -429,35 +558,55 @@ def test_every_build_is_audited_and_refusals_record_nothing() -> None:
 # 7. THE HTTP SURFACE adds no capability
 # --------------------------------------------------------------------------- #
 def test_the_http_routes_add_no_capability_and_always_return_the_footprint() -> None:
-    """The routes must expose generate-only, and must not be able to hide the honest half."""
+    """The route set is CLOSED, and no route can hide the honest half.
+
+    Build #13 part 2 adds `/deliver` and this test caught it, which is the point: the route set
+    is pinned, so a new evasion surface cannot appear without someone deciding it should. What
+    changed is the set, not the rule — `download`, `execute` and `artifact` routes are still
+    forbidden, because delivery goes to a TARGET through the gates and never hands the artifact
+    back over HTTP.
+    """
     import main
 
     routes = {(tuple(sorted(r.methods)), r.path) for r in main.app.routes
               if "/api/evasion" in getattr(r, "path", "")}
     paths = {p for _, p in routes}
     assert paths == {"/api/evasion/techniques", "/api/evasion/preview",
-                     "/api/evasion/generate"}, f"unexpected evasion route set: {sorted(paths)}"
+                     "/api/evasion/generate", "/api/evasion/deliver"}, \
+        f"unexpected evasion route set: {sorted(paths)}"
 
-    # No route may deliver, deploy, execute or fetch an artifact.
-    for verb in ("deploy", "deliver", "execute", "run", "upload", "download", "artifact"):
+    # Still forbidden. `deliver` is now a route; handing the artifact BACK, or running one
+    # outside the gated delivery path, is not.
+    for verb in ("deploy", "execute", "download", "artifact"):
         assert not [p for p in paths if verb in p], f"an evasion route named {verb!r} must not exist"
 
-    # The response model itself makes the honest half non-optional, so no route can omit it.
-    assert G.EvasionResult.model_fields["footprint"].is_required()
-    assert G.EvasionResult.model_fields["opsec_note"].is_required()
+    # The response models make the honest half non-optional, so NO route can omit it.
+    for model in (G.EvasionResult, G.DeliveryResult):
+        assert model.model_fields["footprint"].is_required(), model
+        assert model.model_fields["opsec_note"].is_required(), model
 
-    # And the generate route really does declare that model as its response.
-    gen = next(r for r in main.app.routes if getattr(r, "path", "") == "/api/evasion/generate")
-    assert getattr(gen, "response_model", None) is G.EvasionResult, \
-        "the generate route must return EvasionResult, which carries the mandatory footprint"
-    print(f"  {len(paths)} /api/evasion routes: generate-only, footprint non-optional: PASS")
+    # ...and each route really does declare the model that carries it.
+    for path, model in (("/api/evasion/generate", G.EvasionResult),
+                        ("/api/evasion/deliver", G.DeliveryResult)):
+        route = next(r for r in main.app.routes if getattr(r, "path", "") == path)
+        assert getattr(route, "response_model", None) is model, \
+            f"{path} must return {model.__name__}, which carries the mandatory footprint"
+
+    print(f"  {len(paths)} /api/evasion routes: closed set, footprint non-optional on both: PASS")
 
 
 if __name__ == "__main__":
     test_no_orchestrator_or_agent_path_to_evasion()
     test_the_engine_imports_no_agent_module()
-    test_the_package_has_no_deploy_or_execute_primitive()
+    test_delivery_is_a_closed_set()
+    test_the_smb_credential_is_masked_in_the_audit_record()
     test_the_artifact_is_never_executed()
+    test_the_artifact_is_only_a_program_on_the_gated_invoke_path()
+    test_delivery_always_needs_the_red_confirm()
+    test_delivery_routes_through_the_real_executor_gate()
+    test_delivery_needs_approval()
+    test_delivery_computes_the_footprint_before_the_gate()
+    test_chunking_is_correct_and_a_short_write_is_caught()
     test_stub_techniques_execute_nothing_at_all()
     test_generation_routes_through_the_real_gates()
     test_both_generators_trip_the_red_confirm()

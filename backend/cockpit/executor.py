@@ -938,3 +938,68 @@ def run_command(request: ExecRequest) -> RunRecord:
     if record is None:  # pragma: no cover - defensive
         raise RuntimeError("run completed but record not found")
     return record
+
+
+# --------------------------------------------------------------------------- #
+# GATED WINDOWS FILE DELIVERY (build #13 part 2)
+#
+# WHY THIS LIVES HERE AND NOT IN THE CALLER. `test_winrm_safety` scans the whole tree and
+# allows only this module and the router to reach `winrm_transport` — the orchestrator
+# PROPOSES, it must never fire WinRM. The evasion engine genuinely needs to put a file on a
+# Windows host, and its first implementation imported the transport directly. That trips the
+# scan, and adding the engine to the allow-list would have been the wrong fix: it would mean a
+# THIRD module that can fire WinRM, and it would leave that module re-implementing the gates
+# beside the ones that already live here.
+#
+# So the capability lives at the gated execution point, where every other Windows command
+# already goes, and callers get it by asking rather than by reaching around. The gate runs
+# HERE — one human approval for one delivery, with the chunking an implementation detail of
+# that single approved operation rather than N separate commands nobody could sanely approve.
+# --------------------------------------------------------------------------- #
+def send_windows_scripts(
+    request: ExecRequest,
+    scripts: list[str],
+    *,
+    timeout_seconds: int = 300,
+) -> list[dict[str, Any]]:
+    """Run a SEQUENCE of PowerShell scripts on the request's profile host, as ONE gated act.
+
+    The whole sequence is one approved operation: a chunked upload is not N commands a human
+    could meaningfully approve one at a time, it is one transfer. So the gates run once, here,
+    against the request the caller built — and if any of them refuses, NOTHING is sent.
+
+    Stops at the first non-zero status: a chunk that failed means every later chunk would be
+    appending to a file that is already wrong.
+    """
+    rejected = _validate_windows(request)
+    if rejected is not None:
+        raise WindowsDeliveryRefused(rejected.reason, rejected.gate)
+    if not request.approved:
+        raise WindowsDeliveryRefused(
+            "windows delivery: every delivery needs an individual human approval "
+            "(approved=true) — the orchestrator proposes, it never auto-runs a WinRM command",
+            "approval",
+        )
+
+    resolved = resolve_mode(request)
+    profile = resolved.windows_profile or {}
+    out: list[dict[str, Any]] = []
+    for script in scripts:
+        try:
+            res = winrm_transport.run(profile, script, timeout_seconds)
+            out.append({"status_code": res.status_code, "stdout": res.stdout,
+                        "stderr": res.stderr})
+        except winrm_transport.WinRMError as exc:
+            out.append({"status_code": 1, "stdout": "", "stderr": str(exc)})
+        if out[-1]["status_code"] != 0:
+            break
+    return out
+
+
+class WindowsDeliveryRefused(RuntimeError):
+    """A gated Windows delivery that was refused. Carries the gate that refused it."""
+
+    def __init__(self, reason: str, gate: str = "windows") -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.gate = gate

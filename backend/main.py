@@ -2026,3 +2026,35 @@ def evasion_generate(
         raise _evasion_http_error(exc)
     except evasion_engine.EvasionError as exc:
         raise HTTPException(status_code=409, detail={"gate": "honesty", "reason": str(exc)})
+
+
+@app.post("/api/evasion/deliver", response_model=evasion_engine.DeliveryResult)
+def evasion_deliver(
+    req: evasion_engine.DeliveryRequest = Body(...),
+) -> evasion_engine.DeliveryResult:
+    """Put a built artifact on the target, and optionally RUN it (build #13 part 2).
+
+    THIS IS THE POLICY REVERSAL. The engine used to carry no delivery or execution primitive
+    at all. It does now, gated exactly like every other command here: engagement or Windows
+    profile → target-lock → per-command approval → red-confirm. 403 names the gate on any
+    refusal, with nothing delivered.
+
+    The red-confirm is required UNCONDITIONALLY, not left to the heuristic to notice — build
+    #5 found a red-confirm defeated by moving a cmdlet one token right.
+
+    ``kind`` is a CLOSED SET (winrm | smb). There is no free-form delivery command, because
+    one would be a general execution path with none of these gates. ``invoke`` is WinRM-only:
+    running the artifact inside HackPit's own sandbox would detonate it on the operator's box,
+    so it is refused rather than merely unimplemented.
+
+    409 with ``gate='honesty'`` if the footprint cannot be produced — no footprint, no
+    delivery, same contract as generate.
+    """
+    try:
+        return evasion_engine.deliver(req)
+    except evasion_engine.EvasionRefused as exc:
+        raise _evasion_http_error(exc)
+    except evasion_engine.EvasionError as exc:
+        raise HTTPException(status_code=409, detail={"gate": "honesty", "reason": str(exc)})
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail={"gate": "artifact", "reason": str(exc)})

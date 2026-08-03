@@ -418,11 +418,10 @@ claim every JSON loot file in the tree."
 - Consumes: `dangerous_command_heuristic(command: str, args: list[str]) -> list[str]` from `cockpit/allowlist.py`; `loader.load().tools` from `arsenal/loader.py`.
 - Produces: catalog invocations `zap-baseline.py` (passive) and `zap-full-scan.py` (active). Task 4 confirms these names against the built image.
 
-> **DECISION REQUIRED BEFORE THIS TASK — see "Open decision" at the end of this plan.**
-> `sqlmap`, `nikto`, `dalfox` and `nuclei` are currently in `_MUST_NOT_FIRE`, i.e. active web
-> scanners do NOT currently require the red-confirm. Putting `zap-full-scan.py` in `_MUST_FIRE`
-> makes ZAP stricter than the rest of its family. This plan implements the spec as approved
-> (ZAP active fires); if the decision changes, only this task changes.
+> **DECISION RESOLVED (2026-08-03, Zaid): ship as specced.** `zap-full-scan.py` demands the
+> red-confirm; `sqlmap`, `nikto`, `dalfox` and `nuclei` stay in `_MUST_NOT_FIRE` untouched. ZAP
+> is deliberately stricter than the rest of its family — see the decision note at the end of
+> this plan before changing it.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -964,7 +963,7 @@ parser registry are keyed differently ON PURPOSE."
 - [ ] The detection panel describes a ZAP run rather than showing nothing.
 - [ ] `docs/ASSESSMENT-2026-07-26.md` updated and regenerated in the same commit, verified against the HTML.
 
-## Open decision — resolve before Task 2
+## Decision — RESOLVED 2026-08-03 (Zaid): option 1, ship as specced
 
 **`sqlmap`, `nikto`, `dalfox`, `nuclei` and `wpscan` are all in `_MUST_NOT_FIRE`.** They send attack traffic too — sqlmap is arguably more intrusive than a ZAP full scan. Putting `zap-full-scan.py` in `_MUST_FIRE` therefore makes ZAP the *only* active web scanner requiring the red-confirm.
 
@@ -974,4 +973,10 @@ Three options:
 2. **Reclassify the family**: move sqlmap/dalfox/nikto to `_MUST_FIRE` too. Consistent, but adds a confirm to tools used constantly — and `_MUST_NOT_FIRE`'s own AD note warns that a confirm firing on almost everything "stops meaning anything."
 3. **Put ZAP active in `_MUST_NOT_FIRE`** with the family. Consistent, but drops a control on the loudest tool in the set and contradicts the approved spec.
 
-This plan implements **option 1**. Only Task 2 changes if the decision differs.
+**RESOLVED: option 1.** `zap-full-scan.py` goes in `_MUST_FIRE`; sqlmap/nikto/dalfox/nuclei are
+left exactly as they are. Rationale accepted: the heuristic is documented as over-inclusive
+best-effort, a ZAP full scan is the broadest tool in the set, and erring safe on the new tool
+changes no existing behaviour. Task 2 implements this; no other task is affected.
+
+The inconsistency is deliberate and recorded here so a future reader does not "fix" it by
+quietly demoting ZAP. If the family is ever reclassified, that is its own decision.

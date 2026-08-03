@@ -124,11 +124,18 @@ The VMnet8 lab case *is* a profile — `192.168.13.1` + `dns-tunnel` → `53/udp
 named preset `vmnet8-dns`, `docker/proof/c2-lab.yml` is deleted, and `c2_lab_proof.sh` generates
 its profile before bringing the stack up.
 
-**A test asserts the preset renders byte-equivalent to the file build #10 hand-wrote.** That file
-moves from `docker/proof/c2-lab.yml` to `backend/test_support/c2-lab.golden.yml`, where it is no
-longer a live compose path but the fixture the equivalence test compares against. The
-generalisation is therefore *proven* faithful to the thing it replaces rather than assumed to be —
-the same discipline as the KB fixture's byte-identity check. One live exposure file, ever.
+**A test asserts the preset renders the same EFFECTIVE EXPOSURE as the file build #10 hand-wrote:**
+`published_ports()` over the generated file equals `published_ports()` over the original, attached
+to the same compose service. That file moves from `docker/proof/c2-lab.yml` to
+`backend/test_support/c2-lab.golden.yml`, where it is no longer a live compose path but the
+fixture the equivalence test compares against.
+
+*Byte-equivalence was the first claim here and it was wrong* — build #10's file opens with 27
+lines of hand-written prose explaining why VMnet8 and why UDP/53, and no generator will reproduce
+that. Comparing the parsed exposure is the honest comparison and it is also the one that matters:
+the guarantee wanted is "this preset exposes exactly what the hand-written file exposed", not
+"this preset reproduces its comments". The generalisation is therefore *proven* faithful to the
+thing it replaces rather than assumed to be. One live exposure file, ever.
 
 ### 3.5 The generated file is gitignored
 

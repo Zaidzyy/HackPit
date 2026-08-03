@@ -1513,6 +1513,85 @@ export const stopTunnel = (tid: string, signal?: AbortSignal) =>
     signal,
   }).then((r) => r.json() as Promise<Tunnel>);
 
+/* -------------------------------------------------------------------------- */
+/* the recording proxy (build #14 part 2)                                     */
+/* -------------------------------------------------------------------------- */
+export type Proxy = {
+  id: string;
+  container: string;
+  port: number;
+  /** starting | listening | down — OBSERVED after the settle window, never assumed. */
+  status: string;
+  /** What was actually seen about the process and its port. The evidence behind `status`. */
+  liveness: string;
+  captured: number;
+  started_at: string;
+  engagement_id: string | null;
+};
+
+export type ProxyStatus = {
+  lab_sandbox: string;
+  lab_running: boolean;
+  engage_sandbox: string;
+  engage_running: boolean;
+  live: number;
+  default_port: number;
+};
+
+export type CapturedHeader = { name: string; value: string };
+
+/** One recorded request/response pair. Field names match the repeater's on purpose. */
+export type CapturedExchange = {
+  id: string;
+  request: { method: string; url: string; headers: CapturedHeader[]; body: string };
+  response: {
+    status: number | null;
+    headers: CapturedHeader[];
+    body: string;
+    size_bytes: number;
+    time_ms: number;
+  };
+  sent_at: string;
+  container: string;
+};
+
+export const getProxyStatus = (signal?: AbortSignal) =>
+  getJSON<ProxyStatus>("/cockpit/proxy/status", signal);
+
+export const listProxies = (signal?: AbortSignal) =>
+  getJSON<Proxy[]>("/cockpit/proxy", signal);
+
+export const startProxy = (
+  body: {
+    port?: number;
+    engagement_id?: string | null;
+    // A recording proxy holds full request bodies — credentials and session tokens in
+    // cleartext — so starting it clears an explicit approval AND the danger red-confirm.
+    // Both default false on the backend, so omitting them is a refusal, never a silent grant.
+    approved?: boolean;
+    dangerous_ack?: boolean;
+  },
+  signal?: AbortSignal
+) => postJSON<Proxy>("/cockpit/proxy", body, signal);
+
+export const stopProxy = (pid: string, signal?: AbortSignal) =>
+  fetch(`${API_URL}/cockpit/proxy/${encodeURIComponent(pid)}`, {
+    method: "DELETE",
+    signal,
+  }).then((r) => r.json() as Promise<Proxy>);
+
+/** Captured exchanges. READ-ONLY; bodies come back RAW (redaction applies only in reports). */
+export const proxyHistory = (
+  container: string,
+  port: number,
+  count = 50,
+  signal?: AbortSignal
+) =>
+  getJSON<CapturedExchange[]>(
+    `/cockpit/proxy/history?container=${encodeURIComponent(container)}&port=${port}&count=${count}`,
+    signal
+  );
+
 /** Resolve the tunnel for a host and get the rewritten command to APPROVE. Pure — nothing runs. */
 export type RouteResult = {
   routed: boolean;

@@ -21,9 +21,12 @@ command. Exposure and lab isolation are mutually exclusive by construction, not 
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 import socket
+import subprocess
 from pathlib import Path
+from typing import Any, Callable
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field, field_validator
@@ -334,3 +337,72 @@ def clear() -> bool:
         PROFILE_PATH.unlink()
         return True
     return False
+
+
+_PORTS_FMT = "{{json .NetworkSettings.Ports}}"
+
+
+def _docker_ports(container: str) -> tuple[int, str, str]:
+    try:
+        p = subprocess.run(
+            ["docker", "inspect", "-f", _PORTS_FMT, container],
+            capture_output=True, text=True, timeout=10.0,
+        )
+        return p.returncode, p.stdout.strip(), p.stderr.strip()
+    except FileNotFoundError:
+        return 127, "", "docker CLI not found on PATH"
+    except subprocess.TimeoutExpired:
+        return 124, "", "docker inspect timed out"
+
+
+def observe(
+    profile: "ListenerProfile | None" = None,
+    *,
+    runner: "Callable[[list[str]], tuple[int, str, str]] | None" = None,
+) -> dict[str, Any]:
+    """What is ACTUALLY published, compared against what the profile asked for.
+
+    Never reports a state it has not looked at — the rule lifecycle.py exists to enforce,
+    applied to exposure instead of listener liveness. `status="listening"` assigned at Popen
+    time was false for two of three binaries; `state="active"` assigned at write time would be
+    false for every profile until the container is recreated. So: a container publishing
+    something other than the profile is `drifted`, never `active`, and docker being unavailable
+    is `unknown`, never `active`.
+    """
+    if profile is None:
+        return {"state": "none", "published": {}, "expected": [], "note": "no profile written"}
+
+    container = EXPOSABLE.get(profile.container, profile.container)
+    call = runner or (lambda _argv: _docker_ports(container))
+    rc, out, err = call(["docker", "inspect", "-f", _PORTS_FMT, container])
+    if rc != 0:
+        return {"state": "unknown", "published": {}, "expected": [],
+                "note": err or f"docker inspect failed (rc {rc})"}
+
+    try:
+        published = json.loads(out or "{}") or {}
+    except json.JSONDecodeError:
+        return {"state": "unknown", "published": {}, "expected": [],
+                "note": "could not parse docker inspect output"}
+
+    expected = derive_ports(profile.kinds, profile.extra)
+    want = {f"{port}/{proto}": (profile.ip, str(port)) for port, proto in expected}
+
+    seen: dict[str, Any] = {}
+    for key, bindings in published.items():
+        for b in bindings or []:
+            seen[key] = (b.get("HostIp"), b.get("HostPort"))
+
+    if not seen:
+        return {"state": "pending-restart", "published": {}, "expected": expected,
+                "note": "profile written; recreate the container to apply it"}
+
+    if len(seen) == len(want) and all(seen.get(k) == v for k, v in want.items()):
+        return {
+            "state": "active", "published": seen, "expected": expected,
+            "note": "a published port is NOT an open port — if a callback does not land, "
+                    "check the host firewall before anything else",
+        }
+
+    return {"state": "drifted", "published": seen, "expected": expected,
+            "note": "the container publishes something other than this profile — recreate it"}

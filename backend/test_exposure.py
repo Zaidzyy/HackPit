@@ -223,6 +223,51 @@ def test_write_refuses_a_bad_profile_and_writes_a_good_one() -> None:
     print("  write refuses a bad profile without touching disk, and clear is idempotent: PASS")
 
 
+def _fake_docker(mapping):
+    import json as _json
+
+    def run(_argv):
+        return 0, _json.dumps(mapping), ""
+    return run
+
+
+def test_observe_reports_what_is_true() -> None:
+    p = _profile(ip="10.10.14.7", kinds=["dns-tunnel"])
+
+    active = _fake_docker({"53/udp": [{"HostIp": "10.10.14.7", "HostPort": "53"}]})
+    assert exposure.observe(p, runner=active)["state"] == "active"
+
+    pending = _fake_docker({})
+    assert exposure.observe(p, runner=pending)["state"] == "pending-restart"
+
+    drifted = _fake_docker({"53/udp": [{"HostIp": "192.168.1.5", "HostPort": "53"}]})
+    assert exposure.observe(p, runner=drifted)["state"] == "drifted"
+
+    def broken(_argv):
+        return 127, "", "docker CLI not found on PATH"
+    assert exposure.observe(p, runner=broken)["state"] == "unknown"
+
+    assert exposure.observe(None, runner=pending)["state"] == "none"
+    print("  observe reports active / pending-restart / drifted / unknown / none: PASS")
+
+
+def test_observe_never_claims_active_on_a_mismatch() -> None:
+    """The case that matters. A container publishing SOME of the profile is not active."""
+    p = _profile(ip="10.10.14.7", kinds=["dns-tunnel", "sliver"])
+    half = _fake_docker({"53/udp": [{"HostIp": "10.10.14.7", "HostPort": "53"}]})
+    assert exposure.observe(p, runner=half)["state"] == "drifted"
+    print("  a partially-published profile is drifted, never active: PASS")
+
+
+def test_observe_mentions_the_firewall_when_active() -> None:
+    """A published port is not an open port, and the surface should say so rather than leave
+    the operator guessing when a callback does not land."""
+    p = _profile(ip="10.10.14.7", kinds=["dns-tunnel"])
+    active = _fake_docker({"53/udp": [{"HostIp": "10.10.14.7", "HostPort": "53"}]})
+    assert "firewall" in exposure.observe(p, runner=active)["note"].lower()
+    print("  an active profile says a published port is not an open port: PASS")
+
+
 if __name__ == "__main__":
     print("== listener profiles (build #13) ==")
     test_ports_derive_from_kinds()
@@ -244,5 +289,8 @@ if __name__ == "__main__":
     test_generated_profile_is_gitignored()
     test_compose_command_carries_both_files()
     test_write_refuses_a_bad_profile_and_writes_a_good_one()
+    test_observe_reports_what_is_true()
+    test_observe_never_claims_active_on_a_mismatch()
+    test_observe_mentions_the_firewall_when_active()
     print("all listener-profile tests passed")
     sys.exit(0)

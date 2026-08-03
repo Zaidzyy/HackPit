@@ -176,6 +176,53 @@ def test_render_is_deterministic() -> None:
     print("  render is deterministic for a given profile and timestamp: PASS")
 
 
+def test_generated_profile_is_gitignored() -> None:
+    """The first profile generated on a client engagement holds THEIR internal address, and
+    this repository is public. Same class as the hardcoded user path parameterised out of
+    fix-vmnet8.ps1 before it was tracked."""
+    import subprocess
+    out = subprocess.run(
+        ["git", "check-ignore", "docker/listener-profile.yml"],
+        cwd=str(exposure.REPO_ROOT), capture_output=True, text=True,
+    )
+    assert out.returncode == 0, "docker/listener-profile.yml is NOT gitignored"
+    print("  the generated profile is gitignored: PASS")
+
+
+def test_compose_command_carries_both_files() -> None:
+    argv = exposure.compose_command(_profile())
+    assert argv[:2] == ["docker", "compose"], argv
+    assert argv.count("-f") == 2, argv
+    joined = " ".join(argv)
+    assert "docker-compose.yml" in joined and "listener-profile.yml" in joined, argv
+    assert argv[-3:] == ["up", "-d", "engage-sandbox"], argv
+    print("  the compose command names both files and the one service: PASS")
+
+
+def test_write_refuses_a_bad_profile_and_writes_a_good_one() -> None:
+    import tempfile
+    from pathlib import Path as _P
+    original = exposure.PROFILE_PATH
+    with tempfile.TemporaryDirectory() as d:
+        exposure.PROFILE_PATH = _P(d) / "listener-profile.yml"
+        try:
+            try:
+                exposure.write(_profile(ip="0.0.0.0"), at=_AT)   # unacknowledged wildcard
+                raise AssertionError("an unacknowledged wildcard was written")
+            except exposure.ExposureRefused:
+                pass
+            assert not exposure.PROFILE_PATH.exists(), "a refused profile still wrote a file"
+
+            exposure.write(_profile(ip="127.0.0.1"), at=_AT)
+            assert exposure.PROFILE_PATH.exists()
+            assert '"127.0.0.1:53:53/udp"' in exposure.PROFILE_PATH.read_text(encoding="utf-8")
+            assert exposure.clear() is True
+            assert exposure.clear() is False
+        finally:
+            exposure.PROFILE_PATH = original
+    print("  write refuses a bad profile without touching disk, and clear is idempotent: PASS")
+
+
 if __name__ == "__main__":
     print("== listener profiles (build #13) ==")
     test_ports_derive_from_kinds()
@@ -194,5 +241,8 @@ if __name__ == "__main__":
     test_render_publishes_exactly_the_derived_ports()
     test_ack_line_is_rendered_only_when_needed()
     test_render_is_deterministic()
+    test_generated_profile_is_gitignored()
+    test_compose_command_carries_both_files()
+    test_write_refuses_a_bad_profile_and_writes_a_good_one()
     print("all listener-profile tests passed")
     sys.exit(0)

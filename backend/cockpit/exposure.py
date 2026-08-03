@@ -292,3 +292,45 @@ def render(profile: ListenerProfile, *, at: str) -> str:
     for port, proto in ports:
         out.append(f'      - "{profile.ip}:{port}:{port}/{proto}"\n')
     return "".join(out)
+
+
+def compose_command(profile: ListenerProfile) -> list[str]:
+    """The exact argv that applies this profile. PURE — builds a list, runs nothing.
+
+    Both `-f` flags, always. Compose merges overrides onto the base file, so omitting the first
+    would bring the service up with no image, and omitting the second is the whole exposure
+    silently not happening. The same pair is needed on teardown.
+    """
+    return [
+        "docker", "compose",
+        "-f", str(DEFAULT_COMPOSE_PATH),
+        "-f", str(PROFILE_PATH),
+        "up", "-d", profile.container,
+    ]
+
+
+def write(profile: ListenerProfile, *, at: str) -> Path:
+    """Validate, render, write. Raises ExposureRefused on any refusal.
+
+    Warnings do NOT stop it — a dead bind address is a warning because Docker already fails
+    loudly on one, and refusing would break the real case of writing a profile while off the
+    VPN, intending to connect before applying it.
+    """
+    result = validate(profile)
+    if not result.ok:
+        raise ExposureRefused("; ".join(result.refusals))
+    PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PROFILE_PATH.write_text(render(profile, at=at), encoding="utf-8")
+    return PROFILE_PATH
+
+
+def clear() -> bool:
+    """Remove the profile. True if one was there.
+
+    The CONTAINER keeps its bindings until it is recreated, so this does not close a port on
+    its own — observe() reports that state as `drifted`, never as `none`.
+    """
+    if PROFILE_PATH.exists():
+        PROFILE_PATH.unlink()
+        return True
+    return False

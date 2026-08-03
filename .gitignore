@@ -83,3 +83,7 @@ Thumbs.db
 # settings.local.json holds per-machine tool permissions with absolute home paths.
 # This repo is PUBLIC; a home directory in git history is permanent (see D20).
 .claude/settings.local.json
+
+# Generated listener profile (build #13). Operator-local machine state, not source — and on a
+# client engagement it holds THEIR internal address, in a public repository.
+docker/listener-profile.yml

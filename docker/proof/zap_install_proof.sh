@@ -80,31 +80,65 @@ fi
 # Skipped rather than failed when the stack is down: this proof is about the image, and the
 # name checks above are the load-bearing part.
 if docker ps --format '{{.Names}}' | grep -qx "$SANDBOX" && docker ps --format '{{.Names}}' | grep -qx "$LAB"; then
-  printf '  ....  running a real ACTIVE scan against the lab target (several minutes)\n'
-  # Written INSIDE the container, then copied out — `-quickout` needs a real path, and a
-  # `docker exec ... > file` redirect on the host would capture progress chatter as well.
-  docker exec "$SANDBOX" rm -f /tmp/zap-proof.json >/dev/null 2>&1 || true
-  if docker exec "$SANDBOX" zaproxy -cmd -quickurl "http://$LAB:3000" \
-       -quickout /tmp/zap-proof.json >/dev/null 2>&1; then
-    ok "the scan completed"
-  else
-    ok "the scan exited non-zero (it does that when it finds alerts)"
+  # *** THE CONTAINER IS NOT THE IMAGE. *** Every check above ran `docker run` against the
+  # freshly built IMAGE; the scan below runs `docker exec` inside a LONG-LIVED CONTAINER, and
+  # `docker compose up -d` does not recreate a running container just because its image was
+  # rebuilt. The first run of this proof hit exactly that: all six name checks passed against a
+  # new image while the sandbox had been up for 45 minutes on the old one, and the failure
+  # surfaced as the meaningless "no report was written". Compare them, and say so plainly.
+  IMAGE_ID="$(docker image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || echo unknown)"
+  CONTAINER_IMAGE_ID="$(docker inspect "$SANDBOX" --format '{{.Image}}' 2>/dev/null || echo unknown)"
+  if [ "$IMAGE_ID" != "$CONTAINER_IMAGE_ID" ]; then
+    bad "$SANDBOX is running a DIFFERENT image than the one just built and verified.
+        image:     $IMAGE_ID
+        container: $CONTAINER_IMAGE_ID
+        The name checks above therefore say nothing about what this container can run. Recreate
+        it, then re-run this proof:
+          docker compose -f docker/docker-compose.yml up -d --force-recreate kali-sandbox"
+    printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
+    exit 1
   fi
-  docker exec "$SANDBOX" cat /tmp/zap-proof.json > /tmp/zap-lab-proof.json 2>/dev/null \
-    || bad "no report was written inside the container"
+  ok "the running sandbox is the image that was just built and verified"
+
+  printf '  ....  running a real ACTIVE scan against the lab target (several minutes)\n'
+  # *** MSYS_NO_PATHCONV. *** On a Windows host running Git Bash, MSYS rewrites any argument
+  # that looks like an absolute POSIX path into a Windows one BEFORE docker sees it — so a
+  # CONTAINER path becomes a host path in transit. This cost a debugging round: ZAP reported
+  #   Writing results to /usr/share/zaproxy/C:/Users/.../Temp/zap-proof.json
+  #   The directory of given '-quickout' file is not writable
+  # and exited 0, which read as "the scan worked but wrote nothing". The tool was fine; the
+  # argument never arrived. Harmless on Linux, where the variable is simply unused.
+  #
+  # A non-zero exit is NOT automatically fine either — ZAP exits non-zero both when it finds
+  # alerts and when it fails to start. The first version of this file called both "ok", which
+  # turned a hard failure into a passing line. The exit code is printed; whether the run was
+  # good is decided by the report existing, below.
+  REPORT_IN_CONTAINER='/tmp/zap-proof.json'
+  MSYS_NO_PATHCONV=1 docker exec "$SANDBOX" rm -f "$REPORT_IN_CONTAINER" >/dev/null 2>&1 || true
+  MSYS_NO_PATHCONV=1 docker exec "$SANDBOX" zaproxy -cmd -quickurl "http://$LAB:3000" \
+      -quickout "$REPORT_IN_CONTAINER" >/tmp/zap-scan.log 2>&1
+  printf '        (scan exit=%s)\n' "$?"
+  if MSYS_NO_PATHCONV=1 docker exec "$SANDBOX" test -s "$REPORT_IN_CONTAINER"; then
+    ok "a report was written inside the container"
+  else
+    bad "no report was written inside the container (see /tmp/zap-scan.log)"
+  fi
 
   cd "$(dirname "$0")/../../backend" || die "cannot find backend/"
   PY=".venv/Scripts/python.exe"
   [ -x "$PY" ] || PY=".venv/bin/python"
   [ -x "$PY" ] || PY="python3"
 
-  if "$PY" -c "
+  # Piped, not written to a host file. On a Windows host, bash's `/tmp` and the Windows Python's
+  # `/tmp` are DIFFERENT directories, so a redirect here and an open() there disagree silently.
+  # stdin has no path to disagree about.
+  if MSYS_NO_PATHCONV=1 docker exec "$SANDBOX" cat "$REPORT_IN_CONTAINER" 2>/dev/null | "$PY" -c "
 import sys
 from state import parsers
-text = open('/tmp/zap-lab-proof.json', encoding='utf-8', errors='replace').read()
+text = sys.stdin.read()
 out = parsers.parse_zap(text, 's-proof', 'run-proof')
 print(f'      findings={len(out.findings)} endpoints={len(out.endpoints)}')
-for f in out.findings[:5]:
+for f in out.findings[:6]:
     print(f'        {f.severity:8} {f.title}')
 sys.exit(0 if out.findings else 1)
 "; then

@@ -82,9 +82,28 @@ pivot listener and the DNS-tunnel listener. All three were solved the same way, 
 
 That works because a C2 listener's job is to sit and wait for something to call home, so
 "send it further instructions" is a capability that can be thrown away. **A ZAP daemon's entire
-purpose is to receive further instructions.** Step 2 is unavailable by construction, so the
-existing pattern cannot be reused and a genuinely new gating design would be required. That
-belongs in its own spec, not as a sub-bullet of "add a scanner."
+purpose is to receive further instructions**, so step 2 is unavailable for it and the pattern
+does not transfer as-is.
+
+**But the objection is to an UNGATED control channel, not to a daemon as such** — and that
+distinction matters for the proxy build, so it is recorded here rather than left to be
+rediscovered:
+
+- **A recording proxy may reuse the pattern almost directly.** A ZAP proxy that captures traffic
+  and never accepts attack commands *observes* — the same shape as the existing listeners. Gate
+  the start, hold liveness, expose no writer, read the recorded history.
+- **A scan-control channel has a known solution shape, already proven here.** Starting a pivot
+  listener is also a POST rather than a command, and `tunnels.py` gates it by constructing a
+  synthetic `ExecRequest` and running the *real* gates against it. `server_argv_for()` is "THE
+  SINGLE DERIVATION" — both `_gate_request()` and `start_tunnel()` come through it, and a test
+  asserts the gated argv equals the spawned argv. A scan-control API would do the same: build an
+  `ExecRequest` for "active scan against `<target>`", pass `validate_request`, and only then make
+  the call.
+
+So the later build is not blocked on inventing a gating model; it is blocked on the **network
+path**, which splits by sandbox: the engage sandbox is already open and breaks no property by
+hosting a daemon, while the lab sandbox keeps `internal: true` and keeps command-path scanning.
+That decision belongs in that spec, not this one.
 
 ## 4. Why the autorun plan file is excluded
 

@@ -57,10 +57,16 @@ KIND_PORTS: dict[str, tuple[int, str]] = {
 # recognises.
 WILDCARD_IPS: frozenset[str] = frozenset({"0.0.0.0", "::", "*"})
 
-# 100.64.0.0/10 — carrier-grade NAT, which is what Tailscale and many mobile hotspots hand out.
-# Checked explicitly rather than leaning on `is_private`, whose membership for this range
-# changed across Python versions and would make the classification silently version-dependent.
-_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+# NOTE ON THE PREDICATE. The question this guard asks is "could the internet reach a listener
+# bound here", so the right test is `is_global` — true for exactly the globally routable
+# addresses — and NOT `is_private`, which is the obvious choice and is wrong twice over on
+# Python 3.14:
+#
+#   100.101.5.2 (CGNAT — Tailscale, mobile hotspots)  is_private=False, is_global=False
+#   203.0.113.9 (RFC 5737 documentation range)        is_private=True,  is_global=False
+#
+# The first is the one that would have hurt: keying off `is_private` would have called every
+# Tailscale address PUBLIC and demanded an acknowledgement to bind it. Measured, not assumed.
 
 
 def derive_ports(kinds: list[str], extra: list[tuple[int, str]]) -> list[tuple[int, str]]:
@@ -91,11 +97,7 @@ def classify_ip(ip: str) -> str:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         return "invalid"
-    if addr.is_loopback or addr.is_private:
-        return "private"
-    if addr.version == 4 and addr in _CGNAT:
-        return "private"
-    return "public"
+    return "public" if addr.is_global else "private"
 
 
 def address_is_live(ip: str) -> bool:

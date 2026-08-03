@@ -39,6 +39,13 @@ operator.json
 backend/operator.json
 !backend/operator.example.json
 
+# OOB canary hit log. It records the source addresses and internal hostnames of whatever
+# reached the canary — that is the CLIENT's information, in a public repository. It also
+# normally lives on the VPS, not here; a copy appears locally only when the loopback proof
+# or a local run writes one. NEVER commit.
+hits.jsonl
+oob/hits.jsonl
+
 # Local engagement sessions store (SQLite). NEVER commit.
 sessions.db
 backend/sessions.db

@@ -172,6 +172,10 @@ run_test test_home_summary.py "/home-summary launcher rail (no secret reaches th
 
 run_test test_operator.py "operator identity (config gitignored in a PUBLIC repo / OSID+email never reach the browser)"
 
+run_test test_oob_tokens.py "OOB canary tokens (DNS-label-safe / CSPRNG / correlates to the step / executes nothing)"
+
+run_test test_oob_server.py "OOB canary server (answers not NXDOMAIN / authenticated append-only reads / no execution, no forwarding)"
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="
@@ -179,6 +183,12 @@ if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker FULLY-OPEN proof (engagement — Wall A down, full reach — must exit 0) =="
   sh ../docker/proof/engage_open_proof.sh
+  # Binds real sockets (udp/5353 + an ephemeral tcp port on loopback), which is why it is a
+  # proof and not a hermetic test. It needs no Docker and no network beyond 127.0.0.1, and
+  # it reports the two public-reachability checks as NOT-RUN until a VPS and zone exist.
+  echo
+  echo "== OOB canary LOOPBACK end-to-end proof (real sockets, no infrastructure — must exit 0) =="
+  "$PY" ../docker/proof/oob_loopback_proof.py
 else
   echo
   echo "Hermetic safety tests passed ($FILES_RUN test files, every one exited 0)."

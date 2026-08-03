@@ -1605,3 +1605,61 @@ Suite **57 files, 0 failures** (build #13), green both with the live KB and unde
 CI is complete: **all three jobs have now actually executed on GitHub's machines and passed** — the two gating jobs on every push, and the drift job by dispatch, which was the last piece of this workflow that had only ever been reasoned about. No deprecation warnings remain.
 
 The repository is **one branch, `main`**, and CI is green on it.
+
+## Build #13 part 3 — the out-of-band canary (2026-08-03)
+
+This is **part 1a** in the numbering above: the half of "where a callback lands" that part 1c can never do. Listener profiles solve the callback for a target that can route to your laptop; `192.168.13.1` means nothing to a host on the internet, which is every bug-bounty target there is.
+
+Without an internet-reachable listener, whole vulnerability classes are **unconfirmable**, because the hit *is* the entire proof: blind SSRF, blind XXE, blind RCE with no returned output, DNS-based blind SQLi (`xp_dirtree`, `UTL_HTTP`), JNDI and deserialization callbacks, and async SSRF where the app calls your URL minutes later through a queue. The alternative is writing a promising blind injection up as "unconfirmed", which most programs reject and which this project's own report discipline already bans.
+
+**DNS matters more than HTTP**, and that is the reason this needs a real domain rather than an IP. Plenty of targets block outbound HTTP from application servers while DNS still resolves through their internal resolver, so DNS-based OOB lands where HTTP does not. That requires **NS delegation** to an authoritative listener — and it is the second reason part 1c can never do this job, since a target's resolver will never route to a private address.
+
+### HackPit does not provision, and that is a decision
+
+The tool **configures, deploys and verifies**; you create the droplet and buy the domain yourself, once. Four reasons, in order of weight. A credential that can create one droplet can create a hundred, and it would sit in an application that has **zero route authentication today**. The ROI is poor for a strictly one-time task. Domain registration needs a funded registrar account and ICANN verification regardless, so the "automated" path still stops and waits for a human. And a tool that *spins up* C2 infrastructure is a materially different artifact from one pointed at infrastructure you already own — the same concern that ended build #11. Everything after the one-time setup is buttons.
+
+### The first internet-facing component, and why it is safe to expose
+
+`oob/server.py` is the first HackPit component that faces the internet, and it faces it from a machine holding a client's evidence. The safety argument is deliberately **an absence rather than a control**:
+
+* it **records, and that is all** — no execution, no eval, no deserialization;
+* it **never forwards** — there is no outbound connection anywhere in the file, so it cannot be turned into a redirector. That is part 4, and a different thing;
+* it **never reflects** request content into a response — the body is the constant `ok\n`, so it is not a free reflection oracle for anyone who can reach it;
+* the hit log is **append-only JSONL** — no database, no rewrite path, no delete;
+* **reads are authenticated**, because the log holds the target's internal hostnames and source addresses. That is the client's information, and an unauthenticated read endpoint would publish it to anyone who guessed the host. Bearer secret from the environment, compared with `hmac.compare_digest`, rate-limited per source, newest-first on a cursor.
+
+It is **one file importing nothing outside the standard library**, because it is deployed by copying it to a bare VPS. An install step on a box you SSH into once is a box that stops working the day a wheel moves.
+
+The correlation deliberately does **not** live there. The server records the candidate token it saw; only HackPit knows which tokens were ever minted and for which engagement. A canary that knew would be a canary worth stealing.
+
+### Four things the design got right only after being questioned
+
+**An answer, never NXDOMAIN.** Refusing the name would record the DNS half of a chained proof and kill the HTTP half. The A record is the feature: the target resolves `<token>.<zone>`, gets an address, and the follow-up request lands on the same box under the same token. Other query types (AAAA, TXT, MX) get NOERROR-no-data rather than a refusal, for the same reason — the name stays alive for the A retry.
+
+**The token is the label immediately LEFT of the zone, not the leftmost label.** Reading the leftmost one works perfectly for `<token>.<zone>` and fails silently for every blind-RCE and DNS-exfil one-liner, all of which *prepend command output* to the name. `whoami-output.<token>.<zone>` has to correlate or the feature only works in the demo.
+
+**The question is echoed byte-for-byte, and this is the subtle one.** Resolvers randomize the case of a query as an anti-spoofing measure (DNS 0x20) and compare the echo against what they sent. Re-encoding the question from the lowercased name — the obvious implementation — produces an answer the resolver discards as a spoof, while every log on this side says the hit was answered. So the raw question bytes are kept verbatim for the response, and the *recorded* name is folded for correlation. Two different jobs, two different forms.
+
+**Credentials that arrive in a hit are recorded as present, with their values dropped.** A blind SSRF routinely arrives carrying the target's own `Authorization` header, session cookie or proxy credential. The finding needs "an authenticated internal client reached out"; it does not need the secret it used, and storing it would turn a canary into a credential store sitting on a VPS. Bodies are capped to a 512-byte excerpt, flagged when truncated — a canary records that something arrived and from where, not a copy of the target's traffic.
+
+The read secret **fails closed**: no secret, or one under 16 characters, and the server refuses to start. The failure mode that prevents is an operator deploying, watching the listeners come up, and never learning the read endpoint was open the whole time.
+
+### Verified end to end, on loopback, for real
+
+The first assumption was that nothing here could be verified without infrastructure. That was wrong, and precisely wrong: **everything except public reachability runs today**. `docker/proof/oob_loopback_proof.py` starts both listeners on `127.0.0.1` with DNS on **udp/5353**, sends a real datagram carrying a real minted token, parses the answer off the wire, and asserts the hit was recorded, correlated back to the right engagement and step, and served through the authenticated API — with the anonymous and wrong-bearer reads refused and the operator's own read traffic absent from the hit log. **15 passed, 0 failed, 2 not-run.**
+
+The two not-run are named exactly, never folded into a pass: that **NS delegation resolves publicly** to the server, and **one live hit from a real target**. Both become real checks the moment the VPS and zone exist.
+
+**The proof's own first version had the bug worth recording.** It probed udp/5353 with a throwaway socket before binding, and fell back to an ephemeral port when the probe failed. The probe did not set `SO_REUSEADDR` and the real listener does, so on a host running mDNS the probe reported the port busy when the actual bind would have succeeded — and the proof passed cheerfully on a port the spec never named. A probe that differs from the real thing answers a different question. It now attempts the real bind and says loudly if it ever falls back.
+
+Hermetically, the two new test files add **24 assertions** over the wire format, the token grammar, redaction, paging, authentication and inertness. Ten mutations were planted to confirm they can fail — NXDOMAIN answers, a re-encoded question, redaction removed, an uncapped body, a prefix-matching bearer check, a missing read secret, oldest-first paging, the leftmost-label token, a reflected response, and a global instead of per-source rate limit. All ten were caught.
+
+Two structural locks exist because no behavioural test can see the difference: the minter must draw from `secrets` and never `random`, and the bearer check must go through `hmac.compare_digest` rather than `==`. Both spellings look identical in review and only one of each is safe.
+
+**The token grammar lives in two files on purpose** — the deployable may not import from the repository — so a test holds them together against 200 freshly minted tokens rather than against a reading. Drift there is the silent kind: hits keep landing and quietly stop correlating.
+
+### What is not built yet
+
+This is the first half of part 1a: the server and the minting. Still to come are the **poll client and state ingest** (so an OOB confirmation becomes a finding like any other rather than a screenshot), the **payload templates** per class, and the **configure / deploy / verify panel** — including the SSH deploy, which will go through `executor.send_windows_scripts`' gated path and be host-locked to the configured VPS rather than a request field, applying part 2's lesson directly. The public C2 redirector remains part 4 and out of scope; this server records hits and never forwards.
+
+Suite **59 files, 0 failures**, up from 57.

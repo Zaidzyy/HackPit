@@ -8282,3 +8282,11 @@ a.hp-card {
   color: var(--dim);
   opacity: 0.75;
 }
+
+/* Checkbox rows on :proxy. NOT .hp-tn-form — that rule sizes every input with
+   `flex: 1 1 200px`, which turns a checkbox into a 200px-wide grey slab (seen in the
+   browser, invisible to tsc/lint). This keeps the box its natural size and lets the
+   label sit next to it. */
+.hp-tn-check { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.hp-tn-check label { align-items: center; cursor: pointer; }
+.hp-tn-check input[type="checkbox"] { flex: 0 0 auto; width: auto; min-width: 0; margin: 0; }

@@ -148,6 +148,8 @@ run_test test_zap_scan.py "ZAP active-scan mapping (REAL API response -> alerts 
 
 run_test test_zap_scan_safety.py "ZAP active-scan GATING (approval + red-confirm + off-lab target, each with a control / THE SCOPED HOST IS THE ATTACKED HOST / a target carrying '&recurse=true' cannot broaden the scan / non-http refused at construction / gate before ZAP is contacted / concurrency bound read from ZAP not local state / stop ungated / the action URL is built once and reached only from the gated start)"
 
+run_test test_zap_scan_ingest.py "ZAP alert ingest ROUTE end-to-end (POST -> mapper -> SQLite -> read back, against a TEMP db so the operator's store is untouched / re-ingesting does not duplicate / scoped to one session / no session_id is a 422 not a silent no-op / the route executes nothing, by AST)"
+
 run_test test_scope_hostcheck.py "Phase-3 scope host-check (no false-reject of files/versions; real hosts still caught)"
 
 run_test test_credvault.py "Phase-3 credential vault (fills user/pass/hash/domain; wrong-kind + non-cred left alone)"

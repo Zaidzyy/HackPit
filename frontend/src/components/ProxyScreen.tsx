@@ -208,360 +208,345 @@ export function ProxyScreen() {
     }
   }, [live, sessionId]);
 
+
   return (
     <PageShell crumbs={[{ label: "cockpit", href: "/cockpit" }, { label: "proxy" }]}>
-      <h1>:proxy</h1>
-      <p className="hp-note">
-        Record what your tools send. ZAP runs inside the sandbox on 127.0.0.1 with no published
-        port, so its API is unreachable from this machine — HackPit reads it through the same
-        gated <code>docker exec</code> channel everything else uses.
-      </p>
-      {error ? <div className="hp-card hp-error">{error}</div> : null}
+      <div className="hp-tn">
+        <header className="hp-tn-head">
+          <div className="hp-ap-kicker">record · replay · actively scan what you touched</div>
+          <h1 className="hp-tn-title">:proxy</h1>
+          <p className="hp-tn-sub">
+            Record what your tools send, then attack exactly that. ZAP runs inside the sandbox on
+            127.0.0.1 with no published port, so its API is unreachable from this machine —
+            HackPit reads it through the same gated <code>docker exec</code> channel everything
+            else uses.
+          </p>
+          {status && (
+            <div className={`hp-tn-status ${status.live > 0 ? "is-up" : "is-down"}`}>
+              <span className="hp-tn-dot" />
+              lab {status.lab_sandbox}: {status.lab_running ? "up" : "down"} · engagement{" "}
+              {status.engage_sandbox}: {status.engage_running ? "up" : "down"} · live{" "}
+              {status.live}
+            </div>
+          )}
+        </header>
 
-      {/* ---- status rail ---------------------------------------------------- */}
-      <section className="hp-card">
-        <h2>Sandboxes</h2>
-        {status ? (
-          <ul className="hp-kv">
-            <li>
-              <span>lab</span>
-              <span>
-                {status.lab_sandbox} — {status.lab_running ? "up" : "down"}
-              </span>
-            </li>
-            <li>
-              <span>engagement</span>
-              <span>
-                {status.engage_sandbox} — {status.engage_running ? "up" : "down"}
-              </span>
-            </li>
-            <li>
-              <span>live proxies</span>
-              <span>{status.live}</span>
-            </li>
-          </ul>
-        ) : (
-          <p>Status unavailable — is the stack up?</p>
-        )}
-      </section>
+        {error && <div className="hp-tn-error">{error}</div>}
 
-      {/* ---- start / stop --------------------------------------------------- */}
-      <section className="hp-card">
-        <h2>{live ? "Running" : "Start the proxy"}</h2>
+        {/* ---- start / stop --------------------------------------------------- */}
+        <section className="hp-tn-card">
+          <div className="hp-tn-cardhead">{live ? "running" : "start the recording proxy"}</div>
 
-        {live ? (
-          <>
-            <ul className="hp-kv">
-              <li>
-                <span>container</span>
-                <span>{live.container}</span>
-              </li>
-              <li>
-                <span>port</span>
-                <span>{live.port}</span>
-              </li>
-              <li>
-                <span>status</span>
-                {/* OBSERVED, never assumed from a successful POST. */}
-                <span>{live.status}</span>
-              </li>
-              <li>
-                <span>observed</span>
-                <span>{live.liveness || "—"}</span>
-              </li>
-              <li>
-                <span>captured</span>
-                <span>{live.captured}</span>
-              </li>
-            </ul>
-            <p className="hp-note">
-              Point a tool at it by sending <code>proxy: true</code> with the run. A tool with no
-              known proxy flag runs <strong>uncaptured</strong> and says so — it is never
-              silently dropped.
-            </p>
-            <button type="button" onClick={() => stop(live.id)}>
-              Stop the proxy
+          {live ? (
+            <>
+              <ul className="hp-tn-list">
+                <li className={`hp-tn-row ${live.status === "down" ? "is-down" : ""}`}>
+                  <div className="hp-tn-rowtop">
+                    <span className="hp-tn-kind">{live.container}</span>
+                    <span className="hp-tn-subs">:{live.port}</span>
+                    {/* OBSERVED after the settle window, never assumed from a successful POST. */}
+                    <span className={`hp-tn-state is-${live.status}`}>{live.status}</span>
+                    <span className="hp-tn-olhint">{live.captured} captured</span>
+                    <button type="button" className="hp-tn-stop" onClick={() => stop(live.id)}>
+                      stop
+                    </button>
+                  </div>
+                  <div className="hp-tn-note">{live.liveness || "—"}</div>
+                </li>
+              </ul>
+              <p className="hp-tn-note">
+                Point a tool at it by sending <code>proxy: true</code> with the run. A tool with
+                no known proxy flag runs <strong>uncaptured</strong> and says so — it is never
+                silently dropped.
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="hp-tn-form">
+                <input
+                  className="hp-tn-port"
+                  value={port}
+                  onChange={(e) => setPort(e.target.value)}
+                  placeholder={String(status?.default_port ?? 8090)}
+                  inputMode="numeric"
+                  aria-label="Proxy port"
+                />
+                <input
+                  value={engagementId}
+                  onChange={(e) => setEngagementId(e.target.value)}
+                  placeholder="engagement id — blank for the isolated lab"
+                  aria-label="Engagement id"
+                />
+              </div>
+
+              {/* TWO SEPARATE, NEVER PRE-TICKED CHECKBOXES. Both default false on the backend, so
+                  an omitted field is a refusal rather than a silent grant. */}
+              <div className="hp-tn-check">
+                <label className="hp-tn-olhint" style={{ display: "flex", gap: "0.4rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={approved}
+                    onChange={(e) => setApproved(e.target.checked)}
+                  />
+                  I approve starting this proxy
+                </label>
+              </div>
+              <div className="hp-tn-danger">
+                <div className="hp-tn-danger-head">it records credentials in cleartext</div>
+                <label
+                  className="hp-tn-danger-why"
+                  style={{ display: "flex", gap: "0.4rem", alignItems: "flex-start" }}
+                >
+                  <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+                  I understand this records <strong>full request and response bodies</strong> —
+                  passwords, session tokens and payloads in cleartext
+                </label>
+                <div className="hp-tn-danger-actions">
+                  <button
+                    type="button"
+                    className="hp-tn-danger-go"
+                    onClick={start}
+                    disabled={starting || !approved || !ack}
+                  >
+                    {starting ? "starting…" : "start the proxy"}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </section>
+
+        {/* ---- history -------------------------------------------------------- */}
+        <section className="hp-tn-card">
+          <div className="hp-tn-cardhead">captured traffic</div>
+          <div className="hp-tn-form">
+            <button type="button" onClick={loadHistory} disabled={!live}>
+              refresh
             </button>
-          </>
-        ) : (
-          <>
-            <label>
-              Port
-              <input
-                value={port}
-                onChange={(e) => setPort(e.target.value)}
-                placeholder={String(status?.default_port ?? 8090)}
-                inputMode="numeric"
-              />
-            </label>
-            <label>
-              Engagement id (leave blank for the isolated lab)
-              <input
-                value={engagementId}
-                onChange={(e) => setEngagementId(e.target.value)}
-                placeholder="lab"
-              />
-            </label>
+          </div>
+          {history.length === 0 ? (
+            <p className="hp-tn-note">
+              Nothing captured yet. Run a tool with <code>proxy: true</code> while the proxy is up.
+            </p>
+          ) : (
+            <ul className="hp-tn-list">
+              {history.map((ex) => (
+                <li key={ex.id} className="hp-tn-row">
+                  <div className="hp-tn-rowtop">
+                    <span className="hp-tn-kind">{ex.request.method}</span>
+                    <span
+                      className="hp-tn-subs"
+                      style={{ flex: "1 1 320px", wordBreak: "break-all" }}
+                    >
+                      {ex.request.url}
+                    </span>
+                    <span className="hp-tn-state is-listening">{ex.response.status ?? "—"}</span>
+                    <span className="hp-tn-olhint">
+                      {ex.response.size_bytes}b · {ex.response.time_ms}ms
+                    </span>
+                    {/* Aims the scanner; it does NOT start one. The confirms below are still
+                        required — a one-click path from a row to live attack traffic is exactly
+                        the shape a red-confirm exists to prevent. */}
+                    <button type="button" onClick={() => setScanTarget(ex.request.url)}>
+                      aim scanner
+                    </button>
+                    <button type="button" onClick={() => setOpen(open === ex.id ? null : ex.id)}>
+                      {open === ex.id ? "hide" : "detail"}
+                    </button>
+                  </div>
 
-            {/* TWO SEPARATE, NEVER PRE-TICKED CHECKBOXES. Both default false on the backend, so
-                an omitted field is a refusal rather than a silent grant. */}
-            <label className="hp-check">
+                  {open === ex.id ? (
+                    <div className="hp-tn-oneliner">
+                      <div className="hp-tn-olhint">
+                        request <CopyButton text={ex.request.url} />
+                      </div>
+                      <pre>
+                        {ex.request.headers.map((h) => `${h.name}: ${h.value}`).join("\n") || "—"}
+                      </pre>
+                      {ex.request.body ? <pre>{ex.request.body}</pre> : null}
+                      <div className="hp-tn-olhint">response</div>
+                      <pre>
+                        {ex.response.headers.map((h) => `${h.name}: ${h.value}`).join("\n") || "—"}
+                      </pre>
+                      {ex.response.body ? <pre>{ex.response.body.slice(0, 4000)}</pre> : null}
+                    </div>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        {/* ---- the ACTIVE SCANNER (build #14 part 3) --------------------------- */}
+        <section className="hp-tn-card">
+          <div className="hp-tn-cardhead">attack a captured endpoint</div>
+          <div className="hp-tn-cardsub">
+            ZAP only attacks a URL it has already seen, so aim it from the captured traffic above
+            — a URL that never went through the proxy is refused.
+          </div>
+
+          <div className="hp-tn-form">
+            <input
+              value={scanTarget}
+              onChange={(e) => setScanTarget(e.target.value)}
+              placeholder="http://host:3000/rest/products/search?q=x"
+              aria-label="Scan target URL"
+            />
+          </div>
+          <div className="hp-tn-check">
+            <label className="hp-tn-olhint" style={{ display: "flex", gap: "0.4rem" }}>
               <input
                 type="checkbox"
-                checked={approved}
-                onChange={(e) => setApproved(e.target.checked)}
+                checked={recurse}
+                onChange={(e) => setRecurse(e.target.checked)}
               />
-              I approve starting this proxy
+              also attack everything below this URL (same host — more traffic, not more reach)
             </label>
-            <label className="hp-check hp-danger">
-              <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
-              I understand this records <strong>full request and response bodies</strong> —
-              passwords, session tokens and payloads in cleartext
-            </label>
+          </div>
 
-            <button type="button" onClick={start} disabled={starting || !approved || !ack}>
-              {starting ? "Starting…" : "Start the proxy"}
-            </button>
-          </>
-        )}
-      </section>
-
-      {/* ---- history -------------------------------------------------------- */}
-      <section className="hp-card">
-        <h2>Captured traffic</h2>
-        <button type="button" onClick={loadHistory} disabled={!live}>
-          Refresh
-        </button>
-        {history.length === 0 ? (
-          <p className="hp-note">
-            Nothing captured yet. Run a tool with <code>proxy: true</code> while the proxy is up.
-          </p>
-        ) : (
-          <table className="hp-table">
-            <thead>
-              <tr>
-                <th>Method</th>
-                <th>URL</th>
-                <th>Status</th>
-                <th>Size</th>
-                <th>ms</th>
-                <th>Aim</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.map((ex) => (
-                <tr key={ex.id} onClick={() => setOpen(open === ex.id ? null : ex.id)}>
-                  <td>{ex.request.method}</td>
-                  <td className="hp-url">{ex.request.url}</td>
-                  <td>{ex.response.status ?? "—"}</td>
-                  <td>{ex.response.size_bytes}</td>
-                  <td>{ex.response.time_ms}</td>
-                  <td>
-                    {/* Aims the scanner; it does NOT start one. The confirms below are still
-                        required — a one-click path from a table row to live attack traffic is
-                        exactly the shape a red-confirm exists to prevent. */}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setScanTarget(ex.request.url);
-                      }}
-                    >
-                      Aim scanner
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-
-        {open
-          ? history
-              .filter((ex) => ex.id === open)
-              .map((ex) => (
-                <div key={ex.id} className="hp-card">
-                  <h3>
-                    {ex.request.method} {ex.request.url}
-                    <CopyButton text={ex.request.url} />
-                  </h3>
-                  <h4>Request headers</h4>
-                  <pre>
-                    {ex.request.headers.map((h) => `${h.name}: ${h.value}`).join("\n") || "—"}
-                  </pre>
-                  {ex.request.body ? (
-                    <>
-                      <h4>Request body</h4>
-                      <pre>{ex.request.body}</pre>
-                    </>
-                  ) : null}
-                  <h4>Response headers</h4>
-                  <pre>
-                    {ex.response.headers.map((h) => `${h.name}: ${h.value}`).join("\n") || "—"}
-                  </pre>
-                  {ex.response.body ? (
-                    <>
-                      <h4>Response body</h4>
-                      <pre>{ex.response.body.slice(0, 4000)}</pre>
-                    </>
-                  ) : null}
-                </div>
-              ))
-          : null}
-      </section>
-
-      {/* ---- the ACTIVE SCANNER (build #14 part 3) --------------------------- */}
-      <section className="hp-card">
-        <h2>Attack a captured endpoint</h2>
-        <p className="hp-note">
-          This sends <strong>real attack traffic</strong> — SQLi, XSS and command-injection
-          payloads at every parameter. Measured: <strong>376 requests against one endpoint</strong>,
-          which found a live SQL injection. ZAP will only attack a URL it has already seen, so aim
-          it from the captured traffic above; a URL that never went through the proxy is refused.
-        </p>
-
-        <label>
-          Target URL (must be in the captured traffic)
-          <input
-            value={scanTarget}
-            onChange={(e) => setScanTarget(e.target.value)}
-            placeholder="http://host:3000/rest/products/search?q=x"
-          />
-        </label>
-        <label className="hp-check">
-          <input
-            type="checkbox"
-            checked={recurse}
-            onChange={(e) => setRecurse(e.target.checked)}
-          />
-          Also attack everything below this URL in the tree (same host — more traffic, not more
-          reach)
-        </label>
-
-        {/* Separate from the proxy's own confirms, and never pre-ticked. Starting a recording
-            proxy and launching an attack are different decisions. */}
-        <label className="hp-check">
-          <input
-            type="checkbox"
-            checked={scanApproved}
-            onChange={(e) => setScanApproved(e.target.checked)}
-          />
-          I approve this scan
-        </label>
-        <label className="hp-check hp-danger">
-          <input
-            type="checkbox"
-            checked={scanAck}
-            onChange={(e) => setScanAck(e.target.checked)}
-          />
-          I understand this <strong>actively attacks</strong> the target and that I am authorised
-          to do so
-        </label>
-
-        <button
-          type="button"
-          onClick={beginScan}
-          disabled={scanning || !live || !scanTarget.trim() || !scanApproved || !scanAck}
-        >
-          {scanning ? "Starting…" : "Attack this endpoint"}
-        </button>
-
-        <h3>Scans</h3>
-        <button type="button" onClick={loadScans} disabled={!live}>
-          Refresh
-        </button>
-        {scans.length === 0 ? (
-          <p className="hp-note">No scans yet.</p>
-        ) : (
-          <table className="hp-table">
-            <thead>
-              <tr>
-                <th>id</th>
-                <th>Target</th>
-                <th>State</th>
-                <th>Progress</th>
-                {/* Attack requests actually SENT. The number that matters when deciding to stop. */}
-                <th>Requests</th>
-                <th>Alerts</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {scans.map((s) => (
-                <tr key={s.id}>
-                  <td>{s.id}</td>
-                  <td className="hp-url">{s.target_url || "—"}</td>
-                  <td>{s.state}</td>
-                  <td>{s.progress}%</td>
-                  <td>{s.requests}</td>
-                  <td>{s.alerts}</td>
-                  <td>
-                    {/* Ungated on purpose — this is the panic button while requests are in
-                        flight, so it must never be behind a confirm. */}
-                    <button type="button" onClick={() => haltScan(s.id)}>
-                      Stop
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-
-      {/* ---- alerts ---------------------------------------------------------- */}
-      <section className="hp-card">
-        <h2>Alerts</h2>
-        <p className="hp-note">
-          Everything ZAP is holding — including <strong>passive</strong> findings raised just by
-          traffic passing through the proxy, with no scan involved.
-        </p>
-        <button type="button" onClick={loadAlerts} disabled={!live}>
-          Refresh
-        </button>
-
-        {alerts.length === 0 ? (
-          <p className="hp-note">No alerts.</p>
-        ) : (
-          <>
-            <table className="hp-table">
-              <thead>
-                <tr>
-                  <th>Risk</th>
-                  <th>Name</th>
-                  <th>URL</th>
-                  <th>Param</th>
-                  <th>Plugin</th>
-                </tr>
-              </thead>
-              <tbody>
-                {alerts.map((a) => (
-                  <tr key={`${a.id}-${a.plugin_id}-${a.url}`}>
-                    <td>{a.risk}</td>
-                    <td>{a.name}</td>
-                    <td className="hp-url">{a.url}</td>
-                    <td>{a.param || "—"}</td>
-                    <td>{a.plugin_id || "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            <label>
-              Session id (to record these as findings in engagement state)
+          {/* Separate from the proxy's own confirms, and never pre-ticked. Starting a recording
+              proxy and launching an attack are different decisions. */}
+          <div className="hp-tn-check">
+            <label className="hp-tn-olhint" style={{ display: "flex", gap: "0.4rem" }}>
               <input
-                value={sessionId}
-                onChange={(e) => setSessionId(e.target.value)}
-                placeholder="session id"
+                type="checkbox"
+                checked={scanApproved}
+                onChange={(e) => setScanApproved(e.target.checked)}
               />
+              I approve this scan
             </label>
-            <button type="button" onClick={ingest} disabled={!live || !sessionId.trim()}>
-              Record as findings
+          </div>
+          <div className="hp-tn-danger">
+            <div className="hp-tn-danger-head">this sends real attack traffic</div>
+            <div className="hp-tn-danger-note">
+              SQLi, XSS and command-injection payloads at every parameter. Measured:{" "}
+              <strong>376 requests against one endpoint</strong>, which found a live SQL injection.
+            </div>
+            <label
+              className="hp-tn-danger-why"
+              style={{ display: "flex", gap: "0.4rem", alignItems: "flex-start" }}
+            >
+              <input
+                type="checkbox"
+                checked={scanAck}
+                onChange={(e) => setScanAck(e.target.checked)}
+              />
+              I understand this <strong>actively attacks</strong> the target and that I am
+              authorised to do so
+            </label>
+            <div className="hp-tn-danger-actions">
+              <button
+                type="button"
+                className="hp-tn-danger-go"
+                onClick={beginScan}
+                disabled={scanning || !live || !scanTarget.trim() || !scanApproved || !scanAck}
+              >
+                {scanning ? "starting…" : "attack this endpoint"}
+              </button>
+            </div>
+          </div>
+
+          <div className="hp-tn-oneliner">
+            <div className="hp-tn-olhint">scans</div>
+            <div className="hp-tn-form">
+              <button type="button" onClick={loadScans} disabled={!live}>
+                refresh
+              </button>
+            </div>
+            {scans.length === 0 ? (
+              <p className="hp-tn-note">No scans yet.</p>
+            ) : (
+              <ul className="hp-tn-list">
+                {scans.map((s) => (
+                  <li key={s.id} className="hp-tn-row">
+                    <div className="hp-tn-rowtop">
+                      <span className="hp-tn-kind">scan {s.id}</span>
+                      <span
+                        className="hp-tn-subs"
+                        style={{ flex: "1 1 280px", wordBreak: "break-all" }}
+                      >
+                        {s.target_url || "—"}
+                      </span>
+                      <span
+                        className={`hp-tn-state ${
+                          /RUNNING|PAUSED/i.test(s.state) ? "is-starting" : "is-down"
+                        }`}
+                      >
+                        {s.state} {s.progress}%
+                      </span>
+                      {/* Attack requests actually SENT — the number that matters when deciding
+                          whether to hit stop. */}
+                      <span className="hp-tn-olhint">
+                        {s.requests} requests · {s.alerts} alerts
+                      </span>
+                      {/* Ungated on purpose — the panic button must never sit behind a confirm. */}
+                      <button type="button" className="hp-tn-stop" onClick={() => haltScan(s.id)}>
+                        stop
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </section>
+
+        {/* ---- alerts ---------------------------------------------------------- */}
+        <section className="hp-tn-card">
+          <div className="hp-tn-cardhead">alerts</div>
+          <div className="hp-tn-cardsub">
+            Everything ZAP is holding — including <strong>passive</strong> findings raised just by
+            traffic passing through the proxy, with no scan involved.
+          </div>
+          <div className="hp-tn-form">
+            <button type="button" onClick={loadAlerts} disabled={!live}>
+              refresh
             </button>
-            {ingested ? <p className="hp-note">Recorded {ingested}.</p> : null}
-          </>
-        )}
-      </section>
+          </div>
+
+          {alerts.length === 0 ? (
+            <p className="hp-tn-note">No alerts.</p>
+          ) : (
+            <>
+              <ul className="hp-tn-list">
+                {alerts.map((a) => (
+                  <li key={`${a.id}-${a.plugin_id}-${a.url}`} className="hp-tn-row">
+                    <div className="hp-tn-rowtop">
+                      <span
+                        className={`hp-tn-state ${
+                          /high|critical/i.test(a.risk) ? "is-starting" : "is-down"
+                        }`}
+                      >
+                        {a.risk}
+                      </span>
+                      <span className="hp-tn-kind">{a.name}</span>
+                      <span className="hp-tn-olhint">
+                        {a.param ? `param ${a.param} · ` : ""}plugin {a.plugin_id || "—"}
+                      </span>
+                    </div>
+                    <div className="hp-tn-subs" style={{ wordBreak: "break-all" }}>
+                      {a.url}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+
+              <div className="hp-tn-form">
+                <input
+                  value={sessionId}
+                  onChange={(e) => setSessionId(e.target.value)}
+                  placeholder="session id — to record these as findings"
+                  aria-label="Session id"
+                />
+                <button type="button" onClick={ingest} disabled={!live || !sessionId.trim()}>
+                  record as findings
+                </button>
+              </div>
+              {ingested ? <p className="hp-tn-note">Recorded {ingested}.</p> : null}
+            </>
+          )}
+        </section>
+      </div>
     </PageShell>
   );
 }

@@ -409,11 +409,13 @@ STDOUT_PARSERS = {
     "nuclei": parse_nuclei,
     "secretsdump.py": parse_secretsdump,
     "secretsdump": parse_secretsdump,
-    # ingest.program_name() strips .exe but NOT .py, so these keys keep the suffix — unlike
-    # allowlist._tool_name(), which strips both. The two normalisers genuinely differ; keying
-    # these "zap-full-scan" would match nothing and ingest nothing, silently.
-    "zap-baseline.py": parse_zap,
-    "zap-full-scan.py": parse_zap,
+    # Kali's zaproxy package ships ONE launcher and no scan scripts, so these are the only two
+    # names a ZAP run can have. Verified against the built image, not upstream's docs — the
+    # OWASP zap-baseline.py / zap-full-scan.py scripts exist only inside OWASP's own Docker
+    # image and are absent here. Keying this on names that do not exist is the build #9 ingest
+    # gap: nothing matches, nothing ingests, and the suite stays green.
+    "zaproxy": parse_zap,
+    "owasp-zap": parse_zap,
 }
 
 

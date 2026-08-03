@@ -1256,9 +1256,9 @@ ALIASES: dict[str, str] = {
     "nikto": "web_vuln_scan", "nuclei": "web_vuln_scan", "wpscan": "web_vuln_scan",
     "whatweb": "web_vuln_scan", "httpx": "web_vuln_scan", "zap": "web_vuln_scan",
     "zaproxy": "web_vuln_scan", "wapiti": "web_vuln_scan", "joomscan": "web_vuln_scan",
-    # the names that ACTUALLY execute — "zap"/"zaproxy" above are neither, so without these
-    # the panel describes nothing for every ZAP run while looking perfectly healthy
-    "zap-baseline.py": "web_vuln_scan", "zap-full-scan.py": "web_vuln_scan",
+    # "zaproxy" above IS the name that executes on Kali (the package ships one launcher, no
+    # scan scripts); "owasp-zap" is the alternate binary it also installs.
+    "owasp-zap": "web_vuln_scan",
     "gobuster": "dir_brute", "ffuf": "dir_brute", "feroxbuster": "dir_brute",
     "dirsearch": "dir_brute", "dirb": "dir_brute", "wfuzz": "dir_brute", "dirbuster": "dir_brute",
     "sqlmap": "sqli", "ghauri": "sqli",

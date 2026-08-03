@@ -72,20 +72,23 @@ RUN apt-get update \
 # network and has NO egress, so it can never fetch one at runtime — the same reason
 # nuclei-templates is baked in layer 9 rather than `-update-templates`d.
 #
-# THE SMOKE TEST IS THREE CHECKS, NOT ONE, because they fail separately. The package can
-# install while shipping the scan scripts under a different name or leaving them off PATH,
-# and that mismatch is INVISIBLE until a live run ingests nothing: backend/state/parsers.py
-# keys STDOUT_PARSERS on `zap-baseline.py` / `zap-full-scan.py` exactly, and a key that never
-# matches is the build #9 ingest gap (a live DCSync dumped krbtgt and ingested none of it).
-# `command -v` alone is NOT a smoke test (build #4's lesson) — `zap.sh -version` is the check
-# that proves the JVM actually starts.
+# THE NAMES HERE ARE MEASURED, NOT ASSUMED, and the first version of this layer got them
+# wrong. Upstream documents packaged scan scripts (`zap-baseline.py`, `zap-full-scan.py`);
+# those exist ONLY inside OWASP's own Docker image and Kali ships NEITHER. `dpkg -L zaproxy`
+# on 2.17.0-0kali1 gives exactly three programs:
+#     /usr/bin/zaproxy   /usr/bin/owasp-zap   /usr/share/zaproxy/zap.sh   (zap.sh NOT on PATH)
+# backend/state/parsers.py keys STDOUT_PARSERS on `zaproxy` / `owasp-zap` because of that. A
+# key that can never match ingests nothing, run after run, with a green suite — the build #9
+# gap, where a live DCSync dumped krbtgt and ingested none of it.
+#
+# The smoke test is TWO checks because they fail separately, and `command -v` alone is not a
+# smoke test (build #4's lesson): `-version` is what proves the JVM actually starts.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         zaproxy default-jre-headless \
     && rm -rf /var/lib/apt/lists/* \
-    && zap.sh -version \
-    && command -v zap-baseline.py \
-    && command -v zap-full-scan.py
+    && command -v zaproxy \
+    && zaproxy -cmd -version
 
 # --- 4. Network / Active Directory (from Linux) ------------------------------
 # The AD graph + AD orchestration modules generate commands from exactly this set;

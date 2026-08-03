@@ -194,20 +194,9 @@ _RCE_TOOLS = frozenset({
 })
 # Installs something that will execute a payload later, without the operator present.
 _PERSISTENCE_TOOLS = frozenset({"sharpersist"})
-# ACTIVE web vulnerability scanners — these SEND live injection payloads (SQLi, XSS, command
-# injection, path traversal) at every parameter they discover. The PASSIVE sibling of the same
-# tool is deliberately NOT here: gating a spider-and-observe crawl identically to a full attack
-# run would make the confirm meaningless for the tool, which is the same argument the AD
-# ENUMERATION note in test_arsenal_safety._MUST_NOT_FIRE already makes.
-#
-# ZAP is deliberately STRICTER than the rest of its family here — sqlmap/nikto/dalfox/nuclei
-# remain unflagged. That inconsistency is a recorded decision (2026-08-03), not an oversight:
-# a ZAP full scan is the broadest of the set, and erring safe on a new tool changes no existing
-# behaviour. See docs/superpowers/plans/2026-08-03-zap-scanner-integration.md before "fixing" it.
-#
-# Keyed on _tool_name() output, so NO `.py` suffix — that normaliser strips it. The parser
-# registry in state/parsers.py is keyed the other way, because program_name() keeps `.py`.
-_ACTIVE_WEB_SCANNERS = frozenset({"zap-full-scan"})
+# NOTE: the ACTIVE web scan verdict is argument-based, not name-based — see
+# _TOOL_ATTACK_FLAGS below. Kali's zaproxy package ships one launcher and no scan scripts, so
+# the binary name cannot carry the distinction.
 # Flags that mean "run this inline code / command".
 _EVAL_FLAGS = frozenset({"-c", "-e", "--command", "--eval", "--exec", "-code"})
 # Argument shapes that turn an otherwise-clean tool into OS command execution or a file write
@@ -228,6 +217,25 @@ _TOOL_EXEC_FLAGS: dict[str, frozenset[str]] = {
     "nxc": frozenset({"-x", "-X", "--exec-method"}),
     "crackmapexec": frozenset({"-x", "-X", "--exec-method"}),
     "cme": frozenset({"-x", "-X", "--exec-method"}),
+}
+# Per-tool flags that mean "ATTACK this target", as opposed to crawling or fingerprinting it.
+# Same shape as _TOOL_EXEC_FLAGS above and for the same reason: the BINARY is not the tell.
+#
+# Kali's `zaproxy` package ships no scan scripts — only the one launcher — so the whole
+# passive/active distinction lives in the arguments:
+#   `zaproxy -cmd -zapit <url>`     reconnaissance: crawl + fingerprint, no attack traffic
+#   `zaproxy -cmd -quickurl <url>`  spider THEN ACTIVE SCAN — real SQLi/XSS/command-injection
+#                                   payloads at every parameter it discovered
+# Gating the binary would fire on both and teach the operator to click through; gating the flag
+# is what makes the confirm mean something. `-autorun` is deliberately absent from this map and
+# from the catalog: a plan file decides its own aggression, so the command would not describe
+# what runs — the Critical 2 shape. See §4 of the ZAP design spec.
+#
+# ZAP is deliberately stricter than sqlmap/nikto/dalfox/nuclei, which stay unflagged. Recorded
+# decision (2026-08-03); see docs/superpowers/plans/2026-08-03-zap-scanner-integration.md.
+_TOOL_ATTACK_FLAGS: dict[str, frozenset[str]] = {
+    "zaproxy": frozenset({"-quickurl"}),
+    "owasp-zap": frozenset({"-quickurl"}),
 }
 # Substrings anywhere in the args that signal a reverse shell / code exec shape.
 _SHELL_MARKERS = (
@@ -387,10 +395,13 @@ def dangerous_command_heuristic(command: str, args: list[str]) -> list[str]:
         reasons.append(f"{cmd}: turns a vulnerability into command execution / a shell")
     if cmd in _PERSISTENCE_TOOLS:
         reasons.append(f"{cmd}: installs persistence that executes a payload")
-    if cmd in _ACTIVE_WEB_SCANNERS:
+    # An ATTACK flag on a scanner: the binary crawls or attacks depending on this argument, so
+    # the flag is the tell. Same shape as the exec-flag check just below.
+    attack_flags = sorted(flags & _TOOL_ATTACK_FLAGS.get(cmd, frozenset()))
+    if attack_flags:
         reasons.append(
-            f"{cmd}: active web scan — sends live injection payloads at every discovered "
-            "parameter"
+            f"{lead}{cmd} {', '.join(attack_flags)}: active web scan — sends live injection "
+            "payloads at every discovered parameter"
         )
 
     # Argument shapes that turn an otherwise-clean tool into remote command execution.
@@ -535,8 +546,6 @@ def _script_name_markers() -> tuple[tuple[str, str], ...]:
         (_TUNNEL_TOOLS, "covert tunnel / C2 channel — carries arbitrary traffic"),
         (_RCE_TOOLS, "turns a vulnerability into command execution / a shell"),
         (_PERSISTENCE_TOOLS, "installs persistence that executes a payload"),
-        (_ACTIVE_WEB_SCANNERS,
-         "active web scan — sends live injection payloads at every discovered parameter"),
         (_AD_CRED_DUMP, "dumps/replicates domain credentials"),
         (_AD_REMOTE_EXEC, "remote code execution on a domain host"),
         (_AD_DIR_WRITE, "modifies the directory / coerces or relays authentication"),
@@ -568,6 +577,12 @@ _SCRIPT_SHAPE_MARKERS: tuple[tuple[str, str], ...] = (
     + tuple((m, "reverse-shell / code-exec pattern") for m in _SHELL_MARKERS)
     + tuple((m, "requests OS command execution / a file write") for m in _RCE_ARG_MARKERS)
     + tuple((m, "credential-dump flag") for m in _AD_DUMP_MARKERS)
+    # DERIVED from _TOOL_ATTACK_FLAGS, never retyped. The command heuristic reads that dict
+    # directly; if this line duplicated the flags instead, the two paths could disagree about
+    # the same tool — the Critical 2 / D22 / D24 shape, which this codebase has produced three
+    # times. Deriving means adding a scanner to the dict updates BOTH paths at once.
+    + tuple((flag, "active web scan — sends live injection payloads")
+            for flags in _TOOL_ATTACK_FLAGS.values() for flag in sorted(flags))
 )
 
 _MAX_DECODE_DEPTH = 2

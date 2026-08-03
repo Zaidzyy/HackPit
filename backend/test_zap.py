@@ -152,13 +152,18 @@ def test_garbage_never_raises_and_yields_nothing() -> None:
     print("  9 malformed inputs yield empty and never raise: PASS")
 
 
-def test_the_stdout_registry_is_keyed_the_way_program_name_spells_it() -> None:
-    """THE BUILD #9 DEFECT CLASS. program_name() strips .exe but NOT .py, so the keys must
-    carry the .py suffix. Keying them 'zap-full-scan' would silently ingest nothing — which is
-    exactly how a live DCSync dumped krbtgt and ingested none of it."""
+def test_the_stdout_registry_is_keyed_on_what_kali_actually_installs() -> None:
+    """THE BUILD #9 DEFECT CLASS, and it very nearly happened here.
+
+    This build was first written against `zap-baseline.py` / `zap-full-scan.py`, upstream's
+    packaged scan-script names. Kali's `zaproxy` package ships NEITHER — only the launcher,
+    as `/usr/bin/zaproxy` and `/usr/bin/owasp-zap`. Those keys would have matched nothing, run
+    after run, with the suite green: exactly how a live DCSync dumped krbtgt and ingested none
+    of it. The image build caught it because its smoke test checks the names.
+    """
     from state.ingest import program_name
 
-    for spelling in ("zap-baseline.py", "/usr/share/zaproxy/zap-baseline.py", "ZAP-BASELINE.PY"):
+    for spelling in ("zaproxy", "/usr/bin/zaproxy", "ZAPROXY", "owasp-zap"):
         key = program_name(spelling)
         assert key in parsers.STDOUT_PARSERS, (
             f"program_name({spelling!r}) -> {key!r}, which is NOT a STDOUT_PARSERS key. "
@@ -166,14 +171,44 @@ def test_the_stdout_registry_is_keyed_the_way_program_name_spells_it() -> None:
         )
         assert parsers.STDOUT_PARSERS[key] is parsers.parse_zap
 
-    assert program_name("zap-full-scan.py") in parsers.STDOUT_PARSERS
-    # positive control: the normaliser really does keep .py (if it ever starts stripping it,
-    # this test must fail rather than quietly pass on a key that no longer matches)
-    assert program_name("zap-full-scan.py") == "zap-full-scan.py", (
-        f"program_name no longer preserves .py (got {program_name('zap-full-scan.py')!r}) — "
-        "the registry keys above are now wrong"
+    # The names that do NOT exist on Kali must not be re-added on the strength of upstream's
+    # docs. If a future image really does ship them, add them WITH a build smoke test.
+    for absent in ("zap-baseline.py", "zap-full-scan.py"):
+        assert absent not in parsers.STDOUT_PARSERS, (
+            f"{absent} is registered, but Kali's zaproxy package does not install it — "
+            "verified against the built image. A key that can never match ingests nothing."
+        )
+    print("  STDOUT_PARSERS keys match what the image installs, not upstream's docs: PASS")
+
+
+def test_real_zap_output_parses() -> None:
+    """*** THE CHECK A HAND-WRITTEN FIXTURE CANNOT MAKE. ***
+
+    test_support/zap_report_fixture.json is the verbatim report from a real ZAP 2.17.0 run
+    (`zaproxy -cmd -quickurl ... -quickout ...json`) against a live throwaway web app inside
+    the Kali image. Every other test in this file feeds the parser a string this repo wrote,
+    which is precisely the blind spot that let the build #9 ingest gap survive a green suite.
+    """
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / "test_support" / "zap_report_fixture.json"
+    out = parsers.parse_zap(fixture.read_text(encoding="utf-8"), SESSION, "run-real")
+
+    assert len(out.findings) == 4, f"real report -> {len(out.findings)} findings, expected 4"
+    assert out.endpoints, "real report produced no endpoints"
+    assert all(f.tool == "zap" for f in out.findings)
+    assert all(f.reference.startswith("pluginid:") for f in out.findings), (
+        f"references: {[f.reference for f in out.findings]}"
     )
-    print("  STDOUT_PARSERS keys match program_name's spelling: PASS")
+    titles = {f.title for f in out.findings}
+    assert any("Content Security Policy" in t for t in titles), f"got {titles}"
+    # real ZAP emits riskcode as a STRING; a parser that assumed int would map everything to
+    # "info" and still look like it worked
+    assert {f.severity for f in out.findings} == {"medium", "low"}, (
+        f"severity mapping wrong on REAL output: {[(f.title, f.severity) for f in out.findings]}"
+    )
+    print(f"  REAL ZAP 2.17 output -> {len(out.findings)} findings, "
+          f"{len(out.endpoints)} endpoints, severities mapped: PASS")
 
 
 def test_the_file_registry_does_not_claim_every_json_file() -> None:
@@ -201,13 +236,15 @@ def test_detection_describes_the_names_that_actually_run() -> None:
     a surface reporting nothing is indistinguishable from one with nothing to report."""
     from detection.catalog import ALIASES
 
-    for name in ("zap-baseline.py", "zap-full-scan.py"):
+    # every name the image can invoke ZAP as — drawn from the parser registry so the two
+    # cannot disagree about which spellings exist
+    for name in sorted(k for k, v in parsers.STDOUT_PARSERS.items() if v is parsers.parse_zap):
         assert name in ALIASES, f"{name} is not in detection ALIASES — the panel will be blank"
         assert ALIASES[name] == "web_vuln_scan", f"{name} -> {ALIASES[name]!r}"
 
-    # positive control: the pre-existing spellings are untouched
-    assert ALIASES["zap"] == "web_vuln_scan" and ALIASES["zaproxy"] == "web_vuln_scan"
-    print("  detection covers the program names that actually execute: PASS")
+    # positive control: the pre-existing spelling is untouched
+    assert ALIASES["zap"] == "web_vuln_scan"
+    print("  detection covers every name the parser registry accepts: PASS")
 
 
 if __name__ == "__main__":
@@ -215,7 +252,8 @@ if __name__ == "__main__":
     test_instances_become_endpoints()
     test_the_report_is_found_inside_progress_noise()
     test_garbage_never_raises_and_yields_nothing()
-    test_the_stdout_registry_is_keyed_the_way_program_name_spells_it()
+    test_the_stdout_registry_is_keyed_on_what_kali_actually_installs()
+    test_real_zap_output_parses()
     test_the_file_registry_does_not_claim_every_json_file()
     test_detection_describes_the_names_that_actually_run()
     print("ALL ZAP parser tests pass")

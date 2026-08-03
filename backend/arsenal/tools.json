@@ -571,9 +571,13 @@
       ]
     },
     {
-      "name": "zap",
+      "name": "zaproxy",
+      "aliases": [
+        "zap",
+        "owasp-zap"
+      ],
       "category": "web",
-      "purpose": "OWASP ZAP — spiders a web application and reports vulnerabilities. The baseline scan crawls and analyses traffic passively; the full scan additionally sends live injection payloads at every parameter it discovered.",
+      "purpose": "OWASP ZAP — spiders a web application and reports vulnerabilities. `-zapit` crawls and fingerprints without attacking; `-quickurl` spiders and then runs a full ACTIVE scan, sending live injection payloads at every parameter it found.",
       "phases": [
         "enumeration",
         "exploitation"
@@ -587,46 +591,41 @@
       "docs": "https://www.zaproxy.org/docs/",
       "templates": [
         {
-          "label": "Baseline scan (passive, report to stdout)",
-          "template": "zap-baseline.py -t <target> -J /dev/stdout",
-          "note": "Spider + passive rules only. Sends no attack traffic, so it needs approval but no red-confirm. Start here."
-        },
-        {
-          "label": "Baseline scan with the AJAX spider (SPA targets)",
-          "template": "zap-baseline.py -t <target> -j -J /dev/stdout",
-          "note": "-j adds the AJAX spider. Slower, but the traditional spider finds almost nothing on a single-page app."
-        },
-        {
-          "label": "Full active scan (report to stdout)",
-          "template": "zap-full-scan.py -t <target> -J /dev/stdout",
-          "note": "ACTIVE: sends real SQLi/XSS/command-injection payloads at every discovered parameter. Requires the red-confirm. Takes tens of minutes, so raise timeout_seconds on the request — the 180s default will kill it (ceiling is 3600)."
+          "label": "Recon scan (no attack traffic)",
+          "template": "zaproxy -cmd -zapit <target>",
+          "note": "Crawls and fingerprints the app and prints a summary. Sends no attack traffic, so it needs approval but no red-confirm. Start here."
         },
         {
           "label": "Full active scan (report to the loot dir)",
-          "template": "zap-full-scan.py -t <target> -J <output>-zap.json",
-          "note": "Engagement form: the -zap.json suffix is what the loot ingester keys on. ACTIVE — same red-confirm, and the same timeout_seconds caveat as above."
+          "template": "zaproxy -cmd -quickurl <target> -quickout <output>-zap.json",
+          "note": "ACTIVE: spiders, then sends real SQLi/XSS/command-injection payloads at every discovered parameter. Requires the red-confirm. The -zap.json suffix is what the loot ingester keys on. Takes tens of minutes — raise timeout_seconds on the request, the 180s default will kill it (ceiling 3600)."
+        },
+        {
+          "label": "Full active scan (HTML report for the write-up)",
+          "template": "zaproxy -cmd -quickurl <target> -quickout <output>-zap.html",
+          "note": "Same ACTIVE scan; -quickout picks the format from the extension. Use the .json form when you want the findings ingested into engagement state."
         }
       ],
       "flags": [
         {
-          "flag": "-t",
-          "what": "target URL (include the scheme)"
+          "flag": "-cmd",
+          "what": "run inline and exit (no UI, no daemon left behind)"
         },
         {
-          "flag": "-J",
-          "what": "write the JSON report to this path"
+          "flag": "-zapit",
+          "what": "quick reconnaissance scan — crawl + fingerprint, no attack"
         },
         {
-          "flag": "-j",
-          "what": "use the AJAX spider (needed for single-page apps)"
+          "flag": "-quickurl",
+          "what": "ACTIVE: the URL to attack (spider + active scan)"
         },
         {
-          "flag": "-m",
-          "what": "minutes to spider before scanning"
+          "flag": "-quickout",
+          "what": "report path; format follows the extension (.json/.html/.md/.xml)"
         },
         {
-          "flag": "-I",
-          "what": "do not fail the run on warnings"
+          "flag": "-quickprogress",
+          "what": "print progress bars while scanning"
         }
       ]
     },

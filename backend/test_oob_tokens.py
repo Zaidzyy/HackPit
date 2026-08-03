@@ -230,19 +230,64 @@ def _violations(source: str) -> list[str]:
     return out
 
 
-def test_the_oob_package_executes_nothing_and_reaches_no_network() -> None:
-    """The HackPit-side OOB package is a record store. It runs with no approval of its own.
+# The ONLY modules in this package permitted to touch the network, pinned by name.
+#
+# THIS SET IS THE CONTROL, not an exemption. When §3.3 landed, the single invariant below was
+# "the OOB package executes nothing and reaches no network" — and the second half stopped being
+# true of a poll client, whose entire job is to fetch the hit log. The wrong fix was available
+# and tempting: drop `urllib` from the banned list, which would have silently un-banned it for
+# all six modules. The right one is to notice it was always TWO claims, keep the execution half
+# absolute, and make the network half a PINNED SET so that a third module gaining reach fails
+# here — which is a stronger statement than the original made, not a weaker one.
+#
+#   poll.py   — fetches the read API (spec §3.3). Locked further in test_oob_poll.py: fixed
+#               destination from the config store, fixed paths, no redirects, no proxy.
+#   verify.py — resolves <token>.<zone> through the system resolver to prove NS delegation
+#               (spec §3.5). A getaddrinfo, and nothing else.
+_MAY_REACH_NETWORK = {"poll.py", "verify.py"}
 
-    The poll client that lands next drives this module on a timer, which is precisely the
-    position from which code would sit outside every approval gate — the same argument that
-    put this lock on the state package.
+# What those two are allowed to reach: the stdlib client and the resolver, nothing more. The
+# ban on subprocess/docker/pty/ctypes still applies to them in full.
+_NETWORK_IMPORTS = {"urllib", "socket"}
+
+
+def test_no_module_in_the_oob_package_executes_anything() -> None:
+    """The execution half, and it is absolute — no module, no exception.
+
+    This package is imported by the app and driven on a timer, which is precisely the position
+    from which code would sit outside every approval gate. Nothing here runs a command; the one
+    thing in build #13 part 3 that executes is the deploy, and it lives at the gated execution
+    point in cockpit/executor.py (test_oob_deploy_safety.py).
     """
     modules = sorted(OOB_DIR.glob("*.py"))
     assert modules, f"no modules found under {OOB_DIR} — this scan would pass vacuously"
     for path in modules:
-        found = _violations(path.read_text(encoding="utf-8"))
-        assert not found, f"{path.name} executes or dials out: {found}"
-    print(f"  all {len(modules)} backend/oob modules execute nothing and dial nothing: PASS")
+        found = [v for v in _violations(path.read_text(encoding="utf-8"))
+                 if not any(n in v for n in _NETWORK_IMPORTS)]
+        assert not found, f"{path.name} executes: {found}"
+    print(f"  all {len(modules)} backend/oob modules execute nothing: PASS")
+
+
+def test_only_the_two_named_modules_reach_the_network() -> None:
+    """The network half — a pinned set, so growth fails rather than passing quietly."""
+    modules = sorted(OOB_DIR.glob("*.py"))
+    reaching = {
+        path.name for path in modules
+        if any(n in v for v in _violations(path.read_text(encoding="utf-8"))
+               for n in _NETWORK_IMPORTS)
+    }
+    unexpected = reaching - _MAY_REACH_NETWORK
+    assert not unexpected, (
+        f"{sorted(unexpected)} gained network reach. That may well be correct — but it is a new "
+        f"egress path out of the operator's own machine, so it needs the same treatment poll.py "
+        f"got (fixed destination, no redirects, no proxy) and a line in this set saying so."
+    )
+    missing = _MAY_REACH_NETWORK - reaching
+    assert not missing, (
+        f"{sorted(missing)} is pinned as network-capable but reaches nothing — either it was "
+        f"gutted or renamed, and this control is now guarding a module that does not exist"
+    )
+    print(f"  exactly {sorted(reaching)} reach the network, as pinned: PASS")
 
 
 def test_the_execution_scan_can_fail() -> None:
@@ -271,7 +316,8 @@ if __name__ == "__main__":
     test_correlation_survives_a_resolver_changing_the_case()
     test_an_unminted_or_malformed_token_correlates_to_nothing()
     test_tokens_list_per_engagement()
-    test_the_oob_package_executes_nothing_and_reaches_no_network()
+    test_no_module_in_the_oob_package_executes_anything()
+    test_only_the_two_named_modules_reach_the_network()
     test_the_execution_scan_can_fail()
     _reset()
     print("ALL OOB token minting/correlation tests pass")

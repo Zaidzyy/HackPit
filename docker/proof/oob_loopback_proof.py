@@ -37,7 +37,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "backend"))
 
-from oob import tokens  # noqa: E402
+from oob import config as oob_config  # noqa: E402
+from oob import poll, tokens, verify  # noqa: E402
+from state import store as state_store  # noqa: E402
+
+# SCRATCH STORES. This proof SAVES a canary configuration so the real poll client can be driven
+# against the loopback listener — and the live store is the operator's own. Overwriting it
+# would repoint (or, on cleanup, destroy) a real canary's read secret, whose only other copy is
+# a 0700 file on a VPS. A proof that damages what it is proving is not a proof.
+# The engagement state store goes with them: this proof FILES FINDINGS, and filing proof
+# findings into the operator's real engagement state would put fabricated evidence next to
+# genuine evidence in a report.
+_STORE = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+oob_config.DB_PATH = Path(_STORE.name) / "proof.db"
+tokens.DB_PATH = oob_config.DB_PATH
+state_store.DB_PATH = oob_config.DB_PATH
+# A fresh file has no schema — the real one is created by the app's lifespan, which is not
+# running here. Creating it explicitly is also what makes this proof independent of whether
+# the operator has ever started HackPit on this machine.
+tokens.init_db()
+oob_config.init_db()
+state_store.init_db()
 
 _spec = importlib.util.spec_from_file_location("hackpit_oob_server", ROOT / "oob" / "server.py")
 assert _spec and _spec.loader
@@ -49,6 +69,7 @@ ZONE = "oob.proof.local"
 ANSWER_IP = "203.0.113.10"
 SECRET = "loopback-proof-shared-secret-0123456789"
 ENGAGEMENT = "proof-oob-loopback"
+SESSION = "proof-oob-loopback-session"
 STEP = "proof-step-1"
 PREFERRED_DNS_PORT = 5353
 
@@ -306,7 +327,93 @@ def run() -> int:
             f"what was recorded",
         )
 
-        # -- 7. what loopback CANNOT show ------------------------------------ #
+        # -- 7. THE HACKPIT SIDE: the real poll client, over a real socket --- #
+        #
+        # Sections 1-6 proved the listener. This proves the half that turns a line in its log
+        # into a finding — and it does so by driving the SHIPPING code (oob/poll.py) against
+        # the listener over loopback TCP, not by calling its helpers with hand-built dicts.
+        oob_config.init_db()
+        oob_config.save(
+            zone=ZONE, host="127.0.0.1", http_port=canary.http_port, read_secret=SECRET,
+        )
+        check(
+            "poll.destination_is_the_stored_host",
+            oob_config.base_url() == f"http://127.0.0.1:{canary.http_port}",
+            f"the poll client addresses {oob_config.base_url()} — resolved from the config "
+            f"store, never from an argument",
+        )
+
+        health = poll.health()
+        check(
+            "poll.health_over_the_wire",
+            health["ok"] and health["zone_matches"],
+            f"the real client read /_hp/health over loopback: zone={health['zone']!r} matches "
+            f"the zone payloads are rendered against",
+        )
+
+        polled = poll.poll({ENGAGEMENT: SESSION}, after=0)
+        filed = polled["filed"]
+        correlated_hits = [h for h in polled["hits"] if h["correlated"]]
+        check(
+            "poll.fetch_and_correlate",
+            len(polled["hits"]) >= 2 and len(correlated_hits) >= 2,
+            f"the client fetched {len(polled['hits'])} hit(s) through the authenticated API "
+            f"and correlated {len(correlated_hits)} of them back to {ENGAGEMENT}/{STEP}",
+        )
+        check(
+            "poll.files_a_finding",
+            filed >= 1,
+            f"{filed} finding(s) upserted into engagement state — an OOB confirmation is now a "
+            f"finding like any other, not something you screenshot",
+        )
+        summary = state_store.load(SESSION)
+        oob_findings = [f for f in summary.findings if f.tool == "oob-canary"]
+        check(
+            "poll.finding_carries_the_evidence",
+            bool(oob_findings)
+            and oob_findings[0].severity == "high"
+            and token in oob_findings[0].reference,
+            f"the filed finding is severity={oob_findings[0].severity if oob_findings else None} "
+            f"and carries the token, so the report can trace it to the step that caused it",
+        )
+
+        # Idempotence: re-polling the same window must not multiply findings. Findings upsert
+        # on a fingerprint, which is what makes it safe for a failed poll to leave the cursor
+        # alone and re-read.
+        poll.poll({ENGAGEMENT: SESSION}, after=0)
+        again = [f for f in state_store.load(SESSION).findings if f.tool == "oob-canary"]
+        check(
+            "poll.is_idempotent",
+            len(again) == len(oob_findings),
+            f"re-reading the same window left {len(again)} finding(s), not {len(again) * 2} — "
+            f"re-polling is free, which is why a failed poll may safely not advance the cursor",
+        )
+
+        # -- 8. the verify button, for real ---------------------------------- #
+        #
+        # Two of its three checks run fully here. The third needs public NS delegation and
+        # says so — which is the behaviour being demonstrated as much as the checks are.
+        verdict = verify.verify()
+        by_name = {c["check"]: c for c in verdict["checks"]}
+        check(
+            "verify.health_passes",
+            by_name["health"]["status"] == "pass",
+            f"verify's health check: {by_name['health']['detail']}",
+        )
+        check(
+            "verify.round_trip_passes",
+            by_name["http"]["status"] == "pass",
+            f"verify's round trip (mint -> arrive -> correlate -> read back): "
+            f"{by_name['http']['detail']}",
+        )
+        check(
+            "verify.reports_dns_as_not_run",
+            by_name["dns"]["status"] == "not-run" and verdict["not_run"] == ["dns"],
+            "verify reports NS delegation as NOT-RUN with a reason, and does not fold it into "
+            "an overall pass — the whole point of the button",
+        )
+
+        # -- 9. what loopback CANNOT show ------------------------------------ #
         result(
             "public.ns_delegation",
             "NOTRUN",
@@ -321,10 +428,22 @@ def run() -> int:
             "client, which is the only thing that proves the path a client's network actually "
             "takes.",
         )
+        result(
+            "public.ssh_deploy",
+            "NOTRUN",
+            "needs the VPS: shipping server.py over SSH and starting it there. The GATES on "
+            "that path are fully exercised hermetically (test_oob_deploy_safety.py — the "
+            "signature carries no destination, an unapproved deploy sends nothing, the secret "
+            "never touches an argv), but the transfer itself has no remote box to reach.",
+        )
     finally:
         canary.stop()
-        tokens.clear(ENGAGEMENT)
+        try:
+            state_store.clear(SESSION)
+        except Exception:  # noqa: BLE001 - cleanup must never mask a real failure above
+            pass
         scratch.cleanup()
+        _STORE.cleanup()
 
     print()
     print("==========================================================================")

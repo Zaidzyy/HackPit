@@ -14,8 +14,13 @@ Two halves:
     graph and persist it against the session/engagement. :func:`classify_failure` turns a failed
     collector run (bad creds, DC unreachable, DNS) into a clean, human message.
 
-On this branch the collector is BUILT + unit-tested against captured/sample output but not run
-against a live AD lab (there is none) — see docs/AD-GRAPH.md.
+VERIFIED LIVE (build #9, 2026-07-31). This ran for real against a live ``corp.local`` domain
+controller, not only against captured sample output: ``bloodhound-python`` collected the real
+forest and the result parsed into the typed graph — 84 nodes, 625 edges, 593 of them abusable —
+with an assertion that the graph is the operator's ACTUAL domain and not ``sample_data`` (the
+live DC's computer object is present in it). See ``backend/livefire.log`` lines 64 and 66, and
+docs/AD-GRAPH.md. The live run also found and fixed a real defect this module had: the failure
+classifier's FQDN signature ordering.
 """
 
 from __future__ import annotations

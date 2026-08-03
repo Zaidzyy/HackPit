@@ -1003,3 +1003,205 @@ class WindowsDeliveryRefused(RuntimeError):
         super().__init__(reason)
         self.reason = reason
         self.gate = gate
+
+
+# --------------------------------------------------------------------------- #
+# GATED OOB CANARY DEPLOY (build #13 part 3, spec §3.5)
+#
+# WHY IT IS HERE. Shipping `oob/server.py` to a VPS and starting it is a NEW REMOTE-EXECUTION
+# PATH — a third transport after docker exec and WinRM. Part 2 of this build already made the
+# mistake this avoids: `deliver` grew its own WinRM call, reached around the gated execution
+# point, and a whole-tree guard caught it. Adding that module to the guard's allow-list would
+# have meant a second module that can fire a remote command while re-implementing the gates
+# next to the ones that already live in this file. So the capability lives here, where every
+# other remote command already goes, and callers get it by asking.
+#
+# WHY IT TAKES NO DESTINATION. There is no host, user, port or key parameter below — not a
+# defaulted one, not an optional one. The destination is read from `oob.config.deploy_target()`,
+# which itself takes no arguments. That is the entire containment argument: there is no way to
+# EXPRESS "deploy somewhere else", so no request field, no agent proposal and no future
+# refactor can redirect it. `test_oob_deploy_safety.py` asserts the signature over the AST
+# rather than trusting this comment.
+#
+# WHY THE SUBPROCESS RUNS ON THE HOST, when cockpit/repeater.py deliberately refused to.
+# The repeater sends OPERATOR-COMPOSED requests to ARBITRARY hosts; doing that from the backend
+# process would have created a general egress path out of the operator's machine, so it execs
+# curl inside the open sandbox instead. Neither half of that applies here: the destination is
+# one validated hostname from the store, and the request is a fixed command. Running it in the
+# sandbox would additionally require mounting the operator's SSH PRIVATE KEY into a container
+# that also runs attack tooling — strictly worse than the thing it would be avoiding.
+# --------------------------------------------------------------------------- #
+
+# Where server.py comes from. The repository's own copy — never a caller's bytes, so a deploy
+# cannot be used to put an arbitrary file on the VPS.
+_OOB_SERVER_SOURCE = Path(__file__).resolve().parent.parent.parent / "oob" / "server.py"
+
+# SSH options, fixed. BatchMode refuses a password prompt rather than hanging a request thread
+# forever on a box whose key is wrong; accept-new pins the host key on first contact and then
+# refuses a CHANGED one, which is the useful half of StrictHostKeyChecking for a box the
+# operator just created.
+_SSH_OPTIONS = (
+    "-o", "BatchMode=yes",
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-o", "ConnectTimeout=10",
+)
+
+_DEPLOY_TIMEOUT = 120
+
+
+class OOBDeployRefused(RuntimeError):
+    """A gated canary deploy that was refused. Carries the gate that refused it."""
+
+    def __init__(self, reason: str, gate: str = "oob") -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.gate = gate
+
+
+def _ssh_argv(target: Any, remote_command: str) -> list[str]:
+    """The argv for ONE ssh invocation to the configured canary host.
+
+    Argv-style, never a local shell: the remote command is a single argument, so nothing in
+    it is parsed by the operator's own shell. The remote side does run it through `sh` — that
+    is what SSH does — which is why every value interpolated into `remote_command` by the
+    callers below is drawn from the config store, validated against a character allow-list
+    when it was saved, and single-quoted at the point of use. The read secret is never one of
+    those values: it travels on STDIN, so it cannot appear in `ps` on either machine.
+    """
+    argv = ["ssh", *_SSH_OPTIONS, "-p", str(target.port)]
+    if target.key_path:
+        argv += ["-i", target.key_path, "-o", "IdentitiesOnly=yes"]
+    argv += [f"{target.user}@{target.host}", remote_command]
+    return argv
+
+
+def _ssh(target: Any, remote_command: str, stdin: bytes = b"") -> dict[str, Any]:
+    """Run one remote command, feeding `stdin` to it. Never raises for a remote failure."""
+    try:
+        proc = subprocess.run(
+            _ssh_argv(target, remote_command),
+            input=stdin,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=_DEPLOY_TIMEOUT,
+        )
+    except FileNotFoundError:
+        return {"exit_code": 127, "stdout": "", "stderr": "ssh not found on PATH"}
+    except subprocess.TimeoutExpired:
+        return {"exit_code": 124, "stdout": "", "stderr": f"timed out after {_DEPLOY_TIMEOUT}s"}
+    return {
+        "exit_code": proc.returncode,
+        "stdout": proc.stdout.decode("utf-8", "replace")[:4000],
+        "stderr": proc.stderr.decode("utf-8", "replace")[:4000],
+    }
+
+
+def _run_script(target: Any) -> bytes:
+    """The launcher written to the VPS, mode 0700, carrying the read secret.
+
+    The secret lives in a 0700 file that the daemon sources, rather than on the start command
+    line, because a command line is world-readable in `ps` on a multi-user box. Every other
+    value here was validated against a character allow-list before it was stored, and is
+    single-quoted regardless.
+    """
+    return (
+        "#!/bin/sh\n"
+        "# Written by HackPit. Mode 0700: it holds the canary's read secret.\n"
+        f"HACKPIT_OOB_TOKEN='{target.secret}'\n"
+        "export HACKPIT_OOB_TOKEN\n"
+        f"cd '{target.remote_dir}' || exit 1\n"
+        "exec python3 server.py \\\n"
+        f"  --zone '{target.zone}' \\\n"
+        f"  --answer-ip '{target.answer_ip}' \\\n"
+        f"  --dns-port '{target.dns_port}' \\\n"
+        f"  --http-port '{target.http_port}' \\\n"
+        f"  --hits '{target.remote_dir}/hits.jsonl'\n"
+    ).encode("utf-8")
+
+
+def deploy_oob_canary(*, approved: bool, restart: bool = True) -> dict[str, Any]:
+    """Ship `oob/server.py` to the CONFIGURED canary host and start it. ONE gated act.
+
+    Takes no destination of any kind — see the block comment above. The three remote steps are
+    one approved operation for the same reason a chunked upload is: "write the file", "write
+    the launcher" and "start it" are not three things a human could meaningfully approve
+    separately, they are one deploy, and stopping between any two of them leaves a canary that
+    is half-installed rather than one that is safely not installed.
+
+    Stops at the first non-zero status. Returns a record with NO secret in it.
+    """
+    if not approved:
+        raise OOBDeployRefused(
+            "canary deploy: every deploy needs an individual human approval (approved=true) — "
+            "this starts a listener on the public internet",
+            "approval",
+        )
+    # Imported here rather than at module scope so that `cockpit` keeps no import-time
+    # dependency on the oob package: the executor is loaded by every gate check in the suite,
+    # and the canary store is only ever touched on this one path.
+    from oob import config as oob_config
+
+    target = oob_config.deploy_target()
+    if target is None:
+        raise OOBDeployRefused(
+            "no canary is configured — set the zone, VPS address and read secret first",
+            "oob",
+        )
+    if not target.secret:
+        raise OOBDeployRefused(
+            "the canary has no read secret stored — the server refuses to start without one, "
+            "because its hit log holds a target's internal hostnames",
+            "oob",
+        )
+    try:
+        payload = _OOB_SERVER_SOURCE.read_bytes()
+    except OSError as exc:
+        raise OOBDeployRefused(f"cannot read {_OOB_SERVER_SOURCE.name}: {exc}", "oob") from exc
+
+    quoted_dir = f"'{target.remote_dir}'"
+    steps: list[tuple[str, str, bytes]] = [
+        (
+            "install",
+            # The python3 check is first and is the useful one: without it a missing
+            # interpreter surfaces two steps later as "started, then died", with the reason
+            # only in a log file on a box the operator reaches once.
+            f"command -v python3 >/dev/null || {{ echo 'python3 is not installed on the VPS' "
+            f">&2; exit 1; }}; mkdir -p {quoted_dir} && cat > {quoted_dir}/server.py && "
+            f"chmod 0644 {quoted_dir}/server.py && echo installed",
+            payload,
+        ),
+        (
+            "configure",
+            f"cat > {quoted_dir}/run.sh && chmod 0700 {quoted_dir}/run.sh && echo configured",
+            _run_script(target),
+        ),
+    ]
+    if restart:
+        steps.append((
+            "start",
+            # pkill by the full path so a restart cannot take down an unrelated python3.
+            f"pkill -f {quoted_dir}/server.py >/dev/null 2>&1; sleep 1; "
+            f"setsid nohup {quoted_dir}/run.sh >> {quoted_dir}/canary.log 2>&1 < /dev/null & "
+            f"sleep 2; pgrep -f {quoted_dir}/server.py >/dev/null && echo started || "
+            f"(tail -n 20 {quoted_dir}/canary.log >&2; exit 1)",
+            b"",
+        ))
+
+    results: list[dict[str, Any]] = []
+    for name, remote_command, stdin in steps:
+        outcome = _ssh(target, remote_command, stdin)
+        results.append({"step": name, **outcome})
+        if outcome["exit_code"] != 0:
+            break
+
+    ok = bool(results) and all(r["exit_code"] == 0 for r in results)
+    if ok:
+        oob_config.mark_deployed()
+    return {
+        "ok": ok,
+        # describe() carries the destination and NOT the secret, so this record is safe to
+        # return to the browser and safe to keep.
+        "target": target.describe(),
+        "bytes_sent": len(payload),
+        "steps": results,
+    }

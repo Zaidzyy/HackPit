@@ -91,6 +91,9 @@ from arsenal.router import (  # noqa: E402
     set_arsenal as set_arsenal_catalog,
 )
 from exploits.router import router as exploits_router  # noqa: E402  (backend/exploits — CVE index)
+from oob import config as oob_config  # noqa: E402  (backend/oob — the canary's one configuration)
+from oob import tokens as oob_tokens  # noqa: E402  (canary token minting + correlation)
+from oob.router import router as oob_router  # noqa: E402  (out-of-band canary panel)
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
 CAPTIONS_PATH = REPO_ROOT / "data" / "images" / "captions.json"
@@ -310,6 +313,11 @@ async def lifespan(app: FastAPI):
     cockpit_winprofiles.init_db()
     # parsed AD attack-path graphs share it too.
     ad_store.init_db()
+    # out-of-band canary: minted tokens and the one canary configuration share it too. The
+    # LISTENER those tokens are for is a separate deployable (oob/server.py) that runs on a
+    # VPS; nothing started here opens a socket.
+    oob_tokens.init_db()
+    oob_config.init_db()
     # structured engagement state (hosts/services/endpoints/credentials/findings) + the
     # task tree share it too. This is what the orchestrator reasons over instead of
     # re-reading stdout tails.
@@ -397,6 +405,12 @@ app.include_router(arsenal_router)
 # A hit is information plus a path inside the sandbox; running it is a separate, gated,
 # human-approved command like every other.
 app.include_router(exploits_router)
+# Out-of-band canary (see backend/oob/ + oob/server.py). Mints the tokens that go into blind
+# SSRF/XXE/RCE/SQLi/JNDI payloads, correlates the callbacks back to the step that caused them,
+# and files them as findings. The DEPLOY route is the only one that executes anything, and it
+# goes through the cockpit executor host-locked to the configured VPS — it is passed no
+# destination, because it has no parameter for one.
+app.include_router(oob_router)
 
 
 # --------------------------------------------------------------------------- #

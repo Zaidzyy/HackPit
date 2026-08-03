@@ -230,6 +230,28 @@ def list_active() -> list[EngagementRecord]:
     return [_row(r) for r in rows]
 
 
+def session_ids() -> dict[str, str]:
+    """engagement_id -> session_id, for EVERY engagement, active or exited.
+
+    Deliberately not filtered to the active ones. An out-of-band callback is the case this
+    exists for: a blind SSRF routed through a queue can land ten minutes — or a day — after
+    the test that caused it, by which point the engagement it belongs to has very often been
+    exited. Filtering here would file those hits nowhere and report them as unattributable,
+    which is precisely the evidence the canary was built to stop losing.
+
+    Engagements with no session attached are omitted rather than mapped to an empty id: there
+    is nowhere to file their findings, and the caller reports that as its own outcome.
+    """
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                "SELECT engagement_id, session_id FROM engagement_mode WHERE session_id IS NOT NULL"
+            ).fetchall()
+    except sqlite3.OperationalError:  # table not created yet — no engagements, no mapping
+        return {}
+    return {r["engagement_id"]: r["session_id"] for r in rows if r["session_id"]}
+
+
 def _col(row: sqlite3.Row, name: str) -> str | None:
     """A column that may not exist on a pre-migration row (migration-safe reads)."""
     try:

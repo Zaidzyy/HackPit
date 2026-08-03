@@ -185,6 +185,13 @@ export const SURFACE_BANDS: SurfaceBand[] = [
         desc: "Generate-only payload shaping. Never auto-runs.",
         needsStack: true,
       },
+      {
+        key: "oob",
+        icon: "◇",
+        label: ":oob",
+        href: "/oob",
+        desc: "Canary for blind SSRF/XXE/RCE — the callback is the proof.",
+      },
     ],
   },
   {

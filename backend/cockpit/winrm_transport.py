@@ -16,8 +16,14 @@ HERMETIC BY CONSTRUCTION
 ``pywinrm`` is imported LAZILY, inside :func:`_send`, so the safety suite runs with no
 third-party WinRM dependency and no network. Tests exercise the executor's Windows path by
 monkeypatching :func:`_send` (or :func:`run`) with a fake transport — exactly how test_kali
-fakes ``subprocess.run``. The live path against a real VM is verified separately, once the
-operator's VM is up (deferred, like AD-live execution and tunnels were).
+fakes ``subprocess.run``.
+
+The hermetic suite is therefore not the whole story, and the rest of it is no longer pending:
+the live path was VERIFIED against a real Windows/AD box in build #9 (2026-07-31), with a
+round trip reaching a real ``corp.local`` domain controller and returning
+``corp\\administrator`` (``backend/livefire.log`` line 21). That run is also where this
+transport's real-world edges surfaced — stderr arriving as CLIXML, and impacket needing the
+DC's address rather than its FQDN — neither of which any amount of mocking would have shown.
 
 AUTH. NTLM/Negotiate, so a LOCAL Windows account authenticates over plain HTTP:5985 without
 enabling Basic auth. Two credential kinds:

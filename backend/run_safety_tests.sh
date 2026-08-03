@@ -176,6 +176,12 @@ run_test test_oob_tokens.py "OOB canary tokens (DNS-label-safe / CSPRNG / correl
 
 run_test test_oob_server.py "OOB canary server (answers not NXDOMAIN / authenticated append-only reads / no execution, no forwarding)"
 
+run_test test_oob_poll.py "OOB poll client + state ingest (correlation kept / nothing dropped / cursor monotonic / no redirect followed)"
+
+run_test test_oob_templates.py "OOB payload templates (token left of the zone per the server's own parser / renders and stops)"
+
+run_test test_oob_deploy_safety.py "OOB deploy SAFETY invariants (signature carries NO destination / no agent path / refusal sends nothing / secret never in an argv)"
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

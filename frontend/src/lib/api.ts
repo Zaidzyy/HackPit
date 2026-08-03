@@ -2950,3 +2950,163 @@ export const testWindowsProfile = (profileId: string, signal?: AbortSignal) =>
     {},
     signal
   );
+
+// ---- out-of-band canary (build #13 part 3) ------------------------------- //
+
+/** The canary's configuration, MASKED. `has_secret` is the only thing said about the
+ *  read secret — the value is never sent to the browser. */
+export type OOBConfig = {
+  zone: string;
+  host: string;
+  answer_ip: string;
+  http_port: number;
+  dns_port: number;
+  ssh_user: string;
+  ssh_port: number;
+  ssh_key_path: string;
+  has_secret: boolean;
+  cursor: number;
+  deployed_at: string;
+  updated_at: string;
+};
+
+export type OOBNsRecord = { name: string; type: string; value: string; note: string };
+
+/** The exact records to paste at the registrar. An A record alone is the usual mistake and
+ *  the `warning` says so. */
+export type OOBNsDelegation = {
+  zone: string;
+  parent_zone: string;
+  records: OOBNsRecord[];
+  zonefile: string;
+  warning: string;
+};
+
+export type OOBTemplate = {
+  id: string;
+  vuln_class: string;
+  title: string;
+  sink: string;
+  proves: string;
+  note: string;
+};
+
+export type OOBPayload = OOBTemplate & { payload: string };
+
+export type OOBStatus = {
+  configured: boolean;
+  config: OOBConfig | null;
+  ns: OOBNsDelegation | null;
+  templates: OOBTemplate[];
+  vuln_classes: string[];
+  remote_dir: string;
+};
+
+export type OOBToken = {
+  token: string;
+  engagement_id: string;
+  step_id: string | null;
+  note: string;
+  at: string;
+};
+
+export type OOBMintResult = { token: OOBToken; zone: string; payloads: OOBPayload[] };
+
+/** A hit, joined to the mint record that explains it. `correlated: false` means it arrived
+ *  but could not be attributed — kept deliberately, never dropped. */
+export type OOBHit = {
+  kind: "dns" | "http";
+  token: string | null;
+  qname?: string;
+  qtype?: string;
+  method?: string;
+  path?: string;
+  host?: string;
+  source_ip: string;
+  at: string;
+  seq: number;
+  correlated: boolean;
+  engagement_id: string | null;
+  step_id: string | null;
+  note: string;
+};
+
+export type OOBPollResult = {
+  hits: OOBHit[];
+  cursor: number;
+  after: number;
+  filed: number;
+  unfiled: (OOBHit & { reason: string })[];
+};
+
+/** One verify check. `not-run` is a first-class status and is never folded into a pass. */
+export type OOBCheck = {
+  check: string;
+  status: "pass" | "fail" | "not-run";
+  detail: string;
+};
+
+export type OOBVerifyResult = {
+  ok: boolean;
+  checks: OOBCheck[];
+  not_run?: string[];
+};
+
+export type OOBDeployStep = {
+  step: string;
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+};
+
+export type OOBDeployResult = {
+  ok: boolean;
+  target: { host: string; user: string; port: number; remote_dir: string; zone: string };
+  bytes_sent: number;
+  steps: OOBDeployStep[];
+};
+
+export type OOBConfigInput = {
+  zone: string;
+  host: string;
+  answer_ip?: string;
+  http_port?: number;
+  dns_port?: number;
+  ssh_user?: string;
+  ssh_port?: number;
+  ssh_key_path?: string;
+  /** Blank on edit KEEPS the stored secret — it is never returned, so it cannot be re-sent. */
+  read_secret?: string;
+};
+
+export const getOOB = (signal?: AbortSignal) => getJSON<OOBStatus>("/oob", signal);
+
+export const saveOOBConfig = (input: OOBConfigInput, signal?: AbortSignal) =>
+  postJSON<{ config: OOBConfig; ns: OOBNsDelegation; note: string }>("/oob/config", input, signal);
+
+export const deleteOOBConfig = (signal?: AbortSignal) =>
+  delJSON<{ removed: boolean; note: string }>("/oob/config", signal);
+
+/** Mint a token for a step and render the payloads that carry it. One call, because a
+ *  payload with no mint record behind it correlates to nothing. */
+export const mintOOBToken = (
+  input: { engagement_id: string; step_id?: string | null; note?: string; vuln_class?: string | null },
+  signal?: AbortSignal
+) => postJSON<OOBMintResult>("/oob/mint", input, signal);
+
+export const listOOBTokens = (engagementId: string, signal?: AbortSignal) =>
+  getJSON<{ engagement_id: string; tokens: OOBToken[] }>(
+    `/oob/tokens/${encodeURIComponent(engagementId)}`,
+    signal
+  );
+
+/** Fetch what is new, correlate it, file it. Omit `after` to use (and advance) the cursor. */
+export const pollOOB = (after?: number | null, signal?: AbortSignal) =>
+  postJSON<OOBPollResult>("/oob/poll", { after: after ?? null }, signal);
+
+/** GATED. Carries no destination — the server resolves the VPS from its own config store. */
+export const deployOOB = (approved: boolean, signal?: AbortSignal) =>
+  postJSON<OOBDeployResult>("/oob/deploy", { approved, restart: true }, signal);
+
+export const verifyOOB = (signal?: AbortSignal) =>
+  postJSON<OOBVerifyResult>("/oob/verify", {}, signal);

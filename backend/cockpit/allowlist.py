@@ -233,9 +233,15 @@ _TOOL_EXEC_FLAGS: dict[str, frozenset[str]] = {
 #
 # ZAP is deliberately stricter than sqlmap/nikto/dalfox/nuclei, which stay unflagged. Recorded
 # decision (2026-08-03); see docs/superpowers/plans/2026-08-03-zap-scanner-integration.md.
+# `-daemon` is here for a DIFFERENT reason than `-quickurl`, and both belong. `-quickurl`
+# attacks. `-daemon` attacks nothing — it starts a long-lived listener that RECORDS every request
+# and response passing through it, including credentials, session tokens and payloads in
+# cleartext. The three existing listener surfaces (sliver, tunnels, obfuscation) all demand the
+# red-confirm for that same shape of capability, and finding I2 of the 2026-07-27 gate audit
+# exists precisely because one of them did not. `-zapit` stays absent: it crawls and fingerprints.
 _TOOL_ATTACK_FLAGS: dict[str, frozenset[str]] = {
-    "zaproxy": frozenset({"-quickurl"}),
-    "owasp-zap": frozenset({"-quickurl"}),
+    "zaproxy": frozenset({"-quickurl", "-daemon"}),
+    "owasp-zap": frozenset({"-quickurl", "-daemon"}),
 }
 # Substrings anywhere in the args that signal a reverse shell / code exec shape.
 _SHELL_MARKERS = (

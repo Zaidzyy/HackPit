@@ -2350,9 +2350,78 @@ a browser**, not merely typechecked: the publish control is disabled until an en
 entered, and the crawl panel's red-confirm carries its own copy rather than the scanner's. All
 three spider routes are registered and all three are called by the client — no orphans.
 
-**Not verified, and not to be read as passing: the acceptance test.** A real browser reaching an
-Akamai-fronted in-scope host that a bare client cannot is the point of the whole build, and it
-needs a human at a real browser with a real session. The runbook is
-`docs/proof/build15-acceptance-runbook.md`, including exactly what to capture (status, headers,
-timing, protocol) **if a real browser is refused too** — that result is the input to a separate
-decision, deliberately left open rather than foreclosed here.
+**The acceptance test was left open at commit time and HAS SINCE BEEN RUN.** The runbook is
+`docs/proof/build15-acceptance-runbook.md`; what it returned is below, and it split the two halves
+of this build apart.
+
+### The acceptance test, run live (2026-08-04) — part 1 passes, part 2 does not
+
+Run against `www.crateandbarrel.me`, in scope for the MAF Lifestyle Bugcrowd program and one of the
+nine Akamai-fronted assets that returned **nothing at all** to a bare `HEAD` — h2 stream reset,
+h1.1 total timeout.
+
+**Part 1 PASSED.** Firefox on Windows, pointed at the published `127.0.0.1:8090` with ZAP's CA
+trusted, loaded the site normally. ZAP captured **55 requests** across the target's own hosts:
+
+| host | requests |
+|---|---|
+| `www.crateandbarrel.me` | 44 |
+| `dh.crateandbarrel.me` | 6 |
+| `gtm-analytics.crateandbarrel.me` | 3 |
+| `crateandbarrel.me` | 2 |
+
+A real browser through this proxy reaches a host a bare client cannot. That is the whole premise of
+the build, and it holds. It also surfaced **two subdomains enumeration had not** — `dh.` and
+`gtm-analytics.` came out of a page load, not a wordlist.
+
+**A stated concern was measured and was WRONG.** Before the test, the risk called out was that ZAP
+is a MITM proxy: it terminates the browser's TLS and re-originates upstream with its own Java
+stack, so Akamai would see Firefox's headers and JS but *not* Firefox's TLS fingerprint — and
+Akamai Bot Manager leans on TLS fingerprinting. That was a reasonable objection and the measurement
+overruled it. Java's handshake was accepted. Worth keeping, because it is the shape of a plausible
+argument that a five-minute test settles.
+
+**Part 2 FAILED against the same target, and the control makes it unambiguous.** Three fetches
+through the identical proxy, minutes apart:
+
+| client | target | result |
+|---|---|---|
+| Firefox | `www.crateandbarrel.me` | 55 requests captured |
+| headless Chromium | `www.crateandbarrel.me` | **ZAP's own 20s read timeout, 0 bytes** |
+| headless Chromium | `example.com` | HTML, normal |
+
+Same ZAP, same proxy, same window. The refusal is specific to the CLIENT, and it reproduces the
+original `curl` signature exactly: a silent hang rather than a rejection.
+
+**This undercuts part 2's central argument on precisely the targets that motivated the build.** The
+design was "log in by hand, let the AJAX spider expand from there, let part 3's scanner attack what
+both produced." The *session* inheritance works — that part is sound. But the spider brings its own
+browser and therefore its own fingerprint, and on a bot-managed edge that is what gets refused. So
+the honest scope of each half is now measured rather than assumed:
+
+* **Part 1 (publish + manual browsing)** — what actually unblocks the WAF-fronted assets.
+* **Part 2 (AJAX spider)** — scale on ordinary targets; refused by Akamai. Useful, and narrower
+  than the spec claimed.
+
+**Not pursued, deliberately.** Headless Chrome advertises `HeadlessChrome` in its User-Agent, which
+is the likely discriminator, and overriding it would probably restore the crawl. That crosses the
+line this build drew around itself — *"nothing here imitates or evades — it uses one."* Going
+further is a separate decision and a separate build; this section is the evidence it would rest on,
+which is exactly what the spec asked for if a real browser were refused.
+
+### Two smaller things the live run surfaced
+
+**Chromium phoned Google during the proof's crawl.** A crawl aimed at a local two-page site also
+produced requests to `www.google.com`, `gstatic.com` and `play.google.com` — Chromium's background
+networking (variations seed, search preconnect) going out through the proxy, and the engage sandbox
+has full egress. Harmless here, wrong for a tool used on engagements: traffic nobody asked for,
+attributed to the operator's IP. The `/etc/chromium.d/` drop-in should carry
+`--disable-background-networking --no-first-run --no-default-browser-check`.
+
+**An engagement's rules-of-engagement text is not enforced by anything.** The active engagement
+carried `authorization: "...PASSIVE RECON ONLY this session; no active scanning per rules of
+engagement."` — written for an unattended session. Scope is enforced in code; that sentence is free
+prose no gate reads, so a crawl that clicks through a production storefront would have passed every
+gate. It was caught by reading the record, not by a control. Same shape as the
+credential-precondition finding in the 2026-08-04 audit: **a documented constraint with nothing
+behind it.**

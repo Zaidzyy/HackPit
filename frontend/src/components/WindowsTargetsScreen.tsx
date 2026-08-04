@@ -190,6 +190,10 @@ export function WindowsTargetsScreen() {
               aria-label="Secret"
               autoComplete="new-password"
             />
+          </div>
+          {/* CONFIGURE above, ACT below — the same shared divider :exposure and :oob use. */}
+          <div className="hp-tn-actions">
+            <span className="hp-tn-actions-label">act</span>
             <button
               className="hp-tn-start"
               onClick={create}

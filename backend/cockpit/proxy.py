@@ -904,6 +904,138 @@ _RISK_TO_SEVERITY = {
 }
 
 
+# --------------------------------------------------------------------------- #
+# AUTHENTICATED-SCAN SESSION EXPIRY — turning a silent wrong answer into a loud one
+#
+# Build #15's AJAX spider crawls behind a login by inheriting a session the human established
+# by hand in a real browser. It added NO ZAP context, no session-management configuration and
+# no authentication handling — verified — which is fine, and is not what this is.
+#
+# THE PROBLEM IS WHAT HAPPENS WHEN THAT SESSION EXPIRES MID-SCAN. The active scanner does not
+# stop. It keeps firing payloads at what are now login redirects, finds nothing in them, and
+# reports **zero findings** — which is indistinguishable from "the application is secure".
+# That is the worst failure shape this project recognises: not a crash, not an error, but a
+# confident and wrong answer nobody has a reason to doubt.
+#
+# THIS IS THE CHEAP HONEST VERSION, on purpose. It does not re-authenticate, maintain a
+# session, or build a ZAP context — all of which are a separate decision. It only NOTICES
+# that scan traffic has started coming back login-shaped, and says so. Converting a silent
+# failure into a visible one is the whole goal; fixing the failure is a different build.
+# --------------------------------------------------------------------------- #
+#: Path fragments that mean "you are being sent to a login". Matched on the redirect TARGET.
+_LOGIN_PATHS = (
+    "/login", "/signin", "/sign-in", "/log-in", "/auth", "/sso", "/session/new",
+    "/account/login", "/users/sign_in", "/oauth", "/saml", "/adfs", "/idp",
+)
+#: Markers of a login FORM in a response body. Deliberately narrow: a password input is hard
+#: to produce by accident, while the word "login" appears in half the nav bars on the web.
+_LOGIN_BODY_MARKERS = (
+    'type="password"', "type='password'", 'name="password"', "name='password'",
+    'id="password"', "j_security_check", 'name="username" ', "__requestverificationtoken",
+)
+#: Below this many sampled responses there is nothing to judge. A verdict drawn from four
+#: requests would be a guess wearing a percentage.
+_SESSION_MIN_SAMPLE = 10
+#: What share of sampled responses has to look login-shaped before we say so.
+_SESSION_SUSPECT_SHARE = 0.30
+#: ...and the share of IDENTICAL responses that means the app collapsed to one shape.
+_SESSION_UNIFORM_SHARE = 0.90
+
+
+def _is_login_redirect(exchange: "CapturedExchange") -> bool:
+    status = exchange.response.status or 0
+    if status not in (301, 302, 303, 307, 308):
+        return False
+    for h in exchange.response.headers:
+        if h.name.lower() == "location":
+            target = (h.value or "").lower()
+            return any(p in target for p in _LOGIN_PATHS)
+    return False
+
+
+def _has_login_form(exchange: "CapturedExchange") -> bool:
+    if (exchange.response.status or 0) != 200:
+        return False
+    body = (exchange.response.body or "").lower()
+    return any(m in body for m in _LOGIN_BODY_MARKERS)
+
+
+def session_health(exchanges: list["CapturedExchange"]) -> dict[str, Any]:
+    """Does this scan traffic still look authenticated? PURE — reads, decides nothing else.
+
+    Three independent signals, because a session can end in three different shapes:
+      * a redirect to a login path,
+      * a 200 that is really the login page,
+      * a wall of 401/403.
+    Plus a fourth that catches the ones those miss: a COLLAPSE to a single response shape.
+    An application answering 90% of a varied scan with the same status and near-identical
+    body length has stopped distinguishing between the requests, which is what a login wall
+    looks like when it renders a friendly page instead of redirecting.
+
+    Verdicts are ``ok`` | ``suspect`` | ``unknown``, and ``unknown`` is used freely. With too
+    few responses to judge, saying so is the honest answer; "ok" on a sample of four would
+    re-create the false confidence this exists to remove.
+    """
+    sampled = [e for e in exchanges if (e.response.status or 0) > 0]
+    total = len(sampled)
+    if total < _SESSION_MIN_SAMPLE:
+        return {
+            "verdict": "unknown",
+            "reasons": [
+                f"only {total} response(s) to look at — too few to judge whether the "
+                "session is still live"
+            ],
+            "sampled": total, "login_redirects": 0, "login_bodies": 0,
+            "auth_rejections": 0, "uniform_share": 0.0,
+        }
+
+    redirects = sum(1 for e in sampled if _is_login_redirect(e))
+    bodies = sum(1 for e in sampled if _has_login_form(e))
+    rejections = sum(1 for e in sampled if (e.response.status or 0) in (401, 403))
+
+    shapes: dict[tuple[int, int], int] = {}
+    for e in sampled:
+        # Bucket by status + body size rounded to 100 bytes: a login page rendered for many
+        # different URLs varies by a few bytes, not by kilobytes.
+        key = (e.response.status or 0, (e.response.size_bytes or len(e.response.body or "")) // 100)
+        shapes[key] = shapes.get(key, 0) + 1
+    top_shape, top_count = max(shapes.items(), key=lambda kv: kv[1])
+    uniform_share = top_count / total
+
+    reasons: list[str] = []
+    login_share = (redirects + bodies) / total
+    if login_share >= _SESSION_SUSPECT_SHARE:
+        parts = []
+        if redirects:
+            parts.append(f"{redirects} redirected to a login path")
+        if bodies:
+            parts.append(f"{bodies} returned a login form")
+        reasons.append(
+            f"{int(login_share * 100)}% of {total} responses were login-shaped ("
+            + ", ".join(parts) + ")"
+        )
+    if rejections / total >= _SESSION_SUSPECT_SHARE:
+        reasons.append(
+            f"{rejections} of {total} responses were 401/403 — the credential is being refused"
+        )
+    if uniform_share >= _SESSION_UNIFORM_SHARE:
+        reasons.append(
+            f"{int(uniform_share * 100)}% of responses collapsed to one shape (HTTP "
+            f"{top_shape[0]}, ~{top_shape[1] * 100} bytes) — the app stopped distinguishing "
+            "between the requests, which is what a login wall looks like"
+        )
+
+    return {
+        "verdict": "suspect" if reasons else "ok",
+        "reasons": reasons,
+        "sampled": total,
+        "login_redirects": redirects,
+        "login_bodies": bodies,
+        "auth_rejections": rejections,
+        "uniform_share": round(uniform_share, 2),
+    }
+
+
 class ScanStartRequest(BaseModel):
     """Start an ACTIVE SCAN against one URL the proxy already captured."""
 

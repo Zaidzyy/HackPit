@@ -34,50 +34,39 @@ import {
  * heuristic, so a build always comes back as an explicit RED CONFIRM you re-confirm.
  */
 
+/** One labelled fact inside a footprint / opsec panel. */
+function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="hp-tn-fact">
+      <dt className="hp-tn-olhint">{label}</dt>
+      <dd className="hp-tn-factval">{children}</dd>
+    </div>
+  );
+}
+
 /** The defender's view. Rendered on every preview and every result, never hidden. */
 function FootprintPanel({ fp }: { fp: EvasionFootprint }) {
   return (
-    <section className="rounded border border-sky-700/50 bg-sky-950/20 p-3">
-      <h3 className="mb-2 text-sm font-semibold text-sky-300">
-        What a defender sees
-        <span className="ml-2 font-normal text-xs text-sky-500/80">
-          (always shown — this cannot be turned off)
-        </span>
-      </h3>
-      <dl className="space-y-2 text-sm">
-        <div>
-          <dt className="text-xs uppercase tracking-wide text-slate-400">Activity</dt>
-          <dd className="text-slate-200">{fp.activity}</dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase tracking-wide text-slate-400">Blue-team view</dt>
-          <dd className="text-slate-200">{fp.blue_view}</dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase tracking-wide text-slate-400">
-            Loudness — {fp.loudness?.level}
-          </dt>
-          <dd className="text-slate-300">{fp.loudness?.why}</dd>
-        </div>
+    <section className="hp-tn-card">
+      <div className="hp-tn-cardhead">what a defender sees</div>
+      <div className="hp-tn-cardsub">always shown — this cannot be turned off</div>
+      <dl className="hp-tn-facts">
+        <Fact label="activity">{fp.activity}</Fact>
+        <Fact label="blue-team view">{fp.blue_view}</Fact>
+        <Fact label={`loudness — ${fp.loudness?.level}`}>{fp.loudness?.why}</Fact>
         {fp.telemetry?.length > 0 && (
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-slate-400">Telemetry</dt>
-            <dd>
-              <ul className="list-disc pl-5 text-slate-300">
-                {fp.telemetry.map((t) => (
-                  <li key={t}>{t}</li>
-                ))}
-              </ul>
-            </dd>
-          </div>
+          <Fact label="telemetry">
+            <ul className="hp-tn-bullets">
+              {fp.telemetry.map((t) => (
+                <li key={t}>{t}</li>
+              ))}
+            </ul>
+          </Fact>
         )}
         {fp.techniques?.length > 0 && (
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-slate-400">ATT&amp;CK</dt>
-            <dd className="text-slate-300">
-              {fp.techniques.map((t) => `${t.id} ${t.name}`).join(" · ")}
-            </dd>
-          </div>
+          <Fact label="ATT&CK">
+            {fp.techniques.map((t) => `${t.id} ${t.name}`).join(" · ")}
+          </Fact>
         )}
       </dl>
     </section>
@@ -87,35 +76,27 @@ function FootprintPanel({ fp }: { fp: EvasionFootprint }) {
 /** The operator's half. `still_recorded` is the mandatory honesty marker. */
 function OpsecPanel({ note }: { note: EvasionOpsecNote }) {
   return (
-    <section className="rounded border border-amber-700/50 bg-amber-950/20 p-3">
-      <h3 className="mb-2 text-sm font-semibold text-amber-300">Tradecraft — and its limits</h3>
-      <dl className="space-y-2 text-sm">
-        <div>
-          <dt className="text-xs uppercase tracking-wide text-slate-400">Loud because</dt>
-          <dd className="text-slate-200">{note.loud_because}</dd>
-        </div>
+    <section className="hp-tn-card">
+      <div className="hp-tn-cardhead">tradecraft — and its limits</div>
+      <dl className="hp-tn-facts">
+        <Fact label="loud because">{note.loud_because}</Fact>
         {note.quieter?.length > 0 && (
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-slate-400">Quieter</dt>
-            <dd>
-              <ul className="list-disc pl-5 text-slate-300">
-                {note.quieter.map((q) => (
-                  <li key={q}>{q}</li>
-                ))}
-              </ul>
-            </dd>
-          </div>
+          <Fact label="quieter">
+            <ul className="hp-tn-bullets">
+              {note.quieter.map((q) => (
+                <li key={q}>{q}</li>
+              ))}
+            </ul>
+          </Fact>
         )}
-        <div className="rounded border border-amber-600/60 bg-amber-900/30 p-2">
-          <dt className="text-xs font-semibold uppercase tracking-wide text-amber-200">
-            Still recorded
-          </dt>
-          <dd className="text-amber-50">{note.still_recorded}</dd>
+        {/* `still_recorded` keeps its own emphasis after the restyle. It is the sentence that
+            makes this surface a purple-team instrument rather than an evasion how-to, and it
+            must not flatten into the other facts around it. */}
+        <div className="hp-tn-fact hp-tn-fact-loud">
+          <dt className="hp-tn-olhint">still recorded</dt>
+          <dd className="hp-tn-factval">{note.still_recorded}</dd>
         </div>
-        <div>
-          <dt className="text-xs uppercase tracking-wide text-slate-400">Tradeoff</dt>
-          <dd className="text-slate-300">{note.tradeoff}</dd>
-        </div>
+        <Fact label="tradeoff">{note.tradeoff}</Fact>
       </dl>
     </section>
   );
@@ -193,92 +174,74 @@ export function EvasionScreen() {
 
   return (
     <PageShell crumbs={[{ label: "cockpit", href: "/cockpit" }, { label: "evasion" }]}>
-      <div className="space-y-6">
-        <p className="max-w-3xl text-sm text-slate-400">
-          Builds one artifact and stops. There is no deploy or run control here because the
-          backend has no such endpoint. Every build is gated, scope-checked and audited, and
-          every result carries the defender&apos;s view of what you just made.
-        </p>
+      <div className="hp-tn">
+        <header className="hp-tn-head">
+          <div className="hp-ap-kicker">donut · shellcode packing · amsi · etw · generate-only</div>
+          <h1 className="hp-tn-title">:evasion</h1>
+          <p className="hp-tn-sub">
+            Builds one artifact and stops. There is no deploy or run control here because the
+            backend has no such endpoint. Every build is gated, scope-checked and audited, and
+            every result carries the defender&apos;s view of what you just made.
+          </p>
+        </header>
 
-        {error && (
-          <div className="rounded border border-red-700 bg-red-950/40 p-3 text-sm text-red-200">
-            {error}
-          </div>
-        )}
+        {error && <div className="hp-tn-error">{error}</div>}
 
-        <section className="rounded border border-slate-700 bg-slate-900/40 p-4">
-          <h2 className="mb-3 text-sm font-semibold text-slate-200">Build</h2>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="text-sm">
-              <span className="block text-xs uppercase tracking-wide text-slate-400">
-                Technique
-              </span>
-              <select
-                className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 text-slate-100"
-                value={technique}
-                onChange={(e) => setTechnique(e.target.value)}
-              >
-                {(techniques.length ? techniques : [technique]).map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="text-sm sm:col-span-2">
-              <span className="block text-xs uppercase tracking-wide text-slate-400">
-                Input payload path {stubTechnique && "(not used by a stub technique)"}
-              </span>
-              <input
-                className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-slate-100"
-                placeholder="/loot/<engagement>/input.exe"
-                value={payloadPath}
-                onChange={(e) => setPayloadPath(e.target.value)}
-              />
-            </label>
-
-            <label className="text-sm">
-              <span className="block text-xs uppercase tracking-wide text-slate-400">
-                Target (scope-checked)
-              </span>
-              <input
-                className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-slate-100"
-                placeholder="leave empty in lab"
-                value={target}
-                onChange={(e) => setTarget(e.target.value)}
-              />
-            </label>
-
-            <label className="text-sm">
-              <span className="block text-xs uppercase tracking-wide text-slate-400">
-                Engagement id
-              </span>
-              <input
-                className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-slate-100"
-                placeholder="empty = lab"
-                value={engagementId}
-                onChange={(e) => setEngagementId(e.target.value)}
-              />
-            </label>
-          </div>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="rounded border border-slate-600 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-50"
-              onClick={onPreview}
-              disabled={busy}
+        <section className="hp-tn-card">
+          <div className="hp-tn-cardhead">1 · build</div>
+          <div className="hp-tn-form">
+            <select
+              className="hp-tn-input"
+              value={technique}
+              onChange={(e) => setTechnique(e.target.value)}
+              aria-label="Technique"
             >
-              Preview (runs nothing)
+              {(techniques.length ? techniques : [technique]).map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+            <input
+              className="hp-tn-input"
+              placeholder="/loot/<engagement>/input.exe"
+              value={payloadPath}
+              onChange={(e) => setPayloadPath(e.target.value)}
+              aria-label="Input payload path"
+            />
+          </div>
+          <p className="hp-tn-olhint">
+            input payload path{stubTechnique && " — not used by a stub technique"}
+          </p>
+          <div className="hp-tn-form">
+            <input
+              className="hp-tn-input"
+              placeholder="target (scope-checked) — leave empty in lab"
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              aria-label="Target"
+            />
+            <input
+              className="hp-tn-input"
+              placeholder="engagement id — empty = lab"
+              value={engagementId}
+              onChange={(e) => setEngagementId(e.target.value)}
+              aria-label="Engagement id"
+            />
+          </div>
+
+          <div className="hp-tn-actions">
+            <span className="hp-tn-actions-label">act</span>
+            <button type="button" className="hp-tn-start" onClick={onPreview} disabled={busy}>
+              {busy ? "…" : "preview (runs nothing)"}
             </button>
           </div>
         </section>
 
         {preview && (
-          <div className="space-y-4">
+          <>
             {preview.rejected && preview.rejected.gate !== "danger" && (
-              <div className="rounded border border-red-700 bg-red-950/40 p-3 text-sm text-red-200">
+              <div className="hp-tn-error">
                 <strong>Refused at the {preview.rejected.gate} gate.</strong>{" "}
                 {preview.rejected.reason}
               </div>
@@ -290,60 +253,55 @@ export function EvasionScreen() {
             <OpsecPanel note={preview.opsec_note} />
 
             {dangerReason && (
-              <div className="rounded border-2 border-red-600 bg-red-950/50 p-4">
-                <h3 className="text-sm font-bold uppercase tracking-wide text-red-300">
-                  Red confirm
-                </h3>
-                <p className="mt-1 text-sm text-red-100">{dangerReason}</p>
-                <p className="mt-2 text-xs text-red-200/80">
+              <div className="hp-tn-danger">
+                <div className="hp-tn-danger-head">red confirm</div>
+                <div className="hp-tn-danger-why">{dangerReason}</div>
+                <div className="hp-tn-danger-note">
                   This builds an artifact in the sandbox. It is not delivered and not executed.
-                </p>
-                <button
-                  type="button"
-                  className="mt-3 rounded bg-red-700 px-3 py-2 text-sm font-semibold text-white hover:bg-red-600 disabled:opacity-50"
-                  onClick={onGenerate}
-                  disabled={busy}
-                >
-                  Confirm and build
-                </button>
+                </div>
+                <div className="hp-tn-danger-actions">
+                  <button
+                    type="button"
+                    className="hp-tn-danger-go"
+                    onClick={onGenerate}
+                    disabled={busy}
+                  >
+                    {busy ? "building…" : "confirm and build"}
+                  </button>
+                </div>
               </div>
             )}
-          </div>
+          </>
         )}
 
         {result && (
-          <div className="space-y-4">
-            <section className="rounded border border-slate-700 bg-slate-900/40 p-4">
-              <h2 className="mb-2 text-sm font-semibold text-slate-200">Artifact</h2>
+          <>
+            <section className="hp-tn-card">
+              <div className="hp-tn-cardhead">2 · artifact</div>
               {/* An empty path means the generator failed or timed out and wrote nothing.
                   Offering a copyable path to a file that does not exist reads as success. */}
               {result.artifact_path ? (
-                <p className="text-sm text-slate-300">
-                  <span className="text-slate-500">path </span>
-                  <code className="font-mono text-slate-100">{result.artifact_path}</code>{" "}
-                  <CopyButton text={result.artifact_path} />
+                <p className="hp-tn-note">
+                  <span className="hp-tn-olhint">path </span>
+                  <code>{result.artifact_path}</code> <CopyButton text={result.artifact_path} />
                 </p>
               ) : (
-                <p className="text-sm text-amber-300">
+                <p className="hp-tn-note hp-tn-note-warn">
                   No artifact was produced — the generator did not complete successfully.
                 </p>
               )}
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="hp-tn-olhint">
                 mode {result.mode} · exit {String(result.exit_code)} · run {result.run_id}
               </p>
               {result.exit_code !== 0 && result.stderr && (
-                <pre className="mt-2 overflow-x-auto rounded bg-slate-950 p-2 text-xs text-amber-200">
-                  {result.stderr}
-                </pre>
+                <pre className="hp-tn-pre hp-tn-pre-warn">{result.stderr}</pre>
               )}
               {result.stub && (
-                <div className="mt-3">
-                  <div className="mb-1 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-400">
-                    Stub <CopyButton text={result.stub} />
+                <div className="hp-tn-oneliner">
+                  <div className="hp-tn-olhint">
+                    stub <CopyButton text={result.stub} />
                   </div>
-                  <pre className="max-h-72 overflow-auto rounded bg-slate-950 p-2 text-xs text-slate-200">
-                    {result.stub}
-                  </pre>
+                  <pre className="hp-tn-pre">{result.stub}</pre>
                 </div>
               )}
             </section>
@@ -352,7 +310,7 @@ export function EvasionScreen() {
                 catches it always travel together. */}
             <FootprintPanel fp={result.footprint} />
             <OpsecPanel note={result.opsec_note} />
-          </div>
+          </>
         )}
       </div>
     </PageShell>

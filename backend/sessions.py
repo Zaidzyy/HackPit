@@ -131,6 +131,32 @@ def init_db() -> None:
                 "ALTER TABLE sessions ADD COLUMN chat_history "
                 "TEXT NOT NULL DEFAULT '[]'"
             )
+        # SUBMISSION RATING (build #16). Both feed the bug-bounty template.
+        #
+        # `cvss_vector` is not new to report.py — build_cvss_block has read it since the
+        # template shipped, and NOTHING HAS EVER WRITTEN IT. There was no column, no
+        # endpoint and no control, so the authoritative CVSS block this project verified
+        # against six reference vectors could not appear in a single real report. The
+        # calculator was right and unreachable; this is the missing half.
+        #
+        # `vrt_category` is the Bugcrowd VRT key — the priority a triager acts on, which is
+        # a taxonomy LOOKUP and never derived from the CVSS score.
+        if "cvss_vector" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN cvss_vector TEXT")
+        if "vrt_category" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN vrt_category TEXT")
+        # KNOWN ISSUES (build #16) — the program's published "we already know about this,
+        # we will not pay for it" list, pasted verbatim from the brief's scope table. Used
+        # at report time to FLAG a finding that looks like a match. Never to drop one.
+        if "known_issues" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN known_issues TEXT")
+        # SCAN SESSION HEALTH (build #16) — the verdict from cockpit/proxy.session_health,
+        # recorded when a scan's alerts were ingested. Persisted rather than recomputed at
+        # report time because only the ingest knows which proxy produced those findings, and
+        # by then the proxy may be long stopped. JSON blob; absent for every scan that ran
+        # before this existed, which reads as "unknown" and not as "fine".
+        if "scan_session_health" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN scan_session_health TEXT")
 
         # one-time backfill: early sessions stored the FULL goal as the label,
         # which renders as a giant overflowing title. Re-derive a concise label
@@ -171,6 +197,20 @@ def _touch(conn: sqlite3.Connection, session_id: str) -> None:
     conn.execute(
         "UPDATE sessions SET updated_at=? WHERE id=?", (_now(), session_id)
     )
+
+
+def _load_json_col(row: sqlite3.Row, name: str) -> Any:
+    """Parse a JSON blob column into a value — None on absence or on ANY problem.
+
+    Same fail-soft rule as the chat history below: a corrupt blob must never be the reason an
+    engagement will not load.
+    """
+    if name not in row.keys() or not row[name]:
+        return None
+    try:
+        return json.loads(row[name])
+    except (TypeError, ValueError):
+        return None
 
 
 def _load_chat(row: sqlite3.Row) -> list[dict[str, Any]]:
@@ -304,6 +344,10 @@ def get_session(session_id: str) -> dict[str, Any] | None:
             row["report_generated_at"] if "report_generated_at" in keys else None
         ),
         "report_model": row["report_model"] if "report_model" in keys else None,
+        "cvss_vector": row["cvss_vector"] if "cvss_vector" in keys else None,
+        "vrt_category": row["vrt_category"] if "vrt_category" in keys else None,
+        "known_issues": row["known_issues"] if "known_issues" in keys else None,
+        "scan_session_health": _load_json_col(row, "scan_session_health"),
         "chat_history": _load_chat(row),
     }
 
@@ -388,6 +432,58 @@ def save_report(
         if cur.rowcount == 0:
             return None
     return ts
+
+
+def set_scan_session_health(session_id: str, health: dict[str, Any] | None) -> bool:
+    """Record whether a scan's traffic still looked authenticated. Returns False if unknown.
+
+    Stored as JSON so the report can render the reasons verbatim rather than re-deriving a
+    verdict from a summary of a verdict.
+    """
+    blob = json.dumps(health) if health else None
+    with _write_lock, _connect() as conn:
+        cur = conn.execute(
+            "UPDATE sessions SET scan_session_health=?, updated_at=? WHERE id=?",
+            (blob, _now(), session_id),
+        )
+        return cur.rowcount > 0
+
+
+def set_submission(
+    session_id: str,
+    cvss_vector: str | None = None,
+    vrt_category: str | None = None,
+    known_issues: str | None = None,
+) -> bool:
+    """Set the submission fields the bug-bounty report reads. Returns False if unknown.
+
+    Each argument is applied only when it is not ``None``, so a caller can update one field
+    without clearing the others. Passing an EMPTY STRING clears that field — the operator
+    needs a way to take back a wrong CVSS vector or a stale known-issues paste, and a
+    field that can only ever be set is one that eventually carries something wrong.
+
+    Stored verbatim. Nothing here validates the vector or the category: `report.py` reports
+    an unparseable vector and an unrecognised VRT key IN THE REPORT, where the operator will
+    see it, rather than rejecting it at write time and losing what they typed.
+    """
+    updates: list[str] = []
+    values: list[Any] = []
+    for column, value in (
+        ("cvss_vector", cvss_vector),
+        ("vrt_category", vrt_category),
+        ("known_issues", known_issues),
+    ):
+        if value is not None:
+            updates.append(f"{column}=?")
+            values.append(value.strip() or None)
+    if not updates:
+        return get_session(session_id) is not None
+    values.extend([_now(), session_id])
+    with _write_lock, _connect() as conn:
+        cur = conn.execute(
+            f"UPDATE sessions SET {', '.join(updates)}, updated_at=? WHERE id=?", values
+        )
+        return cur.rowcount > 0
 
 
 def append_chat(

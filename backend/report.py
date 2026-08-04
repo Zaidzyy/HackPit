@@ -616,6 +616,303 @@ def build_cvss_block(session: dict) -> str:
     )
 
 
+# --------------------------------------------------------------------------- #
+# BUGCROWD VRT PRIORITY (bug-bounty template) — alongside CVSS, never derived from it
+#
+# Bugcrowd triages on the Vulnerability Rating Taxonomy: a P1–P5 priority attached to a
+# vulnerability TYPE, not computed from a CVSS vector. The two genuinely disagree — a stored
+# XSS is P2 whatever its CVSS works out to, and a 9.8 on a class the program rates P3 gets
+# paid as a P3. Reports carried CVSS only, so the number a triager will actually act on was
+# missing.
+#
+# THIS IS A LOOKUP, NOT A CALCULATION, and that distinction is load-bearing. Deriving a
+# priority from the CVSS score would produce a plausible P-number with no relationship to
+# the taxonomy — a fabricated claim in the one field a triager reads first. So the operator
+# names the category and this maps it; with no category named, the block says the priority
+# is unrated rather than inventing one.
+#
+# SCOPE OF THIS TABLE, stated because it bounds the claim: a curated subset of the VRT's
+# common categories at their DEFAULT priorities. It is not the full taxonomy, VRT versions
+# change, and a program may override any entry in its own brief. The rendered block says all
+# of that, so the output is never mistaken for an authoritative rating.
+# --------------------------------------------------------------------------- #
+_VRT: dict[str, tuple[str, str]] = {
+    # key                    -> (default priority, VRT category path)
+    "rce": ("P1", "Server-Side Injection > Remote Code Execution (RCE)"),
+    "sqli": ("P1", "Server-Side Injection > SQL Injection"),
+    "command-injection": ("P1", "Server-Side Injection > Command Injection"),
+    "auth-bypass": ("P1", "Broken Authentication and Session Management > Authentication Bypass"),
+    "privesc-vertical": ("P1", "Broken Access Control > Privilege Escalation > Vertical"),
+    "ssrf-internal": ("P1", "Server-Side Injection > Server-Side Request Forgery > Internal High Impact"),
+    "secret-exposure": ("P1", "Sensitive Data Exposure > Critically Sensitive Data"),
+    "xxe": ("P2", "Server-Side Injection > XML External Entity Injection"),
+    "xss-stored": ("P2", "Cross-Site Scripting (XSS) > Stored > Non-Self"),
+    "idor": ("P2", "Broken Access Control > Insecure Direct Object Reference (IDOR)"),
+    "lfi": ("P2", "Server-Side Injection > File Inclusion > Local"),
+    "subdomain-takeover": ("P2", "Server Security Misconfiguration > Misconfigured DNS > Subdomain Takeover"),
+    "ssrf-limited": ("P3", "Server-Side Injection > Server-Side Request Forgery > Internal Scan and/or Medium Impact"),
+    "xss-reflected": ("P3", "Cross-Site Scripting (XSS) > Reflected > Non-Self"),
+    "csrf": ("P3", "Broken Authentication and Session Management > Cross-Site Request Forgery (CSRF)"),
+    "broken-crypto": ("P3", "Insecure Data Storage > Sensitive Application Data Stored Unencrypted"),
+    "rate-limit": ("P4", "Server Security Misconfiguration > Lack of Password Confirmation"),
+    "open-redirect": ("P4", "Unvalidated Redirects and Forwards > Open Redirect"),
+    "user-enumeration": ("P4", "Broken Authentication and Session Management > Username Enumeration"),
+    "clickjacking": ("P4", "Server Security Misconfiguration > Clickjacking"),
+    "xss-self": ("P5", "Cross-Site Scripting (XSS) > Stored > Self"),
+    "missing-headers": ("P5", "Server Security Misconfiguration > Missing Security Headers"),
+    "info-disclosure": ("P5", "Sensitive Data Exposure > Non-Sensitive Data Disclosure"),
+}
+
+#: What each priority means to a triager, in one clause.
+_VRT_MEANING = {
+    "P1": "Critical — immediate escalation",
+    "P2": "Severe — high business impact",
+    "P3": "Moderate",
+    "P4": "Low",
+    "P5": "Informational — typically not awarded",
+}
+
+#: Which CVSS severity band a VRT priority usually sits in. Used ONLY to notice when the two
+#: DISAGREE — never to derive one from the other. A P3 carrying a 9.8 is worth arguing in the
+#: submission; a P1 carrying a 3.1 usually means the wrong category was picked.
+_VRT_EXPECTED_CVSS = {
+    "P1": ("High", "Critical"),
+    "P2": ("Medium", "High", "Critical"),
+    "P3": ("Low", "Medium", "High"),
+    "P4": ("None", "Low", "Medium"),
+    "P5": ("None", "Low"),
+}
+
+
+def vrt_categories() -> list[dict[str, str]]:
+    """The catalogue, for a picker. Sorted by priority then key."""
+    return [
+        {"key": k, "priority": p, "category": path, "meaning": _VRT_MEANING[p]}
+        for k, (p, path) in sorted(_VRT.items(), key=lambda kv: (kv[1][0], kv[0]))
+    ]
+
+
+def vrt_priority(category: str) -> dict[str, str] | None:
+    """Look up one VRT category key. None when it is not in this table.
+
+    Returns None rather than a best guess: an unrecognised category means we do not know the
+    priority, and saying "P3" because it sounds middling would be the fabrication this whole
+    block exists to avoid.
+    """
+    entry = _VRT.get((category or "").strip().lower())
+    if entry is None:
+        return None
+    priority, path = entry
+    return {
+        "key": (category or "").strip().lower(),
+        "priority": priority,
+        "category": path,
+        "meaning": _VRT_MEANING[priority],
+    }
+
+
+def build_vrt_block(session: dict) -> str:
+    """The VRT priority block for the bug-bounty template, from a stored category.
+
+    The category lives in ``session['vrt_category']`` (set by the operator), exactly as the
+    CVSS vector does. Empty when none is set — a report with no VRT line is honest; one with
+    a guessed P-number is not.
+    """
+    key = (session.get("vrt_category") or "").strip()
+    if not key:
+        return ""
+    res = vrt_priority(key)
+    if res is None:
+        known = ", ".join(sorted(_VRT))
+        return (
+            f"_VRT category `{key}` is not in HackPit's table, so no priority is claimed. "
+            f"Known keys: {known}._"
+        )
+
+    line = (
+        f"**Bugcrowd VRT:** {res['priority']} ({res['meaning']}) · {res['category']}  \n"
+    )
+    # Flag a genuine disagreement with the CVSS score, if one was computed. This is the
+    # useful part: the triager acts on the P-number, and the two metrics rating the same
+    # finding very differently is something to argue in the submission, not to hide.
+    cvss = cvss31_base((session.get("cvss_vector") or "").strip())
+    note = ""
+    if cvss and cvss["severity"] not in _VRT_EXPECTED_CVSS[res["priority"]]:
+        note = (
+            f"_Note: CVSS rates this {cvss['severity']} ({cvss['score']}) while the VRT "
+            f"default is {res['priority']}. Bugcrowd triages on the VRT — if the CVSS "
+            "reading is the right one, argue it explicitly in the submission._  \n"
+        )
+    return (
+        line
+        + note
+        + "_Default priority from a curated subset of the Bugcrowd VRT; the program's own "
+        "brief and VRT version override it._"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# THE KNOWN-ISSUE CHECK — flag, never suppress
+#
+# Bug bounty programs publish what they already know about and will not pay for; the MAF
+# program's scope table has a "Known issues" column. Submitting one of those burns the
+# report, and on some programs it costs signal. Nothing compared a finding against that list.
+#
+# THE DESIGN RULE, and it is the whole feature: this FLAGS a possible match and never drops
+# anything. A false match that silently removed a real finding would be far worse than a
+# warning the operator glances at and dismisses — one wastes ten seconds, the other loses a
+# paid bug and nobody ever learns it happened. So the output is a table headed by what was
+# compared, the matching is deliberately loose, and no code path anywhere removes a finding.
+# --------------------------------------------------------------------------- #
+#: Words too common to carry a match on their own. A finding titled "Missing header" and a
+#: known issue reading "Missing rate limit" share "missing" and nothing that matters.
+_KI_STOPWORDS = frozenset({
+    "the", "a", "an", "and", "or", "of", "in", "on", "at", "to", "for", "with", "is", "are",
+    "was", "were", "be", "been", "by", "as", "from", "that", "this", "it", "its", "not", "no",
+    "all", "any", "can", "may", "via", "used", "using", "issue", "issues", "vulnerability",
+    "vuln", "finding", "known", "we", "our", "you", "your", "will", "does", "do",
+})
+#: How much of the FINDING has to be covered by a known-issue line before it is flagged, and
+#: how many distinctive words that has to be in absolute terms. Two thresholds because either
+#: alone misfires: a ratio alone flags one-word findings on a single shared token, a count
+#: alone flags a long finding that happens to share three common words.
+_KI_MIN_RATIO = 0.5
+_KI_MIN_TERMS = 2
+
+
+def _ki_terms(text: str) -> set[str]:
+    """Distinctive lowercase words in a title or a known-issue line."""
+    words = re.split(r"[^A-Za-z0-9]+", (text or "").lower())
+    return {w for w in words if len(w) > 2 and w not in _KI_STOPWORDS}
+
+
+def known_issue_matches(finding: dict, known_issues: str) -> dict[str, Any] | None:
+    """The known-issue line this finding may already be covered by, or None.
+
+    Errs toward REPORTING. A spurious flag costs the operator one glance at the brief; a
+    missed one costs a submission. That asymmetry is why the thresholds are loose and why
+    this returns the best candidate rather than requiring certainty.
+    """
+    lines = [ln.strip(" \t-*•") for ln in (known_issues or "").splitlines()]
+    lines = [ln for ln in lines if len(ln) > 3]
+    if not lines:
+        return None
+
+    title = finding.get("title") or ""
+    reference = (finding.get("reference") or "").strip()
+    f_terms = _ki_terms(f"{title} {reference}")
+    if not f_terms:
+        return None
+
+    best: dict[str, Any] | None = None
+    for line in lines:
+        # A CVE / template id named in both is not a fuzzy match, it is the same issue.
+        if reference and len(reference) > 3 and reference.lower() in line.lower():
+            return {"line": line, "shared": [reference], "ratio": 1.0, "exact": True}
+        # ...as is the finding's whole title appearing in the line.
+        if title and len(title) > 8 and title.lower() in line.lower():
+            return {"line": line, "shared": [title], "ratio": 1.0, "exact": True}
+        shared = f_terms & _ki_terms(line)
+        ratio = len(shared) / len(f_terms)
+        if len(shared) >= _KI_MIN_TERMS and ratio >= _KI_MIN_RATIO:
+            if best is None or ratio > best["ratio"]:
+                best = {
+                    "line": line, "shared": sorted(shared), "ratio": ratio, "exact": False,
+                }
+    return best
+
+
+def build_known_issues_block(session: dict) -> str:
+    """The known-issue check section. Empty when the program published no known issues.
+
+    Reports the check EVEN WHEN IT FINDS NOTHING — "compared against 7 findings, no matches"
+    tells the operator the list was read. Silence would be indistinguishable from a check
+    that never ran, which is the failure mode this project keeps designing out.
+    """
+    known = (session.get("known_issues") or "").strip()
+    if not known:
+        return ""
+    findings = list(session.get("state_findings") or [])
+    if not findings:
+        return (
+            "## Known-issue check\n\n"
+            "The program's known-issues list is recorded for this engagement, but there are "
+            "no structured findings to compare against it. **Check it by hand before "
+            "submitting.**\n"
+        )
+
+    rows: list[str] = []
+    for f in findings:
+        m = known_issue_matches(f, known)
+        if not m:
+            continue
+        how = "exact" if m["exact"] else f"{len(m['shared'])} terms: {', '.join(m['shared'][:4])}"
+        title = str(f.get("title") or "").replace("|", "\\|")
+        line = str(m["line"]).replace("|", "\\|")
+        rows.append(
+            f"| {title} | {f.get('severity', 'info')} | {line} | {how} |"
+        )
+
+    out = ["## Known-issue check", ""]
+    if not rows:
+        out += [
+            f"Compared {len(findings)} finding(s) against the program's published known "
+            "issues — **no matches**. Nothing here was filtered out; every finding stands.",
+            "",
+        ]
+        return "\n".join(out)
+
+    out += [
+        f"**{len(rows)} of {len(findings)} finding(s) resemble something the program has "
+        "already published as a known issue.** Check the brief before submitting these — a "
+        "known issue is usually not awarded.",
+        "",
+        "**NOTHING WAS REMOVED.** This is a prompt to look, not a verdict: the match is "
+        "textual, it can be wrong in both directions, and dropping a real finding on a bad "
+        "match would cost far more than reading four rows.",
+        "",
+        "| finding | severity | published known issue | matched on |",
+        "|---|---|---|---|",
+        *rows,
+        "",
+    ]
+    return "\n".join(out)
+
+
+def build_session_health_block(session: dict) -> str:
+    """Warn in the REPORT when the scan's traffic stopped looking authenticated.
+
+    An authenticated scan whose session expired mid-run reports zero findings, and a report
+    saying "no vulnerabilities identified" is the most expensive sentence in this codebase to
+    get wrong. If the traffic went login-shaped, the report says so next to that conclusion
+    rather than leaving the reader to infer it.
+
+    Reads ``session['scan_session_health']`` — the verdict from ``cockpit/proxy.session_health``,
+    folded in at report time. Absent (no authenticated scan ran) yields no block.
+    """
+    health = session.get("scan_session_health") or {}
+    verdict = (health.get("verdict") or "").lower()
+    if verdict not in ("suspect", "unknown"):
+        return ""
+    reasons = [str(r) for r in (health.get("reasons") or [])]
+    if verdict == "unknown":
+        return (
+            "> **Scan session state: UNKNOWN.** "
+            + (reasons[0] if reasons else "There was too little traffic to judge whether the "
+               "authenticated session was still live during the scan.")
+            + " A low finding count here is not evidence of a secure application."
+        )
+    bullets = "\n".join(f"> * {r}" for r in reasons)
+    return (
+        "> **⚠ THE AUTHENTICATED SESSION MAY HAVE EXPIRED DURING THIS SCAN.**\n>\n"
+        f"{bullets}\n>\n"
+        "> An expired session does not stop the active scanner — it keeps sending payloads at "
+        "login redirects, matches nothing, and finishes cleanly. **A low or zero finding count "
+        "in this report may mean the scan was never authenticated, not that the application is "
+        "secure.** Re-establish the session and re-run before treating these results as coverage."
+    )
+
+
 def build_evidence_section(session: dict) -> str:
     """Construct the Evidence section programmatically — the source of truth.
 
@@ -883,6 +1180,26 @@ def compose_report(
     # The OSCP proof table + the bug-bounty CVSS block are spliced like the evidence — computed
     # from state / a vector, never written by the model.
     md = _insert_proof_table(md, session)
+    # VRT FIRST, so it ends up rendered BELOW the CVSS block — each _prepend_after_title
+    # inserts directly under the title, so the last one spliced is the one on top. CVSS is
+    # the computed number and leads; the VRT priority sits under it as the thing a Bugcrowd
+    # triager will actually act on.
+    # THE KNOWN-ISSUE CHECK rides at the TOP, above CVSS and VRT, because it is the one
+    # thing that can make the whole submission pointless — and because a warning appended
+    # under Evidence is a warning nobody reads before hitting submit. Computed, never
+    # prompted for: the model must not be the thing that decides a finding is "already known".
+    ki = build_known_issues_block(session)
+    if ki and "Known-issue check" not in md:
+        md = _prepend_after_title(md, ki)
+    # ...and ABOVE even that: a scan whose session expired reports zero findings, and "no
+    # vulnerabilities identified" is the most expensive sentence in this report to get wrong.
+    # It goes first because it changes how everything below it should be read.
+    health = build_session_health_block(session)
+    if health and "AUTHENTICATED SESSION MAY HAVE EXPIRED" not in md:
+        md = _prepend_after_title(md, health)
+    vrt = build_vrt_block(session)
+    if vrt and "Bugcrowd VRT" not in md:
+        md = _prepend_after_title(md, vrt)
     cvss = build_cvss_block(session)
     if cvss and "CVSS 3.1" not in md:
         # Prepend the authoritative CVSS block just under the first heading (bug-bounty).

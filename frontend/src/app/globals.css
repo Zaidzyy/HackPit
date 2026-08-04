@@ -8037,9 +8037,128 @@ a.hp-card {
   border-radius: 5px; color: var(--dim); cursor: pointer; font-size: 11px; padding: 4px 10px;
 }
 .hp-tn-stop:hover:not(:disabled) { color: #f0776a; border-color: rgba(240,119,106,0.4); }
+
+/* --- CONFIGURE vs ACT: the action row, and the button ranks inside it -------------- */
+/*
+ * `.hp-tn-start` DID NOT EXIST. Nine buttons across :exposure, :oob and :windows carried
+ * the class and got nothing but the generic `.hp-tn-form button` styling — so the PRIMARY
+ * action ("write profile", "save remote profile", "deploy + start") rendered plainer than
+ * the destructive ones beside it, which use `.hp-tn-stop` and at least turn red on hover.
+ * The visual hierarchy was exactly backwards, and no amount of tsc/build/lint could see it:
+ * none of them knows whether a class exists.
+ *
+ * DEFINED, not dropped. Nine call sites already say "this is the affirmative action", which
+ * is a real distinction worth rendering; deleting the class would have thrown that away and
+ * left every button in the row identical.
+ *
+ * THREE RANKS, so the eye can tell them apart before reading the labels:
+ *   .hp-tn-start    accent   — the affirmative action (write / save / deploy)
+ *   .hp-tn-destroy  red      — the one that destroys something (recreate a container, stop
+ *                              a live redirector). Loud on purpose.
+ *   .hp-tn-stop     muted    — a minor undo (clear / forget). Reversible, so quiet.
+ */
+/*
+ * Written as `button.hp-tn-*` (specificity 0,1,1) rather than `.hp-tn-*` (0,1,0) so these
+ * tie with `.hp-tn-form button` above and win on source order. That matters because these
+ * buttons appear in three different places — inside `.hp-tn-form`, inside `.hp-tn-actions`,
+ * and LOOSE as a card's only control (`:oob`'s "run the checks" and "poll now"). A
+ * descendant selector scoped to the two containers would have silently skipped the loose
+ * ones, which is the same class of miss as the phantom class itself.
+ */
+button.hp-tn-start {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12.5px;
+  border-radius: 6px; padding: 8px 12px; cursor: pointer;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+}
+button.hp-tn-start:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+button.hp-tn-destroy {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12.5px;
+  border-radius: 6px; padding: 8px 12px; cursor: pointer;
+  color: #f0776a;
+  background: color-mix(in srgb, #f0776a 10%, transparent);
+  border: 1px solid rgba(240, 119, 106, 0.45);
+}
+button.hp-tn-destroy:hover:not(:disabled) {
+  background: color-mix(in srgb, #f0776a 22%, transparent);
+}
+button.hp-tn-start:disabled, button.hp-tn-destroy:disabled { opacity: 0.45; cursor: default; }
+
+/*
+ * THE ACTION ROW. Configuring a profile and ACTING on it were one undifferentiated
+ * `.hp-tn-form` flex row: text inputs (stretched by `flex: 1 1 200px`), a checkbox, then
+ * three buttons wrapping to wherever they landed. There was no break between describing
+ * what you want and doing it — including the doing that recreates a container and kills
+ * every listener, session and background job inside it.
+ *
+ * This is the break. A rule above it, the buttons right-aligned and grouped, so the row
+ * reads as a distinct step rather than as more of the form. It lives here rather than in
+ * any one screen: the last time a shared `.hp-tn-form` rule was patched per-screen, the
+ * fix shipped for `:proxy` alone and left checkboxes broken on six others.
+ */
+.hp-tn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.hp-tn-actions button {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12.5px;
+  background: rgba(0,0,0,0.35); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--white); padding: 8px 10px; cursor: pointer;
+}
+/* `.hp-tn-stop` carries `margin-left:auto` so it can sit at the far end of a LIST ROW.
+   Inside an action row that would shove the first minor button away from its siblings, so
+   it is reset here — scoped, because the row-header behaviour is right everywhere else. */
+.hp-tn-actions .hp-tn-stop { margin-left: 0; font-size: 12.5px; padding: 8px 10px; }
+/* The destructive action sits apart from the affirmative one, so "apply (recreates
+   container)" is never the button next to the cursor after "write profile". */
+.hp-tn-actions .hp-tn-destroy { margin-left: auto; }
+.hp-tn-actions-label {
+  font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim);
+  margin-right: 2px;
+}
 .hp-tn-oneliner { margin-top: 10px; }
 .hp-tn-olhint { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); margin-bottom: 5px; }
 .hp-tn-note { font-size: 12px; color: var(--dim); line-height: 1.55; margin: 8px 0; }
+.hp-tn-note-warn { color: #f0b45a; }
+
+/* --- FACT LISTS + code blocks, added for the :evasion / :ad-graph restyle (D9) ------ */
+/* Those two screens predate the house style and were written in raw Tailwind utilities, so
+   they read as a different product from the other 16 surfaces. Restyling them needed a
+   label/value pair and a preformatted block, neither of which the hp-tn-* vocabulary had —
+   so they are defined HERE, as vocabulary, rather than as one screen's private classes.
+   That is the difference between a restyle and a reskin: the next surface that needs a fact
+   list now has one to use. */
+.hp-tn-facts { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 0; }
+.hp-tn-fact { display: flex; flex-direction: column; gap: 3px; }
+.hp-tn-factval { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--fg); }
+/* The one fact that must not flatten into the others. On :evasion this is `still_recorded`
+   — the sentence that makes the surface a purple-team instrument rather than an evasion
+   how-to, and the reason it is allowed to exist at all. */
+.hp-tn-fact-loud {
+  padding: 8px 10px;
+  background: color-mix(in srgb, #f0b45a 10%, transparent);
+  border-left: 2px solid color-mix(in srgb, #f0b45a 55%, transparent);
+  border-radius: 0 4px 4px 0;
+}
+.hp-tn-fact-loud .hp-tn-olhint { color: #f0b45a; }
+.hp-tn-bullets { margin: 0; padding-left: 18px; list-style: disc; }
+.hp-tn-bullets li { font-size: 12.5px; line-height: 1.6; color: var(--fg); }
+.hp-tn-pre {
+  margin: 6px 0 0; padding: 10px 12px; max-height: 320px; overflow: auto;
+  background: #0c0e0f; border: 1px solid var(--border-2); border-radius: 8px;
+  font-family: var(--font-jetbrains-mono), "JetBrains Mono", monospace;
+  font-size: 12px; line-height: 1.55; color: var(--white); white-space: pre-wrap;
+  word-break: break-word;
+}
+.hp-tn-pre-warn { color: #f0b45a; }
 .hp-tn-addscope {
   display: inline-block; margin: 2px 6px 2px 0; padding: 4px 10px; cursor: pointer;
   font-size: 11px; color: var(--accent); background: var(--accent-soft);

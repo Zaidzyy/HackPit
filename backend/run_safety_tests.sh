@@ -56,6 +56,8 @@ run_test() {
 # cannot demonstrate that it catches a planted violation, nothing after this line means much.
 run_test test_scans.py "shared source scanner (whole-tree sweep / path allow-lists / AST indirection / can-fail)"
 
+run_test test_css_vocabulary.py "CSS VOCABULARY (every hp-* class a component uses EXISTS in globals.css — tsc, next build and eslint cannot see this, and it has now cost three builds: an invisible :proxy, and a phantom .hp-tn-start behind nine primary buttons)"
+
 run_test test_kb_drift.py "KB DRIFT (the semantic index, the scripts index and the corpus report all still describe the LIVE KB — the scripts index once sat 126 entries stale and nothing noticed / every check has a control / absences reported, never silently green)"
 
 run_test test_attack_path.py "attack-path composer regressions"
@@ -171,6 +173,10 @@ run_test test_lifecycle_safety.py "listener lifecycle SAFETY invariants (no stdi
 run_test test_tunnels.py "Phase-4 pivot/tunnels (human-only lifecycle / pure rewrite-before-approval / scope-by-hand)"
 
 run_test test_report_templates.py "Phase-4 exam report templates (proof-flag capture / per-host table / CVSS 3.1 / template select)"
+
+run_test test_scan_session_health.py "authenticated-scan SESSION EXPIRY (an expired session reports ZERO findings, which reads as 'the app is secure' — all four expiry shapes caught / a healthy scan NOT flagged / too little traffic is `unknown`, never `ok` / the warning reaches the report / the detector only reads)"
+
+run_test test_submission_fields.py "bug-bounty SUBMISSION fields (VRT priority is a LOOKUP, never derived from the CVSS score / a real CVSS-vs-VRT disagreement is surfaced / the known-issue check FLAGS and never suppresses, with the finding list proven unmutated / a zero-match run still reports that it ran)"
 
 run_test test_sliver.py "Sliver C2 containment (human-only server lifecycle / GATED implant gen / <listener> verbatim)"
 

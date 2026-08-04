@@ -998,6 +998,25 @@ class SessionDetail(BaseModel):
     # the model that actually generated the persisted report (for correct
     # attribution after the active LLM config changes); null for old reports
     report_model: str | None = None
+    # SUBMISSION FIELDS — what the bug-bounty report renders alongside the finding.
+    cvss_vector: str | None = Field(
+        default=None,
+        description="CVSS 3.1 vector string. The SCORE is computed from it at report time, "
+        "never asserted by the model.",
+    )
+    vrt_category: str | None = Field(
+        default=None,
+        description="Bugcrowd VRT category key (see GET /vrt-categories). Maps to a P1–P5 "
+        "priority by LOOKUP — the priority is never derived from the CVSS score, because the "
+        "two genuinely disagree and a triager acts on the VRT one.",
+    )
+    known_issues: str | None = Field(
+        default=None,
+        description="The program's published known-issues list, pasted verbatim from the "
+        "brief. At report time each finding is compared against it and possible matches are "
+        "FLAGGED. Nothing is ever auto-suppressed: a false match that silently dropped a "
+        "real finding would cost far more than a warning the operator dismisses.",
+    )
     # the engagement assistant's persisted conversation
     chat_history: list[ChatTurn] = Field(default_factory=list)
 
@@ -1614,6 +1633,56 @@ def rename_session(
     return s
 
 
+class SubmissionIn(BaseModel):
+    """The submission fields the bug-bounty report renders. Each is optional; only the ones
+    supplied are written, and an EMPTY STRING clears one (a field that can only ever be set
+    eventually carries something wrong)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cvss_vector: str | None = Field(
+        default=None, description="CVSS 3.1 vector, e.g. CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    )
+    vrt_category: str | None = Field(
+        default=None, description="Bugcrowd VRT key from GET /vrt-categories, e.g. 'xss-stored'."
+    )
+    known_issues: str | None = Field(
+        default=None,
+        description="The program's published known-issues list, pasted verbatim (one per line).",
+    )
+
+
+@app.get("/vrt-categories")
+def list_vrt_categories() -> dict[str, Any]:
+    """The Bugcrowd VRT categories HackPit can map to a P1–P5 priority.
+
+    A CURATED SUBSET of the taxonomy at its default priorities — not the full VRT, and any
+    program's own brief overrides it. Read-only reference data for a picker; the priority is
+    a lookup on the category, never a function of the CVSS score.
+    """
+    return {"categories": report_gen.vrt_categories()}
+
+
+@app.put("/sessions/{session_id}/submission", response_model=SessionDetail)
+def set_submission(session_id: str, req: SubmissionIn = Body(...)) -> dict[str, Any]:
+    """Set the CVSS vector, VRT category and/or known-issues list for an engagement.
+
+    Stored verbatim and unvalidated on purpose: an unparseable vector and an unrecognised VRT
+    key are both reported IN THE REPORT, where the operator sees them, rather than rejected
+    here where the typed text would be lost.
+    """
+    if not sessions_db.set_submission(
+        session_id,
+        cvss_vector=req.cvss_vector,
+        vrt_category=req.vrt_category,
+        known_issues=req.known_issues,
+    ):
+        raise HTTPException(status_code=404, detail="session not found")
+    s = sessions_db.get_session(session_id)
+    assert s is not None  # just written to it
+    return s
+
+
 @app.delete("/sessions/{session_id}", status_code=204)
 def delete_session(session_id: str) -> None:
     """Delete an engagement and all its step state."""
@@ -1646,7 +1715,12 @@ def generate_report(
         session["execution_runs"] = [r.model_dump() for r in runs]
     # Fold in the structured engagement state so the OSCP template can render the per-host
     # proof table straight from state — no hash retyped at report time.
-    session["state_hosts"] = state_store.load(session_id).to_dict(include_secrets=True)["hosts"]
+    engagement_state = state_store.load(session_id).to_dict(include_secrets=True)
+    session["state_hosts"] = engagement_state["hosts"]
+    # ...and the findings, so the known-issue check has something to compare the program's
+    # published list against. Read-only: the check FLAGS a possible match and never removes
+    # a finding.
+    session["state_findings"] = engagement_state["findings"]
     try:
         report_md, model_used = report_gen.compose_report(
             session, template=template, include_opsec=include_opsec

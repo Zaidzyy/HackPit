@@ -274,6 +274,10 @@ export function OOBCanaryScreen() {
               aria-label="Read secret"
               autoComplete="new-password"
             />
+          </div>
+          {/* CONFIGURE above, ACT below — the same shared divider :exposure uses. */}
+          <div className="hp-tn-actions">
+            <span className="hp-tn-actions-label">act</span>
             <button
               className="hp-tn-start"
               onClick={save}
@@ -329,6 +333,9 @@ export function OOBCanaryScreen() {
                 />
                 I approve this deploy
               </label>
+            </div>
+            <div className="hp-tn-actions">
+              <span className="hp-tn-actions-label">act</span>
               <button
                 className="hp-tn-start"
                 onClick={deploy}
@@ -426,6 +433,9 @@ export function OOBCanaryScreen() {
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="hp-tn-actions">
+              <span className="hp-tn-actions-label">act</span>
               <button
                 className="hp-tn-start"
                 onClick={mint}

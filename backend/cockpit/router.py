@@ -758,6 +758,30 @@ def proxy_history(
     return proxy_mod.history(container, port, start=start, count=count)
 
 
+@router.get("/proxy/session-health")
+def proxy_session_health(
+    container: str = Query(..., description="Sandbox container the proxy runs in."),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+    count: int = Query(200, ge=10, le=500,
+                       description="How many recent exchanges to judge from."),
+) -> dict[str, Any]:
+    """Does the recorded traffic still look AUTHENTICATED?
+
+    An authenticated scan inherits a session the human established by hand. When that session
+    expires mid-scan the active scanner does not stop — it keeps firing payloads at login
+    redirects, finds nothing, and reports ZERO FINDINGS, which reads exactly like "the
+    application is secure". This turns that silent wrong answer into a visible one.
+
+    READ-ONLY and UNGATED, like the history it reads. It notices; it does not re-authenticate,
+    maintain a session or build a ZAP context — those are a separate decision and no part of
+    this. Verdict is ok | suspect | unknown, and `unknown` is used freely: with too little
+    traffic to judge, saying so beats a confident `ok`.
+    """
+    return proxy_mod.session_health(
+        proxy_mod.history(container, port, start=0, count=count)
+    )
+
+
 # --------------------------------------------------------------------------- #
 # the ACTIVE SCANNER over the same API (build #14 part 3) — GATED start, UNGATED stop
 #
@@ -928,10 +952,41 @@ def ingest_scan_alerts(req: AlertIngestRequest) -> dict[str, Any]:
     alerts = proxy_mod.scan_alerts(req.container, req.port, base_url=req.base_url, count=req.count)
     findings = proxy_mod.findings_from(alerts, session_id=req.session_id)
     endpoints = proxy_mod.alert_endpoints_from(alerts, session_id=req.session_id)
+
+    # SESSION HEALTH IS RECORDED HERE, not at report time, because HERE is the only place
+    # that knows which proxy produced these findings. A scan whose authenticated session
+    # expired reports zero findings, and this is the moment that zero gets persisted — so it
+    # is the moment to record whether the traffic behind it still looked logged in.
+    # Best-effort: a health verdict must never be the reason an ingest fails.
+    try:
+        health = proxy_mod.session_health(
+            proxy_mod.history(req.container, req.port, start=0, count=200)
+        )
+    except Exception as exc:  # pragma: no cover - defensive; the ingest itself succeeded
+        # `unknown` WITH A REASON, never None and never `ok`. A null here would render as
+        # "nothing to report", which is the same shape as the silent wrong answer this whole
+        # feature exists to remove — and swallowing the error without saying so would hide a
+        # real defect behind a clean-looking ingest.
+        health = {
+            "verdict": "unknown",
+            "reasons": [f"could not read the proxy history to judge session state: {exc}"],
+            "sampled": 0, "login_redirects": 0, "login_bodies": 0,
+            "auth_rejections": 0, "uniform_share": 0.0,
+        }
+    try:
+        import sessions as sessions_db  # lazy: keep router import-light
+
+        sessions_db.set_scan_session_health(req.session_id, health)
+    except Exception:  # pragma: no cover - a verdict must never fail the ingest
+        pass
+
     return {
         "alerts": len(alerts),
         "findings": state_store.upsert_findings(findings),
         "endpoints": state_store.upsert_endpoints(endpoints),
+        # Surfaced immediately as well as persisted: an operator watching a scan finish with
+        # 0 findings should learn why on this response, not only in a report drafted later.
+        "session_health": health,
     }
 
 

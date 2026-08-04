@@ -52,10 +52,27 @@ def _client_with_fixture() -> TestClient:
     raw = FIXTURE.read_text(encoding="utf-8")
 
     def fake_api_get(container, port, path, timeout=10):
-        assert "/JSON/core/view/alerts/" in path, (
-            f"the ingest path asked ZAP for {path!r}. It must only READ alerts — an action URL "
-            "reached from an ungated route is the residual risk the one-module decision accepted"
+        # THE PREDICATE IS "NO ACTION URL", not "only the alerts view".
+        #
+        # This used to assert the path WAS `/JSON/core/view/alerts/`, which was a faithful
+        # stand-in while the ingest made exactly one ZAP call. It stopped being one when the
+        # ingest also began reading the message history to judge session health — a call from
+        # the same READ group, which the rule explicitly permits from ungated code.
+        #
+        # The rule being guarded (see cockpit/proxy.py) is that an UNGATED route may reach the
+        # READ group and never the ACTION group. Naming one read endpoint was a proxy for
+        # that, and the proxy broke before the rule did. So the check now says what it means:
+        # any `/view/` path is fine, any `/action/` path is the violation. That is a sharper
+        # test than the one it replaces, not a looser one — it now fails on EVERY action URL
+        # rather than only on the ones that are not the alerts view.
+        assert "/action/" not in path, (
+            f"the ingest path asked ZAP for {path!r} — an ACTION URL reached from an ungated "
+            "route is the residual risk the one-module decision accepted"
         )
+        assert "/view/" in path, f"the ingest path asked ZAP for a non-view URL: {path!r}"
+        if "/JSON/core/view/messages/" in path:
+            # the session-health read: no captured history in this fixture
+            return '{"messages": []}'
         return raw
 
     proxy._api_get = fake_api_get  # type: ignore[assignment]
@@ -73,7 +90,18 @@ def test_the_ingest_route_persists_findings_and_endpoints() -> None:
     # TWO endpoints, not one: the passive CORS alert names the clean URL (`?q=measure`) while the
     # SQL injection names the one carrying the payload (`?q=measure%27`). Both are worth keeping
     # — the second IS the reproduction — and they are genuinely distinct URLs.
-    assert counts == {"alerts": 2, "findings": 2, "endpoints": 2}, counts
+    assert {k: counts[k] for k in ("alerts", "findings", "endpoints")} == {
+        "alerts": 2, "findings": 2, "endpoints": 2
+    }, counts
+    # The ingest also reports whether the scan's traffic still looked AUTHENTICATED, because
+    # this is where a zero-finding scan gets persisted and "0 findings" and "the session died"
+    # look identical afterwards. With no captured history it must say `unknown` — never `ok`.
+    health = counts.get("session_health")
+    assert health is not None, "the ingest dropped the session-health verdict entirely"
+    assert health["verdict"] == "unknown", (
+        f"an empty history produced {health['verdict']!r} — a scan with nothing to judge must "
+        "never come back clean"
+    )
 
     # and the rows must be READABLE BACK. A route that returns "2" having written nothing is the
     # failure this test exists to catch, and it would satisfy any assertion on the response alone.

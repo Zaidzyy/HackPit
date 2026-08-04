@@ -323,6 +323,12 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#d5-the-safety-suite-rewrote-the-live-kb-on-every-run">D5 — the safety suite rewrote the live KB on every run</a></li>
 <li><a href="#d6-nothing-noticed-a-derived-artefact-going-stale">D6 — nothing noticed a derived artefact going stale</a></li>
 <li><a href="#d7-every-successful-ad-command-looked-like-a-failing-one">D7 — every successful AD command looked like a failing one</a></li>
+<li><a href="#the-bug-bounty-submission-fields-and-one-that-nothing-could-set">The bug-bounty submission fields — and one that nothing could set</a></li>
+<li><a href="#the-known-issue-check-flag-never-suppress">The known-issue check — flag, never suppress</a></li>
+<li><a href="#authenticated-scan-session-expiry-a-silent-wrong-answer-made-loud">Authenticated-scan session expiry — a silent wrong answer made loud</a></li>
+<li><a href="#the-phantom-class-and-what-the-type-checker-cannot-see">The phantom class, and what the type-checker cannot see</a></li>
+<li><a href="#d9-the-two-surfaces-that-read-as-a-different-product">D9 — the two surfaces that read as a different product</a></li>
+<li><a href="#what-was-not-done">What was not done</a></li>
 </ul>
 </li>
 </ul>
@@ -2860,5 +2866,109 @@ that fails to parse is returned verbatim</strong>. The raw stderr stays on the r
 count is reported, so "quiet because it was filtered" stays distinguishable from "quiet because
 it was quiet". The test that matters is the negative one: a genuine <code>Get-ADUser</code> error survives a
 document carrying forty progress records.</p>
+<h3 id="the-bug-bounty-submission-fields-and-one-that-nothing-could-set">The bug-bounty submission fields — and one that nothing could set</h3>
+<p><strong>VRT priority (P1–P5) now sits alongside CVSS.</strong> Bugcrowd triages on the Vulnerability
+Rating Taxonomy, and the two genuinely disagree: a stored XSS is P2 whatever its vector works
+out to, and a 9.8 on a class the program rates P3 gets paid as a P3. Reports carried CVSS
+only, so the number a triager acts on was missing.</p>
+<p><strong>It is a LOOKUP, and that is the invariant with teeth.</strong> Deriving a priority from the CVSS
+score would have been three lines and would have produced a confident P-number with no
+relationship to the taxonomy — a fabrication in the field a triager reads first. So the
+operator names the category and a curated subset of the VRT maps it; an unrecognised category
+claims <em>no</em> priority and says why. The regression test proves the priority does not move when
+the CVSS vector does. Where the two disagree, the report says so and suggests arguing it.</p>
+<p><strong>The field nothing could set.</strong> <code>build_cvss_block</code> has read <code>session['cvss_vector']</code> since the
+bug-bounty template shipped. There was no column, no endpoint and no control — so the CVSS
+block this project verified against six reference vectors, roundup edges included, <strong>could
+never appear in a real report</strong>. The calculator was right and unreachable. Adding the VRT
+field would have been dead in exactly the same way, so both are now stored, settable through
+<code>PUT /sessions/{id}/submission</code>, and covered by a round-trip test.</p>
+<h3 id="the-known-issue-check-flag-never-suppress">The known-issue check — flag, never suppress</h3>
+<p>Programs publish what they already know about and will not pay for. Submitting one burns the
+report and, on some programs, costs signal. Nothing compared a finding against that list.</p>
+<p>The whole feature is one design rule: <strong>it flags and it never drops</strong>. A false match that
+silently removed a real finding costs a paid bug and nobody ever learns it happened; a false
+flag costs one glance at the brief. The output is a table headed by what was compared, the
+matching is deliberately loose, no code path removes a finding, and the test asserts the
+finding list comes back unmutated.</p>
+<p>It also reports <strong>when it finds nothing</strong> — "compared 7 findings, no matches" — because
+silence is indistinguishable from a check that never ran. The discrimination is real, not
+nominal: a stored XSS in the order form is not matched against a published <em>self</em>-XSS in the
+profile bio, which is the false positive that would have flagged a P2 as unpayable.</p>
+<h3 id="authenticated-scan-session-expiry-a-silent-wrong-answer-made-loud">Authenticated-scan session expiry — a silent wrong answer made loud</h3>
+<p>Build #15's AJAX spider crawls behind a login by inheriting a session the human established by
+hand. It added no ZAP context, no session management and no authentication handling. That is
+fine. <strong>What happens when the session expires mid-scan is not.</strong></p>
+<p>The active scanner does not stop. It keeps firing SQLi and XSS payloads at what are now login
+redirects, matches nothing, and finishes cleanly reporting <strong>zero findings</strong> — which is
+indistinguishable from <em>"the application is secure"</em>. Not a crash and not an error: a
+confident wrong answer, of the kind nobody has a reason to doubt.</p>
+<p><code>session_health()</code> reads the recorded traffic and notices four shapes a dead session takes: a
+wall of redirects to a login path; 200s whose body is the login page; a wall of 401/403; and
+the one the first three miss — a <strong>collapse to a single response shape</strong>, which is what a login
+wall looks like when it renders a friendly page instead of redirecting. Below ten responses it
+returns <code>unknown</code> and says so; a false all-clear would re-create exactly the confidence this
+removes. A <code>suspect</code> verdict rides the alert-ingest response <em>and</em> lands at the top of the
+report, above the finding count it should be read with.</p>
+<p><strong>This is the cheap honest version by decision.</strong> It does not re-authenticate, maintain a
+session or build a ZAP context — those are a separate build. The AST-scanned test asserts it
+cannot: it reads the exchanges it was handed and calls nothing.</p>
+<h3 id="the-phantom-class-and-what-the-type-checker-cannot-see">The phantom class, and what the type-checker cannot see</h3>
+<p><code>.hp-tn-start</code> <strong>did not exist in <code>globals.css</code></strong>, while nine buttons across <code>:exposure</code>,
+<code>:oob</code> and <code>:windows</code> used it. Those are the PRIMARY actions — "write profile", "save remote
+profile", "deploy + start" — so they rendered plainer than the destructive buttons beside
+them, which at least use <code>.hp-tn-stop</code> and turn red on hover. <strong>The visual hierarchy was
+exactly backwards</strong>, and nothing could tell: tsc, <code>next build</code> and eslint have no idea whether
+a CSS class exists.</p>
+<p>Defined rather than dropped — nine call sites already assert "this is the affirmative action",
+which is a distinction worth rendering. Three ranks now, so the eye sorts them before reading
+the labels: <code>.hp-tn-start</code> (accent, affirmative) · <code>.hp-tn-destroy</code> (red, destroys something) ·
+<code>.hp-tn-stop</code> (muted, a reversible undo).</p>
+<p><strong>And the row itself.</strong> Inputs, the wildcard checkbox and all three buttons shared one
+<code>.hp-tn-form</code> flex row, where <code>input { flex: 1 1 200px }</code> stretched the fields and the buttons
+wrapped wherever they landed. There was no break between <em>configuring</em> a profile and <em>acting</em>
+on it — including the act that recreates the container and kills every listener, session and
+background job inside it. A shared <code>.hp-tn-actions</code> row now separates them, rules them off, and
+pushes the destructive button away from the affirmative one. It lives in the CSS layer: the
+last time a shared <code>.hp-tn-form</code> rule was patched per-screen, the fix shipped for <code>:proxy</code>
+alone and left checkboxes broken on six others.</p>
+<p><strong>The guard this earns.</strong> <code>test_css_vocabulary.py</code> asserts every <code>hp-*</code> class any component
+names exists in <code>globals.css</code>. This class of defect has now cost three builds — an entirely
+invisible <code>:proxy</code> for two of them, then this — and it is mechanical, so it belongs in the
+suite rather than in a reviewer's memory. <strong>Its first run found seventeen</strong>, and the first
+thing that had to be fixed was the checker: <code>hp-set-model</code> and <code>hp-set-key</code> are element
+<strong>ids</strong>, not classes, so the scan was narrowed to <code>className</code> attributes. Four more are
+harmless: modifiers on an element whose <em>first</em> class is defined and does the styling. The
+remaining <strong>eleven are real, bare phantoms</strong> in <code>:repeater</code>, <code>:exploits</code>, <code>:category</code> and
+three others. They are frozen as a baseline that may only ever SHRINK, kept deliberately
+apart from the allow-list: one list means "checked, fine", the other means "known,
+unexamined", and collapsing them is how a check like this quietly stops working. <strong>It is
+still not a substitute for looking at the screen</strong> — a class can exist and still be wrong.</p>
+<h3 id="d9-the-two-surfaces-that-read-as-a-different-product">D9 — the two surfaces that read as a different product</h3>
+<p><code>:evasion</code> was <strong>raw Tailwind utilities</strong> (<code>rounded border border-slate-700 bg-slate-900/40</code>)
+with no kicker/<code>:title</code> header, so it looked like a different application. It is now the house
+<code>hp-tn-*</code> vocabulary throughout. Two classes of thing the vocabulary did not have — a
+label/value fact list and a preformatted block — were added <em>as vocabulary</em> rather than as one
+screen's private classes, which is the difference between a restyle and a reskin. The one
+piece of emphasis kept deliberately is <code>still_recorded</code>: it is the sentence that makes the
+surface a purple-team instrument rather than an evasion how-to, and it must not flatten into
+the facts around it.</p>
+<p><code>:ad-graph</code> was a different case, and worth saying plainly. It is <strong>not</strong> Tailwind — it has a
+purpose-built <code>hp-adg-*</code> vocabulary for nodes, edges and hop drawers, with no <code>hp-tn-*</code>
+equivalent. The real gap was the page: a bare <code>&lt;main&gt;</code> with its own back-link bar, outside
+<code>PageShell</code>, with no kicker/<code>:title</code> block. That is fixed, along with the two empty states,
+which are ordinary cards now. <strong>The graph canvas itself is untouched</strong> — replacing those
+primitives would be a rewrite of something that works, and D9 is explicitly cosmetic.</p>
+<p>Both are behaviour-identical: no gates, no endpoints, no handlers changed.</p>
+<h3 id="what-was-not-done">What was not done</h3>
+<ul>
+<li><strong>No UI for the VRT / known-issues fields yet.</strong> <code>PUT /sessions/{id}/submission</code> and
+  <code>GET /vrt-categories</code> exist and are tested; the report screen has no control for them, so
+  today they are set by API. Flagged rather than quietly skipped — the report-side work is
+  what the punch list asked for, and it is complete.</li>
+<li><strong><code>:ad-graph</code>'s graph primitives were left alone</strong>, for the reason above.</li>
+<li><strong>A real foreign host is still not substituted</strong> in a planned command, only flagged — see
+  the D8 section for why rewriting one would point a tool download at the client.</li>
+</ul>
 </body>
 </html>

@@ -200,36 +200,42 @@ export function CockpitADGraph({
   // ---- empty state ---------------------------------------------------------- //
   if (!result) {
     return (
+      // D9: the empty state is a plain card now, in the house vocabulary. The GRAPH itself
+      // keeps its own hp-adg-* primitives — those have no hp-tn-* equivalent and rewriting a
+      // working canvas is not a restyle.
       <div className="hp-adg">
-        <div className="hp-adg-empty">
-          <p className="hp-adg-empty-head">Active Directory attack-path graph</p>
-          <p className="hp-adg-empty-sub">
-            Load a BloodHound collection to map the route from an owned low-priv user to
-            Domain Admin. Each edge’s abuse is grounded in the KB and runs only through the
-            gated executor — you approve every command.
-          </p>
-          {error && <p className="hp-cv-error">{error}</p>}
+        <section className="hp-tn-card">
+          <div className="hp-tn-cardhead">load a collection</div>
+          <div className="hp-tn-cardsub">
+            Map the route from an owned low-priv user to Domain Admin. Each edge’s abuse is
+            grounded in the KB and runs only through the gated executor — you approve every
+            command.
+          </div>
+          {error && <div className="hp-tn-error">{error}</div>}
           {warnings.length > 0 && (
-            <ul className="hp-adg-warn">
+            <ul className="hp-tn-bullets">
               {warnings.map((w, i) => (
                 <li key={i}>⚠ {w}</li>
               ))}
             </ul>
           )}
-          <button
-            type="button"
-            className="hp-ck-approve"
-            onClick={ingestSample}
-            disabled={loading}
-          >
-            {loading ? "loading…" : "Load the sample domain (GOAD-style)"}
-          </button>
-          <p className="hp-adg-empty-note">
+          <div className="hp-tn-actions">
+            <span className="hp-tn-actions-label">act</span>
+            <button
+              type="button"
+              className="hp-tn-start"
+              onClick={ingestSample}
+              disabled={loading}
+            >
+              {loading ? "loading…" : "load the sample domain (GOAD-style)"}
+            </button>
+          </div>
+          <p className="hp-tn-olhint">
             No AD lab needed — the sample is a synthetic domain with a real 5-hop route to Domain
             Admins. A live collection (bloodhound-python) wires in the same way, through the gated
             executor, when a domain is in scope.
           </p>
-        </div>
+        </section>
       </div>
     );
   }
@@ -237,13 +243,16 @@ export function CockpitADGraph({
   if (!path) {
     return (
       <div className="hp-adg">
-        <div className="hp-adg-empty">
-          <p className="hp-adg-empty-head">No path found</p>
-          <p className="hp-adg-empty-sub">{result.reason}</p>
-          <button type="button" className="hp-loop-skip" onClick={ingestSample}>
-            reload
-          </button>
-        </div>
+        <section className="hp-tn-card">
+          <div className="hp-tn-cardhead">no path found</div>
+          <div className="hp-tn-cardsub">{result.reason}</div>
+          <div className="hp-tn-actions">
+            <span className="hp-tn-actions-label">act</span>
+            <button type="button" className="hp-tn-start" onClick={ingestSample}>
+              reload
+            </button>
+          </div>
+        </section>
       </div>
     );
   }

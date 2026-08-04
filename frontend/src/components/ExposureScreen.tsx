@@ -263,14 +263,24 @@ export function ExposureScreen() {
               />
               I know 0.0.0.0 binds every interface
             </label>
+          </div>
+          {/* CONFIGURE above, ACT below. The divider is the point: "apply" recreates the
+              container and kills every listener inside it, and it used to sit in the same
+              undifferentiated flex row as the bind-address field. */}
+          <div className="hp-tn-actions">
+            <span className="hp-tn-actions-label">act</span>
             <button className="hp-tn-start" onClick={saveLocal} disabled={busy !== null}>
               {busy === "save-local" ? "…" : "write profile"}
             </button>
-            <button className="hp-tn-stop" onClick={applyLocal} disabled={busy !== null || !approved}>
-              {busy === "apply-local" ? "…" : "apply (recreates container)"}
-            </button>
             <button className="hp-tn-stop" onClick={clearLocal} disabled={busy !== null}>
               clear
+            </button>
+            <button
+              className="hp-tn-destroy"
+              onClick={applyLocal}
+              disabled={busy !== null || !approved}
+            >
+              {busy === "apply-local" ? "…" : "apply (recreates container)"}
             </button>
           </div>
           <p className="hp-tn-olhint">
@@ -305,6 +315,9 @@ export function ExposureScreen() {
               />
               I understand this is a public listener that relays into this machine
             </label>
+          </div>
+          <div className="hp-tn-actions">
+            <span className="hp-tn-actions-label">act</span>
             <button className="hp-tn-start" onClick={saveRemote} disabled={busy !== null || !ackPublic}>
               {busy === "save-remote" ? "…" : "save remote profile"}
             </button>
@@ -327,10 +340,17 @@ export function ExposureScreen() {
                   />
                   I approve this action
                 </label>
+              </div>
+              <div className="hp-tn-actions">
+                <span className="hp-tn-actions-label">act</span>
                 <button className="hp-tn-start" onClick={deploy} disabled={busy !== null || !approved}>
                   {busy === "deploy" ? "shipping…" : "deploy + start"}
                 </button>
-                <button className="hp-tn-stop" onClick={stop} disabled={busy !== null || !approved}>
+                <button
+                  className="hp-tn-destroy"
+                  onClick={stop}
+                  disabled={busy !== null || !approved}
+                >
                   {busy === "stop" ? "stopping…" : "stop redirector"}
                 </button>
               </div>

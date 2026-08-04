@@ -290,6 +290,15 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#closing-the-two-gaps-that-were-left-open-and-what-the-second-one-found">Closing the two gaps that were left open — and what the second one found</a></li>
 </ul>
 </li>
+<li><a href="#full-project-audit-the-whole-surface-driven-end-to-end-2026-08-04">Full-project audit — the whole surface, driven end to end (2026-08-04)</a><ul>
+<li><a href="#the-finding-that-mattered-most-was-a-combination-not-a-bug">The finding that mattered most was a combination, not a bug</a></li>
+<li><a href="#every-gate-fires-and-every-gate-can-fail-27-checks-both-directions">Every gate fires, and every gate can fail — 27 checks, both directions</a></li>
+<li><a href="#the-missing-gate-is-the-mirror-of-the-never-fired-guard">The missing gate is the mirror of the never-fired guard</a></li>
+<li><a href="#two-hypotheses-in-the-brief-were-wrong-in-the-products-favour">Two hypotheses in the brief were wrong, in the product's favour</a></li>
+<li><a href="#defects-fixed-in-this-commit">Defects fixed in this commit</a></li>
+<li><a href="#verification_4">Verification</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -2179,5 +2188,90 @@ the ingester and belongs in its own session.</p>
 <p><strong>And the screen had no way in.</strong> Zaid asked whether anything recent was missing from the home launcher. It was: <code>/proxy</code> was the <strong>only</strong> top-level route in the app with no tile — not in <code>SURFACE_BANDS</code>, not in the command palette, with nothing anywhere in the UI linking to it. Both part 2 and part 3 shipped it reachable only by typing the URL. Part 3's own definition of done said <em>":proxy ships with its endpoints — no orphaned routes (the build #13 part 1 lesson)"</em>, and I had verified that every <strong>endpoint</strong> had a frontend caller — but never that the <strong>screen</strong> had an entry point. The same lesson, one level up, walked straight past. The tile now sits in <strong>operate</strong>, next to <code>:repeater</code>. That placement is an argument, not a preference: the band <code>hint</code> is a posture claim about everything in the band, and infrastructure's reads <em>"gated start · human-only stdin"</em> — the proxy's start is gated, but it has no stdin at all (spawned <code>interactive=False</code>, deliberately), so half that claim would be false for this tile. Operate's <em>"every command human-approved · needs the stack"</em> is exactly true of both halves. Sitting beside <code>:repeater</code> also makes the capture → replay path discoverable, which is why the captured-exchange model mirrors the repeater's field names in the first place.</p>
 <p><strong>A process lesson worth more than the bug it caused.</strong> The CI-simulation from the previous fix — running the suite with <code>docker</code> hidden from <code>PATH</code> — also hid <code>git</code>, and <code>test_corpora</code>'s re-ingest uses a git-recovery path. It rewrote the live KB and dropped one entry (2743 → 2742). The KB is gitignored, so there was no commit to fall back on; re-running the ingest with a normal <code>PATH</code> restored it exactly, as the recorded flake note predicted. The lesson: <strong>a simulation that strips the environment can have side effects on real data.</strong> Simulate by running the specific test files, not the whole suite.</p>
 <p><strong>Still not built:</strong> browser interception, blocked on the unauthenticated-API finding above; spidering via the API (that is <code>-quickurl</code>'s job and carries its confirm); scan-policy tuning (a policy that decides its own aggression is the <code>-autorun</code> shape part 1 excluded); and authenticated scanning.</p>
+<h2 id="full-project-audit-the-whole-surface-driven-end-to-end-2026-08-04">Full-project audit — the whole surface, driven end to end (2026-08-04)</h2>
+<p>An unattended overnight audit of <strong>every</strong> surface, not just the newest build, against the brief
+in <code>docs/superpowers/prompts/2026-08-04-full-project-audit.md</code>. The full report with per-question
+verdicts, evidence and an explicit NOT-RUN list is <code>docs/AUDIT-2026-08-04.md</code>; this section
+records what it changed and the three things worth carrying forward.</p>
+<h3 id="the-finding-that-mattered-most-was-a-combination-not-a-bug">The finding that mattered most was a combination, not a bug</h3>
+<p><code>state/render.py</code> sets <code>INCLUDE_CREDENTIAL_SECRETS = True</code> — Zaid's explicit decision, and the
+module says so in full, including the consequence: <em>"every captured credential is sent to
+whatever LLM endpoint is configured, including a remote one."</em> That decision is safe under a
+precondition it states but does not enforce — a <strong>local</strong> endpoint. The precondition was not
+holding. The live provider was <code>claude-agent-sdk</code> (remote, <code>opus</code>), while six real credentials
+from the build #9 live fire sit in <code>state_credentials</code>. Neither half is a defect; the pair was.
+The provider is now <code>ollama</code> / <code>qwen3:8b</code> per the standing rule, verified end to end (a grounded
+attack path composed in 147s, <code>context_leaks: 0</code>, every step citing a real KB entry id).</p>
+<p><strong>The lesson: a documented decision can carry an unenforced precondition, and the audit that
+finds it will be looking at configuration, not code.</strong> Both halves passed every test.</p>
+<h3 id="every-gate-fires-and-every-gate-can-fail-27-checks-both-directions">Every gate fires, and every gate can fail — 27 checks, both directions</h3>
+<p>The 2026-07-27 audit found seven guards that never fired. A harness drove the real
+<code>executor.validate_request</code> with a refusal <strong>and</strong> a positive control for each gate, in lab and
+engagement mode: 24 checks, 0 failures, plus 3 on the isolation guard. The isolation refusal was
+proven with a genuinely non-isolated container rather than a mock — pointing the lab guard at
+<code>hackpit-engage-sandbox</code> (fully open by design) produced the egress-path refusal.</p>
+<p><strong>A trap the harness caught in itself.</strong> Its first danger-gate probe was
+<code>bash -c '…10.0.0.1…'</code>, which is refused at <strong><code>target</code></strong>, not <code>danger</code> — so the probe never
+reached the gate under test and the paired "with ack" control passed <em>vacuously</em>. In lab mode the
+danger gate is only reachable by a command naming the lab target as a clean argv token. This is
+the exact failure the house "not refused at THIS gate" phrasing exists to prevent, and it is the
+second time that convention has earned its keep.</p>
+<h3 id="the-missing-gate-is-the-mirror-of-the-never-fired-guard">The missing gate is the mirror of the never-fired guard</h3>
+<p>Measured against the real bug-bounty program: <code>ffuf -u https://…/FUZZ -w common.txt</code>,
+<code>sqlmap -u https://… --batch</code> and <code>nuclei -u https://… -t cves/</code> all pass on <code>approved=true</code>
+<strong>alone</strong> against a third-party production host — no red-confirm. That is not a defect in the
+danger heuristic, which correctly models arbitrary code execution (it does flag
+<code>sqlmap --os-shell</code>). <strong>Nothing models aggression toward the target</strong>, and there is no rate
+limiting, pacing or concurrency control anywhere in <code>cockpit/</code>, <code>state/</code>, <code>reasoning/</code> or
+<code>arsenal/</code>. Recorded as the highest-value missing feature; the narrowest fix reuses the existing
+red-confirm in engagement mode only.</p>
+<h3 id="two-hypotheses-in-the-brief-were-wrong-in-the-products-favour">Two hypotheses in the brief were wrong, in the product's favour</h3>
+<p>Bug-bounty reporting <strong>exists</strong>: a dedicated <code>bugbounty</code> template ("a HackerOne / Bugcrowd
+submission"), selectable in the UI, with a CVSS 3.1 base calculator verified correct against six
+known vectors including the round-up edges. Missing is narrower than assumed — no VRT, no P1–P4,
+3.1 not 4.0. And the scope model <strong>already</strong> handles wildcards, CIDRs and <code>!exclusions</code>, and
+refuses both classic wildcard bypasses (<code>notexample.com</code>, <code>example.com.evil.net</code>). All 11 of the
+program's web/API targets parse, resolve and enforce.</p>
+<p>What it cannot express is <strong>mobile</strong> — and the failure shape matters more than the refusal:
+<code>parse_scope("THAT Concept Store iOS")</code> splits on whitespace into four bogus hostnames and fails
+only because none of them resolve. Had one resolved, a garbage host would have entered the scope.
+A fail-open shape inside a fail-closed result.</p>
+<h3 id="defects-fixed-in-this-commit">Defects fixed in this commit</h3>
+<p><strong>A tool-file id dropped two files out of the product.</strong> <code>pipeline/ingest_corpora.py</code> built the id
+from <code>path.stem</code>, so files differing only by extension collided: <code>nc</code>/<code>nc.exe</code> (linux vs windows)
+and <code>SharpHound.ps1</code>/<code>SharpHound.exe</code>. The extension is what decides <code>platform</code>, so these are
+genuinely different artefacts. <code>/entry/{id}</code> could only resolve one of each pair, and because the
+Scripts Arsenal keys its React list on that id, <strong>React dropped one of each pair from the list</strong> —
+two duplicate-key errors, confirmed in the browser. Fixed at source (<code>path.name</code>), artefacts
+regenerated, locked by two tests: one on the derivation carrying a control that proves the <em>old</em>
+derivation collided, one on the built artefact. The KB was verified byte-identical at 2743 lines
+before and after every regeneration.</p>
+<p><strong>The Scripts Arsenal claimed more than it contained.</strong> The section header printed <code>count</code> while
+the list held <code>shown</code> — 1235 claimed, 1158 served; <code>Enumeration</code> claimed 335 and rendered 263.
+The cap is deliberate and the pipeline records both numbers honestly; the UI simply never used
+<code>shown</code>, which was already carried through the backend model and the API type. It now shows what
+is listed and states how many were dropped, by which cap, and that the filter cannot reach them.
+The index was also <strong>stale by 126 entries</strong> (built against 2617); rebuilt.</p>
+<p><strong>Checkboxes were grey slabs on six screens.</strong> <code>.hp-tn-form input { flex: 1 1 200px }</code>
+over-matches — a checkbox is not a text field. Build #14 part 3 worked around this on <code>:proxy</code>
+with a per-screen <code>.hp-tn-check</code>; <code>:exposure</code>, <code>:repeater</code>, <code>:oob</code>, <code>:cockpit</code> and the AD screens
+still had it. <strong>Fixed in the over-matching rule itself</strong>, where every screen gets it, rather than
+in the one component that noticed — the same "fix the predicate, never narrow the file set"
+discipline build #5 established. Verified in the browser before and after.</p>
+<h3 id="verification_4">Verification</h3>
+<p>Suite <strong>71 files, 0 failures</strong>. All five live proofs green: isolation 4/0, engage-open 4/0
+(Wall A confirmed down), zap-install 9/0, zap-proxy 7/0, zap-scan 8/0. <code>tsc --noEmit</code> clean; lint
+unchanged from its accepted baseline (no changed file appears in the output). All 18 surfaces
+rendered in a real browser and the orphan-route check is clean. Windows/AD driven <strong>live</strong>
+against the real DC — WinRM reached <code>corp\administrator</code>, and read-only domain enumeration ran
+through the gated executor while DCSync-shaped and <code>-EncodedCommand</code> payloads were correctly held
+at the red-confirm.</p>
+<p><strong>Not run, and not to be read as passing:</strong> the passive HTTP fingerprint sweep of the 11
+third-party hosts (refused by the classifier — left as a self-verifying
+<code>docs/audit-2026-08-04/bb-passive-recon.sh</code>), a re-measurement of ZAP's <code>api.key</code>, and the
+end-to-end report-redaction observation (refused, correctly, because it meant dumping six real
+domain credentials — the property is verified by its existing test instead). Exactly <strong>one</strong>
+packet-generating command touched a program asset all night: a single <code>dig</code>, which returned
+<code>crateandbarrel.edgekey.net</code>. Nothing was submitted anywhere.</p>
 </body>
 </html>

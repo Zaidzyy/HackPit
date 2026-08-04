@@ -595,7 +595,14 @@ def discover_tool_files(root: Path) -> tuple[list[dict], list[dict]]:
             preview = text[:TOOL_PREVIEW_CHARS]
 
         rows.append({
-            "id": f"toolfile-{_slug(folder)}-{_slug(path.stem)}",
+            # `path.name`, NOT `path.stem` — the stem drops the extension, so two
+            # files in one folder that differ only by suffix collided on a single
+            # id. Measured 2026-08-04: `nc`/`nc.exe` (linux vs windows) and
+            # `SharpHound.ps1`/`SharpHound.exe` shared an id, which made one of
+            # each pair unaddressable at /entry/{id} and made React drop one of
+            # the pair from the Scripts Arsenal list. The extension is part of
+            # the file's identity here — it is what decides `platform`.
+            "id": f"toolfile-{_slug(folder)}-{_slug(path.name)}",
             "name": path.name,
             "group": group,
             "folder": folder,

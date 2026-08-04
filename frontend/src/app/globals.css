@@ -7920,6 +7920,15 @@ a.hp-card {
 .hp-tn-form input { flex: 1 1 200px; min-width: 120px; }
 .hp-tn-form .hp-tn-port { flex: 0 0 130px; }
 .hp-tn-routeform input { flex: 1 1 200px; }
+/* A checkbox is not a text field. Without this it inherits the 200px flex basis
+   above and renders as a wide grey slab. Measured in the browser 2026-08-04 on
+   :exposure, which has four of them. `:proxy` worked around it per-screen with
+   `.hp-tn-check`, but the defect is in THIS rule — it over-matches `input` — so
+   the fix belongs here, where every screen gets it, rather than in the one
+   component that happened to notice. */
+.hp-tn-form input[type="checkbox"],
+.hp-tn-form input[type="radio"],
+.hp-tn-routeform input[type="checkbox"] { flex: 0 0 auto; width: auto; min-width: 0; }
 .hp-tn-form button, .hp-tn-routeform button {
   flex: 0 0 auto; cursor: pointer; color: var(--accent);
   border-color: var(--accent-line); background: var(--accent-soft);

@@ -1916,3 +1916,108 @@ Two things were shipped unverified and named as such rather than left to read as
 **A process lesson worth more than the bug it caused.** The CI-simulation from the previous fix — running the suite with `docker` hidden from `PATH` — also hid `git`, and `test_corpora`'s re-ingest uses a git-recovery path. It rewrote the live KB and dropped one entry (2743 → 2742). The KB is gitignored, so there was no commit to fall back on; re-running the ingest with a normal `PATH` restored it exactly, as the recorded flake note predicted. The lesson: **a simulation that strips the environment can have side effects on real data.** Simulate by running the specific test files, not the whole suite.
 
 **Still not built:** browser interception, blocked on the unauthenticated-API finding above; spidering via the API (that is `-quickurl`'s job and carries its confirm); scan-policy tuning (a policy that decides its own aggression is the `-autorun` shape part 1 excluded); and authenticated scanning.
+
+## Full-project audit — the whole surface, driven end to end (2026-08-04)
+
+An unattended overnight audit of **every** surface, not just the newest build, against the brief
+in `docs/superpowers/prompts/2026-08-04-full-project-audit.md`. The full report with per-question
+verdicts, evidence and an explicit NOT-RUN list is `docs/AUDIT-2026-08-04.md`; this section
+records what it changed and the three things worth carrying forward.
+
+### The finding that mattered most was a combination, not a bug
+
+`state/render.py` sets `INCLUDE_CREDENTIAL_SECRETS = True` — Zaid's explicit decision, and the
+module says so in full, including the consequence: *"every captured credential is sent to
+whatever LLM endpoint is configured, including a remote one."* That decision is safe under a
+precondition it states but does not enforce — a **local** endpoint. The precondition was not
+holding. The live provider was `claude-agent-sdk` (remote, `opus`), while six real credentials
+from the build #9 live fire sit in `state_credentials`. Neither half is a defect; the pair was.
+The provider is now `ollama` / `qwen3:8b` per the standing rule, verified end to end (a grounded
+attack path composed in 147s, `context_leaks: 0`, every step citing a real KB entry id).
+
+**The lesson: a documented decision can carry an unenforced precondition, and the audit that
+finds it will be looking at configuration, not code.** Both halves passed every test.
+
+### Every gate fires, and every gate can fail — 27 checks, both directions
+
+The 2026-07-27 audit found seven guards that never fired. A harness drove the real
+`executor.validate_request` with a refusal **and** a positive control for each gate, in lab and
+engagement mode: 24 checks, 0 failures, plus 3 on the isolation guard. The isolation refusal was
+proven with a genuinely non-isolated container rather than a mock — pointing the lab guard at
+`hackpit-engage-sandbox` (fully open by design) produced the egress-path refusal.
+
+**A trap the harness caught in itself.** Its first danger-gate probe was
+`bash -c '…10.0.0.1…'`, which is refused at **`target`**, not `danger` — so the probe never
+reached the gate under test and the paired "with ack" control passed *vacuously*. In lab mode the
+danger gate is only reachable by a command naming the lab target as a clean argv token. This is
+the exact failure the house "not refused at THIS gate" phrasing exists to prevent, and it is the
+second time that convention has earned its keep.
+
+### The missing gate is the mirror of the never-fired guard
+
+Measured against the real bug-bounty program: `ffuf -u https://…/FUZZ -w common.txt`,
+`sqlmap -u https://… --batch` and `nuclei -u https://… -t cves/` all pass on `approved=true`
+**alone** against a third-party production host — no red-confirm. That is not a defect in the
+danger heuristic, which correctly models arbitrary code execution (it does flag
+`sqlmap --os-shell`). **Nothing models aggression toward the target**, and there is no rate
+limiting, pacing or concurrency control anywhere in `cockpit/`, `state/`, `reasoning/` or
+`arsenal/`. Recorded as the highest-value missing feature; the narrowest fix reuses the existing
+red-confirm in engagement mode only.
+
+### Two hypotheses in the brief were wrong, in the product's favour
+
+Bug-bounty reporting **exists**: a dedicated `bugbounty` template ("a HackerOne / Bugcrowd
+submission"), selectable in the UI, with a CVSS 3.1 base calculator verified correct against six
+known vectors including the round-up edges. Missing is narrower than assumed — no VRT, no P1–P4,
+3.1 not 4.0. And the scope model **already** handles wildcards, CIDRs and `!exclusions`, and
+refuses both classic wildcard bypasses (`notexample.com`, `example.com.evil.net`). All 11 of the
+program's web/API targets parse, resolve and enforce.
+
+What it cannot express is **mobile** — and the failure shape matters more than the refusal:
+`parse_scope("THAT Concept Store iOS")` splits on whitespace into four bogus hostnames and fails
+only because none of them resolve. Had one resolved, a garbage host would have entered the scope.
+A fail-open shape inside a fail-closed result.
+
+### Defects fixed in this commit
+
+**A tool-file id dropped two files out of the product.** `pipeline/ingest_corpora.py` built the id
+from `path.stem`, so files differing only by extension collided: `nc`/`nc.exe` (linux vs windows)
+and `SharpHound.ps1`/`SharpHound.exe`. The extension is what decides `platform`, so these are
+genuinely different artefacts. `/entry/{id}` could only resolve one of each pair, and because the
+Scripts Arsenal keys its React list on that id, **React dropped one of each pair from the list** —
+two duplicate-key errors, confirmed in the browser. Fixed at source (`path.name`), artefacts
+regenerated, locked by two tests: one on the derivation carrying a control that proves the *old*
+derivation collided, one on the built artefact. The KB was verified byte-identical at 2743 lines
+before and after every regeneration.
+
+**The Scripts Arsenal claimed more than it contained.** The section header printed `count` while
+the list held `shown` — 1235 claimed, 1158 served; `Enumeration` claimed 335 and rendered 263.
+The cap is deliberate and the pipeline records both numbers honestly; the UI simply never used
+`shown`, which was already carried through the backend model and the API type. It now shows what
+is listed and states how many were dropped, by which cap, and that the filter cannot reach them.
+The index was also **stale by 126 entries** (built against 2617); rebuilt.
+
+**Checkboxes were grey slabs on six screens.** `.hp-tn-form input { flex: 1 1 200px }`
+over-matches — a checkbox is not a text field. Build #14 part 3 worked around this on `:proxy`
+with a per-screen `.hp-tn-check`; `:exposure`, `:repeater`, `:oob`, `:cockpit` and the AD screens
+still had it. **Fixed in the over-matching rule itself**, where every screen gets it, rather than
+in the one component that noticed — the same "fix the predicate, never narrow the file set"
+discipline build #5 established. Verified in the browser before and after.
+
+### Verification
+
+Suite **71 files, 0 failures**. All five live proofs green: isolation 4/0, engage-open 4/0
+(Wall A confirmed down), zap-install 9/0, zap-proxy 7/0, zap-scan 8/0. `tsc --noEmit` clean; lint
+unchanged from its accepted baseline (no changed file appears in the output). All 18 surfaces
+rendered in a real browser and the orphan-route check is clean. Windows/AD driven **live**
+against the real DC — WinRM reached `corp\administrator`, and read-only domain enumeration ran
+through the gated executor while DCSync-shaped and `-EncodedCommand` payloads were correctly held
+at the red-confirm.
+
+**Not run, and not to be read as passing:** the passive HTTP fingerprint sweep of the 11
+third-party hosts (refused by the classifier — left as a self-verifying
+`docs/audit-2026-08-04/bb-passive-recon.sh`), a re-measurement of ZAP's `api.key`, and the
+end-to-end report-redaction observation (refused, correctly, because it meant dumping six real
+domain credentials — the property is verified by its existing test instead). Exactly **one**
+packet-generating command touched a program asset all night: a single `dig`, which returned
+`crateandbarrel.edgekey.net`. Nothing was submitted anywhere.

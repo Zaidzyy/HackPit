@@ -175,6 +175,51 @@ def test_windows_only_tool_files_are_marked_not_advertised() -> None:
     print(f"  {len(win)} Windows-only tool files kept and marked not-runnable: PASS")
 
 
+def test_a_tool_file_id_distinguishes_files_that_differ_only_by_extension() -> None:
+    """The id is an ADDRESS: /entry/{id} and the Scripts Arsenal's React key both
+    key on it, so two files sharing one id means one of the pair is unreachable
+    and the other silently replaces it in the list.
+
+    Measured 2026-08-04: the id was built from `path.stem`, which drops the
+    extension, so `nc`/`nc.exe` and `SharpHound.ps1`/`SharpHound.exe` collided.
+    The extension is not decoration here — it is what decides `platform`, so the
+    linux `nc` and the windows `nc.exe` are genuinely different artefacts.
+    """
+    folder = "Network Utilities"
+
+    def ident(filename: str, part: str) -> str:
+        return f"toolfile-{ic._slug(folder)}-{ic._slug(part)}"
+
+    # The lock: on the real derivation (full filename) the pair is distinct.
+    assert ident("nc", "nc") != ident("nc.exe", "nc.exe")
+    assert ident("SharpHound.ps1", "SharpHound.ps1") != ident("SharpHound.exe", "SharpHound.exe")
+
+    # The control: the OLD derivation (stem) really did collide, so this test
+    # bites rather than passing vacuously on any implementation.
+    assert ident("nc", "nc") == ident("nc.exe", "nc"), "stem-based ids should collide"
+
+    # And a same-name file in a DIFFERENT folder must still be a different id.
+    assert ident("nc", "nc") != f"toolfile-{ic._slug('Active Directory')}-{ic._slug('nc')}"
+    print("  a tool-file id distinguishes files differing only by extension: PASS")
+
+
+def test_built_tool_file_ids_are_unique() -> None:
+    """The property above, asserted against the artefact actually on disk."""
+    tf = REPO_ROOT / "data" / "kb" / "toolfiles.json"
+    if not tf.is_file():
+        print("  (skipped — toolfiles.json not built)")
+        return
+    rows = json.loads(tf.read_text(encoding="utf-8"))["files"]
+    seen: dict[str, str] = {}
+    clashes: list[str] = []
+    for r in rows:
+        if r["id"] in seen:
+            clashes.append(f"{r['id']}: {seen[r['id']]} vs {r['rel_path']}")
+        seen[r["id"]] = r["rel_path"]
+    assert not clashes, "tool files share an id (one is unaddressable): " + "; ".join(clashes)
+    print(f"  all {len(rows)} built tool-file ids are unique: PASS")
+
+
 def test_tool_file_previews_are_capped_and_binaries_have_none() -> None:
     tf = REPO_ROOT / "data" / "kb" / "toolfiles.json"
     if not tf.is_file():
@@ -258,6 +303,8 @@ if __name__ == "__main__":
     test_entry_validates_against_the_canonical_schema()
     test_sha256_and_byte_count_describe_the_real_file()
     test_windows_only_tool_files_are_marked_not_advertised()
+    test_a_tool_file_id_distinguishes_files_that_differ_only_by_extension()
+    test_built_tool_file_ids_are_unique()
     test_tool_file_previews_are_capped_and_binaries_have_none()
     test_every_corpus_entry_has_its_sidecar_on_disk()
     test_no_orphan_sidecars()

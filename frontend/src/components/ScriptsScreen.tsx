@@ -36,6 +36,10 @@ export function ScriptsScreen() {
 
   const total = arsenal.data?.total ?? 0;
   const shownCount = groups.reduce((n, g) => n + g.scripts.length, 0);
+  // What the API actually served, before any filter — `total` counts scripts the
+  // per-group cap dropped at build time, so quoting it alone overstates what is
+  // browsable here (1235 claimed vs 1158 served, measured 2026-08-04).
+  const served = (arsenal.data?.groups ?? []).reduce((n, g) => n + g.shown, 0);
 
   return (
     <PageShell crumbs={[{ label: "home", href: "/" }, { label: "Scripts" }]}>
@@ -48,7 +52,9 @@ export function ScriptsScreen() {
             <h1 className="hp-listing-title">Scripts Arsenal</h1>
             <p className="hp-listing-sub">
               {arsenal.data
-                ? `${total} runnable scripts & payloads, deduped from ${arsenal.data.kb_entries} entries`
+                ? served < total
+                  ? `${served} runnable scripts & payloads browsable here (${total} indexed, deduped from ${arsenal.data.kb_entries} entries)`
+                  : `${total} runnable scripts & payloads, deduped from ${arsenal.data.kb_entries} entries`
                 : " "}
             </p>
           </div>
@@ -113,6 +119,12 @@ export function ScriptsScreen() {
 }
 
 function ScriptTypeSection({ group }: { group: ScriptGroup }) {
+  // `count` is every distinct script of this type; `shown` is how many the
+  // indexer actually served (pipeline/scripts_index.py caps each group at
+  // MAX_PER_TYPE). The header previously printed `count` while the list held
+  // `shown`, so a group could claim 335 and render 263 with nothing saying so.
+  // The cap is deliberate; hiding it is not.
+  const over = group.count - group.shown;
   return (
     <section
       className="hp-scripts-group"
@@ -122,11 +134,23 @@ function ScriptTypeSection({ group }: { group: ScriptGroup }) {
       <h2 className="hp-scripts-grouphead">
         <span className="hp-scripts-groupic">{group.icon}</span>
         {group.label}
-        <span className="hp-scripts-groupct">{group.count}</span>
+        <span className="hp-scripts-groupct">{group.scripts.length}</span>
       </h2>
+      {over > 0 && (
+        <p className="hp-note">
+          Showing {group.shown} of {group.count} — {over} more are indexed but were
+          dropped at build time by the per-group display cap in{" "}
+          <code>pipeline/scripts_index.py</code>. They are not in this payload, so the
+          filter above cannot reach them.
+        </p>
+      )}
       <div className="hp-scripts-list">
-        {group.scripts.map((s) => (
-          <ScriptCard key={s.id} script={s} />
+        {group.scripts.map((s, i) => (
+          // Keyed by id AND position: two tool files whose names differ only by
+          // extension (nc / nc.exe) shared one id, and React silently dropped one
+          // of the pair from the list. The id collision is fixed at source in
+          // pipeline/ingest_corpora.py; this keeps a future one cosmetic.
+          <ScriptCard key={`${s.id}#${i}`} script={s} />
         ))}
       </div>
     </section>

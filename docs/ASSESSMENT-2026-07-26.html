@@ -346,6 +346,9 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#the-fix-the-key-is-recovered-and-the-clash-check-can-finally-see">The fix — the key is recovered, and the clash check can finally see</a></li>
 <li><a href="#the-defect-underneath-it-a-capture-was-unreadable-on-windows-and-read-as-no-capture">The defect underneath it: a capture was unreadable on Windows, and read as no capture</a></li>
 <li><a href="#item-5-the-browser-must-talk-to-the-target-and-nothing-else">Item 5 — the browser must talk to the target and nothing else</a></li>
+<li><a href="#item-2-run-the-discriminator-is-not-the-user-agent-and-that-is-why-the-honest-fix-works">Item 2, RUN — the discriminator is not the User-Agent, and that is why the honest fix works</a></li>
+<li><a href="#item-4-run-the-attack-half-is-blocked-and-the-first-verdict-said-the-opposite">Item 4, RUN — the attack half IS blocked, and the first verdict said the opposite</a></li>
+<li><a href="#the-defect-that-hid-item-4s-own-evidence-recent-traffic-was-the-oldest-traffic">The defect that hid item 4's own evidence: "recent" traffic was the oldest traffic</a></li>
 <li><a href="#what-is-prepared-and-not-yet-run-stated-plainly-because-last-time-it-was-not">What is prepared and NOT yet run — stated plainly, because last time it was not</a></li>
 <li><a href="#verification_6">Verification</a></li>
 </ul>
@@ -3211,11 +3214,124 @@ is sourced <em>at all</em> is proven by the check above it — the browser only 
 alone would be a grep against a file, which is what "the file existing is not the same as the
 flag reaching the browser" already warns about one line up. Verified to <strong>bite</strong>: run against
 the pre-rebuild container it fails, which is the only way to know a new check is not vacuous.</p>
+<h3 id="item-2-run-the-discriminator-is-not-the-user-agent-and-that-is-why-the-honest-fix-works">Item 2, RUN — the discriminator is not the User-Agent, and that is why the honest fix works</h3>
+<p>Decision-table <strong>row 4</strong> (P1 fails, P2 passes), which the plan routes to row 1: <strong>build option A</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>probe</th>
+<th>result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0 headless, stock UA, ×3</td>
+<td><strong>fails 3/3</strong> — deterministic, not a transient. 336 B, 21–25 s, ZAP's own 504</td>
+</tr>
+<tr>
+<td>P1 headless + a normal Chrome UA (one spoofed request, as a measurement)</td>
+<td><strong>fails</strong> — hung, killed at 75 s, 0 bytes</td>
+</tr>
+<tr>
+<td><strong>P2 headed under Xvfb, stock UA, nothing spoofed</strong></td>
+<td><strong>PASSES — 2,347,139 bytes in 3.7 s</strong>, 26/26 answered</td>
+</tr>
+</tbody>
+</table>
+<p>The prime suspect was the <code>HeadlessChrome</code> token. <strong>It is not the discriminator.</strong> Reading the
+request headers back out of ZAP's own history, across all four clients that reached this target:</p>
+<table>
+<thead>
+<tr>
+<th>client</th>
+<th><code>Sec-CH-UA</code></th>
+<th>outcome</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>headed Chromium</td>
+<td><code>"Not;A=Brand";v="8", "Chromium";v="150"</code></td>
+<td>31× 200, 1× 302, 1× 301</td>
+</tr>
+<tr>
+<td>headless, stock UA</td>
+<td><strong>absent</strong></td>
+<td>504</td>
+</tr>
+<tr>
+<td>headless, <strong>spoofed</strong> Chrome UA</td>
+<td><strong>absent</strong></td>
+<td>504</td>
+</tr>
+</tbody>
+</table>
+<p>Headless Chromium sends <strong>no Client Hints at all</strong>, and <code>--user-agent</code> does not add them. So P1
+changed the string the client <em>claims</em> and left untouched the header set a real browser <em>emits</em>
+— which is why it failed, and why row 2 was never reachable. <strong>You cannot get there by lying
+about one header; you get there by using a browser that sends them all.</strong> That is this build's
+own line — <em>"nothing here imitates or evades — it uses one"</em> — arriving as a measurement rather
+than a principle, and it is a considerably better outcome than row 1 would have been: the
+dishonest route is not merely disallowed, it does not work.</p>
+<p><strong>The script's printed verdict was wrong and the data was right.</strong> It reported
+<code>ROW none: HARNESS BROKEN</code> because a single <code>dom &gt; 5000</code> rule declared both controls broken:
+example.com is a ~1 KB page, so a perfect fetch of it is 561 bytes. One threshold cannot serve a
+1 KB control and a megabyte storefront; the floor belongs to the URL. The same rule cost P2c 76
+seconds — the headed probe only stops early once it is over the floor, so it sat waiting on a
+page that had finished loading in three. Both are fixed, and the pass rule now also refuses to
+count a <code>403</code>/<code>504</code> as success.</p>
+<h3 id="item-4-run-the-attack-half-is-blocked-and-the-first-verdict-said-the-opposite">Item 4, RUN — the attack half IS blocked, and the first verdict said the opposite</h3>
+<p><strong>This is the larger of the two outcomes the plan named.</strong> Not "the chain survives the WAF" —
+the reverse.</p>
+<p>39 attack requests were sent at one read-only catalogue endpoint. Reading the responses back out
+of ZAP's history: <strong>3× <code>200</code>, 36× <code>403 Forbidden</code>, <code>Server: AkamaiGHost</code></strong>, body
+<code>&lt;TITLE&gt;Access Denied&lt;/TITLE&gt;</code>. <strong>92% edge refusals.</strong> A sample request carries a Shellshock
+payload in <code>allCategories</code> — Akamai inspects the payload and refuses it. Capture works; the
+attack half does not. <strong>The payloads never reach the application</strong>, so the zero findings are not
+evidence about the application at all.</p>
+<p>It was also <strong>tarpitted, not merely blocked</strong>: 39 requests in 12 minutes, one stall holding at 7
+requests for ~350 seconds, 28% progress when the wall-clock ceiling stopped it. Build #14 sent
+376 requests at a single endpoint in the lab. That is the concrete shape of the audit's <em>"breaks
+at volume"</em> — roughly three requests a minute against a bot-managed edge.</p>
+<p><strong>The script announced <code>WORKS — the chain survives the WAF</code>, and two separate mistakes produced
+it.</strong></p>
+<ol>
+<li><strong>It counted 153 alerts as scan results.</strong> The route's own docstring says they are <em>"NOT
+   scan-scoped: this includes PASSIVE alerts raised merely by traffic passing through the
+   proxy"</em>. They were an hour of manual browsing. Exactly <strong>2</strong> of the 153 are on the endpoint
+   that was scanned, both passive header findings. Walking into a trap the function documents is
+   worse than walking into an undocumented one.</li>
+<li><strong>It treated "answered" as "allowed".</strong> A <code>403</code> with a block page is a response. Every
+   "requests landed" count in the first pass included the ones Akamai refused.</li>
+</ol>
+<p>The verdict now classifies the recorded responses and calls ≥50% edge refusals what it is.</p>
+<h3 id="the-defect-that-hid-item-4s-own-evidence-recent-traffic-was-the-oldest-traffic">The defect that hid item 4's own evidence: "recent" traffic was the oldest traffic</h3>
+<p>Finding the 403s at all meant paging ZAP's history by hand, because reading the documented way
+returned nothing. <code>history()</code> passed the caller's <code>start</code> straight to ZAP, whose <code>start</code> counts
+from the <strong>beginning</strong> of history, and it defaults to 0. Measured on a daemon holding 1,296
+exchanges: <code>start=0</code> returned requests to <code>example.com</code> from hours earlier. The <code>:proxy</code>
+captured-traffic panel passes no <code>start</code> at all, so <strong>it has always shown the first 50 requests
+that daemon ever recorded</strong>, forever, however long the engagement runs.</p>
+<p><strong>The knock-on is the serious half, and it lands on build #16.</strong> <code>session_health</code> reads
+<code>history(count=200)</code> to notice a scan's traffic coming back login-shaped — #16's answer to a
+silent wrong answer. Judging the <em>oldest</em> 200 exchanges, it was looking at the moment the session
+was established, so <strong>it could not detect a session expiring mid-scan by construction.</strong> It
+reported <code>ok</code> throughout this build's live scan, and that <code>ok</code> meant nothing. A guard against a
+silent wrong answer, silently unable to fire — and it took a scan whose traffic was being refused
+to notice, because that is the case where you go looking.</p>
+<p><code>start</code> is now an offset back from the newest; order within the window stays chronological.
+After the fix, <code>session_health</code> samples 195 recent exchanges instead of the first 200 ever.</p>
 <h3 id="what-is-prepared-and-not-yet-run-stated-plainly-because-last-time-it-was-not">What is prepared and NOT yet run — stated plainly, because last time it was not</h3>
 <p>Build #15's section had to be amended after the fact because the runbook was described as
-finished when it was not. Not repeating that: as of this commit, <strong>item 1 has run and passes,
-the two proxy defects above are fixed and locked, and items 2 and 4 are written, gate-verified
-and NOT YET EXECUTED.</strong> Item 4 is no longer blocked — it is queued.</p>
+finished when it was not. Not repeating that: as of this commit, <strong>items 1, 2 and 4 have all
+run</strong>, and what remains is option A itself, the image rebuild, the proof re-run and teardown.</p>
+<p><strong>Three of this build's findings came from its own scripts being wrong</strong>, and that is worth
+stating rather than smoothing over: a single DOM threshold that failed both controls, an alert
+count that was never scan-scoped, and a verdict that read a WAF block page as a served response.
+Each was caught by going back to the raw evidence — ZAP's own history — instead of trusting the
+summary line. <strong>The scripts printed <code>ROW none</code> and <code>WORKS</code>; the correct answers were <code>row 4</code> and
+<code>REFUSED</code>.</strong> A harness that reports confidently is not the same as a harness that is right, which
+is the same lesson as the proof checks in build #15 and is now this repo's most repeated one.</p>
 <p><strong>Item 1 ran, and its first version was wrong in an instructive way.</strong> It asserted <em>"exactly
 one active engagement"</em>, written against a truncated read of <code>GET /cockpit/engagement</code> that
 showed one record when there were <strong>21</strong> — twenty of them old lab engagements against RFC1918

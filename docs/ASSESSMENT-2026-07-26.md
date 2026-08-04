@@ -2989,12 +2989,104 @@ alone would be a grep against a file, which is what "the file existing is not th
 flag reaching the browser" already warns about one line up. Verified to **bite**: run against
 the pre-rebuild container it fails, which is the only way to know a new check is not vacuous.
 
+### Item 2, RUN — the discriminator is not the User-Agent, and that is why the honest fix works
+
+Decision-table **row 4** (P1 fails, P2 passes), which the plan routes to row 1: **build option A**.
+
+| probe | result |
+|---|---|
+| P0 headless, stock UA, ×3 | **fails 3/3** — deterministic, not a transient. 336 B, 21–25 s, ZAP's own 504 |
+| P1 headless + a normal Chrome UA (one spoofed request, as a measurement) | **fails** — hung, killed at 75 s, 0 bytes |
+| **P2 headed under Xvfb, stock UA, nothing spoofed** | **PASSES — 2,347,139 bytes in 3.7 s**, 26/26 answered |
+
+The prime suspect was the `HeadlessChrome` token. **It is not the discriminator.** Reading the
+request headers back out of ZAP's own history, across all four clients that reached this target:
+
+| client | `Sec-CH-UA` | outcome |
+|---|---|---|
+| headed Chromium | `"Not;A=Brand";v="8", "Chromium";v="150"` | 31× 200, 1× 302, 1× 301 |
+| headless, stock UA | **absent** | 504 |
+| headless, **spoofed** Chrome UA | **absent** | 504 |
+
+Headless Chromium sends **no Client Hints at all**, and `--user-agent` does not add them. So P1
+changed the string the client *claims* and left untouched the header set a real browser *emits*
+— which is why it failed, and why row 2 was never reachable. **You cannot get there by lying
+about one header; you get there by using a browser that sends them all.** That is this build's
+own line — *"nothing here imitates or evades — it uses one"* — arriving as a measurement rather
+than a principle, and it is a considerably better outcome than row 1 would have been: the
+dishonest route is not merely disallowed, it does not work.
+
+**The script's printed verdict was wrong and the data was right.** It reported
+`ROW none: HARNESS BROKEN` because a single `dom > 5000` rule declared both controls broken:
+example.com is a ~1 KB page, so a perfect fetch of it is 561 bytes. One threshold cannot serve a
+1 KB control and a megabyte storefront; the floor belongs to the URL. The same rule cost P2c 76
+seconds — the headed probe only stops early once it is over the floor, so it sat waiting on a
+page that had finished loading in three. Both are fixed, and the pass rule now also refuses to
+count a `403`/`504` as success.
+
+### Item 4, RUN — the attack half IS blocked, and the first verdict said the opposite
+
+**This is the larger of the two outcomes the plan named.** Not "the chain survives the WAF" —
+the reverse.
+
+39 attack requests were sent at one read-only catalogue endpoint. Reading the responses back out
+of ZAP's history: **3× `200`, 36× `403 Forbidden`, `Server: AkamaiGHost`**, body
+`<TITLE>Access Denied</TITLE>`. **92% edge refusals.** A sample request carries a Shellshock
+payload in `allCategories` — Akamai inspects the payload and refuses it. Capture works; the
+attack half does not. **The payloads never reach the application**, so the zero findings are not
+evidence about the application at all.
+
+It was also **tarpitted, not merely blocked**: 39 requests in 12 minutes, one stall holding at 7
+requests for ~350 seconds, 28% progress when the wall-clock ceiling stopped it. Build #14 sent
+376 requests at a single endpoint in the lab. That is the concrete shape of the audit's *"breaks
+at volume"* — roughly three requests a minute against a bot-managed edge.
+
+**The script announced `WORKS — the chain survives the WAF`, and two separate mistakes produced
+it.**
+
+1. **It counted 153 alerts as scan results.** The route's own docstring says they are *"NOT
+   scan-scoped: this includes PASSIVE alerts raised merely by traffic passing through the
+   proxy"*. They were an hour of manual browsing. Exactly **2** of the 153 are on the endpoint
+   that was scanned, both passive header findings. Walking into a trap the function documents is
+   worse than walking into an undocumented one.
+2. **It treated "answered" as "allowed".** A `403` with a block page is a response. Every
+   "requests landed" count in the first pass included the ones Akamai refused.
+
+The verdict now classifies the recorded responses and calls ≥50% edge refusals what it is.
+
+### The defect that hid item 4's own evidence: "recent" traffic was the oldest traffic
+
+Finding the 403s at all meant paging ZAP's history by hand, because reading the documented way
+returned nothing. `history()` passed the caller's `start` straight to ZAP, whose `start` counts
+from the **beginning** of history, and it defaults to 0. Measured on a daemon holding 1,296
+exchanges: `start=0` returned requests to `example.com` from hours earlier. The `:proxy`
+captured-traffic panel passes no `start` at all, so **it has always shown the first 50 requests
+that daemon ever recorded**, forever, however long the engagement runs.
+
+**The knock-on is the serious half, and it lands on build #16.** `session_health` reads
+`history(count=200)` to notice a scan's traffic coming back login-shaped — #16's answer to a
+silent wrong answer. Judging the *oldest* 200 exchanges, it was looking at the moment the session
+was established, so **it could not detect a session expiring mid-scan by construction.** It
+reported `ok` throughout this build's live scan, and that `ok` meant nothing. A guard against a
+silent wrong answer, silently unable to fire — and it took a scan whose traffic was being refused
+to notice, because that is the case where you go looking.
+
+`start` is now an offset back from the newest; order within the window stays chronological.
+After the fix, `session_health` samples 195 recent exchanges instead of the first 200 ever.
+
 ### What is prepared and NOT yet run — stated plainly, because last time it was not
 
 Build #15's section had to be amended after the fact because the runbook was described as
-finished when it was not. Not repeating that: as of this commit, **item 1 has run and passes,
-the two proxy defects above are fixed and locked, and items 2 and 4 are written, gate-verified
-and NOT YET EXECUTED.** Item 4 is no longer blocked — it is queued.
+finished when it was not. Not repeating that: as of this commit, **items 1, 2 and 4 have all
+run**, and what remains is option A itself, the image rebuild, the proof re-run and teardown.
+
+**Three of this build's findings came from its own scripts being wrong**, and that is worth
+stating rather than smoothing over: a single DOM threshold that failed both controls, an alert
+count that was never scan-scoped, and a verdict that read a WAF block page as a served response.
+Each was caught by going back to the raw evidence — ZAP's own history — instead of trusting the
+summary line. **The scripts printed `ROW none` and `WORKS`; the correct answers were `row 4` and
+`REFUSED`.** A harness that reports confidently is not the same as a harness that is right, which
+is the same lesson as the proof checks in build #15 and is now this repo's most repeated one.
 
 **Item 1 ran, and its first version was wrong in an instructive way.** It asserted *"exactly
 one active engagement"*, written against a truncated read of `GET /cockpit/engagement` that

@@ -235,12 +235,23 @@ while True:
 # --- WHAT CAME BACK ------------------------------------------------------------------------
 print("\n[post] alerts")
 code, alerts = call("GET", "/cockpit/proxy/alerts", container=ZAP_CONTAINER, port=PORT,
-                    base_url=BASE, count=200)
+                    base_url=BASE, count=500)
 alerts = alerts or []
-print(f"       {len(alerts)} alert(s) for {BASE}")
-for a in alerts[:20]:
+
+# *** THE ALERT LIST IS NOT SCAN-SCOPED, AND THE FIRST RUN OF THIS SCRIPT REPORTED IT AS IF IT
+# WERE. *** The route says so in its own docstring — it includes PASSIVE alerts raised merely by
+# traffic passing through the proxy, with no active scan involved, and they survive a scan being
+# removed. So it returned 153 alerts from an hour of manual browsing and this script announced
+# "the chain survives the WAF" on the strength of them. Measured afterwards: exactly 2 of those
+# 153 are on the endpoint that was scanned, and both are passive header findings. Walking into a
+# trap the function documents is worse than walking into an undocumented one.
+scanned_path = urllib.parse.urlsplit(TARGET_URL).path
+on_target = [a for a in alerts if scanned_path in (a.get("url") or "")]
+print(f"       {len(alerts)} alert(s) held for {BASE} — SITE-WIDE, mostly passive and mostly")
+print(f"       predating this scan. On the endpoint actually scanned: {len(on_target)}")
+for a in on_target[:20]:
     print(f"         [{a.get('risk','?'):<8}] {a.get('name','')[:60]} "
-          f"param={a.get('param','')[:24]} {a.get('url','')[:70]}")
+          f"param={a.get('param','')[:24]}")
 
 # ZERO FINDINGS AND A DEAD SESSION LOOK IDENTICAL FROM THE OUTSIDE. Build #16 item 10 added
 # this flag to tell them apart; it is read here rather than re-derived.
@@ -248,27 +259,73 @@ code, health1 = call("GET", "/cockpit/proxy/session-health",
                      container=ZAP_CONTAINER, port=PORT, count=200)
 print(f"\n[post] session health AFTER: {json.dumps(health1)[:300]}")
 
+# *** WHAT DID THE EDGE ACTUALLY DO WITH THE ATTACK REQUESTS? ***
+# `requests` counts what ZAP SENT. It says nothing about whether anything was allowed through,
+# and neither does an alert count. The first pass of this script had both and still got the
+# answer backwards. So read the responses to the scanned path out of ZAP's own history and
+# classify them: a 403 carrying a WAF block page is a REFUSAL, however cleanly it is served.
+print("\n[post] what came back for the scanned endpoint")
+# PAGE THE WHOLE HISTORY, do not take the first window. `start=0` is the OLDEST window, not the
+# newest — the route's description says "newest window first" and the implementation passes
+# start/count straight to ZAP, which counts from the beginning. Reading one window from 0
+# returned ZERO exchanges on the scanned path while ZAP was holding 35 of them, i.e. a
+# confident "no refusals" for a scan that was refused 35 times.
+recent: list = []
+for page in range(20):  # 500 * 20 = 10k exchanges; a bounded loop, not a while-true
+    code, chunk = call("GET", "/cockpit/proxy/history", container=ZAP_CONTAINER, port=PORT,
+                       start=page * 500, count=500)
+    if code != 200 or not chunk:
+        break
+    recent.extend(chunk)
+    if len(chunk) < 500:
+        break
+print(f"       paged {len(recent)} recorded exchange(s) in total")
+# A CapturedExchange is NESTED — request.url and response.status, not flat keys. Reading it
+# flat returns None for every field and yields a confident "0 refusals", which would have put
+# the wrong verdict back in through a different door.
+mine_msgs = [e for e in (recent or [])
+             if scanned_path in ((e.get("request") or {}).get("url") or "")]
+codes: dict[str, int] = {}
+waf = 0
+for e in mine_msgs:
+    st = str((e.get("response") or {}).get("status") or "?")
+    codes[st] = codes.get(st, 0) + 1
+    if st in {"403", "406", "429"}:
+        waf += 1
+print(f"       {len(mine_msgs)} recorded exchange(s) on that path: {codes}")
+
 reqs = int(last.get("requests") or 0)
-verdict = "?"
+blocked_share = (waf / len(mine_msgs)) if mine_msgs else 0.0
+
 if reqs == 0:
     verdict = ("REFUSED -- the scanner sent nothing that landed. The ATTACK half is blocked "
                "even though capture works.")
+elif blocked_share >= 0.5:
+    verdict = (f"REFUSED BY THE WAF -- {reqs} attack requests were SENT and "
+               f"{waf}/{len(mine_msgs)} of the recorded responses are edge refusals ({codes}). "
+               "Capture works and the attack half does not: the payloads never reach the "
+               "application. This is the larger of the two outcomes the plan named.")
 elif (health1 or {}).get("verdict") == "suspect":
     verdict = (f"INCONCLUSIVE -- {reqs} requests, but session health says 'suspect': the "
                "traffic started coming back login-shaped. Findings (or their absence) cannot "
                "be trusted.")
-elif alerts:
-    verdict = (f"WORKS -- {reqs} attack requests landed and ZAP raised {len(alerts)} alert(s). "
-               "The captured-request -> scanner chain survives the WAF.")
+elif on_target:
+    verdict = (f"WORKS -- {reqs} attack requests reached the application and ZAP raised "
+               f"{len(on_target)} alert(s) ON THE SCANNED ENDPOINT. The captured-request -> "
+               "scanner chain survives the WAF.")
 else:
-    verdict = (f"WORKS, NO FINDINGS -- {reqs} attack requests landed; session health is "
-               f"'{(health1 or {}).get('verdict')}', so zero findings is a real zero rather "
-               "than a dead session.")
+    verdict = (f"WORKS, NO FINDINGS -- {reqs} attack requests reached the application; session "
+               f"health is '{(health1 or {}).get('verdict')}', so zero findings on this "
+               "endpoint is a real zero rather than a dead session.")
 
 print("\n" + "=" * 78)
-print(f"requests={reqs}  alerts={len(alerts)}  stopped_early={stopped_early}")
+print(f"requests_sent={reqs}  alerts_on_endpoint={len(on_target)}  "
+      f"alerts_site_wide={len(alerts)}  edge_refusals={waf}/{len(mine_msgs)}  "
+      f"stopped_early={stopped_early}")
 print(f"VERDICT={verdict}")
 print("=" * 78)
-print("JSON=" + json.dumps({"scan": last, "alerts": len(alerts),
+print("JSON=" + json.dumps({"scan": last, "alerts_site_wide": len(alerts),
+                            "alerts_on_endpoint": len(on_target), "status_codes": codes,
+                            "edge_refusals": waf,
                             "health_before": health0, "health_after": health1,
                             "stopped_early": stopped_early, "target": TARGET_URL}))

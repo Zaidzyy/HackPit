@@ -678,6 +678,55 @@ def test_the_api_reader_survives_bytes_the_local_codec_cannot_decode() -> None:
     print("  the API reader survives bytes the local codec cannot decode: PASS")
 
 
+def test_history_reads_the_NEWEST_window_not_the_oldest() -> None:
+    """"Recent captured exchanges" must actually be recent.
+
+    ZAP's `start` counts from the beginning of history, and this used to pass the caller's
+    `start` through unchanged — defaulting to 0. Measured on a daemon holding 1,296 exchanges,
+    `start=0` returned requests from hours earlier while the traffic under inspection sat at the
+    tail. The `:proxy` panel passes no `start`, so it showed the first 50 requests that daemon
+    ever recorded, permanently.
+
+    THE KNOCK-ON IS WHY THIS IS A SAFETY TEST AND NOT A UI ONE: `session_health` reads
+    `history(count=200)` to notice a scan's traffic coming back login-shaped. Judging the OLDEST
+    200 exchanges it was looking at the moment the session was established, so it could never
+    detect a session expiring mid-scan — build #16's guard against a silent wrong answer,
+    silently unable to fire.
+    """
+    asked: dict = {}
+
+    def fake_api_get(container, port, path, timeout=10):
+        asked["path"] = path
+        return '{"messages": []}'
+
+    real_get, real_count = proxy._api_get, proxy.captured_count
+    try:
+        proxy.captured_count = lambda c, p: 1000  # type: ignore[assignment]
+        proxy._api_get = fake_api_get  # type: ignore[assignment]
+
+        proxy.history("c", 8090, start=0, count=50)
+        assert "start=950" in asked["path"] and "count=50" in asked["path"], (
+            f"history(count=50) asked ZAP for {asked['path']!r} — that is the OLDEST window, "
+            "so the panel shows the first requests ever captured and session_health judges the "
+            "moment the session began"
+        )
+
+        # paging still works, one window further back
+        proxy.history("c", 8090, start=50, count=50)
+        assert "start=900" in asked["path"], asked["path"]
+
+        # and a history shorter than the window must not ask for a negative start
+        proxy.captured_count = lambda c, p: 10  # type: ignore[assignment]
+        proxy.history("c", 8090, start=0, count=50)
+        assert "start=0" in asked["path"] and "count=10" in asked["path"], asked["path"]
+
+        # asking past the end returns nothing rather than wrapping round to the oldest
+        assert proxy.history("c", 8090, start=999, count=50) == []
+    finally:
+        proxy._api_get, proxy.captured_count = real_get, real_count  # type: ignore[assignment]
+    print("  history returns the NEWEST window, and pages backwards from it: PASS")
+
+
 def test_an_orphaned_daemon_blocks_a_new_proxy_and_says_why() -> None:
     """clash_refusal used to protect against a state it could not observe.
 
@@ -719,6 +768,7 @@ if __name__ == "__main__":
     test_a_recovered_key_is_never_sent_to_a_different_port()
     test_the_daemon_probe_cannot_match_itself()
     test_the_api_reader_survives_bytes_the_local_codec_cannot_decode()
+    test_history_reads_the_NEWEST_window_not_the_oldest()
     test_an_orphaned_daemon_blocks_a_new_proxy_and_says_why()
     test_an_unapproved_start_is_refused_with_a_control()
     test_the_red_confirm_is_required()

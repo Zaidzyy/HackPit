@@ -998,14 +998,39 @@ def captured_count(container: str, port: int) -> int:
 
 
 def history(container: str, port: int, start: int = 0, count: int = 50):
-    """Recent captured exchanges.
+    """RECENT captured exchanges — the NEWEST window, which is not what this used to return.
 
     READ-ONLY and UNGATED. A panel that refreshes cannot demand approval per refresh, and
     ``lifecycle.port_is_bound()`` sets the precedent by running ``ss`` the same way. See the
     note on the URL constants: this path reaching ZAP means reaching it unapproved, so it issues
     only the two fixed view URLs.
+
+    *** IT SAID "RECENT" AND RETURNED THE OLDEST (build #17). *** ZAP's ``start`` counts from the
+    BEGINNING of history, and this passed the caller's ``start`` straight through — defaulting to
+    0. Measured on a daemon holding 1,296 exchanges: ``start=0`` returned requests to
+    ``example.com`` from hours earlier, while the traffic the operator was actually looking at
+    sat at the tail. The `:proxy` captured-traffic panel passes no ``start`` at all, so it has
+    always shown *the first 50 requests that daemon ever recorded*, permanently, however long
+    the engagement ran.
+
+    **The knock-on is the serious half.** ``session_health`` reads ``history(count=200)`` to
+    decide whether a scan's traffic has started coming back login-shaped — build #16's answer to
+    a silent wrong answer. Judging the OLDEST 200 exchanges, it was looking at the moment the
+    session was freshly established, so it could not detect a session expiring mid-scan by
+    construction. It reported ``ok`` throughout build #17's live scan for that reason, not
+    because it had checked.
+
+    ``start`` is now an offset BACK from the newest, so paging still works and ``start=0`` means
+    "the latest window". Order within the window stays chronological — a traffic log reads that
+    way, and reversing it would change what every existing caller sees for no stated need.
     """
-    raw = _api_get(container, port, f"{_VIEW_MSGS}?start={int(start)}&count={int(count)}")
+    total = captured_count(container, port)
+    end = max(0, total - int(start))
+    begin = max(0, end - int(count))
+    count = end - begin
+    if count <= 0:
+        return []
+    raw = _api_get(container, port, f"{_VIEW_MSGS}?start={begin}&count={count}")
     try:
         msgs = json.loads(raw).get("messages") or []
     except (ValueError, AttributeError, TypeError):

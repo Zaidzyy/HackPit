@@ -37,6 +37,20 @@ TARGET = "https://www.crateandbarrel.me/"
 CONTROL = "https://example.com/"
 KEY = os.environ.get("ZAP_KEY", "").strip()
 
+# *** A PER-URL SIZE FLOOR, BECAUSE ONE THRESHOLD FOR BOTH IS WRONG — AND IT WAS. ***
+# The first run of this script used a single `dom > 5000` rule and declared BOTH controls
+# broken, printing "ROW none: HARNESS BROKEN" over a set of probes that had worked perfectly.
+# example.com is a ~1 KB page: a perfect fetch of it is 561 bytes of DOM. A retail homepage is
+# megabytes. The floor has to belong to the URL, not to the harness. That mistake also cost
+# P2c 76 seconds — the headed probe only stops early once it is over the floor, so it sat
+# waiting on a page that had finished loading in three.
+MIN_DOM = {TARGET: 50_000, CONTROL: 300}
+
+# Statuses that mean "the edge answered INSTEAD of the site". A 403 with an Akamai block page
+# is a response, and scoring it as one is the exact error that made this build's first pass
+# report a WAF refusal as success.
+REFUSAL_STATUS = ("403", "429", "503", "504")
+
 # Probe timeout. ZAP's own read timeout is 20s; a real page load through a proxy can take
 # longer, so this is deliberately well past both -- a probe that hits THIS limit hung.
 PROBE_TIMEOUT = 75
@@ -100,6 +114,34 @@ def answered(baseurl: str, start: int, count: int) -> tuple[int, int, list[str]]
     return len(msgs), ok, lines
 
 
+def client_hints(baseurl: str, start: int, count: int) -> tuple[bool, str]:
+    """Did the client send `Sec-CH-UA`, and what User-Agent did it claim?
+
+    *** THIS IS THE ANSWER, AND IT IS NOT THE HEADER EVERYONE EXPECTED. *** The prime suspect
+    was the `HeadlessChrome` token in the User-Agent. It is not the discriminator. Measured
+    across all four clients that hit this target: the headed browser sends
+    `sec-ch-ua: "Not;A=Brand";v="8", "Chromium";v="150"` and is served; BOTH headless runs —
+    stock UA and spoofed UA alike — send NO `sec-ch-ua` at all, and both time out.
+
+    Which is why P1 could never have worked: overriding `--user-agent` changes the string the
+    client CLAIMS and leaves untouched the set of headers a real browser EMITS. You cannot get
+    there by lying about one header; you get there by using a browser that sends them all.
+    """
+    if count <= 0:
+        return False, ""
+    got = zap("core/view/messages", baseurl=site_of(baseurl),
+              start=str(start), count=str(count))
+    hints, ua = False, ""
+    for m in got.get("messages", []):
+        for line in (m.get("requestHeader") or "").splitlines():
+            low = line.lower()
+            if low.startswith("sec-ch-ua:"):
+                hints = True
+            elif low.startswith("user-agent:") and not ua:
+                ua = line.split(":", 1)[1].strip()
+    return hints, ua
+
+
 def reap_browsers() -> None:
     """Kill stray browsers by process NAME. Never `pkill -f` here: the ZAP daemon's argv
     carries `-config selenium.chromeDriver=/usr/bin/chromedriver`, so a -f pattern for
@@ -127,17 +169,28 @@ def record(label: str, url: str, rc: int, dom: bytes, secs: float, hung: bool,
     n, ok, lines = answered(url, before, after - before)
     text = dom.decode("utf-8", "replace")
     blocked = any(m in text.lower() for m in BLOCK_MARKERS) and len(text) < 200_000
-    # A pass needs BOTH: the client got a real document, and ZAP saw the target answer.
-    passed = (rc == 0 and len(dom) > 5000 and not blocked and ok > 0)
+    # *** "ANSWERED" IS NOT "ALLOWED", AND CONFLATING THEM IS THIS BUILD'S OWN MISTAKE. ***
+    # `ok` counts messages that came back with any response at all. Akamai's refusal IS a
+    # response — 403 with a block page, or the 504 ZAP emits when the upstream read starves.
+    # Counting those as success is what made the first pass of item 4 report a WAF block as
+    # "the chain survives the WAF".
+    refused = [s for s in lines if any(f" {c}" in s for c in REFUSAL_STATUS)]
+    served = [s for s in lines if " 200" in s or " 301" in s or " 302" in s]
+    floor = MIN_DOM.get(url, 5_000)
+    passed = (rc == 0 and len(dom) >= floor and not blocked
+              and bool(served) and not refused)
+    hints, sent_ua = client_hints(url, before, after - before)
     r = {
         "label": label, "url": url, "rc": rc, "secs": round(secs, 1), "hung": hung,
-        "dom_bytes": len(dom), "zap_msgs": n, "zap_answered": ok,
-        "block_page": blocked, "pass": passed, "note": note, "status": lines[:4],
+        "dom_bytes": len(dom), "dom_floor": floor, "zap_msgs": n, "zap_answered": ok,
+        "refused_statuses": refused[:3], "block_page": blocked, "sec_ch_ua": hints,
+        "claimed_ua": sent_ua[:90], "pass": passed, "note": note, "status": lines[:4],
     }
     RESULTS.append(r)
     print(f"  {label:<28} pass={str(passed):<5} rc={rc} {secs:5.1f}s "
-          f"dom={len(dom)}B zap={ok}/{n} answered{' HUNG' if hung else ''}"
-          f"{' BLOCKPAGE' if blocked else ''}")
+          f"dom={len(dom)}B/{floor} zap={ok}/{n} answered{' HUNG' if hung else ''}"
+          f"{' BLOCKPAGE' if blocked else ''}{' REFUSED' + str(refused[:1]) if refused else ''}"
+          f" sec-ch-ua={'YES' if hints else 'no'}")
     for line in lines[:3]:
         print(f"      | {line}")
     return r
@@ -349,6 +402,14 @@ print("=" * 78)
 P1 = bool(p1 and p1["pass"])
 P2 = bool(p2 and p2["pass"])
 p2_measured = p2 is not None and p2c is not None and p2c["pass"]
+
+# The discriminator, stated from what was OBSERVED rather than from the prime suspect.
+print("  what each client actually sent:")
+for r in RESULTS:
+    if r.get("url") == TARGET and "claimed_ua" in r:
+        print(f"    {r['label']:<26} sec-ch-ua={'YES' if r['sec_ch_ua'] else 'NO ':<3}"
+              f" served={'yes' if r['pass'] else 'no '}  ua={r['claimed_ua'][:60]}")
+print()
 
 print(f"  P0 (headless, stock UA): {p0_pass}/3 passed"
       f"   [control {'OK' if p0c['pass'] else 'BROKEN'}]")

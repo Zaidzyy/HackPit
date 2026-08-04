@@ -3209,3 +3209,314 @@ entries. `docker/proof/browser_intercept_proof.sh` gains one check, so it become
 rebuilt image; it is not re-run here because the rebuild that makes it pass would destroy the
 running daemon and the ~1000 captured messages items 2 and 4 depend on. **The rebuild and
 teardown are deliberately last**, after the live-fire runs, for that reason.
+
+## Build #18 — reaching the targets that refuse us, and scanning behind a login (2026-08-05)
+
+Build #17 measured, against a live Akamai-fronted target, that **there are two different walls
+and they need different answers**: Bot Manager judges the CLIENT (headless Chromium gets a 504
+tarpit; bare `curl`/`ffuf`/`nuclei` never reach request one), and the WAF judges the REQUEST
+CONTENT (scanner payloads got **36 of 39 `403 AkamaiGHost`**). Every item here answers one wall
+or the other, and the two are deliberately never conflated: fingerprint spoofing does nothing
+about a 403, because those requests already cleared Bot Manager and died at the rule engine.
+
+**The build adds no gate, no confirm, no blocklist and no allow-list narrowing** — not in the
+product and not in a proof script. Where something could refuse, it warns and continues. Two
+places tightened an EXISTING control that was failing open, and both are named below with the
+argument for why that is repair rather than prohibition.
+
+### Item 1 — the bypass header, and the fact that its value is a credential
+
+Programs of MAF's size issue researchers a header that skips the WAF, so the testing they invited
+is not refused by the edge they bought. Zaid does not have one yet; the mechanism is built now and
+proved with a dummy header, which is provable without a real one and without spending a
+real-target request.
+
+The header is stored on the **engagement**, because it is per-program. It is injected through
+**ZAP's Replacer add-on**, which is the one point every outgoing request passes: the operator's
+own browser, the AJAX spider's browser, the active scanner's payloads, and any sandbox tool run
+with `proxy: true`. One rule covers all four; threading a header through each caller would need
+four correct implementations and would silently miss the fifth.
+
+**THE VALUE IS A CREDENTIAL AND THERE IS NOWHERE FOR IT TO LEAK FROM.** `EngagementRecord`
+carries `bypass_header_names` — names only — so `GET /cockpit/engagement`, the LLM proposer
+context and every rendered report see the name and never the value. `ReplacerRule` has a
+`replacement_set` boolean and no `replacement` field. That is build #15's rule restated: never
+handing a secret over cannot regress, while redacting it afterwards depends on a redactor being
+correct forever.
+
+**And it never touches a command line either.** `_api_get` already keeps the API key out of the
+URL because ZAP records what passes through it; a replacer value on a GET would land in that same
+history *and* on the `docker exec ... curl ... <url>` argv that `ps` on this host can read. So a
+new `_api_post` sends action parameters as a **form body on stdin** — build #13 part 3's trick
+applied to a different secret. `docker exec -i` is load-bearing there: without it the container's
+curl reads a closed stdin, sends an empty body, and ZAP answers a cheerful `{"Result":"OK"}` for a
+rule with no value in it. Another OK that is not a result.
+
+**ZAP PERSISTS ITS CONFIGURATION — third instance in one build.** A replacer rule set for one
+engagement survives into the next, which is a credential leaking to a third party by nothing worse
+than forgetting. So: every install clears first and re-adds; `stop_proxy` clears **before** the
+kill (afterwards there is no API to clear through while the persisted config keeps the rule);
+exiting an engagement clears it from any live proxy; and what is reported is what
+`replacer/view/rules` **holds**, never what was sent.
+
+One thing is honestly unmeasured and is built to say so. The Replacer add-on **renamed its
+actions** across versions — `addRule` versus `addReplacerRule` — and the daemon was not running
+while this was written, because build #17's teardown stopped it. Guessing one spelling would
+produce this module's signature failure: a confident `{}` from a 404 reading as "the rule is not
+there". So both are tried in order, the **read-back is the arbiter**, and
+`docs/proof/build18_bypass_header.py` prints which one answered. That is how the guess becomes a
+measurement.
+
+### Item 2 — is it fronted, and what is behind it? Passive, and `unknown` is a real answer
+
+`cockpit/fronting.py` resolves the CNAME chain, reads the `Server` header, maps the address to an
+ASN through Team Cymru's DNS zones, and pulls SPF, MX and optionally certificate transparency.
+Everything is a lookup except **one `HEAD` request per host** — the same request a browser makes
+opening the page. No scanning, no brute force, no subdomain guessing, and the test asserts the
+module invokes no scanner.
+
+It runs **from inside the open sandbox**, `docker exec`, argv-only — repeater.py's rule #1
+restated, so no new egress path is created from the Windows host.
+
+**The verdict distinguishes `unknown` from `not-fronted`, and that is the whole design.** A host
+whose lookups all failed reports `unknown`; only a host that *answered* and showed no marker
+reports `not-fronted`. Reporting the first as the second would send an operator at a fronted host
+with the wrong toolchain — build #17's confident-zero lesson, applied before it could happen.
+Suffix matching is **dot-anchored**, because `notakamai.net.example.com` contains `akamai.net`;
+this repo has been bitten by a fragment match in both directions already.
+
+**A discovered origin is REPORTED and never added.** `add_pivot_subnet` is the one deliberate,
+audited widening path and a human uses it. The test that asserts this had to be rewritten from a
+substring check to an AST walk — because `fronting.py`'s own docstring *names* `add_pivot_subnet`
+in the sentence explaining that it must never call it. Item 8's lesson arriving from the other
+direction, inside the test written to check for it.
+
+### Item 3 — a scan policy is a list of checks to switch off, each with a reason
+
+Most of build #17's 403s came from checks that could never have applied: a Shellshock probe
+against a Next.js storefront costs a request, earns a WAF hit, and has nowhere to land.
+`targeted-web` switches off nine rules that are locked to a platform the target is not running —
+the three C-server memory checks, Shellshock, Apache SSI, `.htaccess`, ELMAH, the Java `/WEB-INF`
+disclosure and PHP remote file inclusion. **Each entry carries WHY**, because "off because the
+target is not a C server" is a claim a reviewer can disagree with and a bare list of plugin ids is
+not.
+
+**It is applied FROM A KNOWN BASELINE on every scan and never reset afterwards**, and two facts
+force that shape. ZAP persists scanner state, so a disable-only apply would inherit whatever the
+previous scan switched off and call it this policy — the same error as measuring `api.key` against
+a config a previous run wrote. And a scan is **asynchronous**, so "reset when finished" would
+either race the running scan or need a watcher that outlives the request. Applying at the start of
+the next scan gets the same property with no race. The consequence is stated rather than buried:
+between scans the daemon holds the last policy applied, and `observed_scan_policy` exists so that
+is read from ZAP rather than from our hopes.
+
+**An unknown policy name is a default, not a refusal.** A typo should cost a wider scan the
+operator can see reported back on `Scan.policy_observed`, not a 403 that reads like a safety
+verdict. Nothing about a policy decides whether a scan may happen.
+
+### Item 4 — the scanner cannot shape payloads, and saying so is the result
+
+Zaid took this decision explicitly and it was not re-litigated. What *was* required was an honest
+answer about where it can be built, and the answer is **the scanner cannot; the repeater can**.
+
+ZAP's active scanner generates payloads inside each rule, in Java, at scan time. Its API exposes
+which RULES run, how HARD they try, and which INPUT VECTORS they fill — none of which is a
+transform. The two near-misses are both narrower than they look: the Custom Payloads add-on
+replaces payload *lists* for the handful of rules that opt in and cannot encode what a rule
+already generated, and pointing the Replacer at payload bytes would mean a regex matching every
+payload every rule might emit. A knob there would have been a switch in the UI with nothing
+different on the wire — a fake knob, which the plan explicitly ruled out.
+
+So `cockpit/shaping.py` builds it where it works: the repeater, which is operator-driven, sends
+one request at a time, and is exactly the surface a human uses when they know which parameter to
+attack and are watching a WAF refuse them. Six value transforms (percent-encode, double-encode,
+case variation, `/**/` comment insertion, tab substitution, `+` substitution) and two request
+transforms (parameter pollution, chunked framing). **It is an option, not a gate** — no confirm,
+no acknowledgement, no refusal if unset; the repeater is human-only and a human clicking Send is
+the approval. A test asserts `shaping.py` contains no `raise` at all.
+
+**The span is marked explicitly, with `[[` and `]]`, because guessing would be worse.** A
+transform applied to a whole URL would encode the scheme, the host and the parameter names into a
+request that goes nowhere. The markers are stripped **even with no shapes selected**, which is
+what makes shaped-versus-unshaped a one-variable comparison rather than two different requests.
+
+**The scope check runs on the SHAPED url.** Nothing stops an operator marking a span inside the
+host, and checking the composed URL while sending a different one is "the gated argv is not the
+spawned argv" wearing a new hat — a scope check on bytes that never went on the wire. The run
+record stores the shaped URL for the same reason: an audit trail showing the unshaped request
+would misdescribe every shaped send.
+
+`chunked` also suppresses `Content-Length` explicitly. A bare `Transfer-Encoding: chunked` header
+makes some curl versions send **both** framings, which is request smuggling by accident rather
+than a shaped payload.
+
+### Item 5 — curl-impersonate, and why a User-Agent could never have worked
+
+Nine of eleven in-scope assets refused a bare HTTP client before request one — h2 stream reset on
+HTTP/2, timeout on HTTP/1.1. Two different failure modes on two protocols is an edge refusing the
+client, not a quirk. Build #17 found the discriminator, and it is **not** the `HeadlessChrome`
+token: headless Chromium sends **no Client Hints at all**, and `--user-agent` does not add them.
+Spoofing the UA failed identically to not spoofing it.
+
+`curl-impersonate` is a curl built with Chrome's and Firefox's cipher and TLS-extension order,
+HTTP/2 SETTINGS and pseudo-header order, and the full default header set including `Sec-CH-UA`.
+Dockerfile layer 9g installs it and symlinks the wrappers. **The wrappers are the product, not the
+binary** — `curl-impersonate-chrome` alone is just a curl with a different TLS library; the
+`curl_chrome*` scripts carry the header list and the ciphers. The layer therefore asserts both,
+and it introduces **no new gate**: `curl-impersonate` sits in `_MUST_NOT_FIRE` beside `curl` and
+`httpx`, because a fetch is a fetch. Marking it dangerous while plain curl sits clean would be a
+red-confirm that fires on fetching a page, and one that fires on everything stops meaning
+anything.
+
+Recorded honestly: this makes HackPit's traffic indistinguishable from a browser's. It is built
+deliberately, for an authorized safe-harbour program. The pinned release impersonates Chrome 116
+and Firefox 109, and **whether that vintage still satisfies a 2026 bot manager is a measurement,
+not an assumption** — `docs/proof/build18_impersonate.sh` makes it, every probe carries its own
+control, and a `PASS-NO-BENEFIT` outcome is a legitimate recorded result rather than a failure.
+
+### Items 6 and 7 — the hard part already existed; what was missing was telling ZAP what it means
+
+A human logging in by hand through the published proxy puts a **live session inside ZAP**. What
+was missing was never the session.
+
+**Tier 2 needs no credentials at all**: a Context over the target's origin, cookie-based session
+management, and the logged-in / logged-out indicator regexes. The include regex is quoted with
+`\Q` and `\E`, because a host contains dots and an unquoted regex would read each one as "any
+character" and pull unrelated domains into the context — the same class of bug as a target
+smuggling a `&` into the scan URL. `start_scan` now **looks the context up** for the target it was
+given rather than asking the operator to name it again, which would be a second place for the two
+to disagree. A context with a configured USER switches the scan to `scanAsUser`, because ZAP can
+only re-authenticate mid-scan if it knows who to re-authenticate as. With neither, the scan URL is
+byte-for-byte what it was before build #18, which is what makes this additive.
+
+**Tier 3 is the trap Zaid chose to take on, entered with eyes open.** Build #15 declined it on the
+grounds that per-target auth scripting is a problem the codebase would then own forever. The
+defence is to stay declarative — a login URL, a request body with ZAP's two placeholder tokens,
+two indicator regexes — and to refuse to grow a scripting language. If a target needs JavaScript
+to log in, the answer is Tier 2 and a human's browser.
+
+**No model in the module has a password field.** The credential is *named* by the same
+`{session_id, kind, principal, domain}` reference the Windows-profile path already uses, resolved
+server-side out of the state vault by exactly one function, and delivered to ZAP through
+`_api_post` — on stdin. A GET would have put the password in ZAP's own recorded history, on a
+readable argv, and into the artefact a report is rendered from.
+
+Two failure modes are named rather than left to be discovered. A login body missing ZAP's password
+token produces a POST that literally sends the token text — a request that succeeds, authenticates
+nothing, and leaves the scanner running unauthenticated while every indicator says the login
+failed; that warns. And a **named credential that is not in the vault refuses**, because scanning
+unauthenticated instead would report zero findings off a login page, which reads exactly like a
+secure application. Everything else warns and continues: a weaker context is a weaker scan, not an
+unsafe one.
+
+**Tier 3 is UNVERIFIED against a real target.** Zaid has no account on any in-scope host, so it is
+exercised against the LAB target only. Nothing here implies otherwise. Tier 2 is unaffected — it
+needs no credentials at all.
+
+### Item 8 — the silent-empty sweep, and the two that mattered
+
+`backend/tools/silent_empty_scan.py` walks `cockpit/`, `state/`, `arsenal/` and `reasoning/` for
+the build #17 shape: an exception handler or falsy guard returning `[]`, `""`, `{}` or `0` where
+the caller cannot tell "empty" from "failed". **AST, not substring** — the docstrings in
+`cockpit/proxy.py` quote `return []` repeatedly while *describing* this very bug, so a grep would
+report that file as its own worst offender. The scanner ranks by how likely the caller is to be
+fooled, exits 0 always (a reporting tool that failed a build would turn every legitimate empty
+return into work, which is how a control stops being read), and prints ASCII because this console
+is cp1252.
+
+**118 hits.** Most are fine and the report says which: a parser returning `[]` for input that
+legitimately contains nothing is correct; `get_active("")` returning `None` is a question with an
+answer. Two were not, and both were fixed.
+
+**The one with teeth: `observed_scans` failed OPEN on a bound.** It answered `[]` for both "ZAP
+knows of no scan" and "the read failed", and `start_scan` used that to enforce ONE SCAN AT A TIME
+— a bound on concurrent attack traffic against a live production target. An unreadable daemon
+therefore *granted* a second scan. This is `clash_refusal`'s build #17 defect one function away in
+the same file: a check protecting against a state it could not observe. `scans_snapshot` now
+returns `(scans, read_ok)` and an unreadable list refuses, naming the harm. **That is repair, not
+a new prohibition**: the refusal already existed and its gate is already `limit`; what changed is
+that a failed read used to make it grant. It also costs nothing real — a daemon whose scan list
+will not read is a daemon whose scan *start* would fail one call later, with a worse message.
+
+**The one that travelled furthest: `scan_alerts`.** A failed read returned `[]`, and
+`POST /proxy/alerts/ingest` wrote "0 findings" into engagement state — from which a **report** is
+rendered. A confident zero all the way to a deliverable. `alerts_snapshot` reports `read_ok` and
+the ingest route now refuses rather than persisting a zero it cannot vouch for.
+
+Deliberately NOT fixed, with the reason: `parse_message` and `parse_alert` return `None` for a
+malformed record and `history()` filters those out, so a capture with 200 messages of which 50 are
+unparseable reads as 150. That is a real gap, but it is partly visible already — the `:proxy`
+panel shows ZAP's own `captured` count beside the history length, so the two disagree in front of
+the operator. Closing it properly means a count on a route whose response model is a bare list,
+and that is a schema change with no measured need behind it yet.
+
+### Item 9 — one authored entry, and the KB was checked rather than assumed
+
+`sources/random Custom Toolsmini scripts for.txt` is three HTB helper scripts. Two are noise: a
+random-box picker for a wheel-of-names, and an nmap wrapper that shells out three times. The
+third, `upload.py`, is a catalogue of ingress/egress tool-transfer one-liners — **T1105**.
+
+The token diff nominates; it never confirms. Five existing KB entries already cover file transfer,
+and between them they hold certutil, `DownloadString`, `nc -lvnp` and one mention of `/dev/tcp`.
+What none of them has is **the part that decides which method you can actually use**: the raw-fd
+`exec 3<>/dev/tcp` HTTP download for a host with no wget, curl or nc; the upload direction over
+HTTP (`python3 -m uploadserver` — plain `http.server` will not accept a POST); PowerShell's
+**8191-character command-line ceiling**, which is what rules base64 out at roughly 6 KB; and the
+netcat-to-no-netcat pairing in both directions with `-q 0`. So: **one authored entry about
+choosing**, not a sixth copy of the same command list. Prior batches recorded the discipline — 24
+repos to 2 entries, 7 GitBook spaces to zero.
+
+`data/kb/entries.jsonl` **2743 to 2744**, verified after the run and after Defender has had its
+chance at the file. The downstream artefacts had to follow, exactly as the pipeline's build-order
+note says: `ingest_corpora` re-run to restore the fixed point (the byte-identity test caught it),
+`scripts_index.py` rebuilt (D6's guard caught it — "built against 2743, the KB now holds 2744"),
+and the KB fixture regenerated. Three separate guards fired, each naming its own fix.
+
+### What was NOT built, and why
+
+* **Route auth and scanner pacing** — Zaid's call, skipped for this build.
+* **No frontend.** Every capability here is reachable over the API and exercised by the proof
+  scripts; a cockpit panel for bypass headers, policies and auth contexts is real work with a real
+  trap attached (a bare `.hp-card` is `opacity:0`, and tsc, build and eslint cannot see whether a
+  CSS class exists), and doing it unverified overnight would have shipped screens nobody had
+  looked at. `tsc --noEmit` exits 0, `next build` exits 0, and eslint sits at the accepted
+  baseline of **11 errors + 1 warning**, unchanged — this build touches no frontend file.
+* **The parse-drop count** from item 8, for the reason given above.
+* **The image is NOT rebuilt in this commit.** Layer 9g is written and asserted at build time, but
+  a rebuild is about 45 minutes and recreating the engage sandbox destroys the ZAP daemon and its
+  capture. It is bundled as ONE rebuild, deliberately last, and `docs/proof/build18_run.sh` prints
+  the exact sequence — `docker compose ... build engage-sandbox` (the SERVICE) then
+  `--force-recreate` then re-run `docker/proof/browser_intercept_proof.sh` (still 25 passed, 0
+  failed) and the impersonation proof. Until then `build18_impersonate.sh` reports `NOT-RUN` and
+  says why, rather than reporting every host as refused.
+
+### Verification
+
+Hermetic safety suite green, **82 test files**, every one exited 0 — four new: the bypass header
+(value on stdin only, on no model and no argv, cleared before the kill), payload shaping (markers
+stripped as the control, the shaped URL is the scoped URL, no gate anywhere), scan policy plus
+authenticated scanning (baseline-then-read-back, no password field exists, the scan URL is
+additive), and CDN fronting plus the silent-empty sweep (`unknown` is a real answer, an unreadable
+read is not a zero). Every control is phrased *"not refused at THIS gate"*: a fully approved lab
+request legitimately ends at `gate='sandbox'`, and CI has no Docker.
+
+**Two existing locks fired on a rename, and both were REPAIRED rather than flipped.** Splitting
+`observed_scans` into `scans_snapshot` and `scan_alerts` into `alerts_snapshot` broke a lock
+asserting the old symbol name — while the property it was written for still held. Pinning the
+literal would have made each a lock that only ever says "you renamed something", which teaches
+people to update it without reading it; that is build #17's browser-id lesson, and both now assert
+the predicate. A third lock, `test_arsenal_safety`, correctly refused `curl-impersonate` until it
+had a pinned danger verdict, and then correctly refused two binary names the catalog does not
+actually invoke.
+
+`test_redirector.py` flaked twice inside the full suite with the recorded Windows message — *"no
+bindable port for kind=1 outside the self-mapping range"* — and passed three times out of three
+run on its own; the suite then passed whole. That is Hyper-V/WSL UDP exclusions moving under it,
+not a code fault, and it is written down again because one red run of that file is not evidence
+until it is repeated.
+
+`data/kb/entries.jsonl` at **2744**. Every real-target and live-daemon verification is prepared as
+a self-verifying script under `docs/proof/`, each printing `VERDICT=` and exiting non-zero on
+failure, with `build18_run.sh` chaining them on **captured** exit codes — `RC=$?` after a pipe is
+tee's status, which is 0 whenever tee could write the file, and that bug shipped into two wrappers
+in build #17 before it was caught.

@@ -214,6 +214,15 @@ class EngagementRecord(BaseModel):
         description="Hosts recon revealed that the scope does NOT cover — surfaced read-only, "
         "never added and never targetable.",
     )
+    # --- the WAF-bypass header (build #18 item 1) ---
+    bypass_header_names: list[str] = Field(
+        default_factory=list,
+        description="NAMES of the WAF-bypass headers this engagement holds. The VALUES are "
+        "credentials and are deliberately absent from this model — it is returned to the "
+        "browser, joined into the LLM proposer context and rendered into reports. "
+        "`engagement.bypass_headers()` is the one reader of the values, and its one caller "
+        "puts them on ZAP's stdin rather than on any command line.",
+    )
 
 
 class AllowlistItem(BaseModel):

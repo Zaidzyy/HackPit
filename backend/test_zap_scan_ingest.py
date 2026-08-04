@@ -191,7 +191,11 @@ def test_the_ingest_route_executes_nothing() -> None:
             f"the ingest route calls {banned!r} — it must read ZAP and write the store, nothing "
             f"else. Calls found: {sorted(c for c in called if c)}"
         )
-    assert "scan_alerts" in called, (
+    # THE PROPERTY, NOT THE NAME (build #18). This first fired when `scan_alerts` was split into
+    # `alerts_snapshot`, which does the same read and additionally reports whether it SUCCEEDED —
+    # so the route can stop writing "0 findings" into engagement state off a failed read. A lock
+    # pinned to the old literal would only ever say "you renamed something".
+    assert called & {"scan_alerts", "alerts_snapshot"}, (
         f"the route no longer reads alerts at all: {sorted(c for c in called if c)}"
     )
     print("  the ingest route reads and writes only — it executes nothing: PASS")

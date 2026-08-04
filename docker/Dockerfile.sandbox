@@ -620,6 +620,61 @@ RUN set -eux; \
     osslsigncode --version >/dev/null; \
     echo "build #4 C2/evasion toolset present and each tool runs"
 
+# --- 9g. curl-impersonate — a browser-FIDELITY HTTP client (build #18 item 5) --
+#
+# *** WHAT THIS IS FOR, AS A MEASUREMENT RATHER THAN A HOPE. ***
+# Build #17 drove eleven assets of a live bug bounty program. NINE OF THEM REFUSED A BARE HTTP
+# CLIENT OUTRIGHT — h2 stream reset on HTTP/2, timeout on HTTP/1.1: two different failure modes
+# on two protocols, which is an edge refusing the client rather than a quirk. `ffuf`, `nuclei`,
+# `httpx` and `curl` never reached request one. A real headed browser through the proxy fetched
+# 2.3 MB from the same host in 3.7 seconds.
+#
+# The diagnostic also found WHY, and it is the reason a User-Agent string does not help:
+#
+#     headed Chromium       Sec-CH-UA present   ->  31x 200
+#     headless, stock UA    Sec-CH-UA ABSENT    ->  504
+#     headless, SPOOFED UA  Sec-CH-UA ABSENT    ->  504
+#
+# The discriminator is the HEADER SET AND THE TLS HANDSHAKE a real browser emits, not the string
+# it claims to be. curl-impersonate is a curl built against BoringSSL/nss with Chrome's and
+# Firefox's cipher order, TLS extension order, HTTP/2 SETTINGS frame, pseudo-header order and
+# full default header set — so the wrapper scripts below send what a browser sends because they
+# are configured to, not because they say they are.
+#
+# THE WRAPPER SCRIPTS ARE THE PRODUCT, NOT THE BINARY. `curl-impersonate-chrome` on its own is
+# just a curl with a different TLS library; the `curl_chrome*` wrappers carry the header list and
+# the ciphers. Asserting only that the binary runs would be exactly build #15's lesson — "a
+# successful version string is not a result" — so this layer asserts BOTH the binaries and the
+# wrappers, and the real proof (a request bare curl cannot complete, completing) lives in
+# docs/proof/ because it needs a WAF-fronted host.
+#
+# RECORDED HONESTLY: this makes HackPit's traffic indistinguishable from a browser's. It is
+# built deliberately, for an authorized safe-harbour program, and it introduces NO new gate and
+# no relaxation of one — it is an ordinary binary in the sandbox and every run of it goes through
+# the same four gates as `curl` itself.
+#
+# The pinned release impersonates Chrome 116 / Firefox 109. Whether that vintage still satisfies
+# a 2026 bot manager is a MEASUREMENT, not an assumption, and the proof script is where it gets
+# made — including the outcome where it does not work, which is a legitimate result.
+ARG CURL_IMPERSONATE_VERSION=0.6.1
+RUN set -eux; \
+    curl -fsSL "https://github.com/lwthiker/curl-impersonate/releases/download/v${CURL_IMPERSONATE_VERSION}/curl-impersonate-v${CURL_IMPERSONATE_VERSION}.x86_64-linux-gnu.tar.gz" \
+      -o /tmp/curl-impersonate.tgz; \
+    mkdir -p /opt/curl-impersonate; \
+    tar -xzf /tmp/curl-impersonate.tgz -C /opt/curl-impersonate; \
+    rm -f /tmp/curl-impersonate.tgz; \
+    find /opt/curl-impersonate -maxdepth 1 -type f -exec chmod 0755 {} +; \
+    for f in /opt/curl-impersonate/curl-impersonate-* /opt/curl-impersonate/curl_*; do \
+        [ -f "$f" ] || continue; ln -sf "$f" "/usr/local/bin/$(basename "$f")"; \
+    done; \
+    command -v curl-impersonate-chrome >/dev/null; \
+    command -v curl-impersonate-ff >/dev/null; \
+    curl-impersonate-chrome --version | grep -qi curl; \
+    curl-impersonate-ff --version | grep -qi curl; \
+    ls /usr/local/bin/curl_chrome* >/dev/null; \
+    ls /usr/local/bin/curl_ff* >/dev/null; \
+    echo "curl-impersonate ${CURL_IMPERSONATE_VERSION}: binaries AND browser wrappers present"
+
 # --- 10. Strip file capabilities (REQUIRED — do not remove) -------------------
 # Kali ships a few binaries with FILE capabilities so unprivileged desktop users get raw
 # sockets: /usr/lib/nmap/nmap (cap_net_raw,cap_net_admin,cap_net_bind_service) and

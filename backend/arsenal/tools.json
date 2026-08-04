@@ -343,6 +343,44 @@
       ]
     },
     {
+      "name": "curl-impersonate",
+      "category": "recon",
+      "purpose": "A curl built to be INDISTINGUISHABLE FROM A BROWSER on the wire — Chrome's or Firefox's TLS cipher and extension order (JA3/JA4), HTTP/2 SETTINGS and frame order, and the full default header set including Sec-CH-UA Client Hints. Measured need: on a live Akamai-fronted program, nine of eleven hosts refused bare curl/ffuf/nuclei before request one (h2 stream reset, h1.1 timeout) while a real browser was served normally. The discriminator is the header set and the handshake, NOT the User-Agent string — spoofing the UA alone failed identically to not spoofing it.",
+      "phases": [
+        "recon",
+        "enumeration"
+      ],
+      "techniques": [
+        "browser-fidelity TLS handshake (JA3/JA4)",
+        "HTTP/2 SETTINGS and pseudo-header ordering",
+        "full browser header set incl. Client Hints"
+      ],
+      "docs": "https://github.com/lwthiker/curl-impersonate",
+      "templates": [
+        {
+          "label": "Fetch as Chrome (use when plain curl gets no response at all)",
+          "template": "curl_chrome116 -sS -o /dev/null -w '%{http_code} %{size_download}\\n' <url>",
+          "note": "The curl_* WRAPPERS are the product, not the binary: they carry the header list and the cipher order. curl-impersonate-chrome on its own is just a curl with a different TLS library."
+        },
+        {
+          "label": "Fetch as Firefox",
+          "template": "curl_ff109 -sS -o /dev/null -w '%{http_code} %{size_download}\\n' <url>",
+          "note": "A second fingerprint. If Chrome is refused and Firefox is not, that is a finding."
+        },
+        {
+          "label": "Headers only, as Chrome",
+          "template": "curl_chrome116 -sSI <url>",
+          "note": "Read the Server / edge headers with a client the edge will actually answer."
+        },
+        {
+          "label": "Through the recording proxy, so the exchange is captured",
+          "template": "curl_chrome116 -sS -x http://127.0.0.1:8090 -o /dev/null -w '%{http_code}\\n' <url>",
+          "note": "Sends it through the ZAP recording proxy so the request and response land in history and the active scanner can then aim at that URL."
+        }
+      ],
+      "notes": "RECORDED HONESTLY: this makes HackPit's traffic indistinguishable from a browser's. It is built deliberately, for an authorized safe-harbour program. It introduces NO new gate and relaxes none — it is an ordinary sandbox binary and every run goes through the same four gates as curl itself. The pinned build impersonates Chrome 116 / Firefox 109; whether that vintage satisfies a current bot manager is a measurement, not an assumption, and docs/proof/ is where it gets made."
+    },
+    {
       "name": "httpx",
       "category": "recon",
       "purpose": "Probes a host list for live HTTP services and reports status, title, tech and TLS detail. The bridge from recon to web testing.",

@@ -226,11 +226,26 @@ def enter_engagement(req: EngagementEnterRequest) -> EngagementRecord:
 
 @router.post("/engagement/{engagement_id}/exit")
 def exit_engagement(engagement_id: str) -> dict[str, Any]:
-    """Leave engagement mode for this id — no further engagement-mode runs against it."""
+    """Leave engagement mode for this id — no further engagement-mode runs against it.
+
+    *** IT ALSO PULLS THIS ENGAGEMENT'S BYPASS HEADER OFF ANY LIVE PROXY. ***
+    ZAP persists its configuration, so a replacer rule set for this program would keep being sent
+    to whatever the next engagement points that daemon at — a credential leaking to a third party
+    by nothing worse than forgetting. Best-effort and warn-and-continue: a daemon that is already
+    gone cannot be cleaned, and that must not stop the exit.
+    """
     exited = engagement.exit_engagement(engagement_id)
     if not exited:
         raise HTTPException(status_code=404, detail="no active engagement with that id")
-    return {"engagement_id": engagement_id, "exited": True}
+    cleared: list[str] = []
+    for live in proxy_mod.list_proxies():
+        if live.engagement_id != engagement_id or live.status == "down":
+            continue
+        try:
+            cleared += proxy_mod.clear_bypass_headers(live.container, live.port)
+        except Exception:  # noqa: BLE001 - never let a cleanup failure block the exit
+            pass
+    return {"engagement_id": engagement_id, "exited": True, "bypass_rules_cleared": cleared}
 
 
 # --- Windows targets (WinRM driver — saved connection profiles + picker) ------------ #
@@ -623,6 +638,35 @@ def repeater_send(req: repeater_mod.RepeaterRequest) -> repeater_mod.RepeaterExc
         raise HTTPException(status_code=code, detail={"gate": gate, "reason": reason})
 
 
+@router.get("/repeater/shapes")
+def repeater_shapes() -> dict[str, Any]:
+    """The payload-shaping vocabulary (build #18 item 4): every shape name and what it does.
+
+    Pure data. It reads nothing, sends nothing, and is here so the UI does not carry a second
+    copy of the list — the drift trap the credential vault's docstring names.
+    """
+    from . import shaping
+
+    return {
+        "open": shaping.SHAPE_OPEN,
+        "close": shaping.SHAPE_CLOSE,
+        "shapes": shaping.known_shapes(),
+    }
+
+
+@router.post("/repeater/preview")
+def repeater_preview(req: repeater_mod.RepeaterRequest) -> dict[str, Any]:
+    """The request AS IT WOULD GO ON THE WIRE, without sending it.
+
+    Same function the send path uses, so what is previewed is what is transmitted — one
+    derivation, not two. It spawns nothing and reaches no network, which is why it is a POST that
+    is nonetheless not the send route: the body is a whole request object, and a GET could not
+    carry one.
+    """
+    url, body, applied, warnings = repeater_mod.shape_request(req)
+    return {"url": url, "body": body, "shapes_applied": applied, "warnings": warnings}
+
+
 @router.get("/repeater/history", response_model=list[repeater_mod.RepeaterExchange])
 def repeater_history(
     session_id: str | None = Query(None, description="Engagement whose send history to return."),
@@ -908,6 +952,216 @@ def stop_spider(
     return proxy_mod.stop_spider(container, port)
 
 
+# --------------------------------------------------------------------------- #
+# THE WAF-BYPASS HEADER (build #18 item 1), THE SCAN POLICIES (item 3) AND THE
+# AUTHENTICATED CONTEXT (items 6 and 7).
+#
+# *** THESE ARE UNGATED, AND THE REASON IS WRITTEN HERE RATHER THAN ASSUMED. ***
+# The rule the scanner routes state is that exactly one route can send attack traffic. None of
+# these can send any: they set a header on our own next request, a list of scan rules, and a
+# context regex. What they configure is emitted by `POST /proxy/scan` (gated), the spider
+# (gated), or a human's browser (the human). Putting a red-confirm on typing in the header a
+# program issued would teach an operator that the red-confirm means "this form has fields",
+# which is the failure mode the `-daemon` red-confirm already demonstrated once.
+#
+# THE VALUE OF A BYPASS HEADER IS A CREDENTIAL AND NO ROUTE HERE RETURNS ONE. The setter takes
+# it; every reader answers with NAMES and with what ZAP holds.
+# --------------------------------------------------------------------------- #
+class BypassHeaderIn(BaseModel):
+    """Store a WAF-bypass header on an active engagement. Write-only — never echoed back."""
+
+    engagement_id: str = Field(..., description="The engagement this header was issued for.")
+    name: str = Field(..., min_length=1, description="Header name, e.g. X-Bug-Bounty.")
+    value: str = Field(..., min_length=1, description="The value. WRITE-ONLY: no route returns it.")
+
+
+@router.post("/engagement/bypass-header")
+def set_bypass_header(req: BypassHeaderIn) -> dict[str, Any]:
+    """Store (or amend) the header a program issued to skip its WAF. Returns NAMES only.
+
+    422 for an empty value or an invalid header name — a shape problem, not a safety verdict.
+    404 when the engagement is not active: a header stored against an exited record could never
+    be installed on anything.
+
+    It does NOT install anything by itself. `POST /cockpit/proxy/bypass-headers` pushes it to a
+    running daemon, and starting a proxy, a scan or a crawl installs it as part of doing that.
+    """
+    try:
+        names = engagement.set_bypass_header(req.engagement_id, req.name, req.value)
+    except ValueError as exc:
+        code = 404 if "not active" in str(exc) else 422
+        raise HTTPException(status_code=code, detail=str(exc))
+    return {"engagement_id": req.engagement_id, "bypass_header_names": names}
+
+
+@router.delete("/engagement/{engagement_id}/bypass-header/{name}")
+def delete_bypass_header(engagement_id: str, name: str) -> dict[str, Any]:
+    """Drop one stored bypass header. Returns the NAMES still held. Never 404s on an unknown name
+    — removing something that is already gone is the outcome the caller wanted."""
+    return {
+        "engagement_id": engagement_id,
+        "bypass_header_names": engagement.remove_bypass_header(engagement_id, name),
+    }
+
+
+@router.post("/proxy/bypass-headers")
+def sync_bypass_headers(
+    container: str = Query(..., description="Sandbox container the proxy runs in."),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+    engagement_id: str = Query("", description="Whose headers to install. EMPTY CLEARS."),
+) -> dict[str, Any]:
+    """Make a running daemon hold exactly this engagement's bypass headers, and report what it holds.
+
+    An empty ``engagement_id`` clears — ZAP persists its configuration, so the failure worth
+    preventing is a credential surviving into a session it was not issued for, not a missing
+    header (which announces itself as a 403 on the next request).
+
+    Every field of the answer comes from a read-back of `replacer/view/rules`, and none of them
+    carries a value. An OK from the add call is not a result; this module has measured that twice.
+    """
+    return proxy_mod.sync_bypass_headers(container, port, engagement_id or None)
+
+
+@router.get("/proxy/bypass-headers", response_model=list[proxy_mod.ReplacerRule])
+def get_replacer_rules(
+    container: str = Query(...),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+) -> list[proxy_mod.ReplacerRule]:
+    """Every replacer rule ZAP holds — INCLUDING ones a human added in ZAP's own UI, flagged as
+    not HackPit-managed. Read-only, and the replacement VALUE is deliberately absent from the
+    model: `replacement_set` says whether one is there, which is all a panel needs."""
+    return proxy_mod.observed_replacer_rules(container, port)
+
+
+@router.get("/proxy/scan-policies", response_model=list[proxy_mod.ScanPolicy])
+def list_scan_policies() -> list[proxy_mod.ScanPolicy]:
+    """The named active-scan policies, with the REASON each disabled rule is off.
+
+    Pure data — this reads nothing and configures nothing. The reasons are the reviewable part:
+    "off because the target is not a C server" is a claim someone can argue with, and a bare list
+    of plugin ids is not.
+    """
+    return list(proxy_mod.SCAN_POLICIES.values())
+
+
+@router.get("/proxy/scan-policy", response_model=proxy_mod.ObservedPolicy)
+def get_scan_policy(
+    container: str = Query(...),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+    requested: str = Query("", description="Compare against this named policy."),
+) -> proxy_mod.ObservedPolicy:
+    """What the daemon's scanner configuration ACTUALLY is right now. Read-only.
+
+    Worth reading deliberately, because ZAP persists it: between scans the daemon holds whatever
+    the last apply wrote, and `scanners_seen == 0` means THE READ FAILED rather than "nothing is
+    disabled" — the silent-empty this build spent an item hunting, named in the model.
+    """
+    return proxy_mod.observed_scan_policy(container, port, requested=requested)
+
+
+@router.post("/proxy/auth-context", response_model=proxy_mod.AuthContext)
+def set_auth_context(req: proxy_mod.AuthContextRequest) -> proxy_mod.AuthContext:
+    """Tell ZAP what the session a human established BY HAND actually means.
+
+    TIER 2 (no credentials at all): a Context over the target's origin, cookie-based session
+    management, and the logged-in / logged-out indicator regexes. The operator has already logged
+    in through the published proxy — this describes the result so the scanner scans inside it.
+
+    TIER 3 (``login_url`` set): form-based authentication with a credential taken from the state
+    vault, plus automatic re-login when the logged-out indicator matches mid-scan. THE PASSWORD
+    IS NEVER IN THIS REQUEST — a `credential` reference names a captured vault entry and the
+    secret is resolved server-side and delivered to ZAP on stdin.
+
+    WARN AND CONTINUE. Anything that did not take comes back in `warnings` with the context still
+    returned; a weaker context is a weaker scan, not a refusal. The one 404 is a named credential
+    that is not in the vault, because scanning unauthenticated instead would report zero findings
+    off a login page — which reads exactly like a secure application.
+
+    UNGATED: this emits nothing at the target. See the block above these routes.
+    """
+    container = proxy_mod.container_for(req)
+    try:
+        return proxy_mod.apply_auth_context(req, container)
+    except proxy_mod.ProxyRefused as exc:
+        raise HTTPException(status_code=404 if exc.gate == "notfound" else 409,
+                            detail={"gate": exc.gate, "reason": exc.reason})
+
+
+@router.get("/proxy/auth-context", response_model=proxy_mod.AuthContext)
+def get_auth_context(
+    container: str = Query(...),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+    target_url: str = Query(..., description="Any URL on the site; its ORIGIN names the context."),
+) -> proxy_mod.AuthContext:
+    """What ZAP holds for this target's context. Read-only. `context_id == ""` means none exists.
+
+    `user_name` comes back because an operator needs to know which account a scan ran as. There
+    is no field for the password, which is the version of that property a future edit cannot
+    quietly undo.
+    """
+    return proxy_mod.observed_auth_context(
+        container, port, proxy_mod.context_name_for(target_url)
+    )
+
+
+@router.delete("/proxy/auth-context")
+def clear_auth_contexts(
+    container: str = Query(...),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+) -> dict[str, Any]:
+    """Remove every context HackPit created on this daemon — which removes its stored credential
+    with it. Contexts a human made in ZAP's own UI are left alone."""
+    return {"removed": proxy_mod.clear_auth_contexts(container, port)}
+
+
+# --------------------------------------------------------------------------- #
+# IS IT CDN-FRONTED, AND WHAT IS BEHIND IT? (build #18 item 2) — PASSIVE ONLY
+#
+# Everything behind these routes is a lookup: DNS (CNAME/A/TXT/MX), Team Cymru's ASN zones,
+# certificate transparency, and ONE `HEAD` request per host — the same request a browser makes
+# opening the page. No scanning, no brute force, no subdomain guessing. Ungated for the reason
+# every other read is: it executes no attack and adds no capability.
+#
+# A DISCOVERED ORIGIN IS REPORTED, NEVER ADDED. `engagement.add_pivot_subnet` is the one audited
+# widening path in this codebase and a human uses it.
+# --------------------------------------------------------------------------- #
+class FrontingRequest(BaseModel):
+    """Which hosts to look up. Either an explicit list or an engagement's whole allowed set."""
+
+    hosts: list[str] = Field(default_factory=list, description="Hosts to analyse.")
+    engagement_id: str = Field(
+        "", description="Analyse this engagement's LIVE ALLOWED SET instead of / as well as "
+        "`hosts`. Reads the same set the target lock enforces, so the sweep and the lock can "
+        "never be looking at different lists."
+    )
+    with_ct: bool = Field(
+        False, description="Also query crt.sh for the registrable domain. Off by default: it is "
+        "a third-party service and a sweep would ask it once per host for one answer."
+    )
+
+
+@router.post("/fronting")
+def analyse_fronting(req: FrontingRequest) -> dict[str, Any]:
+    """Fronted / not-fronted / unknown per host, with the evidence for each verdict.
+
+    `unknown` IS A REAL ANSWER AND IS USED FREELY. A host whose lookups all failed reports
+    `unknown`, never `not-fronted` — "we could not tell" and "there is no CDN" are different
+    facts, and reporting the first as the second is the confident-zero failure this project keeps
+    finding. The evidence list says WHERE each verdict came from so it can be argued with.
+    """
+    from . import fronting
+
+    hosts = list(req.hosts)
+    if req.engagement_id:
+        record = engagement.get_active(req.engagement_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="no active engagement with that id")
+        hosts += [h for h in record.allowed_hosts if h not in hosts]
+    if not hosts:
+        raise HTTPException(status_code=422, detail="no hosts to analyse")
+    return fronting.sweep(hosts, with_ct=req.with_ct)
+
+
 @router.get("/proxy/alerts", response_model=list[proxy_mod.ScanAlert])
 def scan_alerts(
     container: str = Query(...),
@@ -949,7 +1203,22 @@ def ingest_scan_alerts(req: AlertIngestRequest) -> dict[str, Any]:
     """
     from state import store as state_store  # lazy: keep router import-light
 
-    alerts = proxy_mod.scan_alerts(req.container, req.port, base_url=req.base_url, count=req.count)
+    # *** "ZERO ALERTS" AND "THE READ FAILED" ARE DIFFERENT FACTS (build #18 item 8). ***
+    # This route persists what it reads INTO ENGAGEMENT STATE, and a report is rendered from that
+    # state — so an unreadable daemon used to write a confident zero all the way to a
+    # deliverable. `read_ok` is returned rather than swallowed, and a failed read raises instead
+    # of quietly ingesting nothing: writing "0 findings" from a failed read is worse than
+    # writing nothing at all, because only one of the two is visible.
+    alerts, read_ok = proxy_mod.alerts_snapshot(
+        req.container, req.port, base_url=req.base_url, count=req.count
+    )
+    if not read_ok:
+        raise HTTPException(status_code=409, detail={
+            "gate": "unavailable",
+            "reason": f"the ZAP API on {req.container}:{req.port} did not answer with an alert "
+                      "list, so 'no alerts' cannot be told apart from 'we could not read them' "
+                      "— nothing was ingested. Is the recording proxy up on that port?",
+        })
     findings = proxy_mod.findings_from(alerts, session_id=req.session_id)
     endpoints = proxy_mod.alert_endpoints_from(alerts, session_id=req.session_id)
 

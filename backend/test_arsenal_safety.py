@@ -229,6 +229,16 @@ _MUST_NOT_FIRE = frozenset({
     "gf", "qsreplace", "unfurl",
     # pipeline heads the templates use — shell builtins, not tools
     "cat", "echo",
+    # curl-impersonate (build #18 item 5) — A FETCH IS A FETCH. It sends the TLS handshake and
+    # header set a real browser sends, which changes whether an edge ANSWERS it; it does not
+    # change what the request does. Classifying it as dangerous while plain `curl` and `httpx`
+    # sit clean two lines up would be a red-confirm that fires on fetching a page, and a
+    # red-confirm that fires on everything stops meaning anything — the same reasoning the AD
+    # enumeration block below states in its own words.
+    # The WRAPPERS are what the templates invoke — the bare `curl-impersonate-*` binaries are
+    # not catalogued, and this table refuses a name the catalog does not use (which is how
+    # `sliver-client` was found missing).
+    "curl-impersonate", "curl_chrome116", "curl_ff109",
     # AD / network ENUMERATION — read-only. Regression-locked in test_adorch_safety.py: a
     # confirm here would fire on almost every AD command and stop meaning anything.
     "netexec", "nxc", "crackmapexec", "cme", "enum4linux", "enum4linux-ng", "smbmap",

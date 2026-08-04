@@ -197,15 +197,55 @@ def test_nothing_is_attacked_on_a_refusal() -> None:
 def test_the_concurrency_bound_is_observed_not_remembered() -> None:
     """A second concurrent scan doubles attack traffic against a target approved once. The refusal
     reads ZAP's own scan list rather than a backend dict, so a restart cannot lose the fact — the
-    same 'observed, never assigned' rule lifecycle.observe follows."""
+    same 'observed, never assigned' rule lifecycle.observe follows.
+
+    *** THE ASSERTION IS THE PROPERTY, NOT THE FUNCTION NAME (build #18). ***
+    This lock first fired when `observed_scans` was split into `scans_snapshot` — which does the
+    same read and additionally tells a FAILED read apart from an empty one. Pinning the old
+    literal would have made this a lock that only ever says "you renamed something", which
+    teaches people to update it without reading it; build #17 wrote that lesson down when the
+    browser-id lock had to be repaired rather than flipped. So it asserts that concurrency is
+    decided by A READ OF ZAP, whichever reader performs it.
+    """
     import inspect
 
     src = inspect.getsource(proxy.start_scan)
-    assert "observed_scans" in src and "is_running" in src, (
+    reads_zap = any(fn in src for fn in ("observed_scans", "scans_snapshot"))
+    assert reads_zap and "is_running" in src, (
         "start_scan does not check ZAP's observed scan list — if it tracks concurrency in local "
         "state instead, a backend restart silently permits a second concurrent scan"
     )
     print("  the one-scan-at-a-time bound is read from ZAP, not from local state: PASS")
+
+
+def test_an_unreadable_scan_list_does_not_grant_a_second_scan() -> None:
+    """*** THE BOUND MUST NOT FAIL OPEN (build #18 item 8). ***
+
+    `observed_scans` used to answer `[]` for both "ZAP knows of no scan" and "the read failed",
+    and `start_scan` read that as "nothing is running". So an unreadable daemon GRANTED a second
+    concurrent scan — the same defect build #17 fixed one function away in `clash_refusal`: a
+    check protecting against a state it could not observe.
+
+    The control is in this test: an EMPTY-but-readable list must still permit a scan, or the fix
+    would be passing because it refuses everything.
+    """
+    empty_ok = proxy.scans_snapshot.__doc__ or ""
+    assert "read_ok" in empty_ok, "scans_snapshot no longer documents the failure distinction"
+
+    src = __import__("inspect").getsource(proxy.start_scan)
+    assert "read_ok" in src, (
+        "start_scan does not look at whether the scan-list READ SUCCEEDED — an unreadable daemon "
+        "would read as 'no scan running' and permit a second one"
+    )
+    # The snapshot's own contract, exercised directly on both shapes.
+    parsed_ok = proxy._json('{"scans": []}').get("scans")
+    parsed_bad = proxy._json("").get("scans")
+    assert isinstance(parsed_ok, list), "a real empty scan list must parse as a list"
+    assert not isinstance(parsed_bad, list), (
+        "an unanswered read must NOT parse as a list, or the two cases are indistinguishable "
+        "before scans_snapshot ever gets to tell them apart"
+    )
+    print("  an unreadable scan list refuses; a readable empty one still permits: PASS")
 
 
 def test_stopping_a_scan_is_not_gated() -> None:
@@ -280,6 +320,7 @@ if __name__ == "__main__":
     test_a_non_http_target_is_refused_before_any_gate()
     test_nothing_is_attacked_on_a_refusal()
     test_the_concurrency_bound_is_observed_not_remembered()
+    test_an_unreadable_scan_list_does_not_grant_a_second_scan()
     test_stopping_a_scan_is_not_gated()
     test_the_action_urls_are_only_reachable_from_the_gated_path()
     test_the_container_follows_the_mode()

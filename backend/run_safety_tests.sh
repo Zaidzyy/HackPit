@@ -214,6 +214,14 @@ run_test test_redirector.py "C2 redirector (LIVE loopback forward both ways / th
 
 run_test test_redirector_safety.py "C2 redirector SAFETY invariants (one loopback destination / no name resolution / remote ack unconditional / paths never half-mix)"
 
+run_test test_bypass_header.py "WAF-bypass header (value on stdin only / never on a model or an argv / cleared before the kill)"
+
+run_test test_shaping.py "payload shaping (markers stripped as the control / the SHAPED url is the scoped url / no gate anywhere)"
+
+run_test test_auth_scan.py "scan policy + authenticated scanning (baseline-then-read-back / no password field exists / additive scan URL)"
+
+run_test test_fronting.py "CDN fronting + the silent-empty sweep (unknown is a real answer / an unreadable read is not a zero)"
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

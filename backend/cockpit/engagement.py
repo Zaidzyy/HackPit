@@ -16,6 +16,9 @@ that gate's state:
   validated against the scope; in-scope ones join the engagement's LIVE ALLOWED SET, out-of-
   scope ones are recorded read-only (surfaced, never auto-added). Adding a host never widens
   the scope — a discovery can only be added if the scope already covered it.
+* :func:`set_bypass_header` stores the WAF-BYPASS HEADER a program issued for this engagement
+  (build #18 item 1). Its VALUE is a credential; see the block above those functions for where
+  it may and may not go.
 
 Records persist in the shared ``sessions.db`` (gitignored) so they survive a reload AND leave
 an audit trail (who entered mode against what, with what scope, and when). This module holds
@@ -93,6 +96,22 @@ def init_db() -> None:
                 first_seen    TEXT NOT NULL,
                 run_id        TEXT,
                 PRIMARY KEY (engagement_id, host)
+            )
+            """
+        )
+        # The WAF-bypass header(s) this program issued. `name_key` is the lower-cased header
+        # name and is the primary key, because HTTP header names are case-insensitive: storing
+        # `X-Bypass` and `x-bypass` as two rows would install two ZAP replacer rules for one
+        # header and let the second silently win.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS engagement_bypass_header (
+                engagement_id TEXT NOT NULL,
+                name_key      TEXT NOT NULL,
+                name          TEXT NOT NULL,
+                value         TEXT NOT NULL,
+                added_at      TEXT NOT NULL,
+                PRIMARY KEY (engagement_id, name_key)
             )
             """
         )
@@ -198,6 +217,112 @@ def add_pivot_subnet(engagement_id: str, cidr: str) -> EngagementRecord:
     return amended
 
 
+# --------------------------------------------------------------------------- #
+# THE WAF-BYPASS HEADER (build #18 item 1)
+#
+# Programs of any size issue researchers a header that skips their WAF, so the testing they
+# invited is not refused by the edge they bought. It is per-engagement because it is per-program,
+# and it is stored rather than typed per request because it has to reach the SCANNER's traffic,
+# which no human types.
+#
+# *** THE VALUE IS A CREDENTIAL. IT IS HELD HERE AND NOWHERE ELSE. ***
+# Whoever holds it can send requests that skip a WAF, so it is treated exactly like the ZAP API
+# key and like the AD passwords secretargs exists for:
+#
+#   * :func:`bypass_headers` — the ONLY function that returns values. Its one caller is the code
+#     that installs the ZAP replacer rule, which puts the value on STDIN, never on an argv.
+#   * :func:`bypass_header_names` — names only. This is what the ENGAGEMENT RECORD carries, so
+#     `GET /cockpit/engagement`, every run record rendered from a record, the LLM proposer
+#     context and every report see the NAME and never the value. Build #15's rule restated:
+#     never handing a secret over cannot regress; redacting it afterwards depends on a redactor
+#     being correct forever.
+#
+# A header with an EMPTY value is refused, because an empty replacer rule would strip the header
+# instead of setting it — a control that silently does the opposite of what it says.
+# --------------------------------------------------------------------------- #
+def _header_name(name: str) -> str:
+    """A syntactically valid HTTP field-name, or ValueError. Not a policy check — a shape check.
+
+    RFC 9110 token characters only. This is the same class of guard as :func:`_valid_target`:
+    it refuses a name that could not be a header at all (a space or a colon in it would make the
+    ZAP replacer rule match nothing, or match the wrong thing), and it decides nothing about
+    WHICH headers an operator may set.
+    """
+    n = (name or "").strip()
+    if not n:
+        raise ValueError("a bypass header needs a name")
+    allowed = set("!#$%&'*+-.^_`|~")
+    if any(not (ch.isalnum() and ch.isascii()) and ch not in allowed for ch in n):
+        raise ValueError(
+            f"{n!r} is not a valid HTTP header name — RFC 9110 token characters only "
+            "(letters, digits and !#$%&'*+-.^_`|~)"
+        )
+    return n
+
+
+def set_bypass_header(engagement_id: str, name: str, value: str) -> list[str]:
+    """Store (or amend) a bypass header on an ACTIVE engagement. Returns the NAMES held after.
+
+    Upsert on the lower-cased name, so amending a value is the same call as setting one — a
+    program that rotates the header mid-engagement should not need a delete first.
+    """
+    n = _header_name(name)
+    v = (value or "").strip()
+    if not v:
+        raise ValueError(
+            f"the value for {n!r} is empty — an empty ZAP replacer rule REMOVES the header "
+            "rather than setting it, which would be a control doing the opposite of what it says"
+        )
+    if get_active(engagement_id) is None:
+        raise ValueError(
+            f"engagement {engagement_id!r} is not active — a bypass header belongs to a live "
+            "engagement, and one stored against an exited record could never be installed"
+        )
+    with _write_lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO engagement_bypass_header "
+            "(engagement_id, name_key, name, value, added_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(engagement_id, name_key) DO UPDATE SET name = ?, value = ?, added_at = ?",
+            (engagement_id, n.lower(), n, v, _now(), n, v, _now()),
+        )
+    return bypass_header_names(engagement_id)
+
+
+def remove_bypass_header(engagement_id: str, name: str) -> list[str]:
+    """Drop one bypass header. Returns the NAMES still held. Never raises on an unknown name."""
+    with _write_lock, _connect() as conn:
+        conn.execute(
+            "DELETE FROM engagement_bypass_header WHERE engagement_id = ? AND name_key = ?",
+            (engagement_id, (name or "").strip().lower()),
+        )
+    return bypass_header_names(engagement_id)
+
+
+def bypass_headers(engagement_id: str) -> list[tuple[str, str]]:
+    """``(name, value)`` pairs — THE ONLY FUNCTION THAT RETURNS THE SECRET.
+
+    Its one intended caller is `proxy.install_bypass_headers`, which sends the value to ZAP on
+    STDIN. Anything that RECORDS, RENDERS or PROMPTS must call :func:`bypass_header_names`.
+    """
+    if not engagement_id:
+        return []
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                "SELECT name, value FROM engagement_bypass_header WHERE engagement_id = ? "
+                "ORDER BY name_key",
+                (engagement_id,),
+            ).fetchall()
+    except sqlite3.OperationalError:  # table not created yet — no headers, not a failure
+        return []
+    return [(r["name"], r["value"]) for r in rows]
+
+
+def bypass_header_names(engagement_id: str) -> list[str]:
+    """The header NAMES this engagement holds. Safe to record, render and prompt with."""
+    return [name for name, _ in bypass_headers(engagement_id)]
+
+
 def get_active(engagement_id: str) -> EngagementRecord | None:
     """The engagement record ONLY while it is active (else None — fail closed)."""
     if not engagement_id:
@@ -294,6 +419,10 @@ def _row(row: sqlite3.Row) -> EngagementRecord:
         allowed_hosts=seeds + [h for h in in_scope if h not in seeds],
         discovered_in_scope=in_scope,
         discovered_out_of_scope=out_scope,
+        # NAMES ONLY — see the block above :func:`set_bypass_header`. This record is returned by
+        # `GET /cockpit/engagement`, joined into the LLM proposer context and rendered into
+        # reports; the value is a credential and reaches none of them.
+        bypass_header_names=bypass_header_names(row["engagement_id"]),
     )
 
 

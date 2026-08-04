@@ -154,6 +154,17 @@ _VIEW_SPIDER_STATUS = "/JSON/ajaxSpider/view/status/"
 _VIEW_SPIDER_RESULTS = "/JSON/ajaxSpider/view/numberOfResults/"
 _VIEW_SPIDER_BROWSER = "/JSON/ajaxSpider/view/optionBrowserId/"
 
+_VIEW_REPLACER_RULES = "/JSON/replacer/view/rules/"
+_VIEW_SCAN_POLICIES = "/JSON/ascan/view/policies/"
+_VIEW_SCANNERS = "/JSON/ascan/view/scanners/"
+_VIEW_CONTEXTS = "/JSON/context/view/contextList/"
+_VIEW_CONTEXT = "/JSON/context/view/context/"
+_VIEW_SESSION_METHOD = "/JSON/sessionManagement/view/getSessionManagementMethod/"
+_VIEW_AUTH_METHOD = "/JSON/authentication/view/getAuthenticationMethod/"
+_VIEW_LOGGED_IN = "/JSON/authentication/view/getLoggedInIndicator/"
+_VIEW_LOGGED_OUT = "/JSON/authentication/view/getLoggedOutIndicator/"
+_VIEW_USERS = "/JSON/users/view/usersList/"
+
 # action, GATED (except the two stops — see above)
 _ACTION_SCAN = "/JSON/ascan/action/scan/"
 _ACTION_STOP = "/JSON/ascan/action/stop/"
@@ -167,6 +178,64 @@ _ACTION_SPIDER_STOP = "/JSON/ajaxSpider/action/stop/"
 _ACTION_SPIDER_BROWSER = "/JSON/ajaxSpider/action/setOptionBrowserId/"
 _ACTION_SPIDER_DEPTH = "/JSON/ajaxSpider/action/setOptionMaxCrawlDepth/"
 _ACTION_SPIDER_DURATION = "/JSON/ajaxSpider/action/setOptionMaxDuration/"
+
+# --------------------------------------------------------------------------- #
+# A THIRD GROUP, AND IT IS A DELIBERATE ADDITION TO THE BOUNDARY ABOVE (build #18).
+#
+# `_ACTION_STOP` was described above as "an action URL that is ungated ON PURPOSE, and it is the
+# only one". It is no longer the only one, so the rule is restated rather than quietly broken.
+#
+# CONFIGURATION ACTIONS THAT SEND NOTHING. Setting a replacer rule, a scan policy, a context or
+# a session-management method changes how OUR OWN next request is shaped. None of them emits a
+# single packet at the target, and none of them can be made to: what they take is a header name,
+# a plugin id or a regex, never a URL to fetch. The traffic they shape is emitted by
+# `start_scan` / `start_spider` / a human's browser, each of which is gated (or is the human)
+# exactly as before.
+#
+# THEY ARE UNGATED BECAUSE GATING THEM WOULD BE A NEW CONFIRM, and build #18 is explicitly a
+# build that adds none. Demanding a red-confirm to type in the header a program issued would
+# teach the operator that the red-confirm means "a form has fields", which is precisely how the
+# `-daemon` red-confirm went wrong: a control whose stated meaning is not the one it enforces.
+#
+# WHAT DOES BOUND THEM is stated instead of implied: every one of these settings is READ BACK
+# from ZAP, and every read-back is what gets reported. An OK is not a result — measured here on
+# `setOptionBrowserId`, which answered `{"Result":"OK"}` for a browser it could not use.
+# --------------------------------------------------------------------------- #
+#: *** TWO SPELLINGS, AND THE READ-BACK IS THE ARBITER. ***
+#: The Replacer add-on renamed these actions across versions: older builds expose
+#: `addReplacerRule` / `removeReplacerRule`, current ones `addRule` / `removeRule`. This daemon
+#: was NOT running while build #18 was written (build #17's teardown stopped it), so which pair
+#: this image's add-on holds is UNMEASURED — and guessing one would produce the exact failure
+#: this module keeps finding: a confident `{}` from a 404 that reads as "the rule is not there".
+#: So both are tried in order and :func:`observed_replacer_rules` decides whether anything took.
+#: The proof script prints which spelling answered, which is how the guess becomes a measurement.
+_ACTION_REPLACER_ADD = (
+    "/JSON/replacer/action/addRule/",
+    "/JSON/replacer/action/addReplacerRule/",
+)
+_ACTION_REPLACER_REMOVE = (
+    "/JSON/replacer/action/removeRule/",
+    "/JSON/replacer/action/removeReplacerRule/",
+)
+
+_ACTION_ENABLE_ALL_SCANNERS = "/JSON/ascan/action/enableAllScanners/"
+_ACTION_DISABLE_SCANNERS = "/JSON/ascan/action/disableScanners/"
+_ACTION_POLICY_STRENGTH = "/JSON/ascan/action/setPolicyAttackStrength/"
+_ACTION_POLICY_THRESHOLD = "/JSON/ascan/action/setPolicyAlertThreshold/"
+
+_ACTION_NEW_CONTEXT = "/JSON/context/action/newContext/"
+_ACTION_REMOVE_CONTEXT = "/JSON/context/action/removeContext/"
+_ACTION_INCLUDE_IN_CONTEXT = "/JSON/context/action/includeInContext/"
+_ACTION_SET_SESSION_METHOD = "/JSON/sessionManagement/action/setSessionManagementMethod/"
+_ACTION_SET_AUTH_METHOD = "/JSON/authentication/action/setAuthenticationMethod/"
+_ACTION_SET_LOGGED_IN = "/JSON/authentication/action/setLoggedInIndicator/"
+_ACTION_SET_LOGGED_OUT = "/JSON/authentication/action/setLoggedOutIndicator/"
+_ACTION_NEW_USER = "/JSON/users/action/newUser/"
+_ACTION_SET_USER_CREDS = "/JSON/users/action/setAuthenticationCredentials/"
+_ACTION_SET_USER_ENABLED = "/JSON/users/action/setUserEnabled/"
+_ACTION_REMOVE_USER = "/JSON/users/action/removeUser/"
+_ACTION_SET_FORCED_USER = "/JSON/forcedUser/action/setForcedUser/"
+_ACTION_SET_FORCED_USER_MODE = "/JSON/forcedUser/action/setForcedUserModeEnabled/"
 
 _lock = threading.Lock()
 _models: dict[str, "Proxy"] = {}
@@ -363,6 +432,11 @@ class Proxy(BaseModel):
     #: NEVER the key itself. The panel needs to know a key is in force; it never needs the value,
     #: and a model field is exactly the thing that ends up in a log line or a report.
     api_key_enforced: bool = True
+    #: NAMES of the WAF-bypass headers ZAP is actually holding for this proxy, READ BACK from
+    #: `replacer/view/rules` rather than echoed from what was sent. Same rule as `api_key_enforced`
+    #: one line up and as `browser_id` on the spider: the value is a credential and never appears
+    #: in a model, and what is reported is what the daemon holds rather than what we asked for.
+    bypass_headers: list[str] = Field(default_factory=list)
 
 
 class CapturedHeader(BaseModel):
@@ -706,6 +780,68 @@ def _api_get(container: str, port: int, path: str, timeout: int = 10) -> str:
     return body
 
 
+def _api_post(container: str, port: int, path: str, fields: dict[str, str],
+              timeout: int = 15) -> str:
+    """Call one ZAP ACTION with its parameters in a POST BODY, delivered on STDIN.
+
+    *** THIS EXISTS FOR ONE REASON: A BYPASS HEADER'S VALUE IS A CREDENTIAL. ***
+    :func:`_api_get` already keeps the API key off the URL by putting it in a header, and its
+    docstring says why — the proxy records what passes through it and a report is rendered from
+    that history. The replacer rule's ``replacement`` is a SECOND secret, and ZAP's action API
+    takes it as a parameter. On a GET it would land in ZAP's own history AND on the
+    ``docker exec … curl … <url>`` argv, which ``ps`` on this host can read.
+
+    ZAP accepts every action over POST with a form-encoded body, and ``curl --data-binary @-``
+    reads that body from stdin — so the value never touches an argv, a shell or a URL. Same trick
+    as build #13 part 3's OOB signature, applied to a different secret. What remains on the argv
+    is the API key header, which is the residual build #15 already wrote down and accepted.
+
+    ``-i`` on ``docker exec`` is load-bearing: without it the container's curl gets a closed
+    stdin, reads an empty body, and ZAP answers a cheerful ``{"Result":"OK"}`` for a rule with no
+    match string. Another OK that is not a result.
+    """
+    url = f"http://{PROXY_HOST}:{port}{path}"
+    body = "&".join(f"{quote_plus(k)}={quote_plus(str(v))}" for k, v in fields.items())
+    argv = ["docker", "exec", "-i", container, "curl", "-s", "--max-time", str(timeout),
+            "-X", "POST", "--data-binary", "@-",
+            "-H", "Content-Type: application/x-www-form-urlencoded"]
+    key = api_key_for(container, port)
+    if key:
+        argv += ["-H", f"X-ZAP-API-Key: {key}"]
+    argv.append(url)
+    try:
+        out = subprocess.run(argv, capture_output=True, timeout=timeout + 5,
+                             input=body.encode("utf-8"))
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    # Bytes then an explicit decode, for the same reason as :func:`_api_get` — never let the
+    # ambient locale codec decide whether this function works.
+    answer = (out.stdout or b"").decode("utf-8", "replace")
+    if not answer.strip() and key:
+        forget_adopted(container, port)
+    return answer
+
+
+def _post_first_that_answers(container: str, port: int, paths: tuple[str, ...],
+                             fields: dict[str, str], timeout: int = 15) -> str:
+    """POST to each candidate path until one answers with parseable JSON. "" if none did.
+
+    For the action names that were RENAMED across add-on versions (see the replacer constants).
+    An unknown path answers with ZAP's `no_implementor` error or an empty body; either way the
+    next spelling is tried. The caller still reads the state back — this only decides which URL
+    to speak, never whether it worked.
+    """
+    for path in paths:
+        answer = _api_post(container, port, path, fields, timeout=timeout)
+        if not answer.strip():
+            continue
+        code = str(_json(answer).get("code", ""))
+        if code in ("no_implementor", "bad_action", "illegal_parameter"):
+            continue
+        return answer
+    return ""
+
+
 def _wait_ready(container: str, port: int) -> bool:
     """Poll the version endpoint until the JVM answers.
 
@@ -831,12 +967,28 @@ def start_proxy(req: ProxyStartRequest) -> Proxy:
     if not ready and live.status != "down":
         detail = (detail + " — the API did not answer within the ready window").strip()
 
+    # THE BYPASS HEADER, INSTALLED ON THE DAEMON THAT WILL CARRY IT (build #18 item 1). A fresh
+    # daemon in a container that ran a PREVIOUS engagement inherits that engagement's replacer
+    # rules out of `$HOME/.ZAP` — so this runs even when the engagement holds no headers, and in
+    # that case it CLEARS. It is not allowed to fail the start: a proxy that came up is worth
+    # having, and `bypass_headers` reports what ZAP actually holds so a silent install failure
+    # shows as an empty list next to an engagement that has one.
+    installed: list[str] = []
+    if ready:
+        try:
+            installed = list(
+                sync_bypass_headers(container, req.port, req.engagement_id).get("installed") or []
+            )
+        except Exception as exc:  # noqa: BLE001 - warn and continue; never refuse the start
+            detail = (detail + f" — bypass headers were not installed ({exc})").strip()
+
     model = Proxy(
         id=pid, container=container, port=req.port,
         status=live.status, liveness=detail,
         captured=captured_count(container, req.port) if ready else 0,
         started_at=_now(), engagement_id=req.engagement_id,
         bind_host=bind_host_for(req), published=req.publish, api_key_enforced=True,
+        bypass_headers=installed,
     )
     with _lock:
         _models[pid] = model
@@ -856,13 +1008,25 @@ def stop_proxy(pid: str) -> Proxy:
     if model is None:
         raise ProxyRefused(f"no proxy with id {pid!r}", gate="notfound")
 
+    # THE BYPASS HEADER DIES WITH THE DAEMON — and it has to be removed BEFORE the kill, because
+    # afterwards there is no API to remove it through, while ZAP's persisted config.xml keeps the
+    # rule for whatever starts next. A credential surviving into an engagement it was not issued
+    # for is the failure this ordering exists to prevent.
+    # The same applies to an auth CONTEXT, which carries a stored credential in its user.
+    try:
+        clear_bypass_headers(model.container, model.port)
+        clear_auth_contexts(model.container, model.port)
+    except Exception:  # noqa: BLE001 - a failed cleanup must still stop the daemon
+        pass
+
     if watched is not None:
         try:
             watched.kill(container=model.container, server_argv=kill_pattern_for(model.port))
         except Exception:  # noqa: BLE001 - a failed teardown must still mark it down
             pass
 
-    stopped = model.model_copy(update={"status": "down", "liveness": "stopped by the operator"})
+    stopped = model.model_copy(update={"status": "down", "liveness": "stopped by the operator",
+                                       "bypass_headers": []})
     with _lock:
         _models[pid] = stopped
         _watched.pop(pid, None)
@@ -892,6 +1056,200 @@ def status() -> dict[str, Any]:
         "engage_running": _container_running(config.ENGAGE_SANDBOX_CONTAINER),
         "live": len(live),
         "default_port": DEFAULT_PROXY_PORT,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# THE WAF-BYPASS HEADER (build #18 item 1)
+#
+# A program that invites testing and then buys an edge that refuses it issues researchers a
+# header that skips the WAF. Build #17 measured why this is the highest-value line in the build:
+# 36 of 39 scanner requests came back `403 AkamaiGHost` with an "Access Denied" body. Those
+# payloads never reached the application, so the zero findings were not evidence about the
+# application at all.
+#
+# *** ZAP'S REPLACER IS THE SINGLE POINT, AND THAT IS THE WHOLE DESIGN. ***
+# Every request that leaves through this proxy passes the Replacer add-on: the operator's own
+# browser, the AJAX spider's browser, the active scanner's payloads, and any sandbox tool run
+# with `proxy: true`. One rule covers all four. The alternative — threading a header through
+# each caller — would need four correct implementations and would silently miss the fifth.
+#
+# *** ZAP PERSISTS ITS CONFIGURATION, SO A RULE OUTLIVES THE ENGAGEMENT THAT SET IT. ***
+# This module's own history says it in one line: "a daemon that persists its configuration makes
+# every measurement conditional on what a previous run wrote". A bypass header left installed
+# would keep being sent to whatever the NEXT engagement points this proxy at — a credential
+# leaking to a third party by nothing worse than forgetting. So:
+#
+#   * every install starts by REMOVING every hackpit rule, then adds the current ones,
+#   * :func:`stop_proxy` clears them,
+#   * exiting an engagement clears them (router),
+#   * and what is reported is what ZAP HOLDS, never what we sent.
+#
+# The rules carry a fixed description prefix so this module can tell its own rules from any a
+# human added in ZAP's UI, and it removes only its own.
+# --------------------------------------------------------------------------- #
+BYPASS_RULE_PREFIX = "hackpit-bypass:"
+
+#: ZAP's match type for "set this request header" — the name goes in ``matchString`` and the
+#: value in ``replacement``. NOT ``REQ_HEADER_STR``, which substitutes a substring anywhere in
+#: the header block and would rewrite an unrelated header that happened to contain the name.
+BYPASS_MATCH_TYPE = "REQ_HEADER"
+
+
+class ReplacerRule(BaseModel):
+    """One replacer rule AS ZAP HOLDS IT — with the replacement VALUE deliberately absent.
+
+    ``replacement_set`` says whether ZAP holds a non-empty value; the value itself is a
+    credential and this model is what the route returns to the browser. Reporting the value back
+    would undo the entire point of putting it on stdin in the first place.
+    """
+
+    description: str = ""
+    match_type: str = ""
+    match_string: str = Field(
+        "", description="For a REQ_HEADER rule this is the HEADER NAME — not a secret."
+    )
+    enabled: bool = False
+    replacement_set: bool = Field(
+        False, description="ZAP holds a non-empty replacement. The value is NEVER reported."
+    )
+    hackpit_managed: bool = Field(
+        False, description="This rule carries HackPit's description prefix, so HackPit installed "
+        "it and HackPit will remove it. Rules a human added in ZAP's own UI are left alone."
+    )
+
+
+def bypass_rule_description(header_name: str) -> str:
+    """The rule description HackPit uses for one header. Lower-cased: header names are."""
+    return f"{BYPASS_RULE_PREFIX}{(header_name or '').strip().lower()}"
+
+
+def _rule_from(obj: Any) -> ReplacerRule | None:
+    """One row of ``replacer/view/rules`` -> a :class:`ReplacerRule`. Never raises.
+
+    ZAP has spelled these keys differently across add-on versions (``matchType`` vs
+    ``matchtype``, ``enabled`` as a bool or as the string "true"), so each is read defensively.
+    A row that carries no description at all is dropped, because a rule this module cannot
+    identify is a rule it must not remove.
+    """
+    if not isinstance(obj, dict):
+        return None
+    def _pick(*names: str) -> Any:
+        for n in names:
+            if n in obj:
+                return obj[n]
+        return None
+    description = str(_pick("description", "Description") or "").strip()
+    if not description:
+        return None
+    enabled_raw = _pick("enabled", "Enabled")
+    replacement = str(_pick("replacement", "Replacement") or "")
+    return ReplacerRule(
+        description=description,
+        match_type=str(_pick("matchType", "matchtype", "MatchType") or ""),
+        match_string=str(_pick("matchString", "matchstring", "MatchString") or ""),
+        enabled=str(enabled_raw).strip().lower() in ("true", "1", "yes"),
+        replacement_set=bool(replacement),
+        hackpit_managed=description.lower().startswith(BYPASS_RULE_PREFIX),
+    )
+
+
+def observed_replacer_rules(container: str, port: int) -> list[ReplacerRule]:
+    """Every replacer rule ZAP is holding right now. READ-ONLY. Values never come back.
+
+    This is the arbiter for item 1, not the ``{"Result":"OK"}`` from the add call. The lesson is
+    written twice already in this file — ``setOptionBrowserId`` answered OK for a browser it
+    could not use, and the ``-daemon`` red-confirm described traffic it did not send.
+    """
+    rows = _json(_api_get(container, port, _VIEW_REPLACER_RULES)).get("rules")
+    if not isinstance(rows, list):
+        return []
+    out = [_rule_from(r) for r in rows]
+    return [r for r in out if r is not None]
+
+
+def clear_bypass_headers(container: str, port: int) -> list[str]:
+    """Remove every rule HackPit installed. Returns the descriptions ZAP no longer holds.
+
+    ONLY HackPit's own rules, identified by the description prefix. A rule a human added in ZAP's
+    UI is somebody else's decision, and a cleanup that removed it would be this module reaching
+    outside what it owns.
+
+    The return value is computed from a READ-BACK, so a remove that answered OK and did nothing
+    reports as still-present rather than as removed.
+    """
+    before = [r.description for r in observed_replacer_rules(container, port) if r.hackpit_managed]
+    for description in before:
+        _post_first_that_answers(container, port, _ACTION_REPLACER_REMOVE,
+                                 {"description": description})
+    after = {r.description for r in observed_replacer_rules(container, port) if r.hackpit_managed}
+    return [d for d in before if d not in after]
+
+
+def install_bypass_headers(container: str, port: int,
+                           headers: list[tuple[str, str]]) -> list[ReplacerRule]:
+    """Install the bypass headers on this daemon. Returns THE RULES ZAP HOLDS AFTERWARDS.
+
+    ``headers`` is ``[(name, value), …]`` and the values are credentials — they go out through
+    :func:`_api_post`, i.e. on stdin, and are never returned, logged or rendered.
+
+    Clears first, then adds, then reads back. Clearing first is what makes this idempotent AND
+    what stops an amended header from being sent alongside the one it replaced: ZAP keys a rule
+    on its description, so re-adding the same description on some add-on versions appends a
+    second rule rather than replacing the first.
+    """
+    clear_bypass_headers(container, port)
+    for name, value in headers or []:
+        clean = (name or "").strip()
+        if not clean or not (value or "").strip():
+            # An empty value would make the rule STRIP the header rather than set it. Skipped
+            # here as well as refused at the engagement, because this function is also reachable
+            # from the proof script with hand-built input.
+            continue
+        _post_first_that_answers(container, port, _ACTION_REPLACER_ADD, {
+            "description": bypass_rule_description(clean),
+            "enabled": "true",
+            "matchType": BYPASS_MATCH_TYPE,
+            "matchString": clean,
+            "matchRegex": "false",
+            "replacement": value,
+            # No `initiators` and no `url`: an empty initiators list means EVERY initiator —
+            # proxied browser traffic, the spider's browser and the active scanner alike — which
+            # is the property item 1 is actually asking for. Naming a subset here would silently
+            # exclude whichever one was forgotten.
+            "initiators": "",
+        })
+    return [r for r in observed_replacer_rules(container, port) if r.hackpit_managed]
+
+
+def sync_bypass_headers(container: str, port: int, engagement_id: str | None) -> dict[str, Any]:
+    """Make this daemon hold exactly the bypass headers of ``engagement_id`` — and say what it holds.
+
+    With no engagement (lab mode, or an engagement that was exited) this CLEARS and holds none.
+    That direction is deliberate: the failure mode worth preventing is a credential surviving into
+    a session it was not issued for, not a missing header, which is visible the moment a request
+    comes back 403.
+
+    Returns ``{"installed": [names], "cleared": [descriptions], "rules": [ReplacerRule]}`` —
+    every field derived from a read-back of ZAP, and no field carrying a value.
+    """
+    from . import engagement as engagement_mod
+
+    wanted: list[tuple[str, str]] = []
+    if engagement_id:
+        try:
+            wanted = engagement_mod.bypass_headers(engagement_id)
+        except Exception:  # noqa: BLE001 - a header lookup must never break a proxy start
+            wanted = []
+    if not wanted:
+        cleared = clear_bypass_headers(container, port)
+        held = [r for r in observed_replacer_rules(container, port) if r.hackpit_managed]
+        return {"installed": [], "cleared": cleared, "rules": held}
+    held = install_bypass_headers(container, port, wanted)
+    return {
+        "installed": [r.match_string for r in held],
+        "cleared": [],
+        "rules": held,
     }
 
 
@@ -1193,6 +1551,202 @@ def session_health(exchanges: list["CapturedExchange"]) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# SCAN POLICY (build #18 item 3) — fewer requests, and the ones that could apply
+#
+# Build #17's measurement: 39 attack requests at one endpoint, 36 refused `403 AkamaiGHost`,
+# roughly three requests a minute through a tarpitting edge. A large share of them came from
+# checks that could not have found anything — a Shellshock probe against a Next.js storefront
+# costs a request, earns a WAF hit, and has nowhere to land.
+#
+# So a policy here is A LIST OF CHECKS TO SWITCH OFF, plus the strength and threshold, and each
+# entry carries WHY. The reasons are what make this reviewable: "disabled because the target is
+# not a C server" is a claim someone can disagree with; a bare id list is not.
+#
+# *** IT IS APPLIED FROM A KNOWN BASELINE ON EVERY SCAN, AND NEVER RESET AFTERWARDS. ***
+# Two facts force that shape, and both are already written down in this file:
+#   1. ZAP PERSISTS ITS CONFIGURATION. A policy set for one scan is still set for the next one
+#      and for the next ENGAGEMENT, so reading "what is enabled" tells you what a previous run
+#      wrote. Every apply therefore starts with `enableAllScanners` and states strength and
+#      threshold explicitly, exactly as `api.disablekey=false` is stated even though false is
+#      ZAP's own default.
+#   2. A SCAN IS ASYNCHRONOUS. `start_scan` returns as soon as ZAP accepts it, so a "reset when
+#      finished" would either race the running scan or need a watcher that outlives the request.
+#      Resetting at the START of the next scan achieves the same property with no race.
+#
+# The consequence is stated rather than buried: BETWEEN scans, the daemon holds the last policy
+# applied. Anything that reads scanner state outside a scan start is reading history, and
+# :func:`observed_scan_policy` is there so it reads it from ZAP rather than from our hopes.
+# --------------------------------------------------------------------------- #
+#: ZAP's five scanner CATEGORIES (`org.parosproxy.paros.core.scanner.Category`). Strength and
+#: threshold are set per category, so setting them "globally" means setting all five.
+_POLICY_CATEGORY_IDS = (0, 1, 2, 3, 4)
+
+DEFAULT_SCAN_POLICY = "default"
+
+
+class ScanPolicy(BaseModel):
+    """A named active-scan policy. Data only — applying it is :func:`apply_scan_policy`."""
+
+    name: str
+    description: str
+    attack_strength: str = Field(
+        "MEDIUM", description="LOW | MEDIUM | HIGH | INSANE — how many payloads each rule sends."
+    )
+    alert_threshold: str = Field(
+        "MEDIUM", description="OFF | LOW | MEDIUM | HIGH — how sure a rule must be to report."
+    )
+    disabled_scanners: dict[int, str] = Field(
+        default_factory=dict,
+        description="ZAP plugin id -> WHY it is off for this policy. A bare id list would be "
+        "unreviewable; the reason is the part a human can disagree with.",
+    )
+
+
+#: THE TWO POLICIES. `default` is ZAP's own behaviour stated explicitly rather than inherited,
+#: which is what makes it a usable CONTROL for the measurement item 3 asks for: same endpoint,
+#: same everything, one variable — the disabled set.
+SCAN_POLICIES: dict[str, ScanPolicy] = {
+    DEFAULT_SCAN_POLICY: ScanPolicy(
+        name=DEFAULT_SCAN_POLICY,
+        description="Every active-scan rule ZAP ships, at medium strength. The widest reach and "
+        "the most requests. This is ZAP's own default behaviour, stated explicitly so that what "
+        "runs is a property of this policy rather than of whatever the last scan wrote.",
+        attack_strength="MEDIUM",
+        alert_threshold="MEDIUM",
+        disabled_scanners={},
+    ),
+    "targeted-web": ScanPolicy(
+        name="targeted-web",
+        description="For a modern JavaScript web application or JSON API behind a CDN. Switches "
+        "off the rules that are locked to a platform the target is not running — they cannot "
+        "find anything, and each one costs requests through an edge that is already pacing us to "
+        "about three a minute.",
+        attack_strength="MEDIUM",
+        alert_threshold="MEDIUM",
+        disabled_scanners={
+            30001: "Buffer Overflow — a memory-safety probe against a C server. Node/JVM/.NET "
+                   "runtimes do not have the failure this looks for.",
+            30002: "Format String Error — same family, same reason.",
+            30003: "Integer Overflow Error — same family, same reason.",
+            10048: "Remote Code Execution (Shell Shock) — needs a CGI handler that shells out to "
+                   "bash. This is the check whose payload build #17 caught being 403'd.",
+            40009: "Server Side Include — Apache/nginx SSI directives.",
+            40028: "ELMAH Information Leak — an ASP.NET error-logging module.",
+            40032: ".htaccess Information Leak — an Apache configuration file.",
+            10045: "Source Code Disclosure /WEB-INF — a Java servlet-container layout.",
+            7: "Remote File Inclusion — needs PHP with remote URL includes enabled.",
+        },
+    ),
+}
+
+
+def scan_policy_for(name: str) -> ScanPolicy:
+    """The named policy, or the default. AN UNKNOWN NAME IS NOT AN ERROR — it is a default.
+
+    Deliberately not a refusal. A typo'd policy name should cost the operator a wider scan they
+    can see reported back (`Scan.scan_policy` says which policy actually ran), not a 403 that
+    reads like a safety verdict. Nothing here decides whether a scan may happen.
+    """
+    return SCAN_POLICIES.get((name or "").strip() or DEFAULT_SCAN_POLICY,
+                             SCAN_POLICIES[DEFAULT_SCAN_POLICY])
+
+
+class ObservedPolicy(BaseModel):
+    """What ZAP HOLDS after a policy was applied. Read back, never echoed.
+
+    ``disabled_ids`` is the intersection of "we asked for this off" and "ZAP reports it off", so
+    a plugin id that does not exist in this ZAP build shows up as *requested but not held* rather
+    than being silently counted as a success.
+    """
+
+    requested: str = ""
+    attack_strength: list[str] = Field(
+        default_factory=list, description="Strength per category, AS ZAP REPORTS IT."
+    )
+    alert_threshold: list[str] = Field(default_factory=list)
+    disabled_ids: list[int] = Field(
+        default_factory=list, description="Requested AND confirmed disabled by a read-back."
+    )
+    not_held: list[int] = Field(
+        default_factory=list,
+        description="Requested off, but ZAP does not report them disabled — usually a plugin id "
+        "this ZAP build does not have. Reported rather than swallowed.",
+    )
+    scanners_seen: int = Field(0, description="How many scan rules the read-back could see. 0 "
+                              "means the read FAILED, not that ZAP has no rules.")
+
+
+def observed_scan_policy(container: str, port: int,
+                         requested: str = "") -> ObservedPolicy:
+    """What the daemon's active-scan configuration actually is. READ-ONLY.
+
+    ``scanners_seen == 0`` is the honest report of a FAILED read — this module's recurring
+    silent-empty, named in the model rather than left for a caller to misread as "nothing is
+    disabled".
+    """
+    wanted = set(scan_policy_for(requested).disabled_scanners) if requested else set()
+
+    rows = _json(_api_get(container, port, _VIEW_SCANNERS)).get("scanners")
+    disabled: set[int] = set()
+    seen = 0
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            seen += 1
+            if str(row.get("enabled", "")).strip().lower() in ("false", "0", "no"):
+                disabled.add(_int(row.get("id")))
+
+    strengths: list[str] = []
+    thresholds: list[str] = []
+    prows = _json(_api_get(container, port, _VIEW_SCAN_POLICIES)).get("policies")
+    if isinstance(prows, list):
+        for row in prows:
+            if not isinstance(row, dict):
+                continue
+            strengths.append(str(row.get("attackStrength") or row.get("attackstrength") or ""))
+            thresholds.append(str(row.get("alertThreshold") or row.get("alertthreshold") or ""))
+
+    return ObservedPolicy(
+        requested=requested or DEFAULT_SCAN_POLICY,
+        attack_strength=sorted({s for s in strengths if s}),
+        alert_threshold=sorted({t for t in thresholds if t}),
+        disabled_ids=sorted(wanted & disabled) if wanted else sorted(disabled),
+        not_held=sorted(wanted - disabled),
+        scanners_seen=seen,
+    )
+
+
+def apply_scan_policy(container: str, port: int, name: str) -> ObservedPolicy:
+    """Put ``name``'s policy on the daemon, FROM A KNOWN BASELINE, and read it back.
+
+    Order matters and is the point: enable everything first, THEN disable this policy's set. A
+    disable-only apply would inherit whatever the previous scan switched off and call it this
+    policy — the same class of mistake as measuring `api.key` against a config a previous run
+    wrote.
+
+    Never raises and never refuses. A policy that would not apply leaves a wider scan, which is
+    a worse measurement and not a safety event; the returned :class:`ObservedPolicy` says so.
+    """
+    policy = scan_policy_for(name)
+    try:
+        _api_get(container, port, _ACTION_ENABLE_ALL_SCANNERS)
+        for category in _POLICY_CATEGORY_IDS:
+            _api_get(container, port,
+                     f"{_ACTION_POLICY_STRENGTH}?id={category}"
+                     f"&attackStrength={quote_plus(policy.attack_strength)}")
+            _api_get(container, port,
+                     f"{_ACTION_POLICY_THRESHOLD}?id={category}"
+                     f"&alertThreshold={quote_plus(policy.alert_threshold)}")
+        if policy.disabled_scanners:
+            ids = ",".join(str(i) for i in sorted(policy.disabled_scanners))
+            _api_get(container, port, f"{_ACTION_DISABLE_SCANNERS}?ids={quote_plus(ids)}")
+    except Exception:  # noqa: BLE001 - the read-back below is what the caller is told
+        pass
+    return observed_scan_policy(container, port, requested=policy.name)
+
+
 class ScanStartRequest(BaseModel):
     """Start an ACTIVE SCAN against one URL the proxy already captured."""
 
@@ -1208,6 +1762,13 @@ class ScanStartRequest(BaseModel):
         "a subtree is same-origin — so this changes how MUCH attack traffic runs, not where it "
         "goes. The approved surface declares `-quickurl`, which means spider-then-scan, so it "
         "already describes more aggression than recursing over an existing tree.",
+    )
+    scan_policy: str = Field(
+        DEFAULT_SCAN_POLICY,
+        description="Named policy: 'default' (every rule ZAP ships) or 'targeted-web' (the "
+        "platform-locked rules switched off). An UNKNOWN NAME FALLS BACK TO THE DEFAULT rather "
+        "than refusing — the policy chooses how many requests to send, and nothing about it is a "
+        "safety verdict. What actually ran comes back on the Scan as `policy_observed`.",
     )
     engagement_id: str | None = Field(
         None, description="Engagement to attribute against. OMIT for LAB mode."
@@ -1255,6 +1816,21 @@ class Scan(BaseModel):
     alerts: int = 0
     started_at: str = ""
     engagement_id: str | None = None
+    #: The policy NAME that was requested for this scan, and what ZAP actually held after it was
+    #: applied. Both blank/None for a scan this backend process did not start — ZAP does not
+    #: report how a scan was configured, and inventing it would be worse than admitting we do not
+    #: know. See :func:`observed_scans`.
+    scan_policy: str = ""
+    policy_observed: ObservedPolicy | None = None
+    #: NAMES of the WAF-bypass headers in force when this scan started, read back from ZAP.
+    #: This is what makes a 403 share interpretable: "36 of 39 refused" means one thing with the
+    #: program's bypass header on and something else entirely without it.
+    bypass_headers: list[str] = Field(default_factory=list)
+    #: The ZAP context this scan ran inside, and what tier of authentication it had. Blank/0 when
+    #: none was configured — which is the pre-build-#18 behaviour and is a perfectly ordinary
+    #: scan, not an error.
+    context_name: str = ""
+    auth_tier: int = Field(0, description="0 none | 2 context+session | 3 form auth + re-login.")
 
 
 class ScanAlert(BaseModel):
@@ -1321,8 +1897,25 @@ def scan_argv_for(req: ScanStartRequest) -> list[str]:
     return ["zaproxy", "-quickurl", scan_target_for(req)]
 
 
-def scan_url_for(req: ScanStartRequest) -> str:
+#: ``ascan/action/scan`` attacks as an anonymous client. ``scanAsUser`` attacks as a CONFIGURED
+#: USER of a context, which is what makes Tier 3's automatic re-login reachable — ZAP can only
+#: re-authenticate if it knows who to re-authenticate as.
+_ACTION_SCAN_AS_USER = "/JSON/ascan/action/scanAsUser/"
+
+
+def scan_url_for(req: ScanStartRequest, context_id: str = "", user_id: str = "") -> str:
     """The API path+query that launches the scan.
+
+    *** THE CONTEXT AND USER ARE PARAMETERS, NOT LOOKUPS, AND THAT IS DELIBERATE. ***
+    This function is PURE and is one half of "the thing the gate scoped is the thing that gets
+    attacked" — a lock that a `docker exec` inside here would break, in exactly the way
+    `clash_refusal` records having been broken. :func:`start_scan` resolves the ids and passes
+    them in; every existing caller passes neither and gets the pre-build-#18 URL unchanged.
+
+    With a user, the endpoint becomes ``scanAsUser``: ZAP then knows which account to
+    re-authenticate as when the logged-out indicator matches mid-scan. Without one it stays
+    ``scan``, with the context attached when there is a context — the scanner still runs inside
+    the context's session management, it just has no identity to re-establish.
 
     *** WHY THE TARGET IS PERCENT-ENCODED, AND WHY THAT IS A SAFETY CONTROL ***
 
@@ -1345,10 +1938,18 @@ def scan_url_for(req: ScanStartRequest) -> str:
     would not add a control, it would remove the feature.
     """
     target = quote(scan_target_for(req), safe="")
+    recurse = "true" if req.recurse else "false"
+    if user_id and context_id:
+        return (
+            f"{_ACTION_SCAN_AS_USER}?url={target}&recurse={recurse}"
+            f"&contextId={quote(str(context_id), safe='')}"
+            f"&userId={quote(str(user_id), safe='')}"
+        )
+    tail = f"&contextId={quote(str(context_id), safe='')}" if context_id else ""
     return (
         f"{_ACTION_SCAN}?url={target}"
-        f"&recurse={'true' if req.recurse else 'false'}"
-        f"&inScopeOnly=false"
+        f"&recurse={recurse}"
+        f"&inScopeOnly=false{tail}"
     )
 
 
@@ -1407,9 +2008,26 @@ def observed_scans(container: str, port: int) -> list[Scan]:
     and left empty when it is not. Empty is the honest answer after a backend restart; inventing
     a target would be worse than admitting we no longer know it.
     """
-    rows = _json(_api_get(container, port, _VIEW_SCANS)).get("scans")
+    return scans_snapshot(container, port)[0]
+
+
+def scans_snapshot(container: str, port: int) -> tuple[list[Scan], bool]:
+    """``(scans, read_ok)`` — the same read, with the FAILURE told apart from the ZERO.
+
+    *** BUILD #18 ITEM 8. THIS ONE FAILS OPEN ON A BOUND, WHICH IS WHY IT IS FIXED. ***
+    :func:`observed_scans` answered ``[]`` for both "ZAP knows of no scan" and "the read
+    failed". :func:`start_scan` uses that answer to enforce ONE SCAN AT A TIME — a bound on
+    concurrent ATTACK TRAFFIC against a live production target. So an unreadable daemon made
+    the bound grant rather than refuse.
+
+    It is the same defect build #17 fixed one function away, in ``clash_refusal``: a check
+    protecting against a state it could not observe. The fix is the same shape — observe, and
+    tell "there is nothing" apart from "we cannot see".
+    """
+    body = _json(_api_get(container, port, _VIEW_SCANS))
+    rows = body.get("scans")
     if not isinstance(rows, list):
-        return []
+        return [], False
     out: list[Scan] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -1428,8 +2046,18 @@ def observed_scans(container: str, port: int) -> list[Scan]:
             alerts=_int(row.get("alertCount")),
             started_at=remembered.started_at if remembered else "",
             engagement_id=remembered.engagement_id if remembered else None,
+            # Same rule as `target_url` two lines up: ZAP does not report what a scan was
+            # CONFIGURED with, so these are merged back in when this process started the scan and
+            # left blank when it did not. Blank is the honest answer after a backend restart; the
+            # dangerous alternative is a panel confidently claiming a bypass header was in force
+            # for a scan it knows nothing about.
+            scan_policy=remembered.scan_policy if remembered else "",
+            policy_observed=remembered.policy_observed if remembered else None,
+            bypass_headers=list(remembered.bypass_headers) if remembered else [],
+            context_name=remembered.context_name if remembered else "",
+            auth_tier=remembered.auth_tier if remembered else 0,
         ))
-    return out
+    return out, True
 
 
 def _int(raw: Any) -> int:
@@ -1477,7 +2105,8 @@ def start_scan(req: ScanStartRequest) -> Scan:
     # scan doubles the attack traffic against a target the operator approved once; a backend dict
     # would lose that fact across a restart, while ZAP always knows. Same principle as
     # lifecycle.observe: status is observed, never assigned.
-    live = [s for s in observed_scans(container, req.port) if is_running(s)]
+    known, read_ok = scans_snapshot(container, req.port)
+    live = [s for s in known if is_running(s)]
     if live:
         raise ProxyRefused(
             f"a scan is already running on {container}:{req.port} "
@@ -1485,8 +2114,52 @@ def start_scan(req: ScanStartRequest) -> Scan:
             "stop it first, or wait for it to finish",
             gate="limit",
         )
+    if not read_ok:
+        # *** NOT A NEW PROHIBITION — THE EXISTING BOUND, FIRING FOR THE REASON IT WAS WRITTEN.
+        # The refusal above already exists and its gate is already `limit`. What changed is that
+        # an unreadable daemon used to make it GRANT: `[]` came back and read as "no scan is
+        # running". This is `clash_refusal`'s defect one function away, and doubling concurrent
+        # attack traffic against a live production storefront is the harm the bound exists for.
+        # It also costs nothing real: a daemon whose scan list will not read is a daemon whose
+        # scan START would fail one call later, with a worse message.
+        raise ProxyRefused(
+            f"could not read the scan list from {container}:{req.port}, so whether a scan is "
+            "already running is UNKNOWN — and starting a second one would double the attack "
+            "traffic against this target. Is the proxy up on that port? (a backend restart "
+            "loses the API key; the reader recovers it from the daemon's own argv, so an "
+            "unreadable daemon usually means it is gone)",
+            gate="limit",
+        )
 
-    raw = _api_get(container, req.port, scan_url_for(req), timeout=30)
+    # *** THE POLICY AND THE BYPASS HEADER, APPLIED FROM A KNOWN BASELINE, EVERY SCAN. ***
+    # Both are ZAP configuration and ZAP PERSISTS ITS CONFIGURATION, so "what is set" is whatever
+    # the last run wrote unless it is stated explicitly — the lesson `api.disablekey=false` is
+    # passed for. Applying at start (rather than resetting at the end) is also the only version
+    # that can work: a scan is asynchronous, so a reset after `start_scan` returns would land in
+    # the middle of the scan it was meant to follow.
+    #
+    # Neither is allowed to refuse the scan. A scan with the default policy is a worse scan, not
+    # an unsafe one, and a scan without the bypass header is exactly what build #17 already ran.
+    # What both DO is report what ZAP holds, so "the header was on" is never assumed.
+    header_names: list[str] = []
+    try:
+        header_names = list(
+            sync_bypass_headers(container, req.port, req.engagement_id).get("installed") or []
+        )
+    except Exception:  # noqa: BLE001 - warn-and-continue; the readback below is the truth
+        header_names = []
+    policy = apply_scan_policy(container, req.port, req.scan_policy)
+
+    # SCAN INSIDE THE CONTEXT, when one exists for this target (build #18 item 6). The context is
+    # LOOKED UP rather than requested: the operator configured it against a target, and asking
+    # them to name it again on every scan is a second place for the two to disagree. A target
+    # with no context scans exactly as it did before, which is what makes this additive.
+    ctx = observed_auth_context(container, req.port, context_name_for(scan_target_for(req)))
+    raw = _api_get(
+        container, req.port,
+        scan_url_for(req, context_id=ctx.context_id, user_id=ctx.user_id),
+        timeout=30,
+    )
     body = _json(raw)
 
     if not body:
@@ -1514,6 +2187,10 @@ def start_scan(req: ScanStartRequest) -> Scan:
         target_url=scan_target_for(req), recurse=req.recurse,
         state="RUNNING", progress=0, requests=0, alerts=0,
         started_at=_now(), engagement_id=req.engagement_id,
+        scan_policy=req.scan_policy or DEFAULT_SCAN_POLICY,
+        policy_observed=policy, bypass_headers=header_names,
+        context_name=ctx.context_name if ctx.context_id else "",
+        auth_tier=ctx.tier,
     )
     with _lock:
         _scans[_scan_key(container, req.port, sid)] = model
@@ -1588,14 +2265,33 @@ def scan_alerts(container: str, port: int, base_url: str = "",
     scanner, with no active scan involved). Alerts also SURVIVE ``removeAllScans`` — both
     measured. ``base_url`` narrows by site, which is the only scoping the API offers.
     """
+    alerts, _ = alerts_snapshot(container, port, base_url=base_url, start=start, count=count)
+    return alerts
+
+
+def alerts_snapshot(container: str, port: int, base_url: str = "",
+                    start: int = 0, count: int = 50) -> tuple[list[ScanAlert], bool]:
+    """``(alerts, read_ok)`` — THE SAME READ, WITH THE FAILURE TOLD APART FROM THE ZERO.
+
+    *** BUILD #18 ITEM 8, AND THIS IS THE ONE WITH TEETH. ***
+    :func:`scan_alerts` returns ``[]`` both when ZAP holds no alerts and when the read failed —
+    a wrong key, a dead daemon, bytes that would not decode, a `docker exec` that errored. Its
+    caller `POST /proxy/alerts/ingest` then writes "0 findings ingested" into engagement state,
+    and a REPORT is rendered from that state. That is a confident zero travelling all the way to
+    a deliverable, which is the exact failure shape build #17 found three of.
+
+    ``read_ok`` is False when ZAP did not answer with a JSON object carrying an ``alerts`` key.
+    An empty list WITH ``read_ok`` True is a real, trustworthy zero.
+    """
     query = f"?start={int(start)}&count={int(count)}"
     if base_url:
         query += f"&baseurl={quote_plus(base_url)}"
-    rows = _json(_api_get(container, port, _VIEW_ALERTS + query, timeout=20)).get("alerts")
+    body = _json(_api_get(container, port, _VIEW_ALERTS + query, timeout=20))
+    rows = body.get("alerts")
     if not isinstance(rows, list):
-        return []
+        return [], False
     parsed = [parse_alert(a) for a in rows]
-    return [a for a in parsed if a is not None]
+    return [a for a in parsed if a is not None], True
 
 
 def findings_from(alerts, session_id: str, run_id: str | None = None):
@@ -1971,6 +2667,15 @@ def start_spider(req: SpiderStartRequest) -> Spider:
             gate="display",
         )
 
+    # THE BYPASS HEADER REACHES THE CRAWL BROWSER TOO, and it has to: the AJAX spider's Chromium
+    # goes out through this same ZAP, so a replacer rule is the one place that covers browsing,
+    # crawling and scanning without three implementations. Warn-and-continue — a crawl without
+    # the header is exactly the crawl build #15 ran.
+    try:
+        sync_bypass_headers(container, req.port, req.engagement_id)
+    except Exception:  # noqa: BLE001 - never refuse a crawl over a header
+        pass
+
     # The approved bounds, applied BEFORE the crawl starts. These are action URLs and they are
     # reached only here, after validate_spider returned None — see the constant block.
     _api_get(container, req.port,
@@ -2029,3 +2734,378 @@ def stop_spider(container: str, port: int) -> Spider:
     """
     _api_get(container, port, _ACTION_SPIDER_STOP, timeout=20)
     return observed_spider(container, port)
+
+
+# --------------------------------------------------------------------------- #
+# AUTHENTICATED SCANNING (build #18 items 6 and 7)
+#
+# *** THE HARD PART ALREADY EXISTED, AND NAMING IT IS HALF THE DESIGN. ***
+# Build #15 published the proxy so a real browser could use it. A human logging in by hand
+# through that proxy puts a LIVE SESSION inside ZAP — cookies and all. What was missing was
+# never the session; it was telling ZAP's scanner what the session MEANS.
+#
+# TIER 2 — a Context, cookie-based session management, and logged-in/out indicators.
+#   Needs NO CREDENTIALS AT ALL. The human has already logged in; this describes the result so
+#   the scanner scans inside it and so ZAP's own view of "am I still authenticated" exists.
+#   This is also what finally makes build #16's session-expiry detector mean something: build
+#   #17 found it was reading the OLDEST 200 exchanges and therefore could not fire.
+#
+# TIER 3 — form-based authentication with stored credentials and automatic re-login.
+#   *** THE TRAP, STATED SO IT IS ENTERED WITH EYES OPEN. *** Build #15 declined this
+#   deliberately, on the grounds that per-target auth scripting is a problem the codebase would
+#   then own forever. Zaid took the decision to own it (2026-08-05). The defence is to stay
+#   DECLARATIVE — a login URL, a request body with two ZAP placeholders, two indicator regexes —
+#   and to refuse to grow a scripting language. If a target needs JavaScript to log in, the
+#   answer is Tier 2 and a human's browser, not a script engine in here.
+#
+# *** THE PASSWORD NEVER TOUCHES AN ARGV, A URL OR A RECORD. ***
+# It is resolved SERVER-SIDE out of the state credential vault, by the same
+# {session_id, kind, principal, domain} reference the Windows profile path already uses, and it
+# reaches ZAP through :func:`_api_post` — i.e. on stdin. No request model in this module has a
+# password field, so there is no field for one to leak out of.
+#
+# *** ZAP PERSISTS CONTEXTS AND USERS, TOO. *** Same trap as the replacer rule and the scan
+# policy, third instance in one build. A context named for one engagement's host survives into
+# the next, and a USER carries a credential. So contexts carry a HackPit prefix, applying one
+# removes and rebuilds it rather than editing in place, and :func:`clear_auth_contexts` runs on
+# proxy stop next to the bypass headers.
+# --------------------------------------------------------------------------- #
+CONTEXT_NAME_PREFIX = "hackpit-"
+
+#: ZAP's own method names. Spelled out rather than inlined so a future ZAP rename is one edit.
+SESSION_METHOD_COOKIE = "cookieBasedSessionManagement"
+AUTH_METHOD_FORM = "formBasedAuthentication"
+
+#: ZAP substitutes these two tokens in ``loginRequestData`` with the user's credentials. They are
+#: ZAP's spelling, not ours, and getting them wrong produces a login POST that literally sends
+#: the string "{%username%}" — a request that succeeds, authenticates nothing, and leaves the
+#: scanner running unauthenticated while every indicator says it failed.
+ZAP_USERNAME_TOKEN = "{%username%}"
+ZAP_PASSWORD_TOKEN = "{%password%}"
+
+
+def context_name_for(target_url: str) -> str:
+    """The context name HackPit uses for a target. Derived from the HOST, prefixed, lower-cased.
+
+    Prefixed so :func:`clear_auth_contexts` can tell HackPit's contexts from any a human made in
+    ZAP's UI and remove only its own — the same ownership rule as the replacer rules.
+    """
+    from urllib.parse import urlparse
+
+    host = (urlparse((target_url or "").strip()).hostname or "").lower()
+    return f"{CONTEXT_NAME_PREFIX}{host or 'target'}"
+
+
+def context_regex_for(target_url: str) -> str:
+    """The ``includeInContext`` regex covering the target's whole origin.
+
+    ``\\Q…\\E`` quotes the literal so a host containing a dot — which is every host — cannot have
+    that dot read as "any character" and pull an unrelated domain into the context. That is the
+    same class of bug as the percent-encoding on the scan URL: a field the operator typed being
+    read as syntax by the thing downstream.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse((target_url or "").strip())
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    return rf"\Q{origin}\E.*"
+
+
+class CredentialRef(BaseModel):
+    """Which stored credential to log in with. NO SECRET FIELD, deliberately.
+
+    Identical shape to the Windows-profile path's ``from_credential``, and for the identical
+    reason: the secret is resolved server-side out of the vault, so it never has to be sent to a
+    browser and back, and there is no field on any model for it to be logged from.
+    """
+
+    session_id: str = Field(..., description="Engagement session whose vault holds the credential.")
+    kind: str = Field("password", description="Credential kind as captured, e.g. 'password'.")
+    principal: str = Field(..., description="The account name.")
+    domain: str = Field("", description="Domain, if the capture had one.")
+
+
+class AuthContextRequest(BaseModel):
+    """Describe an authenticated context to ZAP. Tier 2 by default; Tier 3 when ``login_url`` is set.
+
+    NOT GATED, and the constant block says why: this configures how OUR OWN next request is
+    shaped and emits nothing at the target. The traffic it describes is emitted by ``start_scan``
+    (gated), the spider (gated) or a human's browser (the human).
+    """
+
+    target_url: str = Field(..., description="Any URL on the site. Its ORIGIN becomes the context.")
+    port: int = Field(DEFAULT_PROXY_PORT, ge=1024, le=65535)
+    engagement_id: str | None = Field(
+        None, description="Engagement to attribute against. OMIT for LAB mode."
+    )
+    logged_in_regex: str = Field(
+        "", description="A regex matching something only a LOGGED-IN response contains — a "
+        "logout link, an account menu. Optional but strongly worth setting: without it ZAP has "
+        "no way to tell an authenticated response from a login page."
+    )
+    logged_out_regex: str = Field(
+        "", description="A regex matching something only a LOGGED-OUT response contains — the "
+        "login form's action, a 'sign in' control. This is what triggers Tier 3's re-login."
+    )
+    # --- TIER 3 ONLY. All three absent = Tier 2, which needs no credentials whatsoever. ---
+    login_url: str = Field(
+        "", description="Where the login form POSTs. Setting this switches on Tier 3."
+    )
+    login_body: str = Field(
+        "", description="The login POST body with ZAP's own placeholders, e.g. "
+        "'username={%username%}&password={%password%}'. DECLARATIVE ONLY — this is a form body, "
+        "not a script, and it is deliberately the whole of the login language."
+    )
+    credential: CredentialRef | None = Field(
+        None, description="Which vault credential to log in as. The secret is resolved "
+        "server-side and reaches ZAP on stdin; it is never in this model."
+    )
+
+    @field_validator("target_url")
+    @classmethod
+    def _must_be_http(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v.lower().startswith(("http://", "https://")):
+            raise ValueError("target_url must be an http:// or https:// URL")
+        return v
+
+
+class AuthContext(BaseModel):
+    """An authenticated context AS ZAP HOLDS IT. Every field read back, none echoed."""
+
+    container: str = ""
+    port: int = 0
+    context_id: str = ""
+    context_name: str = ""
+    included: list[str] = Field(default_factory=list, description="Include regexes ZAP holds.")
+    session_method: str = ""
+    auth_method: str = ""
+    logged_in_regex: str = ""
+    logged_out_regex: str = ""
+    user_id: str = ""
+    user_name: str = Field(
+        "", description="The ACCOUNT NAME the context logs in as. A username is not a secret and "
+        "an operator needs to see which account a scan ran as; the password has no field here."
+    )
+    tier: int = Field(
+        0, description="2 = context + session management, no credentials. 3 = plus form-based "
+        "authentication with a stored credential and automatic re-login. 0 = nothing configured."
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Things that did not take. WARN AND CONTINUE: a context missing its "
+        "logged-out indicator is a weaker scan, not a refusal, and saying so beats refusing.",
+    )
+
+
+def observed_auth_context(container: str, port: int, context_name: str) -> AuthContext:
+    """What ZAP holds for this context. READ-ONLY. ``context_id == ""`` means it does not exist.
+
+    The arbiter for items 6 and 7, in the same sense ``observed_replacer_rules`` is item 1's:
+    every one of these setters answers ``{"Result":"OK"}``, and this module has measured an OK
+    that meant nothing twice already.
+    """
+    raw = _json(_api_get(container, port, f"{_VIEW_CONTEXT}?contextName={quote_plus(context_name)}"))
+    body = raw.get("context")
+    if not isinstance(body, dict):
+        return AuthContext(container=container, port=port, context_name=context_name)
+
+    ctx_id = str(body.get("id", "")).strip()
+    included = body.get("includeRegexs") or body.get("includedRegexs") or []
+    users = _json(_api_get(container, port,
+                           f"{_VIEW_USERS}?contextId={quote_plus(ctx_id)}")).get("usersList")
+    user_id = user_name = ""
+    if isinstance(users, list) and users:
+        first = users[0] if isinstance(users[0], dict) else {}
+        user_id = str(first.get("id", "")).strip()
+        user_name = str(first.get("name", "")).strip()
+
+    def _scalar(path: str, key: str) -> str:
+        answer = _json(_api_get(container, port, f"{path}?contextId={quote_plus(ctx_id)}"))
+        value = answer.get(key)
+        if isinstance(value, dict):
+            return str(value.get("methodName") or value.get("className") or "")
+        return "" if value is None else str(value)
+
+    session_method = _scalar(_VIEW_SESSION_METHOD, "methodName") or _scalar(
+        _VIEW_SESSION_METHOD, "getSessionManagementMethod")
+    auth_method = _scalar(_VIEW_AUTH_METHOD, "methodName") or _scalar(
+        _VIEW_AUTH_METHOD, "getAuthenticationMethod")
+
+    tier = 0
+    if ctx_id:
+        tier = 3 if (user_id and "form" in auth_method.lower()) else 2
+    return AuthContext(
+        container=container, port=port, context_id=ctx_id, context_name=context_name,
+        included=[str(r) for r in included] if isinstance(included, list) else [],
+        session_method=session_method, auth_method=auth_method,
+        logged_in_regex=_scalar(_VIEW_LOGGED_IN, "logged_in_regex")
+        or _scalar(_VIEW_LOGGED_IN, "getLoggedInIndicator"),
+        logged_out_regex=_scalar(_VIEW_LOGGED_OUT, "logged_out_regex")
+        or _scalar(_VIEW_LOGGED_OUT, "getLoggedOutIndicator"),
+        user_id=user_id, user_name=user_name, tier=tier,
+    )
+
+
+def list_auth_contexts(container: str, port: int) -> list[str]:
+    """Every context name ZAP holds. READ-ONLY."""
+    names = _json(_api_get(container, port, _VIEW_CONTEXTS)).get("contextList")
+    if isinstance(names, str):
+        # Some ZAP builds answer with a bracketed string rather than a JSON list. Parsed rather
+        # than dropped, because dropping it would report "no contexts" for a daemon holding some
+        # — the silent empty this build spent an item hunting.
+        names = [n.strip() for n in names.strip("[]").split(",") if n.strip()]
+    return [str(n) for n in names] if isinstance(names, list) else []
+
+
+def clear_auth_contexts(container: str, port: int) -> list[str]:
+    """Remove every context HackPit created. Returns the names ZAP no longer holds.
+
+    Removing a context removes its users, so this also takes the stored credential out of the
+    daemon. Called from :func:`stop_proxy` for the reason the replacer clear is: ZAP persists,
+    and a context carrying a credential must not survive into the next engagement.
+    """
+    before = [n for n in list_auth_contexts(container, port)
+              if n.lower().startswith(CONTEXT_NAME_PREFIX)]
+    for name in before:
+        _api_get(container, port, f"{_ACTION_REMOVE_CONTEXT}?contextName={quote_plus(name)}")
+    after = set(list_auth_contexts(container, port))
+    return [n for n in before if n not in after]
+
+
+def _resolve_login_secret(ref: CredentialRef) -> tuple[str, str]:
+    """``(username, secret)`` out of the state vault. The one place a login secret is read.
+
+    Raises ProxyRefused if the credential is not there — which is a NOT-FOUND, not a safety
+    verdict: the operator named a credential that does not exist, and silently scanning
+    unauthenticated instead would be the confident-wrong-answer failure this module exists to
+    stop producing.
+    """
+    from state import store as state_store
+
+    creds = state_store.load(ref.session_id).credentials
+    match = next(
+        (c for c in creds
+         if c.kind.lower() == ref.kind.strip().lower()
+         and c.principal.lower() == ref.principal.strip().lower()
+         and (c.domain or "").lower() == (ref.domain or "").strip().lower()),
+        None,
+    )
+    if match is None:
+        raise ProxyRefused(
+            f"no credential {ref.principal!r} (kind {ref.kind!r}) in session {ref.session_id!r} — "
+            "capture it into the vault first. Scanning unauthenticated instead would report "
+            "zero findings from a login page, which reads exactly like a secure application.",
+            gate="notfound",
+        )
+    return match.principal, match.secret or ""
+
+
+def apply_auth_context(req: AuthContextRequest, container: str) -> AuthContext:
+    """Build (or rebuild) the context on the daemon and READ IT BACK.
+
+    Rebuilds rather than edits: ZAP persists contexts, so an existing one may already carry an
+    include regex, a session method or a USER from a previous engagement, and editing in place
+    would leave whichever of those this call does not set. Remove-then-create makes the result a
+    property of this request instead of a property of the daemon's history.
+
+    WARN AND CONTINUE throughout. A missing indicator, an auth method that would not take, a
+    session method ZAP spelled differently — each lands in ``warnings`` and the context is still
+    returned. The one thing that refuses is a named credential that is not in the vault, and that
+    is a not-found rather than a gate.
+    """
+    name = context_name_for(req.target_url)
+    warnings: list[str] = []
+
+    _api_get(container, req.port, f"{_ACTION_REMOVE_CONTEXT}?contextName={quote_plus(name)}")
+    created = _json(_api_get(container, req.port,
+                             f"{_ACTION_NEW_CONTEXT}?contextName={quote_plus(name)}"))
+    ctx_id = str(created.get("contextId", "")).strip()
+    if not ctx_id:
+        # Fall through to the read-back anyway: `newContext` on some builds answers only
+        # {"Result":"OK"} and the id has to come from the context view. Never assume the failure.
+        ctx_id = observed_auth_context(container, req.port, name).context_id
+    if not ctx_id:
+        raise ProxyRefused(
+            f"ZAP did not create a context for {name!r} — is the recording proxy running on "
+            f"{container}:{req.port}?",
+            gate="notfound",
+        )
+
+    _api_get(container, req.port,
+             f"{_ACTION_INCLUDE_IN_CONTEXT}?contextName={quote_plus(name)}"
+             f"&regex={quote_plus(context_regex_for(req.target_url))}")
+    _api_get(container, req.port,
+             f"{_ACTION_SET_SESSION_METHOD}?contextId={quote_plus(ctx_id)}"
+             f"&methodName={quote_plus(SESSION_METHOD_COOKIE)}&methodConfigParams=")
+
+    for regex, action, label in (
+        (req.logged_in_regex, _ACTION_SET_LOGGED_IN, "loggedInIndicatorRegex"),
+        (req.logged_out_regex, _ACTION_SET_LOGGED_OUT, "loggedOutIndicatorRegex"),
+    ):
+        if not regex.strip():
+            continue
+        # POST, not GET: an indicator regex is not a secret, but it is arbitrary operator text
+        # with `&` and `#` in it as often as not, and the same escaping argument that percent-
+        # encodes the scan target applies — a regex containing `&` on a query string would set
+        # half a regex and silently add a parameter.
+        _api_post(container, req.port, action,
+                  {"contextId": ctx_id, label: regex.strip()})
+
+    tier = 2
+    if req.login_url.strip():
+        tier = 3
+        if ZAP_PASSWORD_TOKEN not in req.login_body:
+            warnings.append(
+                f"the login body does not contain {ZAP_PASSWORD_TOKEN} — ZAP substitutes that "
+                "exact token with the credential, so without it the login POST sends no password "
+                "and the scan runs unauthenticated while every indicator says the login failed"
+            )
+        if not req.logged_out_regex.strip():
+            warnings.append(
+                "no logged-out indicator was set, so ZAP has no trigger for automatic re-login — "
+                "Tier 3 will authenticate once and never notice the session ending"
+            )
+        _api_post(container, req.port, _ACTION_SET_AUTH_METHOD, {
+            "contextId": ctx_id,
+            "authMethodName": AUTH_METHOD_FORM,
+            "authMethodConfigParams":
+                f"loginUrl={req.login_url.strip()}&loginRequestData={req.login_body}",
+        })
+        if req.credential is not None:
+            username, secret = _resolve_login_secret(req.credential)
+            made = _json(_api_post(container, req.port, _ACTION_NEW_USER,
+                                   {"contextId": ctx_id, "name": username}))
+            user_id = str(made.get("userId", "")).strip()
+            if not user_id:
+                user_id = observed_auth_context(container, req.port, name).user_id
+            if user_id:
+                # *** THE SECRET GOES ON STDIN AND NOWHERE ELSE. *** _api_post, not _api_get —
+                # a GET would put the password in ZAP's own recorded history, on the `docker exec`
+                # argv that `ps` can read, and into the artefact a report is rendered from.
+                _api_post(container, req.port, _ACTION_SET_USER_CREDS, {
+                    "contextId": ctx_id, "userId": user_id,
+                    "authCredentialsConfigParams": f"username={username}&password={secret}",
+                })
+                _api_get(container, req.port,
+                         f"{_ACTION_SET_USER_ENABLED}?contextId={quote_plus(ctx_id)}"
+                         f"&userId={quote_plus(user_id)}&enabled=true")
+            else:
+                warnings.append(
+                    "ZAP created no user for this context, so the stored credential was NOT "
+                    "installed and the scan would run unauthenticated"
+                )
+        else:
+            warnings.append(
+                "Tier 3 was requested (a login URL was given) but no credential was named, so "
+                "there is no account to log in as — this is a Tier 2 context with a login form "
+                "described but never submitted"
+            )
+
+    held = observed_auth_context(container, req.port, name)
+    if held.tier and held.tier < tier:
+        warnings.append(
+            f"tier {tier} was requested but ZAP holds a tier-{held.tier} context — the "
+            "authentication method or the user did not take"
+        )
+    return held.model_copy(update={"warnings": warnings})

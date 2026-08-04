@@ -310,6 +310,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#the-isolation-argument-was-rebuilt-not-relaxed">The isolation argument was rebuilt, not relaxed</a></li>
 <li><a href="#two-defects-the-proof-found-that-nothing-else-could-and-the-second-was-hidden-by-the-first">Two defects the proof found that nothing else could — and the second was hidden by the first</a></li>
 <li><a href="#two-more-defects-this-time-in-the-proof-itself-and-one-is-a-lesson-arriving-backwards">Two more defects, this time in the proof itself — and one is a lesson arriving backwards</a></li>
+<li><a href="#ci-caught-a-test-depending-on-docker-for-the-second-time-in-the-same-file">CI caught a test depending on Docker — for the SECOND time, in the same file</a></li>
 <li><a href="#verification_5">Verification</a></li>
 </ul>
 </li>
@@ -2578,8 +2579,24 @@ from an exit code. That is the same sentence as part 1's, applied to the harness
 tool.</p>
 <p>Neither is a product defect, and both are worth writing down: a proof that fails for its own
 reasons trains you to discount it, which is exactly the failure mode a proof exists to prevent.</p>
+<h3 id="ci-caught-a-test-depending-on-docker-for-the-second-time-in-the-same-file">CI caught a test depending on Docker — for the SECOND time, in the same file</h3>
+<p>Build #14 part 3 recorded exactly this: a new lock drove the real validator, asserted a lab run
+"validates cleanly", passed locally and failed on the runner, because there is no Docker in CI and
+the LAB gate order is <code>target -&gt; approval -&gt; danger -&gt; **sandbox**</code>. The fix then was structural —
+every control phrased as <em>"not refused at </em><em>this</em><em> gate"</em> rather than <em>"not refused"</em>.</p>
+<p>The new crawl-gate test did it again: <code>assert clean is None</code>. Locally the stack was up, so the
+isolation gate passed and the assertion looked correct; on the runner it came back
+<code>gate='sandbox'</code>. <strong>The green local run was measuring the developer's machine, not the code.</strong></p>
+<p>Two things follow, and the second is the useful one. The assertion is now <em>if</em> refused it must be
+at <code>sandbox</code>, which excludes the three gates under test and nothing else. And the suite is now run
+with <strong><code>docker</code> removed from <code>PATH</code></strong> before being believed — with the strip itself checked first,
+because a simulation nobody checks is just a second thing to believe. That lesson already existed,
+was already written down, and still did not change what I actually ran until CI forced it. <strong>A
+convention only holds if something executes it.</strong></p>
 <h3 id="verification_5">Verification</h3>
-<p>Suite <strong>71 files, 0 failures</strong>. <code>docker/proof/browser_intercept_proof.sh</code> <strong>22 passed, 0 failed</strong>,
+<p>Suite <strong>71 files, 0 failures</strong> — and re-run with <code>docker</code> hidden from <code>PATH</code>, where it is also
+<strong>71/0</strong>, which is the environment CI actually provides.
+<code>docker/proof/browser_intercept_proof.sh</code> <strong>22 passed, 0 failed</strong>,
 including the four that carry the safety argument — an unauthenticated <strong>view</strong> refused, an
 unauthenticated <strong>action</strong> refused, a <strong>wrong key</strong> refused, and the same call <strong>with</strong> the key
 answering <code>{"version":"2.17.0"}</code> as the control proving the refusals are enforcement rather than a

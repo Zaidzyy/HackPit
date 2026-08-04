@@ -375,9 +375,21 @@ def test_every_crawl_gate_fires_each_with_a_control() -> None:
 
     Each case carries its control in the SAME test: a heuristic stuck on always-refuse would
     otherwise satisfy every assertion here and look correct.
+
+    *** THE CONTROL SAYS "NOT REFUSED AT **THIS** GATE", NEVER "NOT REFUSED". ***
+    CI caught the first version of this test doing exactly what build #14 part 3's locks were
+    already rewritten to stop doing. `assert clean is None` passed locally and failed on the
+    runner, because the LAB gate order is target -> approval -> danger -> **sandbox**, and with
+    no Docker in CI the isolation gate refuses last:
+        gate='sandbox' — "hackpit-kali-sandbox is not running"
+    So the assertion was silently depending on the developer's stack being up, which is the
+    opposite of hermetic. A control must exclude the gate under test and nothing else.
     """
     clean = proxy.validate_spider(_spider())
-    assert clean is None, f"a fully approved in-scope crawl was refused: {clean}"
+    if clean is not None:
+        assert clean.gate == "sandbox", (
+            f"a fully approved in-scope crawl was refused at {clean.gate!r}: {clean.reason}"
+        )
 
     unapproved = proxy.validate_spider(_spider(approved=False))
     assert unapproved is not None and unapproved.gate == "approval", unapproved

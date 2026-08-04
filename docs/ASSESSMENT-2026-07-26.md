@@ -2310,9 +2310,29 @@ tool.
 Neither is a product defect, and both are worth writing down: a proof that fails for its own
 reasons trains you to discount it, which is exactly the failure mode a proof exists to prevent.
 
+### CI caught a test depending on Docker — for the SECOND time, in the same file
+
+Build #14 part 3 recorded exactly this: a new lock drove the real validator, asserted a lab run
+"validates cleanly", passed locally and failed on the runner, because there is no Docker in CI and
+the LAB gate order is `target -> approval -> danger -> **sandbox**`. The fix then was structural —
+every control phrased as *"not refused at **this** gate"* rather than *"not refused"*.
+
+The new crawl-gate test did it again: `assert clean is None`. Locally the stack was up, so the
+isolation gate passed and the assertion looked correct; on the runner it came back
+`gate='sandbox'`. **The green local run was measuring the developer's machine, not the code.**
+
+Two things follow, and the second is the useful one. The assertion is now *if* refused it must be
+at `sandbox`, which excludes the three gates under test and nothing else. And the suite is now run
+with **`docker` removed from `PATH`** before being believed — with the strip itself checked first,
+because a simulation nobody checks is just a second thing to believe. That lesson already existed,
+was already written down, and still did not change what I actually ran until CI forced it. **A
+convention only holds if something executes it.**
+
 ### Verification
 
-Suite **71 files, 0 failures**. `docker/proof/browser_intercept_proof.sh` **22 passed, 0 failed**,
+Suite **71 files, 0 failures** — and re-run with `docker` hidden from `PATH`, where it is also
+**71/0**, which is the environment CI actually provides.
+`docker/proof/browser_intercept_proof.sh` **22 passed, 0 failed**,
 including the four that carry the safety argument — an unauthenticated **view** refused, an
 unauthenticated **action** refused, a **wrong key** refused, and the same call **with** the key
 answering `{"version":"2.17.0"}` as the control proving the refusals are enforcement rather than a

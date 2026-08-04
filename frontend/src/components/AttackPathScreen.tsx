@@ -385,6 +385,42 @@ export function AttackPathScreen() {
               </div>
             )}
 
+            {/* THE HONESTY BANNER. A composed path is built from the KB's commands, which
+                were written against the KB author's target. Before this, a plan where none
+                of them had been adapted looked exactly like one where all of them had. The
+                three states are deliberately distinct — "unchecked" must never read as
+                "clean". */}
+            {(result.commands_total ?? 0) > 0 &&
+              (!result.scope_checked ? (
+                <p className="hp-ap-runnable">
+                  <span className="hp-ap-runnable-lead">commands not checked</span>
+                  no scope was pasted, so there was nothing to check these{" "}
+                  {result.commands_total} commands against. Paste your scope to have every
+                  one of them judged against it.
+                </p>
+              ) : (result.commands_unrunnable ?? 0) > 0 ? (
+                <p className="hp-ap-runnable hp-ap-runnable-warn">
+                  <span className="hp-ap-runnable-lead">
+                    {result.commands_unrunnable} of {result.commands_total} commands
+                    won&rsquo;t run as written
+                  </span>
+                  they point outside your scope, or name no target at all. Each one says
+                  which, below. The rest name a host in scope.
+                </p>
+              ) : (
+                <p className="hp-ap-runnable hp-ap-runnable-ok">
+                  <span className="hp-ap-runnable-lead">
+                    all {result.commands_total} commands name a host in scope
+                  </span>
+                  {result.target_source === "scope" && result.target && (
+                    <>
+                      target <code>{result.target}</code> was taken from your scope —
+                      HackPit chose it, so check it is the one you meant.
+                    </>
+                  )}
+                </p>
+              ))}
+
             <ol className="hp-ap-phases">
               {result.phases.map((ph, pi) => (
                 <li className="hp-ap-phase" key={ph.phase}>
@@ -496,14 +532,27 @@ function StepCard({ step }: { step: AttackStep }) {
 
       {step.commands.length > 0 ? (
         step.commands.map((c, i) => (
-          <div className="hp-code" key={i}>
+          <div
+            className={`hp-code${c.runnable === false ? " hp-code-unrunnable" : ""}`}
+            key={i}
+          >
             <div className="hp-code-bar">
               <span className="hp-code-lang">{c.lang || "sh"}</span>
+              {c.runnable === false && (
+                <span className="hp-code-flag">won&rsquo;t run as written</span>
+              )}
               {c.copyable !== false && <CopyButton text={c.cmd} />}
             </div>
             <pre className="hp-code-pre">
               <code>{c.cmd}</code>
             </pre>
+            {/* THE SCOPE CHECK. Shown under the command it judges, never as a page-level
+                summary the eye skips: this is the difference between a plan that is ready
+                and one that only looks ready. It refuses nothing — the executor's
+                target/scope lock is what actually stops an off-target command. */}
+            {c.runnable === false && c.unrunnable_reason && (
+              <p className="hp-code-why">{c.unrunnable_reason}</p>
+            )}
           </div>
         ))
       ) : ai ? (

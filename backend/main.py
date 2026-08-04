@@ -30,7 +30,7 @@ from typing import Any
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # --------------------------------------------------------------------------- #
 # reuse the pipeline (search + canonical schema) without reimplementing it
@@ -681,14 +681,66 @@ class LLMConfigIn(BaseModel):
 
 # ---- attack path --------------------------------------------------------- #
 class AttackPathIn(BaseModel):
+    # extra="forbid": a field this model does not know is a 422, not a shrug. `target`
+    # below used to be one of those — callers passed it, Pydantic dropped it silently, and
+    # the plan came back pointed at nothing while looking like the request had been honoured.
+    # Rejecting an unknown field is the only answer that cannot be mistaken for success.
+    model_config = ConfigDict(extra="forbid")
+
     goal: str = Field(min_length=3, description="Free-text target/goal description.")
     target_type: str | None = Field(
         default=None, description="Optional chip: pentest | bugbounty | ctf | ad."
     )
+    target: str | None = Field(
+        default=None,
+        description="Optional explicit target (host / IP / URL) for this path. Overrides "
+        "the target parsed from the goal, and is what example hosts in KB commands are "
+        "rewritten to. When omitted the target is taken from the goal, and failing that "
+        "from the first concrete host in scope_text.",
+    )
     scope_text: str | None = Field(
         default=None,
         description="Optional pasted scope / Rules of Engagement. Fed to the target "
-        "profiler; forbidden paths/hosts are dropped from the composed path.",
+        "profiler; forbidden paths/hosts are dropped from the composed path. Also parsed "
+        "as the PROGRAM SCOPE every composed command is checked against.",
+    )
+
+
+class PlannedCode(Code):
+    """A command as the PLANNER hands it back — the KB's ``Code`` plus what composition
+    learned about it.
+
+    A subclass rather than extra fields on ``Code``: that model is the canonical KB entry
+    shape (pipeline/schema.py) and these facts are true of a planned command, not of a
+    stored one. It also repairs a silent loss — ``unverified`` and ``truncated`` were
+    already being set by attack_path.py and then dropped by this response_model, because
+    a field a response model does not declare does not reach the client. That is the same
+    trap ``scoped``/``foreign_refs`` had to be added here to avoid, and it is why a new
+    per-command fact needs a change in three files, not one.
+    """
+
+    unverified: bool = Field(
+        default=False,
+        description="True = the model's own command (an ai_suggested step), not lifted "
+        "from a KB entry. Nothing has checked that it is correct.",
+    )
+    truncated: bool = Field(
+        default=False,
+        description="True = the command was capped for display; open the cited entry for "
+        "the full text.",
+    )
+    runnable: bool | None = Field(
+        default=None,
+        description="THE SCOPE CHECK. False = this command cannot run as written against "
+        "this engagement — see unrunnable_reason. Null = there was no declared scope to "
+        "check it against, or the command names an in-scope host and is fine. Plan quality "
+        "only: it refuses nothing, and the executor's target/scope lock is the real bound.",
+    )
+    unrunnable_reason: str | None = Field(
+        default=None,
+        description="Why this command cannot run as written — either it points at a host "
+        "outside the engagement scope, or it names no host at all. Null when runnable is "
+        "not False.",
     )
 
 
@@ -701,10 +753,15 @@ class AttackStep(BaseModel):
         "AI-suggested step (no KB citation).",
     )
     why: str = Field(description="1–2 line rationale for this step.")
-    commands: list[Code] = Field(
+    commands: list[PlannedCode] = Field(
         description="Commands for this step. For grounded/writeup steps these are "
         "the entry's real commands; for AI-suggested steps they are the model's "
-        "own, unverified."
+        "own, unverified. Each carries its own scope verdict — see PlannedCode."
+    )
+    unrunnable_commands: int | None = Field(
+        default=None,
+        description="How many of this step's commands failed the scope check — a badge "
+        "count so a step can be seen to need work without expanding it. Null when none did.",
     )
     ai_suggested: bool = Field(
         default=False,
@@ -810,8 +867,34 @@ class AttackPathOut(BaseModel):
     target_type: str | None
     target: str | None = Field(
         default=None,
-        description="Target (IP/host/URL) parsed from the goal and substituted "
-        "into step commands; null if none was detectable.",
+        description="Target (IP/host/URL) substituted into step commands; null if none "
+        "could be determined from the request or the scope.",
+    )
+    target_source: str | None = Field(
+        default=None,
+        description="Where that target came from: 'caller' (the request's own target "
+        "field), 'goal' (parsed out of the goal text), or 'scope' (the first concrete "
+        "in-scope host — HackPit chose it for you). Null when there is no target, in "
+        "which case no example host was rewritten and most commands will be unrunnable.",
+    )
+    scope_checked: bool = Field(
+        default=False,
+        description="True when a usable scope was supplied and every command was judged "
+        "against it. False = no scope, so nothing was checked. Reported separately from "
+        "commands_unrunnable because 0-of-0-checked and 0-of-32-bad are the same number "
+        "and very different facts; without this the UI would render 'unchecked' as 'clean'.",
+    )
+    commands_total: int = Field(
+        default=0, description="How many commands this path returned, across every step."
+    )
+    commands_unrunnable: int = Field(
+        default=0,
+        description="How many of them cannot run as written against this engagement — "
+        "they point at a host outside the scope, or name no host at all. THE HEADLINE "
+        "HONESTY NUMBER: a plan whose commands are mostly the KB's own examples used to "
+        "be indistinguishable from one that had been adapted to the target. Always 0 "
+        "when no scope_text was supplied, because then there is nothing to check against "
+        "— that is 'unchecked', not 'clean'.",
     )
     phases: list[AttackPhase]
     profile: TargetProfile = Field(
@@ -1455,13 +1538,22 @@ def attack_path_compose(req: AttackPathIn = Body(...)) -> dict[str, Any]:
     the configured LLM (default local Ollama). Every returned step cites a real
     KB entry and carries that entry's real commands — steps the model invents or
     miscites are dropped in the grounding pass.
+
+    Those real commands are the KB author's, written against the KB author's target. Two
+    passes make that fact visible rather than letting it read as a finished plan: example
+    hosts and placeholders are rewritten to this engagement's target (taken from ``target``,
+    else the goal, else the first concrete host in ``scope_text``), and then EVERY command
+    is checked against the declared scope, with the ones that still cannot run marked
+    ``runnable: false`` and given a reason. ``commands_unrunnable`` is the count. With no
+    ``scope_text`` there is nothing to check against and the count is 0 — unchecked, not clean.
     """
     goal = req.goal.strip()
     if not goal:
         raise HTTPException(status_code=400, detail="goal is required")
     try:
         return attack_path.compose(
-            STATE.by_id, goal, req.target_type, _resilient_search, req.scope_text
+            STATE.by_id, goal, req.target_type, _resilient_search, req.scope_text,
+            req.target,
         )
     except llm.LLMError as e:
         # Ollama offline / no key / unparseable output / nothing grounded.

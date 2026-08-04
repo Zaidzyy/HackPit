@@ -316,6 +316,15 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#two-smaller-things-the-live-run-surfaced">Two smaller things the live run surfaced</a></li>
 </ul>
 </li>
+<li><a href="#the-audit-punch-list-worked-build-16-2026-08-04">The audit punch list, worked — build #16 (2026-08-04)</a><ul>
+<li><a href="#d8-the-planner-emitted-commands-nobody-could-run-and-nothing-said-so">D8 — the planner emitted commands nobody could run, and nothing said so</a></li>
+<li><a href="#d3-nothing-throttled-anything">D3 — nothing throttled anything</a></li>
+<li><a href="#two-shipping-defects-the-pacing-work-found-in-the-proxy-flag-it-was-mirroring">Two shipping defects the pacing work found in the proxy flag it was mirroring</a></li>
+<li><a href="#d5-the-safety-suite-rewrote-the-live-kb-on-every-run">D5 — the safety suite rewrote the live KB on every run</a></li>
+<li><a href="#d6-nothing-noticed-a-derived-artefact-going-stale">D6 — nothing noticed a derived artefact going stale</a></li>
+<li><a href="#d7-every-successful-ad-command-looked-like-a-failing-one">D7 — every successful AD command looked like a failing one</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -2717,5 +2726,139 @@ prose no gate reads, so a crawl that clicks through a production storefront woul
 gate. It was caught by reading the record, not by a control. Same shape as the
 credential-precondition finding in the 2026-08-04 audit: <strong>a documented constraint with nothing
 behind it.</strong></p>
+<h2 id="the-audit-punch-list-worked-build-16-2026-08-04">The audit punch list, worked — build #16 (2026-08-04)</h2>
+<p>The 2026-08-04 audit ended with nine open items. Zaid reviewed each and decided which to build:
+D3, D5, D6, D7, D8 and D9 in, plus three new ones (known-issue matching, VRT priority, scan
+session-expiry detection) and the <code>:exposure</code> control layout. <strong>D1, D2, D4, route auth,
+<code>INCLUDE_CREDENTIAL_SECRETS</code> and mobile support were reviewed and declined</strong> — they are not open
+defects and are not listed as such below.</p>
+<h3 id="d8-the-planner-emitted-commands-nobody-could-run-and-nothing-said-so">D8 — the planner emitted commands nobody could run, and nothing said so</h3>
+<p>The measurement that opened this: with the correct request shape, <code>/attack-path</code> returned <strong>32
+commands, of which 0 named the real scope</strong>, four carried a foreign example host, and an earlier
+run had returned <code>sublist3r -d tesla.com -t 100 / above the -t is for threads…</code> — the source
+writeup's example host <em>and</em> its prose, verbatim, inside the <code>cmd</code> field. Every step carried a
+<code>target_adaptation</code> line <em>describing</em> the substitution in words. Nothing performed it.</p>
+<p><strong>The substitution machinery was not broken. It never ran.</strong> <code>substitute_target</code> opens with
+<code>if not target: return cmd</code>, and <code>target</code> came only from <code>extract_target(goal)</code> — which reads the
+goal text. The failing call passed the real hosts in <code>scope_text</code> and a goal that named none, so
+<code>target</code> was <code>None</code> and every command kept the KB author's example host. One missing fallback made
+an entire feature a no-op, silently, for as long as it has existed.</p>
+<p>Two changes, in the order the work was scoped:</p>
+<p><strong>(c) Validate and flag first.</strong> Every returned command is now checked against the declared
+program scope and, when it cannot run as written, marked <code>runnable: false</code> with the reason. Two
+reasons, kept apart because the fix differs: <em>points at a host outside the scope</em> (written for
+someone else's environment) and <em>names no host at all</em> (an unsubstituted placeholder, or a KB
+excerpt that was prose rather than a command). The path-level <code>commands_unrunnable</code> is the
+headline: <strong>a plan built entirely from the KB's own examples used to be indistinguishable from
+one adapted to the target.</strong></p>
+<p><strong>(a) Then substitute.</strong> <code>primary_target</code> falls back to the first <em>concrete</em> in-scope host when
+the goal names none, and reports where the target came from (<code>caller</code> / <code>goal</code> / <code>scope</code>) so
+"HackPit picked this for you" reads differently from "you named it". A wildcard is deliberately
+not a target: <code>*.example.com</code> names nothing runnable, and inventing <code>www.</code> in front of it would
+be a fabricated target dressed as a real one.</p>
+<p><strong>The scope model is reused, not re-derived.</strong> <code>cockpit/scope.py</code> — wildcards, CIDR, exclusions,
+already measured against a real bug-bounty program — is what judges the commands, so the plan
+cannot disagree with the gate about what is in scope. The same reasoning produced one
+<code>_host_positions()</code> definition shared by the substituter and the checker: written twice they
+would drift, and a checker that disagreed with the substituter would flag commands it had itself
+just fixed. That is the shared-predicate defect this repo has now found four times.</p>
+<p><strong>What was NOT done, and why.</strong> A real foreign host like <code>tesla.com</code> is <em>flagged, never
+rewritten</em>. Rewriting any out-of-scope host sitting in a host position would have closed the gap
+completely — and would also have rewritten <code>curl https://raw.githubusercontent.com/…/linpeas.sh</code>
+into a request against the client's own storefront. A tool download, an attacker-owned listener
+and a target are all "a host in a host position"; nothing in the argv distinguishes them. So
+example hosts are substituted (they are recognisable), and everything else is reported. The
+scope directive said <em>"where it can be done safely"</em>; this is where that line falls.</p>
+<p><strong><code>/attack-path</code> accepts <code>target</code> now — and refuses what it does not know.</strong> A <code>target</code> field
+used to be dropped in silence, which is how the first measurement looked worse than it was. It
+is a declared field, and <code>AttackPathIn</code> is <code>extra="forbid"</code>, so an unknown field is a 422 rather
+than a shrug.</p>
+<p><strong>A silent loss found on the way in.</strong> <code>AttackStep.commands</code> was typed <code>list[Code]</code> — the KB
+entry shape — while <code>attack_path.py</code> had been setting <code>unverified</code> and <code>truncated</code> on planned
+commands the whole time. A response model does not carry a field it has not declared, so both
+have been dropped on the floor for as long as they have existed. <code>PlannedCode</code> repairs that and
+holds the new scope fields. <code>test_attack_path_contract.py</code> locks the general property rather
+than a list of names: <strong>every key the composer emits must survive <code>response_model</code></strong>, with a
+planted field proving the check can fail. A name list would need updating by exactly the person
+who just forgot.</p>
+<h3 id="d3-nothing-throttled-anything">D3 — nothing throttled anything</h3>
+<p>Pacing injects each tool's own rate or delay flag, in the exact shape <code>executor.apply_proxy</code>
+already uses, <strong>engagement mode only</strong> — the lab target is an isolated container with nobody to
+annoy, and lab argv stays byte-identical. A tool with no known throttle flag runs unchanged and
+<em>says so</em>, because a run the operator believes was paced and was not is precisely how a program
+bans your IP mid-engagement.</p>
+<p>Three things the shape needed that a proxy URL does not:</p>
+<ul>
+<li><strong>Units.</strong> Throttling is spelled three incompatible ways — requests/sec, packets/sec, or a
+  delay <em>between</em> requests. The operator supplies one number and it is converted per tool.
+  Handing a literal <code>4</code> to sqlmap's <code>--delay</code> would mean a four-<em>second</em> wait when four
+  requests/second was asked for; reversed, a delay fed to a rate flag runs 1000× too fast. The
+  regression test pins all twelve conversions.</li>
+<li><strong>Already-set detection.</strong> A command that already carries its own rate flag is left alone and
+  says so. Two contradictory rate flags are resolved silently and differently by each tool.</li>
+<li><strong>Flag placement.</strong> See below — this one was a live bug, not a hypothetical.</li>
+</ul>
+<p><strong>Every flag was read out of the tool's own <code>--help</code> inside the real image</strong>, not recalled. That
+check removed three candidates rather than guessing at them: <code>amass</code> is un-probeable in the
+sandbox (the sudo / <code>no-new-privileges</code> trap), <code>curl</code> issues one request so there is nothing to
+pace, and — see below — the image's <code>httpx</code> is not the tool anyone assumes it is. All three take
+the honest no-flag path.</p>
+<h3 id="two-shipping-defects-the-pacing-work-found-in-the-proxy-flag-it-was-mirroring">Two shipping defects the pacing work found in the proxy flag it was mirroring</h3>
+<p><strong><code>gobuster --proxy … dir …</code> has never worked.</strong> Measured against the real image, it exits with
+<code>flag provided but not defined: -proxy</code> and does nothing at all: gobuster's flags belong <em>after</em>
+its subcommand. Asking to capture a gobuster run has been breaking the run. Pacing would have
+reproduced the bug exactly, so the placement rule now lives in one <code>_place_flag()</code> used by both
+rewrites — the next tool with subcommands cannot be right in one and wrong in the other.</p>
+<p><strong><code>/usr/bin/httpx</code> in the sandbox is the <em>python</em> httpx CLI</strong>, whose proxy flag is <code>--proxy</code>.
+ProjectDiscovery's httpx — the one <code>-http-proxy</code> belongs to — installs as <code>httpx-toolkit</code>. Both
+names were mapped to <code>-http-proxy</code>, so capture on <code>httpx</code> produced a command line that CLI
+rejects outright. Same defect class as <em>"Kali ships no <code>zap-baseline.py</code>"</em>: <strong>the map named a
+flag for a tool that is not there.</strong></p>
+<h3 id="d5-the-safety-suite-rewrote-the-live-kb-on-every-run">D5 — the safety suite rewrote the live KB on every run</h3>
+<p><code>test_reingest_is_byte_identical</code> re-ran the real ingester against <code>data/kb/entries.jsonl</code>
+itself. The assertion held, but a green test that rewrites 15 MB of gitignored production data
+with no restore path is how an earlier build lost an entry. It now ingests into a <strong>copy of the
+real KB</strong> in a temp directory, and afterwards asserts production is byte-identical.</p>
+<p>Copying the KB alone was not enough. <strong>Everything under <code>/data/</code> is gitignored</strong>, and <code>--kb</code>
+redirected only <code>entries.jsonl</code> — the sidecars, <code>toolfiles.json</code> and <code>corpora_report.json</code> kept
+writing into <code>data/kb</code> regardless. The ingester's outputs now follow the KB it is given, so
+"run this somewhere else" means it. The test asserts that too, by mtime: <code>corpora_report.json</code>
+is rewritten unconditionally, so before this fix its mtime moved on every single suite run.</p>
+<p>It is still the <strong>real</strong> KB, copied — with a size floor asserting &gt;1000 entries. Idempotence over
+2,743 entries of real escapes, non-ASCII titles and foreign lines is the property worth proving;
+over a three-line fixture it is close to vacuous, and a fixture is what this test would otherwise
+decay into.</p>
+<h3 id="d6-nothing-noticed-a-derived-artefact-going-stale">D6 — nothing noticed a derived artefact going stale</h3>
+<p>The scripts index sat <strong>126 entries behind</strong> the KB (2,617 against 2,743) through an entire
+audit, and was found by reading a number. A stale index does not error — it answers, with 126
+entries' worth of the corpus missing.</p>
+<p><code>test_kb_drift.py</code> compares the KB against the three artefacts built from it: the semantic index
+(<code>ids.json</code>), the scripts index, and the corpus report. Two details carry the weight:</p>
+<ul>
+<li><strong>A count is not coverage.</strong> <code>ids.json</code> is checked for <em>set equality</em> of entry ids, not just
+  the total — one entry added and another deleted between runs leaves the count untouched and
+  the index wrong. The scripts index is additionally checked for citations that no longer
+  resolve.</li>
+<li><strong>Absences are reported, never silently green.</strong> <code>/data/</code> is gitignored in its entirety, so a
+  fresh clone or a CI runner has none of these files, and there the test proves nothing. It says
+  so out loud. A fourth check fails when <code>data/kb</code> grows a file nothing has classified, so
+  leaving something unchecked has to be a decision rather than an oversight.</li>
+</ul>
+<p>Each check has a positive control that runs <strong>the real check</strong> against a doctored artefact —
+including a 126-entry lag, the exact drift that went unnoticed.</p>
+<h3 id="d7-every-successful-ad-command-looked-like-a-failing-one">D7 — every successful AD command looked like a failing one</h3>
+<p>PowerShell's stderr over WinRM is not text; it is a CLIXML object stream, and every progress bar
+it would have drawn on a console arrives as an <code>&lt;Obj S="progress"&gt;</code> record. Build #9's live run
+against a real <code>corp.local</code> DC returned <code>rc=0</code> alongside a wall of markup.</p>
+<p>Progress records are now stripped where the <code>WinRMResult</code> is <em>built</em>, so the event stream and the
+persisted run record see the same cleaned text; doing it at a display layer would have left the
+record full of markup and put the burden on every future consumer.</p>
+<p>The whole risk of this fix is that it strips something else, converting a cosmetic annoyance into
+a silent failure — a strictly worse bug. So the filter removes progress records and nothing else:
+Error, Warning, Verbose and Debug streams survive, <code>_xNNNN_</code> escapes are decoded, and <strong>anything
+that fails to parse is returned verbatim</strong>. The raw stderr stays on the result and the dropped
+count is reported, so "quiet because it was filtered" stays distinguishable from "quiet because
+it was quiet". The test that matters is the negative one: a genuine <code>Get-ADUser</code> error survives a
+document carrying forty progress records.</p>
 </body>
 </html>

@@ -60,6 +60,18 @@ class ExecRequest(BaseModel):
         "REWRITTEN argv is what the gates classify. A tool with no known proxy flag runs "
         "UNCHANGED and the response says so, rather than pretending it was captured.",
     )
+    pace: int | None = Field(
+        None,
+        ge=1,
+        le=10000,
+        description="Throttle this run to roughly this many requests per second by adding "
+        "the tool's OWN rate/delay flag (an argument rewrite on an already-gated request — "
+        "no new capability, no new gate, and the REWRITTEN argv is what the gates classify). "
+        "ENGAGEMENT MODE ONLY: lab runs and WinRM runs ignore it and say so. A tool with no "
+        "known throttle flag, or one that already carries its own rate flag, runs UNCHANGED "
+        "and the start event says so rather than pretending the run was paced. Not a safety "
+        "control — a paced command is quieter, not safer, and every gate still applies.",
+    )
     step_id: str | None = Field(
         None, description="Optional attack-path step id ({phase}-{n}) this run realizes."
     )

@@ -56,9 +56,15 @@ run_test() {
 # cannot demonstrate that it catches a planted violation, nothing after this line means much.
 run_test test_scans.py "shared source scanner (whole-tree sweep / path allow-lists / AST indirection / can-fail)"
 
+run_test test_kb_drift.py "KB DRIFT (the semantic index, the scripts index and the corpus report all still describe the LIVE KB — the scripts index once sat 126 entries stale and nothing noticed / every check has a control / absences reported, never silently green)"
+
 run_test test_attack_path.py "attack-path composer regressions"
 
+run_test test_attack_path_contract.py "/attack-path response contract (no composer field silently stripped / unknown request field refused)"
+
 run_test test_target_substitution.py "target-substitution polish (range rewrite / foreign-host flag / target-lock backstop)"
+
+run_test test_pacing_safety.py "run PACING (grants nothing / rewrite cancels a prevalidated verdict / ENGAGEMENT-ONLY, lab byte-identical / every unpaced path says so and reaches the start event / rate converted into each tool's own unit, never passed through / a subcommand tool's flag lands where it parses, in BOTH rewrites)"
 
 run_test test_cockpit.py "cockpit safety-layer tests (allowlist / target / approval / isolation / order)"
 
@@ -87,6 +93,8 @@ run_test test_terminal.py "raw PTY terminal containment (human-only / hardcoded 
 run_test test_winrm.py "WinRM Windows transport (profile CRUD / routes to WinRM / records mode=windows)"
 
 run_test test_winrm_safety.py "WinRM SAFETY invariants (host-locked / no gate bypass / secret never leaks / no auto-run)"
+
+run_test test_winrm_clixml.py "WinRM CLIXML noise (PROGRESS records stripped so a clean AD run stops reading as a failing one / a GENUINE ERROR still surfaces / warning+verbose+debug survive / an unparseable document is passed through, never swallowed)"
 
 run_test test_secretargs.py "credential redaction in persisted run records (build #9 live-fire finding)"
 

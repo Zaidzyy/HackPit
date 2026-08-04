@@ -34,8 +34,10 @@ enabling Basic auth. Two credential kinds:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
+from xml.etree import ElementTree
 
 # The all-zero LM hash — the standard "no LM" filler pass-the-hash tools prepend so the
 # credential is a well-formed ``LM:NT`` pair.
@@ -53,9 +55,100 @@ class WinRMResult:
     exit_code: int | None
     stdout: str
     stderr: str
+    #: stderr exactly as the box sent it, before the CLIXML progress records were stripped.
+    #: Kept so nothing is destroyed by the filter, and deliberately NOT in ``to_dict`` — it
+    #: is the wall of markup the filter exists to keep off the operator's screen.
+    stderr_raw: str = ""
+    #: How many PowerShell PROGRESS records were dropped from stderr. Reported rather than
+    #: hidden: an operator who sees "0 progress records" and still has noise knows the
+    #: filter is not the reason, and one who sees 40 knows what happened to them.
+    progress_records_dropped: int = 0
 
     def to_dict(self) -> dict[str, Any]:
-        return {"exit_code": self.exit_code, "stdout": self.stdout, "stderr": self.stderr}
+        return {
+            "exit_code": self.exit_code,
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "progress_records_dropped": self.progress_records_dropped,
+        }
+
+
+# --------------------------------------------------------------------------- #
+# CLIXML — why a successful AD command looks like a failing one (D7)
+#
+# `run_ps` runs the command through powershell.exe, whose stderr is not text but a CLIXML
+# document: a PowerShell object stream serialised as XML, prefixed with the literal line
+# `#< CLIXML`. Every progress bar PowerShell would have drawn on a console — "Preparing
+# modules for first use", the percent-complete ticks of any cmdlet that reports progress —
+# is serialised into it as an <Obj S="progress"> record. So a command that succeeded
+# perfectly returns rc=0 with hundreds of lines of markup on stderr, and every clean run in
+# build #9's live-fire session read as a failing one.
+#
+# WHAT IS DROPPED, AND ONLY THAT: progress records. The Error, Warning, Verbose and Debug
+# streams are real output and are kept, unescaped back into text. If anything about the
+# document cannot be parsed the ORIGINAL text is returned untouched — a filter that swallows
+# an error it did not understand would turn a cosmetic annoyance into a silent failure,
+# which is a strictly worse bug than the one being fixed.
+# --------------------------------------------------------------------------- #
+_CLIXML_HEADER = "#< CLIXML"
+_PS_NS = "{http://schemas.microsoft.com/powershell/2004/04}"
+#: PowerShell escapes characters it cannot put in XML text as _xNNNN_ (CR is _x000D_).
+_XML_ESCAPE_RE = re.compile(r"_x([0-9A-Fa-f]{4})_")
+
+
+def _unescape(text: str) -> str:
+    return _XML_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), text or "")
+
+
+def clean_stderr(text: str) -> tuple[str, int]:
+    """Strip PowerShell PROGRESS records from a CLIXML stderr blob.
+
+    Returns ``(stderr, progress_records_dropped)``. Plain (non-CLIXML) stderr is returned
+    unchanged with a count of 0, so a transport error string or an ordinary message passes
+    straight through.
+
+    FAIL-OPEN BY DESIGN. Any parse failure returns the input verbatim. The cost of that is
+    the operator seeing the markup they saw before; the cost of the alternative is a real
+    error being deleted because its document had a shape this function did not expect.
+    """
+    if not text or _CLIXML_HEADER not in text:
+        return text or "", 0
+
+    kept: list[str] = []
+    dropped = 0
+    # A single stderr may carry several CLIXML documents concatenated — one per write.
+    chunks = text.split(_CLIXML_HEADER)
+    for chunk in chunks:
+        body = chunk.strip()
+        if not body:
+            continue
+        try:
+            root = ElementTree.fromstring(body)
+        except ElementTree.ParseError:
+            # Not parseable — hand it back exactly as it arrived rather than guess.
+            kept.append(chunk.strip("\r\n"))
+            continue
+        for node in root:
+            tag = node.tag.replace(_PS_NS, "")
+            stream = (node.get("S") or "").lower()
+            # THE ONLY THING THIS FUNCTION REMOVES.
+            if tag == "Obj" and stream == "progress":
+                dropped += 1
+                continue
+            if tag == "S":
+                piece = _unescape(node.text or "")
+                if piece.strip():
+                    kept.append(piece)
+                continue
+            # Anything else (an Obj that is not progress, an unknown element) is real
+            # output of some kind. Keep its text rather than silently discard it.
+            piece = _unescape("".join(node.itertext()))
+            if piece.strip():
+                kept.append(piece)
+
+    out = "".join(kept)
+    # Trailing CR/LF from the last record only — internal newlines are the error's own.
+    return out.rstrip("\r\n"), dropped
 
 
 def _endpoint(host: str, port: int) -> str:
@@ -111,10 +204,18 @@ def _send(profile: dict[str, Any], command: str, timeout: int) -> WinRMResult:
         result = session.run_ps(command)  # runs the command as a PowerShell script
     except Exception as exc:  # pragma: no cover - network/auth failures need a live box
         raise WinRMError(f"WinRM run failed against {host}:{port} — {exc}") from exc
+    raw_stderr = _decode(result.std_err)
+    # Filter HERE, at the one place a WinRM result is built, so the events, the persisted
+    # RunRecord and anything else downstream all see the same cleaned stderr. Doing it at a
+    # display layer would leave the run record full of markup and put the burden on every
+    # future consumer to remember.
+    stderr, dropped = clean_stderr(raw_stderr)
     return WinRMResult(
         exit_code=result.status_code,
         stdout=_decode(result.std_out),
-        stderr=_decode(result.std_err),
+        stderr=stderr,
+        stderr_raw=raw_stderr,
+        progress_records_dropped=dropped,
     )
 
 

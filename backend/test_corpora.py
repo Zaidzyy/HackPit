@@ -21,6 +21,7 @@ So the properties pinned here are the ones that make an additive ingest safe to 
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -279,18 +280,76 @@ def test_the_ingester_executes_nothing() -> None:
 
 
 def test_reingest_is_byte_identical() -> None:
-    """The whole point of Route B: safe to re-run. Skipped when sources are absent."""
+    """The whole point of Route B: safe to re-run. Skipped when sources are absent.
+
+    RUN AGAINST A COPY OF THE REAL KB, NEVER THE LIVE ONE (D5). This test used to re-run the
+    ingester against `data/kb/entries.jsonl` itself, on every single invocation of the safety
+    suite. The assertion held — but a green test that rewrites 15 MB of gitignored production
+    data with no restore path is a standing hazard, and it is exactly how an earlier build
+    lost an entry. Everything under /data/ is gitignored, so the copy has to catch the
+    DERIVED outputs too: the sidecars, toolfiles.json and corpora_report.json all used to be
+    written to data/kb regardless of --kb.
+
+    AND IT IS STILL THE REAL KB. Copied, not fabricated. Idempotence over a 2,700-entry file
+    with its real mix of foreign lines, escapes and non-ASCII titles is the property worth
+    proving; over a three-line fixture it is close to vacuous, and a fixture is what this
+    test would naturally decay into. The size floor below exists to stop that.
+    """
     if not KB_PATH.is_file() or not ic.DEFAULT_PATT.is_dir():
         print("  (skipped — sources not present)")
         return
-    before = KB_PATH.read_bytes()
-    r = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "pipeline" / "ingest_corpora.py")],
-        capture_output=True, text=True, timeout=600,
+
+    live_before = KB_PATH.read_bytes()
+    live_entries = sum(1 for ln in live_before.split(b"\n") if ln.strip())
+    assert live_entries > 1000, (
+        f"the live KB has only {live_entries} entries — this test is meant to run against the "
+        "REAL corpus; at this size it would prove almost nothing about idempotence"
     )
-    assert r.returncode == 0, r.stderr[-2000:]
-    assert KB_PATH.read_bytes() == before, "a re-run must be byte-identical"
-    print("  re-running the ingester is byte-identical: PASS")
+    # Production's derived outputs, so we can prove afterwards that none of them moved.
+    # corpora_report.json is rewritten UNCONDITIONALLY by the ingester, so its mtime is the
+    # sharpest available evidence: before this fix it changed on every suite run.
+    watched = {
+        p: (p.stat().st_mtime_ns, p.read_bytes())
+        for p in (ic.TOOLFILES_OUT, ic.REPORT_OUT)
+        if p.is_file()
+    }
+
+    with tempfile.TemporaryDirectory() as td:
+        work = Path(td) / "kb"
+        work.mkdir(parents=True)
+        copy = work / "entries.jsonl"
+        shutil.copy2(KB_PATH, copy)
+        assert copy.read_bytes() == live_before, "the copy is not a faithful copy"
+
+        r = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "pipeline" / "ingest_corpora.py"),
+             "--kb", str(copy)],
+            capture_output=True, text=True, timeout=900,
+        )
+        assert r.returncode == 0, r.stderr[-2000:]
+        assert copy.read_bytes() == live_before, "a re-run must be byte-identical"
+        # the redirect is REAL: the run's outputs landed beside the copy, not in data/kb
+        assert (work / ic.TOOLFILES_NAME).is_file(), (
+            "the ingester did not write toolfiles.json beside the KB it was given"
+        )
+        assert (work / ic.PAYLOAD_DIRNAME).is_dir(), (
+            "the ingester did not write its sidecars beside the KB it was given"
+        )
+
+    # PRODUCTION IS UNTOUCHED — the point of the whole exercise.
+    assert KB_PATH.read_bytes() == live_before, (
+        "the live KB was modified by a test run — this is the hazard D5 was raised about"
+    )
+    for p, (mtime, body) in watched.items():
+        assert p.read_bytes() == body, f"the test rewrote production's {p.name}"
+        assert p.stat().st_mtime_ns == mtime, (
+            f"the test touched production's {p.name} (content identical, mtime moved) — "
+            "the run is still reaching data/kb instead of the copy"
+        )
+    print(
+        f"  re-running the ingester over a COPY of the real {live_entries}-entry KB is "
+        "byte-identical, and production is untouched: PASS"
+    )
 
 
 if __name__ == "__main__":

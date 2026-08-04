@@ -56,6 +56,9 @@ export function CockpitEngagementMode({
   const [command, setCommand] = useState("nmap");
   const [argsText, setArgsText] = useState("");
   const [dangerAck, setDangerAck] = useState(false);
+  // Kept as TEXT, not a number: "" has to stay distinguishable from 0, and only a blank
+  // field may mean "unpaced". Parsed once, at send time.
+  const [paceText, setPaceText] = useState("");
   const [running, setRunning] = useState(false);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [lines, setLines] = useState<Line[]>([]);
@@ -137,11 +140,20 @@ export function CockpitEngagementMode({
         dangerous_ack: dangerAck,
         engagement_id: active.engagement_id,
         session_id: sessionId,
+        // Number.isFinite, not a truthiness check: a blank field must send null rather
+        // than NaN, and the server treats null as "not asked for".
+        pace: Number.isFinite(Number(paceText)) && paceText.trim() !== ""
+          ? Number(paceText)
+          : null,
       },
       (ev: ExecEvent) => {
         switch (ev.type) {
           case "start":
             push({ kind: "meta", text: `▶ run ${ev.run_id} → ${ev.target} [${ev.mode ?? "?"}]` });
+            // How the run was rewritten — INCLUDING "this went at full speed". Printed
+            // before any output, because that is the only point at which it can still
+            // change what the operator does.
+            for (const n of ev.notes ?? []) push({ kind: "meta", text: `· ${n}` });
             break;
           case "stdout":
             push({ kind: "stdout", text: ev.line });
@@ -186,7 +198,14 @@ export function CockpitEngagementMode({
         onRunRecorded?.();
         refresh(); // pick up any hosts this run added to the live allowed set
       });
-  }, [active, running, args, command, preview, dangerAck, sessionId, onRunRecorded, refresh]);
+    // paceText belongs here for the same reason dangerAck does: the callback READS it, so
+    // omitting it memoizes a stale closure and the run would be paced at whatever the field
+    // held when this was last rebuilt — a silently wrong rate, which is the one outcome the
+    // whole feature exists to prevent.
+  }, [
+    active, running, args, command, preview, dangerAck, paceText, sessionId,
+    onRunRecorded, refresh,
+  ]);
 
   // ---- NOT ENTERED: the deliberate, warned entry ---------------------------- //
   if (!active) {
@@ -450,6 +469,28 @@ export function CockpitEngagementMode({
             value={argsText}
             onChange={(e) => setArgsText(e.target.value)}
             spellCheck={false}
+            disabled={running}
+          />
+        </label>
+
+        {/* PACING (D3) — engagement mode only, which is why the control lives here and
+            nowhere else. Nothing throttled anything before this; a default-off blank means
+            the run goes at full speed, exactly as it always has. Whether it actually applied
+            is reported per-run in the output, because this tool's flag map cannot cover
+            every tool and a pace the operator believes in but did not get is the failure
+            mode worth designing against. */}
+        <label className="hp-ck-field hp-eng-pace">
+          <span>
+            pace — max requests/second (blank = full speed). Adds the tool&rsquo;s own rate or
+            delay flag; the run says whether it took.
+          </span>
+          <input
+            type="number"
+            min={1}
+            max={10000}
+            placeholder="e.g. 5"
+            value={paceText}
+            onChange={(e) => setPaceText(e.target.value)}
             disabled={running}
           />
         </label>

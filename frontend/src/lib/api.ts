@@ -158,6 +158,27 @@ export type LLMConfig = {
   has_key: boolean;
 };
 
+/**
+ * A command as the PLANNER returns it — the KB's `Code` plus what composition learned
+ * about it. Separate from `Code` because these facts are true of a *planned* command,
+ * not of a stored KB one.
+ */
+export type PlannedCode = Code & {
+  /** The model's own command (an ai_suggested step) — nothing checked that it works. */
+  unverified?: boolean;
+  /** Capped for display; open the cited entry for the full text. */
+  truncated?: boolean;
+  /**
+   * THE SCOPE CHECK. `false` = this cannot run as written against this engagement (see
+   * unrunnable_reason). Absent/null = it names an in-scope host, or there was no declared
+   * scope to check against. Plan quality only — it refuses nothing; the executor's
+   * target/scope lock is the real bound.
+   */
+  runnable?: boolean | null;
+  /** Why it cannot run: an out-of-scope host, or no host at all. */
+  unrunnable_reason?: string | null;
+};
+
 /** One grounded step of a composed attack path. */
 export type AttackStep = {
   /** Stable id ("{phase}-{n}") — safe to key engagement/check-off state on. */
@@ -170,7 +191,12 @@ export type AttackStep = {
    * Commands for this step. Grounded/writeup steps carry the entry's real
    * commands; AI-suggested steps carry the model's own, unverified.
    */
-  commands: Code[];
+  commands: PlannedCode[];
+  /**
+   * How many of this step's commands failed the scope check — a badge count, so a step
+   * can be seen to need work without expanding it. Absent when none did.
+   */
+  unrunnable_commands?: number;
   /**
    * True = general-knowledge gap-fill, NOT from the KB (render distinctly with a
    * "verify" badge). False/absent = grounded in the KB or the user's writeup.
@@ -271,8 +297,32 @@ export type ContextSource = {
 export type AttackPath = {
   goal: string;
   target_type: string | null;
-  /** Target (IP/host/URL) parsed from the goal + substituted into commands. */
+  /** Target (IP/host/URL) substituted into commands; null if none could be determined. */
   target: string | null;
+  /**
+   * Where that target came from — "caller" (the request's own target field), "goal"
+   * (parsed out of the goal text) or "scope" (the first concrete in-scope host, which
+   * HackPit chose for you). Null when there is no target at all, in which case no
+   * example host was rewritten and most commands will come back unrunnable.
+   */
+  target_source?: "caller" | "goal" | "scope" | null;
+  /**
+   * True when a usable scope was supplied and every command was judged against it.
+   * Reported separately from the count because "0 of 0 checked" and "0 of 32 bad" are
+   * the same number and very different facts — without this the UI renders unchecked
+   * as clean.
+   */
+  scope_checked?: boolean;
+  /** How many commands this path returned, across every step. */
+  commands_total?: number;
+  /**
+   * THE HONESTY NUMBER — how many of them cannot run as written: they point at a host
+   * outside the scope, or name no host at all. A plan built from the KB's own example
+   * commands used to be indistinguishable from one adapted to the target. Always 0 when
+   * no scope was pasted, because then nothing was checked — that is "unchecked", not
+   * "clean", and the banner says so.
+   */
+  commands_unrunnable?: number;
   phases: AttackPhase[];
   /** Inferred target profile that steered this path (chips show target_class +
    * priority_bug_classes). Empty when the profiler was unavailable. */
@@ -539,16 +589,29 @@ export const setLLMConfig = (
 export const getOllamaModels = (signal?: AbortSignal) =>
   getJSON<{ models: string[] }>("/ollama-models", signal);
 
-/** Compose a guided attack path. Slow: the local model can take a minute+. */
+/**
+ * Compose a guided attack path. Slow: the local model can take a minute+.
+ *
+ * `target` is optional and explicit — it overrides the target parsed from the goal and is
+ * what example hosts in KB commands get rewritten to. Omitted, the target comes from the
+ * goal, and failing that from the first concrete host in `scope_text`. The endpoint
+ * rejects unknown fields (422) rather than dropping them, so a typo here is visible.
+ */
 export const composeAttackPath = (
   goal: string,
   target_type?: string | null,
   scope_text?: string | null,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  target?: string | null
 ) =>
   postJSON<AttackPath>(
     "/attack-path",
-    { goal, target_type: target_type ?? null, scope_text: scope_text ?? null },
+    {
+      goal,
+      target_type: target_type ?? null,
+      scope_text: scope_text ?? null,
+      target: target ?? null,
+    },
     signal
   );
 
@@ -761,7 +824,23 @@ export type CockpitRun = {
 
 /** One streamed execution event (SSE `data:` payload from POST /cockpit/exec). */
 export type ExecEvent =
-  | { type: "start"; run_id: string; command: string; args: string[]; target: string; mode?: "lab" | "engagement" | "windows"; transport?: string; started_at: string }
+  | {
+      type: "start";
+      run_id: string;
+      command: string;
+      args: string[];
+      target: string;
+      mode?: "lab" | "engagement" | "windows";
+      transport?: string;
+      started_at: string;
+      /**
+       * How this run was rewritten before it started, in the operator's words — and
+       * crucially INCLUDING the cases where it was not. "curl has no known throttle flag —
+       * this run was NOT paced" has to be read before the output arrives, or a full-speed
+       * run gets mistaken for a paced one. Empty when nothing was asked for.
+       */
+      notes?: string[];
+    }
   | { type: "stdout"; line: string }
   | { type: "stderr"; line: string }
   | { type: "exit"; run_id: string; code: number | null; finished_at: string }
@@ -813,6 +892,14 @@ export type ExecPayload = {
    *  above the 3600s ceiling it is CLAMPED, not refused. A full port sweep, a big ffuf or
    *  a nuclei run does not finish in 180s. Not a safety control — every gate still applies. */
   timeout_seconds?: number | null;
+  /**
+   * Throttle this run to roughly this many requests per second, by adding the tool's OWN
+   * rate/delay flag. ENGAGEMENT MODE ONLY — a lab run ignores it and says so in the start
+   * event's notes, as does a tool with no known throttle flag or one that already carries
+   * its own rate. Not a safety control: a paced command is quieter, not safer, and every
+   * gate still applies to the rewritten command line.
+   */
+  pace?: number | null;
   /** Run detached: returns a run_id immediately and the command keeps going server-side,
    *  with output replayable from /cockpit/runs/{id}/stream. Gates are identical — a
    *  backgrounded run is still individually approved BEFORE it starts. */

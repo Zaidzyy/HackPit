@@ -550,13 +550,40 @@ _PROXY_FLAGS: dict[str, tuple[str, str]] = {
     "ffuf": ("-x", ""),
     "nuclei": ("-proxy", ""),
     "katana": ("-proxy", ""),
-    "httpx": ("-http-proxy", ""),
+    # MEASURED 2026-08-04, against the real image: /usr/bin/httpx in hackpit/kali-sandbox is
+    # the PYTHON httpx CLI ("Usage: httpx [OPTIONS] URL"), whose proxy flag is `--proxy`.
+    # ProjectDiscovery's httpx — the one `-http-proxy` belongs to — installs as
+    # `httpx-toolkit`. The two were mapped to the same flag, so asking to capture an `httpx`
+    # run produced `httpx -http-proxy …`, which that CLI rejects outright. Same defect class
+    # as "Kali ships no zap-baseline.py": the map named a flag for a tool that isn't there.
+    "httpx": ("--proxy", ""),
     "httpx-toolkit": ("-http-proxy", ""),
     "sqlmap": ("--proxy", "="),
     "feroxbuster": ("--proxy", ""),
     "gobuster": ("--proxy", ""),
     "wpscan": ("--proxy", ""),
 }
+
+
+#: Tools whose flags belong AFTER a leading subcommand. Prepending to argv is right for the
+#: flat tools and wrong for these, and wrong here is not subtle — MEASURED against the real
+#: image on 2026-08-04, `gobuster --proxy http://… dir -u …` exits with "flag provided but
+#: not defined: -proxy" and does nothing at all. That is the SHIPPING behaviour of the proxy
+#: flag today: asking to capture a gobuster run breaks the run. Pacing would have reproduced
+#: the bug exactly, so the placement rule lives here, once, and both rewrites use it.
+_SUBCOMMAND_TOOLS = frozenset({"gobuster", "amass"})
+
+
+def _place_flag(tool: str, args: list[str], prefix: list[str]) -> list[str]:
+    """Insert a tool's own flag where that tool will actually parse it. PURE.
+
+    After the leading subcommand for the tools that take one — recognised as a first argument
+    that is not itself a flag, so a caller who already passed `dir` gets it right and one who
+    passed none is left where they were rather than having a subcommand invented for them.
+    """
+    if tool in _SUBCOMMAND_TOOLS and args and not args[0].startswith("-"):
+        return [args[0], *prefix, *args[1:]]
+    return [*prefix, *args]
 
 
 def apply_proxy(command: str, args: list[str], port: int) -> tuple[list[str], str]:
@@ -574,14 +601,197 @@ def apply_proxy(command: str, args: list[str], port: int) -> tuple[list[str], st
     from .allowlist import _tool_name
 
     url = f"http://127.0.0.1:{int(port)}"
-    entry = _PROXY_FLAGS.get(_tool_name(command))
+    tool = _tool_name(command)
+    entry = _PROXY_FLAGS.get(tool)
     if entry is None:
         return list(args), (
             f"{command} has no known proxy flag — this run was NOT captured, it went direct"
         )
     flag, joiner = entry
     prefix = [f"{flag}={url}"] if joiner == "=" else [flag, url]
-    return [*prefix, *args], f"{command} routed through the recording proxy on {url}"
+    return _place_flag(tool, list(args), prefix), (
+        f"{command} routed through the recording proxy on {url}"
+    )
+
+
+#: How each tool spells "go slower". Same shape as :data:`_PROXY_FLAGS` — keyed on the
+#: NORMALISED binary name — with one extra element it cannot do without: a UNIT. A proxy URL
+#: is a proxy URL to every tool, but throttling is spelled three incompatible ways (requests
+#: per second, packets per second, or a delay BETWEEN requests), so the operator's single
+#: number has to be converted per tool. Getting that conversion backwards would be worse than
+#: not offering pacing at all: an operator asking for 2 req/s and silently getting a 2-second
+#: delay interpreted as a rate would hammer the target while believing they were being polite.
+#:
+#: EVERY FLAG BELOW WAS READ OUT OF THE TOOL'S OWN `--help` INSIDE hackpit/kali-sandbox on
+#: 2026-08-04, not recalled. Three candidates were REMOVED by that check rather than guessed
+#: at, and they now take the honest no-flag path:
+#:   * amass   — un-probeable in the sandbox (sudo vs no-new-privileges; see the image traps)
+#:   * httpx   — the image's /usr/bin/httpx is the python CLI, which has no rate flag at all
+#:               (its ProjectDiscovery namesake is httpx-toolkit, which does and is listed)
+#:   * curl    — issues one request; there is nothing to pace, and --limit-rate is BANDWIDTH
+#:
+#: unit: "rps" requests/sec · "pps" packets/sec · "delay_s" seconds between requests
+#:       "delay_ms" milliseconds between requests · "delay_go" a Go duration string ("200ms")
+_PACE_FLAGS: dict[str, tuple[str, str, str]] = {
+    # name          -> (flag, joiner, unit)   joiner "" = separate argv token, "=" = glued
+    "ffuf": ("-rate", "", "rps"),
+    "nuclei": ("-rate-limit", "", "rps"),
+    "katana": ("-rate-limit", "", "rps"),
+    "httpx-toolkit": ("-rate-limit", "", "rps"),
+    "subfinder": ("-rate-limit", "", "rps"),
+    "dnsx": ("-rate-limit", "", "rps"),
+    "feroxbuster": ("--rate-limit", "", "rps"),
+    # PACKETS per second, not requests. A port scanner's knob is the only pacing it has, and
+    # it is the one that gets you rate-limited by a WAF or noticed by a NIDS.
+    "nmap": ("--max-rate", "", "pps"),
+    "masscan": ("--rate", "=", "pps"),
+    "naabu": ("-rate", "", "pps"),
+    # delay-between-requests tools — the operator's rate is INVERTED into a wait
+    "sqlmap": ("--delay", "=", "delay_s"),
+    "dirsearch": ("--delay", "=", "delay_s"),
+    "wfuzz": ("-s", "", "delay_s"),
+    "arjun": ("-d", "", "delay_s"),
+    "wpscan": ("--throttle", "", "delay_ms"),
+    "dalfox": ("--delay", "", "delay_ms"),
+    "gobuster": ("--delay", "", "delay_go"),
+}
+
+#: Spellings that mean "the operator already set this tool's rate themselves". Checked before
+#: adding anything: two rate flags on one command line is a contradiction the tool resolves
+#: silently and differently per tool, which would leave the operator believing a pace applied
+#: when their own value won. We defer to what they typed and say we did.
+_PACE_ALREADY_SET: dict[str, tuple[str, ...]] = {
+    "ffuf": ("-rate", "-p"),
+    "nuclei": ("-rate-limit", "-rl", "-rate-limit-minute", "-rlm"),
+    "katana": ("-rate-limit", "-rl", "-delay", "-rd"),
+    "httpx-toolkit": ("-rate-limit", "-rl"),
+    "subfinder": ("-rate-limit", "-rl"),
+    "dnsx": ("-rate-limit", "-rl"),
+    "feroxbuster": ("--rate-limit",),
+    "nmap": ("--max-rate", "--min-rate"),
+    "masscan": ("--rate", "--max-rate"),
+    "naabu": ("-rate",),
+    "sqlmap": ("--delay",),
+    "dirsearch": ("--delay",),
+    "wfuzz": ("-s",),
+    "arjun": ("-d",),
+    "wpscan": ("--throttle",),
+    "dalfox": ("--delay",),
+    "gobuster": ("--delay", "-d"),
+}
+
+
+def _pace_value(rate: int, unit: str) -> str:
+    """The operator's requests-per-second expressed in one tool's own unit."""
+    rate = max(1, int(rate))
+    if unit in ("rps", "pps"):
+        return str(rate)
+    if unit == "delay_s":
+        # 1 req/s -> 1s, 4 req/s -> 0.25s. Trimmed so a whole number reads as "1", not "1.0".
+        secs = round(1.0 / rate, 3)
+        return str(int(secs)) if secs == int(secs) else str(secs)
+    ms = max(1, round(1000.0 / rate))
+    return f"{ms}ms" if unit == "delay_go" else str(ms)
+
+
+def apply_pace(command: str, args: list[str], rate: int) -> tuple[list[str], str]:
+    """Throttle one tool to ``rate`` requests per second. Returns ``(args, note)``. PURE.
+
+    The same ARGUMENT REWRITE shape as :func:`apply_proxy`, on a request that still passes
+    every gate. Nothing here is a safety control — a paced command is not a safer command,
+    it is a quieter one, and every gate still applies to the rewritten argv exactly as before.
+
+    A TOOL WITH NO KNOWN THROTTLE FLAG IS RETURNED UNCHANGED AND THE NOTE SAYS SO. This is
+    the whole point: a run the operator believes was paced and was not is how a program bans
+    your IP mid-engagement, and it is worse than being told plainly that this tool will go
+    full speed. Same rule the proxy flag follows for capture.
+
+    A tool that ALREADY carries its own rate flag is likewise left alone and says so, rather
+    than being handed a second, contradictory one.
+    """
+    from .allowlist import _tool_name
+
+    tool = _tool_name(command)
+    entry = _PACE_FLAGS.get(tool)
+    if entry is None:
+        return list(args), (
+            f"{command} has no known throttle flag — this run was NOT paced, it went at "
+            "full speed"
+        )
+    existing = _PACE_ALREADY_SET.get(tool, ())
+    for a in args:
+        head = a.split("=", 1)[0]
+        if head in existing:
+            return list(args), (
+                f"{command} already sets its own rate ({head}) — left as you typed it, NOT "
+                f"re-paced to {rate}/s"
+            )
+    flag, joiner, unit = entry
+    value = _pace_value(rate, unit)
+    prefix = [f"{flag}={value}"] if joiner == "=" else [flag, value]
+    how = (
+        f"{flag} {value}" if unit in ("rps", "pps") else f"{flag} {value} between requests"
+    )
+    return _place_flag(tool, list(args), prefix), f"{command} paced to ~{rate}/s ({how})"
+
+
+def apply_pace_to_request(request: ExecRequest) -> tuple[ExecRequest, str]:
+    """Apply :func:`apply_pace` to a request, if it asked for it. Returns (request, note).
+
+    ENGAGEMENT MODE ONLY, deliberately. Pacing exists to keep a REAL program from banning
+    you; the lab target is a container on an isolated network with nobody to annoy, and
+    slowing lab runs down would be a behaviour change to the mode this build keeps
+    byte-identical. Windows/WinRM is excluded too: that transport sends a PowerShell string,
+    not an argv, so there is no flag to add.
+
+    Returns the request UNCHANGED (and an empty note) whenever nothing was rewritten — same
+    contract as :func:`apply_proxy_to_request`, so the caller can tell "nothing happened"
+    from "rewritten" and only discard a prevalidated verdict in the second case. The honest
+    "not paced" message for the operator is produced by :func:`run_notes`, which reports it
+    whether or not the argv changed.
+    """
+    if not getattr(request, "pace", None):
+        return request, ""
+    if request.windows_profile_id or not request.engagement_id:
+        return request, ""
+    new_args, note = apply_pace(request.command, list(request.args), int(request.pace))
+    if new_args == list(request.args):
+        return request, ""
+    return request.model_copy(update={"args": new_args}), note
+
+
+def run_notes(request: ExecRequest) -> list[str]:
+    """What the operator needs told about how this run was rewritten, before it runs. PURE.
+
+    Separate from the two ``*_to_request`` helpers because their return value answers a
+    different question — "did the argv change?", which is what decides whether a prevalidated
+    verdict survives. The cases that matter most here are exactly the ones where the argv did
+    NOT change: the tool has no proxy flag, the tool has no throttle flag, pacing was asked
+    for in lab mode. Those produce an empty change-note by design, and reporting them is the
+    difference between an honest run and one the operator misreads.
+    """
+    notes: list[str] = []
+    if getattr(request, "proxy", False):
+        from . import proxy as proxy_mod
+
+        _, note = apply_proxy(request.command, list(request.args), proxy_mod.DEFAULT_PROXY_PORT)
+        notes.append(note)
+    rate = getattr(request, "pace", None)
+    if rate:
+        if request.windows_profile_id:
+            notes.append(
+                "pacing is not available over WinRM — that transport sends a PowerShell "
+                "string, not a command line with flags; this run was NOT paced"
+            )
+        elif not request.engagement_id:
+            notes.append(
+                "pacing applies in engagement mode only — this is a LAB run against the "
+                "isolated target and was NOT paced"
+            )
+        else:
+            _, note = apply_pace(request.command, list(request.args), int(rate))
+            notes.append(note)
+    return notes
 
 
 def apply_proxy_to_request(request: ExecRequest) -> tuple[ExecRequest, str]:
@@ -622,8 +832,17 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
     # earlier verdict is discarded and the REWRITTEN request is validated here. Adding an
     # argument can only ever make the danger classifier fire MORE, never less, so re-validating
     # is strictly safe; skipping it would not be.
+    #
+    # THE PACE REWRITE rides the same rails, for the same reason: it adds an argument, so the
+    # argv the gates classify must be the argv that runs. Both notes are computed from the
+    # ORIGINAL request first, because the messages that matter — "no proxy flag", "no throttle
+    # flag", "lab run, not paced" — are precisely the ones where nothing was rewritten.
+    notes = run_notes(request)
     request, proxy_note = apply_proxy_to_request(request)
     if proxy_note:
+        prevalidated = False
+    request, pace_note = apply_pace_to_request(request)
+    if pace_note:
         prevalidated = False
 
     if not prevalidated:
@@ -718,6 +937,10 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
         "started_at": started_at,
         "timeout_seconds": timeout_seconds,
         "workdir": workdir,
+        # How this run was rewritten, in the operator's words — INCLUDING the cases where it
+        # was not. "curl has no known throttle flag — this run was NOT paced" has to arrive
+        # before the output does, or the operator reads a full-speed run as a paced one.
+        "notes": notes,
     }
 
     out_buf: list[str] = []

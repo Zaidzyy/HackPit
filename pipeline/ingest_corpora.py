@@ -70,9 +70,17 @@ from schema import Entry  # noqa: E402  (local module, path set above)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
-PAYLOAD_DIR = REPO_ROOT / "data" / "kb" / "payloads"
-TOOLFILES_OUT = REPO_ROOT / "data" / "kb" / "toolfiles.json"
-REPORT_OUT = REPO_ROOT / "data" / "kb" / "corpora_report.json"
+# The three DERIVED artefacts, named relative to the KB rather than to the repo. `--kb` used
+# to redirect only entries.jsonl while these three kept writing into data/kb regardless, so
+# "run the ingester somewhere else" quietly still rewrote production. Every path under
+# /data/ is gitignored — none of them has a restore path but a rebuild — so a run pointed at
+# a copy has to be a run that touches nothing but the copy. Outputs now follow their KB.
+PAYLOAD_DIRNAME = "payloads"
+TOOLFILES_NAME = "toolfiles.json"
+REPORT_NAME = "corpora_report.json"
+PAYLOAD_DIR = DEFAULT_KB.parent / PAYLOAD_DIRNAME
+TOOLFILES_OUT = DEFAULT_KB.parent / TOOLFILES_NAME
+REPORT_OUT = DEFAULT_KB.parent / REPORT_NAME
 
 # Raw source trees live OUTSIDE the repo (gitignored, never committed). Same
 # convention as consolidate.py: default under the current user's home so a fresh
@@ -746,15 +754,19 @@ def main() -> None:
         print(json.dumps(report, indent=2)[:4000])
         return
 
-    report.update(write_sidecars(corpora, PAYLOAD_DIR))
+    # EVERY output lands beside the KB that was passed in. With the default --kb that is
+    # data/kb, byte-identical to before; with a copy it is the copy's directory, so a test
+    # or a trial run cannot reach production. See the note on PAYLOAD_DIRNAME.
+    out_dir = kb_path.parent
+    report.update(write_sidecars(corpora, out_dir / PAYLOAD_DIRNAME))
     report.update(merge_into_kb(kb_path, entries))
 
-    TOOLFILES_OUT.parent.mkdir(parents=True, exist_ok=True)
-    TOOLFILES_OUT.write_text(
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / TOOLFILES_NAME).write_text(
         json.dumps({"total": len(tool_rows), "files": tool_rows}, indent=2) + "\n",
         encoding="utf-8",
     )
-    REPORT_OUT.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    (out_dir / REPORT_NAME).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
     print(json.dumps({k: v for k, v in report.items() if k != "flagged"}, indent=2))
     print(f"flagged: {len(flagged)} (see {REPORT_OUT.name})")

@@ -2425,3 +2425,166 @@ prose no gate reads, so a crawl that clicks through a production storefront woul
 gate. It was caught by reading the record, not by a control. Same shape as the
 credential-precondition finding in the 2026-08-04 audit: **a documented constraint with nothing
 behind it.**
+
+## The audit punch list, worked — build #16 (2026-08-04)
+
+The 2026-08-04 audit ended with nine open items. Zaid reviewed each and decided which to build:
+D3, D5, D6, D7, D8 and D9 in, plus three new ones (known-issue matching, VRT priority, scan
+session-expiry detection) and the `:exposure` control layout. **D1, D2, D4, route auth,
+`INCLUDE_CREDENTIAL_SECRETS` and mobile support were reviewed and declined** — they are not open
+defects and are not listed as such below.
+
+### D8 — the planner emitted commands nobody could run, and nothing said so
+
+The measurement that opened this: with the correct request shape, `/attack-path` returned **32
+commands, of which 0 named the real scope**, four carried a foreign example host, and an earlier
+run had returned `sublist3r -d tesla.com -t 100 / above the -t is for threads…` — the source
+writeup's example host *and* its prose, verbatim, inside the `cmd` field. Every step carried a
+`target_adaptation` line *describing* the substitution in words. Nothing performed it.
+
+**The substitution machinery was not broken. It never ran.** `substitute_target` opens with
+`if not target: return cmd`, and `target` came only from `extract_target(goal)` — which reads the
+goal text. The failing call passed the real hosts in `scope_text` and a goal that named none, so
+`target` was `None` and every command kept the KB author's example host. One missing fallback made
+an entire feature a no-op, silently, for as long as it has existed.
+
+Two changes, in the order the work was scoped:
+
+**(c) Validate and flag first.** Every returned command is now checked against the declared
+program scope and, when it cannot run as written, marked `runnable: false` with the reason. Two
+reasons, kept apart because the fix differs: *points at a host outside the scope* (written for
+someone else's environment) and *names no host at all* (an unsubstituted placeholder, or a KB
+excerpt that was prose rather than a command). The path-level `commands_unrunnable` is the
+headline: **a plan built entirely from the KB's own examples used to be indistinguishable from
+one adapted to the target.**
+
+**(a) Then substitute.** `primary_target` falls back to the first *concrete* in-scope host when
+the goal names none, and reports where the target came from (`caller` / `goal` / `scope`) so
+"HackPit picked this for you" reads differently from "you named it". A wildcard is deliberately
+not a target: `*.example.com` names nothing runnable, and inventing `www.` in front of it would
+be a fabricated target dressed as a real one.
+
+**The scope model is reused, not re-derived.** `cockpit/scope.py` — wildcards, CIDR, exclusions,
+already measured against a real bug-bounty program — is what judges the commands, so the plan
+cannot disagree with the gate about what is in scope. The same reasoning produced one
+`_host_positions()` definition shared by the substituter and the checker: written twice they
+would drift, and a checker that disagreed with the substituter would flag commands it had itself
+just fixed. That is the shared-predicate defect this repo has now found four times.
+
+**What was NOT done, and why.** A real foreign host like `tesla.com` is *flagged, never
+rewritten*. Rewriting any out-of-scope host sitting in a host position would have closed the gap
+completely — and would also have rewritten `curl https://raw.githubusercontent.com/…/linpeas.sh`
+into a request against the client's own storefront. A tool download, an attacker-owned listener
+and a target are all "a host in a host position"; nothing in the argv distinguishes them. So
+example hosts are substituted (they are recognisable), and everything else is reported. The
+scope directive said *"where it can be done safely"*; this is where that line falls.
+
+**`/attack-path` accepts `target` now — and refuses what it does not know.** A `target` field
+used to be dropped in silence, which is how the first measurement looked worse than it was. It
+is a declared field, and `AttackPathIn` is `extra="forbid"`, so an unknown field is a 422 rather
+than a shrug.
+
+**A silent loss found on the way in.** `AttackStep.commands` was typed `list[Code]` — the KB
+entry shape — while `attack_path.py` had been setting `unverified` and `truncated` on planned
+commands the whole time. A response model does not carry a field it has not declared, so both
+have been dropped on the floor for as long as they have existed. `PlannedCode` repairs that and
+holds the new scope fields. `test_attack_path_contract.py` locks the general property rather
+than a list of names: **every key the composer emits must survive `response_model`**, with a
+planted field proving the check can fail. A name list would need updating by exactly the person
+who just forgot.
+
+### D3 — nothing throttled anything
+
+Pacing injects each tool's own rate or delay flag, in the exact shape `executor.apply_proxy`
+already uses, **engagement mode only** — the lab target is an isolated container with nobody to
+annoy, and lab argv stays byte-identical. A tool with no known throttle flag runs unchanged and
+*says so*, because a run the operator believes was paced and was not is precisely how a program
+bans your IP mid-engagement.
+
+Three things the shape needed that a proxy URL does not:
+
+* **Units.** Throttling is spelled three incompatible ways — requests/sec, packets/sec, or a
+  delay *between* requests. The operator supplies one number and it is converted per tool.
+  Handing a literal `4` to sqlmap's `--delay` would mean a four-*second* wait when four
+  requests/second was asked for; reversed, a delay fed to a rate flag runs 1000× too fast. The
+  regression test pins all twelve conversions.
+* **Already-set detection.** A command that already carries its own rate flag is left alone and
+  says so. Two contradictory rate flags are resolved silently and differently by each tool.
+* **Flag placement.** See below — this one was a live bug, not a hypothetical.
+
+**Every flag was read out of the tool's own `--help` inside the real image**, not recalled. That
+check removed three candidates rather than guessing at them: `amass` is un-probeable in the
+sandbox (the sudo / `no-new-privileges` trap), `curl` issues one request so there is nothing to
+pace, and — see below — the image's `httpx` is not the tool anyone assumes it is. All three take
+the honest no-flag path.
+
+### Two shipping defects the pacing work found in the proxy flag it was mirroring
+
+**`gobuster --proxy … dir …` has never worked.** Measured against the real image, it exits with
+`flag provided but not defined: -proxy` and does nothing at all: gobuster's flags belong *after*
+its subcommand. Asking to capture a gobuster run has been breaking the run. Pacing would have
+reproduced the bug exactly, so the placement rule now lives in one `_place_flag()` used by both
+rewrites — the next tool with subcommands cannot be right in one and wrong in the other.
+
+**`/usr/bin/httpx` in the sandbox is the *python* httpx CLI**, whose proxy flag is `--proxy`.
+ProjectDiscovery's httpx — the one `-http-proxy` belongs to — installs as `httpx-toolkit`. Both
+names were mapped to `-http-proxy`, so capture on `httpx` produced a command line that CLI
+rejects outright. Same defect class as *"Kali ships no `zap-baseline.py`"*: **the map named a
+flag for a tool that is not there.**
+
+### D5 — the safety suite rewrote the live KB on every run
+
+`test_reingest_is_byte_identical` re-ran the real ingester against `data/kb/entries.jsonl`
+itself. The assertion held, but a green test that rewrites 15 MB of gitignored production data
+with no restore path is how an earlier build lost an entry. It now ingests into a **copy of the
+real KB** in a temp directory, and afterwards asserts production is byte-identical.
+
+Copying the KB alone was not enough. **Everything under `/data/` is gitignored**, and `--kb`
+redirected only `entries.jsonl` — the sidecars, `toolfiles.json` and `corpora_report.json` kept
+writing into `data/kb` regardless. The ingester's outputs now follow the KB it is given, so
+"run this somewhere else" means it. The test asserts that too, by mtime: `corpora_report.json`
+is rewritten unconditionally, so before this fix its mtime moved on every single suite run.
+
+It is still the **real** KB, copied — with a size floor asserting >1000 entries. Idempotence over
+2,743 entries of real escapes, non-ASCII titles and foreign lines is the property worth proving;
+over a three-line fixture it is close to vacuous, and a fixture is what this test would otherwise
+decay into.
+
+### D6 — nothing noticed a derived artefact going stale
+
+The scripts index sat **126 entries behind** the KB (2,617 against 2,743) through an entire
+audit, and was found by reading a number. A stale index does not error — it answers, with 126
+entries' worth of the corpus missing.
+
+`test_kb_drift.py` compares the KB against the three artefacts built from it: the semantic index
+(`ids.json`), the scripts index, and the corpus report. Two details carry the weight:
+
+* **A count is not coverage.** `ids.json` is checked for *set equality* of entry ids, not just
+  the total — one entry added and another deleted between runs leaves the count untouched and
+  the index wrong. The scripts index is additionally checked for citations that no longer
+  resolve.
+* **Absences are reported, never silently green.** `/data/` is gitignored in its entirety, so a
+  fresh clone or a CI runner has none of these files, and there the test proves nothing. It says
+  so out loud. A fourth check fails when `data/kb` grows a file nothing has classified, so
+  leaving something unchecked has to be a decision rather than an oversight.
+
+Each check has a positive control that runs **the real check** against a doctored artefact —
+including a 126-entry lag, the exact drift that went unnoticed.
+
+### D7 — every successful AD command looked like a failing one
+
+PowerShell's stderr over WinRM is not text; it is a CLIXML object stream, and every progress bar
+it would have drawn on a console arrives as an `<Obj S="progress">` record. Build #9's live run
+against a real `corp.local` DC returned `rc=0` alongside a wall of markup.
+
+Progress records are now stripped where the `WinRMResult` is *built*, so the event stream and the
+persisted run record see the same cleaned text; doing it at a display layer would have left the
+record full of markup and put the burden on every future consumer.
+
+The whole risk of this fix is that it strips something else, converting a cosmetic annoyance into
+a silent failure — a strictly worse bug. So the filter removes progress records and nothing else:
+Error, Warning, Verbose and Debug streams survive, `_xNNNN_` escapes are decoded, and **anything
+that fails to parse is returned verbatim**. The raw stderr stays on the result and the dropped
+count is reported, so "quiet because it was filtered" stays distinguishable from "quiet because
+it was quiet". The test that matters is the negative one: a genuine `Get-ADUser` error survives a
+document carrying forty progress records.

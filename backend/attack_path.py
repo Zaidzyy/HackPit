@@ -26,6 +26,12 @@ from typing import Any, Callable
 import context_channel  # Channel 2 — CONTEXT background for the prompt, never steps
 import llm
 from arsenal import planner as arsenal_planner  # tool catalog: prompt reference + step tags
+# The engagement PROGRAM SCOPE model, reused verbatim so the plan is judged against exactly
+# the scope the executor enforces (wildcards, CIDR, exclusions included). A second scope
+# parser written here would drift from that one, and a plan that disagreed with the gate
+# about what is in scope is worse than no check. cockpit/scope.py is a pure parser — it
+# executes nothing and imports nothing from this layer.
+from cockpit import scope as scope_model
 from detection import tagging as detection_tagging  # ATT&CK tags on steps (read-only, no LLM)
 
 # --------------------------------------------------------------------------- #
@@ -417,7 +423,13 @@ _HOST_TOOL = (
     r"ffuf|feroxbuster|gobuster|dirb|dirsearch|katana|hakrawler|gau|waybackurls|"
     r"dig|host|nslookup|ping|fping|nc|ncat|socat|telnet|ssh|scp|sftp|"
     r"smbclient|smbmap|crackmapexec|netexec|nxc|enum4linux|snmpwalk|rpcclient|"
-    r"nuclei|sqlmap|dalfox|amass|subfinder|dnsx|wfuzz"
+    r"nuclei|sqlmap|dalfox|amass|subfinder|dnsx|wfuzz|"
+    # subdomain/OSINT tools that take the target as a -d/-u argument. sublist3r earned its
+    # place by measurement: `sublist3r -d tesla.com -t 100` came back from a real plan with
+    # the source writeup's example host intact, and without the tool named here neither the
+    # substituter nor the scope check could see that tesla.com was the command's target.
+    r"sublist3r|assetfinder|theharvester|dnsrecon|fierce|wafw00f|sslscan|"
+    r"arjun|paramspider|gowitness|naabu"
 )
 
 # An example host is substituted ONLY in a real HOST POSITION — never as a bare
@@ -431,16 +443,41 @@ _HOST_TOOL = (
 # (→ …auth0.coms-app.bugforge.io) — Frankenstein hosts. With it, either the WHOLE
 # example host swaps or nothing does (the match fails and backtracks to no match).
 _EX_HOST_TAIL = r"(?![A-Za-z0-9.-])"
-_HOST_AFTER_SCHEME_RE = re.compile(r"(?P<pre>://)(?P<h>" + _EX_HOST + r")" + _EX_HOST_TAIL)
-_HOST_AFTER_AT_RE = re.compile(r"(?P<pre>@)(?P<h>" + _EX_HOST + r")" + _EX_HOST_TAIL)
-_HOST_IN_HEADER_RE = re.compile(
-    r"(?P<pre>Host:\s*)(?P<h>" + _EX_HOST + r")" + _EX_HOST_TAIL, re.I
-)
-_HOST_AS_TOOL_ARG_RE = re.compile(
-    r"(?P<pre>\b(?:" + _HOST_TOOL + r")\b(?:\s+-{1,2}\S+)*\s+)(?P<h>" + _EX_HOST + r")"
-    + _EX_HOST_TAIL,
-    re.I,
-)
+
+
+def _host_positions(host_rx: str) -> tuple[re.Pattern[str], ...]:
+    """The four places a dotted token is a real HOST rather than a lookalike substring.
+
+    ONE definition of "host position", parameterised by what a host may look like, because
+    two callers need the same positions over different host classes: the SUBSTITUTION rules
+    below match only *example* hosts (rewrite them), while :func:`command_hosts` matches
+    *any* host (ask whether it is in scope). Written twice these would drift, and a scope
+    check that disagrees with the substituter about what a target is would flag commands it
+    had itself just fixed — the shared-predicate defect this repo keeps re-finding.
+    """
+    return (
+        re.compile(r"(?P<pre>://)(?P<h>" + host_rx + r")" + _EX_HOST_TAIL),
+        re.compile(r"(?P<pre>@)(?P<h>" + host_rx + r")" + _EX_HOST_TAIL),
+        re.compile(r"(?P<pre>Host:\s*)(?P<h>" + host_rx + r")" + _EX_HOST_TAIL, re.I),
+        re.compile(
+            r"(?P<pre>\b(?:" + _HOST_TOOL + r")\b(?:\s+-{1,2}\S+)*\s+)(?P<h>" + host_rx + r")"
+            + _EX_HOST_TAIL,
+            re.I,
+        ),
+    )
+
+
+(
+    _HOST_AFTER_SCHEME_RE,
+    _HOST_AFTER_AT_RE,
+    _HOST_IN_HEADER_RE,
+    _HOST_AS_TOOL_ARG_RE,
+) = _host_positions(_EX_HOST)
+
+# ANY host / address in a host position — not just a lab-example one. Used by the scope
+# check to answer "what is this command actually pointed at?".
+_ANY_HOST = r"(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}" + _PORT
+_ANY_HOST_POSITIONS = _host_positions("(?:" + _ANY_HOST + r"|" + _IPV4 + _PORT + r")")
 
 
 # An example/lab NETWORK RANGE baked into a note (10.0.0.0/24, 192.168.1.0/24,
@@ -701,6 +738,168 @@ def flag_foreign_refs(
             if refs:
                 step["foreign_refs"] = refs[:4]
     return phases
+
+
+# --------------------------------------------------------------------------- #
+# THE SCOPE CHECK — is this command actually pointed at the engagement?
+#
+# The planner used to hand back the KB's own example commands and let them read as ready
+# to run: one measured call returned 32 commands of which NONE named the engagement, four
+# carried a foreign example host, and one carried the source writeup's prose inside the
+# `cmd` field. Nothing said so. A plan that looks like it worked is worse than one that
+# admits it did not, so every command is now checked against the declared scope and the
+# ones that cannot run are labelled with the reason.
+#
+# This is PLAN QUALITY, not a gate. Nothing here refuses anything — the executor's
+# target/scope lock is what actually stops a command reaching a foreign host, and it runs
+# whatever this says. See cockpit/executor.py.
+# --------------------------------------------------------------------------- #
+def resolve_scope(scope_text: str | None) -> scope_model.ResolvedScope | None:
+    """Parse pasted scope text into the engagement's program scope, or None.
+
+    ``resolve=False`` — no DNS. This runs on every compose, including in tests and offline,
+    and a scope check that needs the network would fail open exactly when the operator is
+    working from a plane. It costs the seed-IP match (an in-scope name written as its
+    address is not recognised); a command naming a bare IP then reads as out of scope,
+    which is the fail-closed direction and the one we want.
+    """
+    text = (scope_text or "").strip()
+    if not text:
+        return None
+    try:
+        return scope_model.parse_scope(text, resolve=False)
+    except ValueError:
+        return None
+
+
+def _scope_target(resolved: scope_model.ResolvedScope | None) -> str | None:
+    """The first CONCRETE in-scope host — what an example host is rewritten to when the
+    goal names no target of its own.
+
+    Only an exact-host include qualifies. A wildcard (``*.example.com``) names no host we
+    could run against, and inventing ``www.`` in front of it would be a fabricated target
+    dressed as a real one. A CIDR is a range, not a host. Both are left for the operator.
+    """
+    if resolved is None:
+        return None
+    for pat in resolved.include:
+        if pat.kind != "host":
+            continue
+        # host-SHAPED only: pasted RoE prose parses word-by-word, so 'the' and 'scope'
+        # arrive here as exact-host patterns. extract_hosts is the existing filter for
+        # "is this token really a host", reused rather than re-derived.
+        if scope_model.extract_hosts(pat.value):
+            return pat.value
+    return None
+
+
+def primary_target(
+    goal: str, resolved: scope_model.ResolvedScope | None, explicit: str | None = None
+) -> tuple[str | None, str | None]:
+    """``(target, source)`` — the host this plan's commands should be pointed at.
+
+    ``explicit`` (the caller's own ``target``) beats a host parsed out of the goal, which
+    beats the first concrete host in the scope. That last fallback is the one that was
+    missing: the measured failing call passed the real hosts in ``scope_text`` and a goal
+    that named none, so ``extract_target`` returned None and :func:`substitute_target`
+    short-circuited on ``if not target`` — every command kept the KB author's example host.
+
+    ``source`` is returned rather than inferred so the response can say plainly where the
+    target came from; "we substituted a host" and "we substituted a host we picked out of
+    your scope for you" are different claims and the operator should see which one happened.
+    """
+    chosen = (explicit or "").strip()
+    if chosen:
+        return chosen, "caller"
+    chosen = extract_target(goal)
+    if chosen:
+        return chosen, "goal"
+    chosen = _scope_target(resolved)
+    return (chosen, "scope") if chosen else (None, None)
+
+
+def command_hosts(cmd: str) -> list[str]:
+    """Every host/address this command is actually pointed at, de-duplicated.
+
+    Host POSITIONS only (see :func:`_host_positions`) — after ``://``, after ``@``, in a
+    ``Host:`` header, or as a recon/http tool's target argument. A bare dotted token is not
+    a target: ``rockyou.txt``, ``linpeas.sh`` and ``.env.example`` are files, and flagging
+    them would put a warning on nearly every command, which is how a warning stops being
+    read.
+    """
+    out: list[str] = []
+    if not cmd:
+        return out
+    for rx in _ANY_HOST_POSITIONS:
+        for m in rx.finditer(cmd):
+            h = m.group("h")
+            # host-shaped, not a filename/version — the same public filter the scope model
+            # uses on recon output, so "what counts as a host" has one definition.
+            if not scope_model.extract_hosts(h):
+                continue
+            if h not in out:
+                out.append(h)
+    return out
+
+
+def check_command_scope(
+    cmd: str, resolved: scope_model.ResolvedScope | None
+) -> tuple[bool | None, str | None]:
+    """``(runnable, reason)`` for one command, judged against the engagement scope.
+
+    ``(None, None)`` when no scope was declared — there is nothing to judge against and
+    claiming otherwise would be a verdict we did not earn.
+
+    Two ways a command is not runnable as written, kept apart because the fix differs:
+      * it names hosts and **none** is in scope — a command written for someone else's
+        environment; the operator must replace the host.
+      * it names **no** host at all — an unsubstituted placeholder, or a KB excerpt that
+        was prose rather than a command. The operator must point it at something.
+    A command naming at least one in-scope host is left unmarked.
+    """
+    if resolved is None:
+        return None, None
+    hosts = command_hosts(cmd)
+    if not hosts:
+        return False, (
+            "names no host — nothing in this command points at the engagement scope. "
+            "Supply the target, or treat it as a local step that never touches the target"
+        )
+    inside = [h for h in hosts if resolved.in_scope(h)]
+    if inside:
+        return True, None
+    named = ", ".join(hosts[:3])
+    return False, (
+        f"points at {named} — not in the engagement scope; this command was written for "
+        "another environment and must be re-pointed before it runs"
+    )
+
+
+def check_commands(
+    phases: list[dict[str, Any]], resolved: scope_model.ResolvedScope | None
+) -> tuple[int, int]:
+    """Mark every command in every step with its scope verdict. Returns ``(total, unrunnable)``.
+
+    Additive: a runnable command is left exactly as it was, so ``runnable`` absent means
+    "checked and fine" or "no scope to check against" — the frontend only ever reacts to an
+    explicit ``False``. Runs AFTER substitution, so what it reports is what the operator
+    would actually paste; running it first would flag commands the substituter then fixed.
+    """
+    total = unrunnable = 0
+    for phase in phases or []:
+        for step in phase.get("steps") or []:
+            step_bad = 0
+            for c in step.get("commands") or []:
+                total += 1
+                ok, reason = check_command_scope(c.get("cmd") or "", resolved)
+                if ok is False:
+                    c["runnable"] = False
+                    c["unrunnable_reason"] = reason
+                    unrunnable += 1
+                    step_bad += 1
+            if step_bad:
+                step["unrunnable_commands"] = step_bad
+    return total, unrunnable
 
 
 def canonical_phase(entry: dict) -> str:
@@ -1805,6 +2004,7 @@ def compose(
     target_type: str | None,
     search_fn: SearchFn,
     scope_text: str | None = None,
+    target: str | None = None,
 ) -> dict[str, Any]:
     """Compose an attack path for the goal. Two modes:
 
@@ -1822,7 +2022,10 @@ def compose(
     no usable path — the API layer maps that to a clean 503.
     """
     cfg = llm.load_config()
-    target = extract_target(goal)
+    # The declared PROGRAM SCOPE — what every composed command is judged against, and the
+    # last-resort source of a target when the goal names none.
+    resolved = resolve_scope(scope_text)
+    target, target_source = primary_target(goal, resolved, target)
     # The engagement's network RANGE, if the pasted scope names one. An example range in
     # a KB command is rewritten to this; with no range we fall back to the target host.
     scope = scope_cidr(scope_text)
@@ -1893,11 +2096,18 @@ def compose(
             # HONESTY MARKER: a foreign host/AD domain we could not confidently rewrite
             # is reported on the step rather than guessed at or left silent.
             phases = flag_foreign_refs(phases, target, scope)
+            # THE SCOPE CHECK, last: every command has had its substitution by now, so a
+            # verdict here is a verdict on what the operator would actually paste.
+            cmd_total, cmd_unrunnable = check_commands(phases, resolved)
             damaged = bool((wu.get("meta") or {}).get("source_damaged"))
             return {
                 "goal": goal,
                 "target_type": target_type,
                 "target": target,
+                "target_source": target_source,
+                "scope_checked": resolved is not None,
+                "commands_total": cmd_total,
+                "commands_unrunnable": cmd_unrunnable,
                 "phases": phases,
                 "profile": profile,
                 "scoped": scoped,
@@ -1968,11 +2178,17 @@ def compose(
     # and no grounded/ai_suggested label, and it is not a claim that the step is verified.
     arsenal_planner.tag_steps(_arsenal(), phases)
     phases = flag_foreign_refs(phases, target, scope)
+    # THE SCOPE CHECK, last — see the note on the writeup-first return above.
+    cmd_total, cmd_unrunnable = check_commands(phases, resolved)
 
     return {
         "goal": goal,
         "target_type": target_type,
         "target": target,
+        "target_source": target_source,
+        "scope_checked": resolved is not None,
+        "commands_total": cmd_total,
+        "commands_unrunnable": cmd_unrunnable,
         "phases": phases,
         "profile": profile,
         "scoped": scoped,

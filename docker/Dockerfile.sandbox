@@ -151,12 +151,25 @@ RUN apt-get update \
 #      talk to the target and nothing else. (`--no-default-browser-check` is also set by
 #      Debian's own /etc/chromium.d/default-flags; it is repeated here so this one file states
 #      the whole intent rather than depending on a packaging file we do not control.)
+#
+#   4. THE CRAWL BROWSER IS HEADED NOW, AND THAT NEEDS A DISPLAY (build #17). Build #15 shipped
+#      `chrome-headless` and the crawl was refused outright by the very assets the feature
+#      exists for. The measured discriminator is NOT the `HeadlessChrome` token: headless
+#      Chromium sends NO `Sec-CH-UA` Client Hints at all, and `--user-agent` does not add them,
+#      so a spoofed UA fails exactly as a stock one does (both 504; headed gets 31x 200). The
+#      honest fix is the only one that works — use a real browser — and a real browser draws
+#      somewhere. Hence `xvfb`, and `DISPLAY` exported from the drop-in below so any Chromium
+#      the Debian launcher starts finds the display whatever spawned it, without threading an
+#      environment variable through ZAP, Selenium and Crawljax.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends chromium-driver \
+    && apt-get install -y --no-install-recommends chromium-driver xvfb \
     && rm -rf /var/lib/apt/lists/* \
-    && printf '%s %s\n' 'CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-dev-shm-usage' \
+    && printf '%s %s\n%s\n' \
+              'CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-dev-shm-usage' \
               '--disable-background-networking --no-first-run --no-default-browser-check"' \
+              'export DISPLAY="${DISPLAY:-:99}"' \
          > /etc/chromium.d/hackpit-container \
+    && command -v Xvfb \
     && command -v chromedriver \
     && command -v chromium \
     && DRV="$(chromedriver --version | sed -E 's/^ChromeDriver ([0-9]+)\..*/\1/')" \

@@ -555,9 +555,17 @@ def test_the_browser_id_is_read_back_not_trusted() -> None:
         "that call returns OK for values ZAP cannot use"
     )
     assert 'gate="browser"' in src, "a mismatched browser id does not refuse"
-    assert proxy.SPIDER_BROWSER_ID == "chrome-headless", (
-        f"the browser id is {proxy.SPIDER_BROWSER_ID!r} — the image has Chromium and NO Firefox"
+    # THE PREDICATE, NOT THE STRING. This asserted `== "chrome-headless"` and build #17 changed
+    # the value to `chrome` for a measured reason, so the literal would have had to be edited by
+    # whoever made the change — a lock that only ever says "you changed it" teaches people to
+    # update it without reading it. What the reason underneath actually claims is that the image
+    # ships Chromium and NO Firefox, so ZAP's own `firefox-headless` default fails at CRAWL time
+    # rather than at set time. That is the thing worth holding.
+    assert "chrome" in proxy.SPIDER_BROWSER_ID, (
+        f"the browser id is {proxy.SPIDER_BROWSER_ID!r} — the image has Chromium and NO Firefox, "
+        "so anything else fails inside ZAP's log at crawl time instead of here"
     )
+    assert "firefox" not in proxy.SPIDER_BROWSER_ID.lower(), proxy.SPIDER_BROWSER_ID
 
     # observed_spider must report ZAP's value, never the constant we hoped for.
     #
@@ -727,6 +735,61 @@ def test_history_reads_the_NEWEST_window_not_the_oldest() -> None:
     print("  history returns the NEWEST window, and pages backwards from it: PASS")
 
 
+def test_a_headed_crawl_refuses_without_a_display() -> None:
+    """Build #17 made the crawl browser HEADED, and a headed browser with nowhere to draw dies
+    at launch — inside ZAP's log, where the visible symptom is `{"Result":"OK"}` and zero URLs.
+
+    That is the SAME symptom as build #15's two defects (Chromium refusing to run as root, and
+    ZAP preferring its own chromedriver). Three different causes, one indistinguishable outcome,
+    which is why this one refuses up front with a sentence instead of being discovered in a log.
+
+    Hermetic: the display observation is stubbed. `ensure_display` shells out to Docker, and CI
+    has none — the same reason `clash_refusal` takes its observation as an argument.
+    """
+    assert "headless" not in proxy.SPIDER_BROWSER_ID, (
+        "SPIDER_BROWSER_ID is headless again. Measured: headless Chromium sends no Sec-CH-UA "
+        "Client Hints and the WAF-fronted targets this feature exists for refuse it — and "
+        "spoofing the User-Agent does NOT fix it, so this is not a preference to flip back."
+    )
+    real = proxy.ensure_display
+    try:
+        proxy.ensure_display = lambda container: False  # type: ignore[assignment]
+        # The SAME request shape the other crawl tests use. An earlier version of this test
+        # invented `http://127.0.0.1:3000/` and was refused at the TARGET gate — which would
+        # have made the display check look covered while never running.
+        req = _spider()
+        try:
+            proxy.start_spider(req)
+            raised = None
+        except proxy.ProxyRefused as exc:
+            raised = exc
+        except Exception as exc:  # noqa: BLE001
+            # any other failure means we never reached the display check — that is the thing
+            # under test, so say so rather than letting a green tick hide it
+            raised = exc
+        assert isinstance(raised, proxy.ProxyRefused), (
+            f"a headed crawl with no display was not refused (got {raised!r})"
+        )
+        if raised.gate == "display":
+            assert "xvfb" in raised.reason.lower(), raised.reason
+            assert "setcap" in raised.reason.lower(), (
+                "the refusal does not mention the recorded trap: a setcap'd binary cannot exec "
+                "under no-new-privileges, which is the likeliest reason Xvfb is absent"
+            )
+            print("  a headed crawl with no display is refused, naming Xvfb and setcap: PASS")
+        else:
+            # LAB runs need Docker for the isolation gate and CI has none, so a refusal at
+            # `sandbox` here is legitimate and is NOT a failure of what this test covers.
+            assert raised.gate == "sandbox", (
+                f"refused at {raised.gate!r}, which is neither the display check nor the "
+                "sandbox gate that legitimately fires first without Docker"
+            )
+            print("  headed crawl: refused earlier at the sandbox gate (no Docker) — "
+                  "display gate not reached, browser id lock still asserted: PASS")
+    finally:
+        proxy.ensure_display = real  # type: ignore[assignment]
+
+
 def test_an_orphaned_daemon_blocks_a_new_proxy_and_says_why() -> None:
     """clash_refusal used to protect against a state it could not observe.
 
@@ -769,6 +832,7 @@ if __name__ == "__main__":
     test_the_daemon_probe_cannot_match_itself()
     test_the_api_reader_survives_bytes_the_local_codec_cannot_decode()
     test_history_reads_the_NEWEST_window_not_the_oldest()
+    test_a_headed_crawl_refuses_without_a_display()
     test_an_orphaned_daemon_blocks_a_new_proxy_and_says_why()
     test_an_unapproved_start_is_refused_with_a_control()
     test_the_red_confirm_is_required()

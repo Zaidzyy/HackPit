@@ -348,6 +348,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#item-5-the-browser-must-talk-to-the-target-and-nothing-else">Item 5 — the browser must talk to the target and nothing else</a></li>
 <li><a href="#item-2-run-the-discriminator-is-not-the-user-agent-and-that-is-why-the-honest-fix-works">Item 2, RUN — the discriminator is not the User-Agent, and that is why the honest fix works</a></li>
 <li><a href="#item-4-run-the-attack-half-is-blocked-and-the-first-verdict-said-the-opposite">Item 4, RUN — the attack half IS blocked, and the first verdict said the opposite</a></li>
+<li><a href="#item-3-option-a-built-on-the-measurement-rather-than-on-the-suspicion">Item 3 — option A, built on the measurement rather than on the suspicion</a></li>
 <li><a href="#the-defect-that-hid-item-4s-own-evidence-recent-traffic-was-the-oldest-traffic">The defect that hid item 4's own evidence: "recent" traffic was the oldest traffic</a></li>
 <li><a href="#what-is-prepared-and-not-yet-run-stated-plainly-because-last-time-it-was-not">What is prepared and NOT yet run — stated plainly, because last time it was not</a></li>
 <li><a href="#verification_6">Verification</a></li>
@@ -3305,6 +3306,33 @@ it.</strong></p>
    "requests landed" count in the first pass included the ones Akamai refused.</li>
 </ol>
 <p>The verdict now classifies the recorded responses and calls ≥50% edge refusals what it is.</p>
+<h3 id="item-3-option-a-built-on-the-measurement-rather-than-on-the-suspicion">Item 3 — option A, built on the measurement rather than on the suspicion</h3>
+<p><code>SPIDER_BROWSER_ID</code> is <code>chrome</code>, not <code>chrome-headless</code>, and the image installs <code>xvfb</code>. The
+constant carries the measurement that justifies it, because the next person to read it will
+otherwise see "headed browser" and assume it was a preference.</p>
+<p><strong>The display goes in through the drop-in, not through the process tree.</strong> The browser is
+launched by ZAP → Selenium → Crawljax, three processes we do not control, so threading <code>DISPLAY</code>
+down to it would mean touching the spawn path. <code>/etc/chromium.d/hackpit-container</code> now also
+carries <code>export DISPLAY="${DISPLAY:-:99}"</code> — Debian's own launcher sources it, so any Chromium
+started by anything finds the display, and an explicitly-set <code>DISPLAY</code> still wins.</p>
+<p><strong><code>start_spider</code> refuses when there is no display</strong>, with <code>gate="display"</code>, and the refusal names
+both <code>xvfb</code> and <code>setcap</code>. This matters more than it looks: a headed browser with nowhere to draw
+dies at launch inside ZAP's log, and the visible symptom is <code>{"Result":"OK"}</code> followed by zero
+URLs — <strong>the identical symptom of both defects build #15 spent a day on</strong>. Three different causes,
+one indistinguishable outcome. The third one gets a sentence instead of a log dive.
+<code>ensure_display</code> returns the OBSERVED state rather than "the start command ran", which is the
+same rule as reading the browser id back instead of trusting the OK.</p>
+<p>The recorded Xvfb trap — Kali ships setcap'd binaries and <code>no-new-privileges</code> makes the kernel
+refuse to exec them — turned out to be <strong>already handled</strong>: layer 10 strips file capabilities
+across <code>/usr /bin /sbin /opt</code>, and it runs after the layer that installs xvfb. Verified on the
+live container: <code>getcap /usr/bin/Xvfb</code> is empty and Xvfb runs.</p>
+<p><strong>Two locks, and one of them had to be repaired rather than flipped.</strong> The proof no longer
+hardcodes the browser id; it reads <code>SPIDER_BROWSER_ID</code> out of <code>cockpit/proxy.py</code>, because a proof
+carrying its own copy of a fact goes on proving the old one. And the existing test asserted
+<code>SPIDER_BROWSER_ID == "chrome-headless"</code> while its own failure message explained the real
+property — <em>the image has Chromium and NO Firefox</em>. Flipping the literal would have made it a
+lock that only ever says "you changed it", which teaches people to update it without reading it.
+It now asserts the predicate: chrome yes, firefox never.</p>
 <h3 id="the-defect-that-hid-item-4s-own-evidence-recent-traffic-was-the-oldest-traffic">The defect that hid item 4's own evidence: "recent" traffic was the oldest traffic</h3>
 <p>Finding the 403s at all meant paging ZAP's history by hand, because reading the documented way
 returned nothing. <code>history()</code> passed the caller's <code>start</code> straight to ZAP, whose <code>start</code> counts

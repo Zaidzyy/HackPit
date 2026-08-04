@@ -3054,6 +3054,39 @@ it.**
 
 The verdict now classifies the recorded responses and calls ≥50% edge refusals what it is.
 
+### Item 3 — option A, built on the measurement rather than on the suspicion
+
+`SPIDER_BROWSER_ID` is `chrome`, not `chrome-headless`, and the image installs `xvfb`. The
+constant carries the measurement that justifies it, because the next person to read it will
+otherwise see "headed browser" and assume it was a preference.
+
+**The display goes in through the drop-in, not through the process tree.** The browser is
+launched by ZAP → Selenium → Crawljax, three processes we do not control, so threading `DISPLAY`
+down to it would mean touching the spawn path. `/etc/chromium.d/hackpit-container` now also
+carries `export DISPLAY="${DISPLAY:-:99}"` — Debian's own launcher sources it, so any Chromium
+started by anything finds the display, and an explicitly-set `DISPLAY` still wins.
+
+**`start_spider` refuses when there is no display**, with `gate="display"`, and the refusal names
+both `xvfb` and `setcap`. This matters more than it looks: a headed browser with nowhere to draw
+dies at launch inside ZAP's log, and the visible symptom is `{"Result":"OK"}` followed by zero
+URLs — **the identical symptom of both defects build #15 spent a day on**. Three different causes,
+one indistinguishable outcome. The third one gets a sentence instead of a log dive.
+`ensure_display` returns the OBSERVED state rather than "the start command ran", which is the
+same rule as reading the browser id back instead of trusting the OK.
+
+The recorded Xvfb trap — Kali ships setcap'd binaries and `no-new-privileges` makes the kernel
+refuse to exec them — turned out to be **already handled**: layer 10 strips file capabilities
+across `/usr /bin /sbin /opt`, and it runs after the layer that installs xvfb. Verified on the
+live container: `getcap /usr/bin/Xvfb` is empty and Xvfb runs.
+
+**Two locks, and one of them had to be repaired rather than flipped.** The proof no longer
+hardcodes the browser id; it reads `SPIDER_BROWSER_ID` out of `cockpit/proxy.py`, because a proof
+carrying its own copy of a fact goes on proving the old one. And the existing test asserted
+`SPIDER_BROWSER_ID == "chrome-headless"` while its own failure message explained the real
+property — *the image has Chromium and NO Firefox*. Flipping the literal would have made it a
+lock that only ever says "you changed it", which teaches people to update it without reading it.
+It now asserts the predicate: chrome yes, firefox never.
+
 ### The defect that hid item 4's own evidence: "recent" traffic was the oldest traffic
 
 Finding the 403s at all meant paging ZAP's history by hand, because reading the documented way

@@ -161,6 +161,18 @@ MISSING_FLAGS=""
 for f in --disable-background-networking --no-first-run --no-default-browser-check; do
   case " $DROPIN_FLAGS " in *" $f "*) ;; *) MISSING_FLAGS="$MISSING_FLAGS $f" ;; esac
 done
+# The same drop-in carries DISPLAY for the headed crawl browser, so that a Chromium started by
+# ZAP -> Selenium -> Crawljax finds the virtual display without an environment variable being
+# threaded through three processes we do not control.
+DROPIN_DISPLAY="$(MSYS_NO_PATHCONV=1 docker exec "$ENGAGE" \
+  sh -c 'unset DISPLAY; . /etc/chromium.d/hackpit-container 2>/dev/null; printf "%s" "$DISPLAY"' \
+  2>/dev/null | tr -d '\r')"
+if [ -n "$DROPIN_DISPLAY" ]; then
+  ok "the drop-in exports a display for the headed crawl browser (DISPLAY=$DROPIN_DISPLAY)"
+else
+  bad "the drop-in exports no DISPLAY — a headed crawl browser has nowhere to draw and dies at
+        launch, which surfaces as the crawl answering OK and finding zero URLs"
+fi
 if [ -z "$MISSING_FLAGS" ]; then
   ok "the drop-in suppresses Chromium's background networking (variations seed, search preconnect)"
 else
@@ -333,12 +345,48 @@ zapi() {
     curl -s --max-time 20 -H "X-ZAP-API-Key: $KEY" "http://127.0.0.1:$PORT$1" 2>/dev/null
 }
 
-zapi "/JSON/ajaxSpider/action/setOptionBrowserId/?String=chrome-headless" >/dev/null
+# THE BROWSER ID IS READ OUT OF THE PRODUCT, NOT RESTATED HERE. It was hardcoded
+# `chrome-headless` and build #17 changed the product to `chrome`; a proof carrying its own copy
+# of a fact would have gone on proving the old one. Two lists of the same fact have to agree
+# forever — build #5's rule, and the reason `dangerous_script_heuristic` derives rather than
+# restates.
+BROWSER_ID="$(sed -n 's/^SPIDER_BROWSER_ID = "\(.*\)"/\1/p' backend/cockpit/proxy.py | head -1)"
+[ -n "$BROWSER_ID" ] || die "could not read SPIDER_BROWSER_ID out of backend/cockpit/proxy.py —
+        this proof would otherwise test a browser id the product no longer uses"
+note "browser id, read from cockpit/proxy.py: $BROWSER_ID"
+
+# *** A HEADED BROWSER NEEDS A DISPLAY (build #17). *** `chrome` rather than `chrome-headless`
+# because headless sends no Sec-CH-UA Client Hints and the WAF-fronted targets this feature
+# exists for refuse it — measured, and NOT fixable by spoofing the User-Agent, which fails
+# identically. With no display the browser dies at launch and the crawl reports OK and finds
+# nothing: the same symptom as build #15's two defects, for a third reason.
+case "$BROWSER_ID" in
+  *headless*) note "browser id is headless — no display required" ;;
+  *)
+    MSYS_NO_PATHCONV=1 docker exec -d "$ENGAGE" Xvfb :99 -screen 0 1280x1024x24 >/dev/null 2>&1
+    DISPLAY_UP=no
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      if MSYS_NO_PATHCONV=1 docker exec "$ENGAGE" pgrep -x Xvfb >/dev/null 2>&1; then
+        DISPLAY_UP=yes; break
+      fi
+      sleep 1
+    done
+    if [ "$DISPLAY_UP" = yes ]; then
+      ok "a virtual display is up for the headed crawl browser (Xvfb, observed by name)"
+    else
+      bad "Xvfb did not come up in $ENGAGE, so the headed browser ('$BROWSER_ID') dies at launch
+        and the crawl below will answer OK and find nothing. Is xvfb in the image? If it is
+        present but will not exec, strip its file capabilities — no-new-privileges makes the
+        kernel refuse a setcap'd binary."
+    fi ;;
+esac
+
+zapi "/JSON/ajaxSpider/action/setOptionBrowserId/?String=$BROWSER_ID" >/dev/null
 BROWSER_SET="$(zapi "/JSON/ajaxSpider/view/optionBrowserId/")"
-if printf '%s' "$BROWSER_SET" | grep -q 'chrome-headless'; then
-  ok "ZAP reports browser id chrome-headless (read BACK, not assumed from the OK)"
+if printf '%s' "$BROWSER_SET" | grep -q "\"$BROWSER_ID\""; then
+  ok "ZAP reports browser id $BROWSER_ID (read BACK, not assumed from the OK)"
 else
-  bad "ZAP reports $BROWSER_SET after being set to chrome-headless — the option did not take"
+  bad "ZAP reports $BROWSER_SET after being set to $BROWSER_ID — the option did not take"
 fi
 
 # *** THE CRAWL TARGET IS SERVED FROM INSIDE THE ENGAGE SANDBOX, AND THAT IS DELIBERATE. ***

@@ -1665,9 +1665,31 @@ def alert_endpoints_from(alerts, session_id: str, run_id: str | None = None):
 # not a result".
 # --------------------------------------------------------------------------- #
 #: The image has Chromium (150.0.7871.124) and NO Firefox, so ZAP's own default of
-#: `firefox-headless` would fail at crawl time rather than at set time. Headless because there is
-#: no display in the container.
-SPIDER_BROWSER_ID = "chrome-headless"
+#: `firefox-headless` would fail at crawl time rather than at set time.
+#:
+#: *** HEADED, NOT HEADLESS — AND THE REASON IS MEASURED, NOT PREFERRED (build #17). ***
+#: Build #15 shipped `chrome-headless` and the crawl was refused outright by the Akamai-fronted
+#: assets that motivated the whole feature. Build #17's diagnostic found the discriminator, and
+#: it is NOT the `HeadlessChrome` token everyone suspected:
+#:
+#:     headed Chromium      sec-ch-ua present   ->  31x 200
+#:     headless, stock UA   sec-ch-ua ABSENT    ->  504
+#:     headless, SPOOFED UA sec-ch-ua ABSENT    ->  504
+#:
+#: Headless Chromium sends no Client Hints at all, and `--user-agent` does not add them — so
+#: overriding the UA changes what the client CLAIMS and leaves untouched the header set a real
+#: browser EMITS. The dishonest route is not merely disallowed here, it does not work. A headed
+#: browser under a virtual display sends the real header set because it IS the real browser,
+#: which is the whole premise of build #15 stated as a measurement.
+#:
+#: This needs a display, so the image installs `xvfb` and the daemon runs under `Xvfb :99`.
+#: NOT trusted: `setOptionBrowserId` answers `{"Result":"OK"}` for values it cannot use, so
+#: :func:`start_spider` reads this back and refuses a mismatch.
+SPIDER_BROWSER_ID = "chrome"
+
+#: The virtual display the headed browser draws into. `:99` by convention; nothing else in the
+#: container uses a display, so there is no clash to arbitrate.
+SPIDER_DISPLAY = ":99"
 
 #: ZAP's own defaults are depth 10 / 60 minutes. These are lower on purpose: they are what the
 #: human approves, and a crawl the operator did not expect to still be clicking an hour later is
@@ -1871,6 +1893,41 @@ def spider_is_running(spider: Spider) -> bool:
     return spider.state.strip().lower() == "running"
 
 
+def display_is_up(container: str) -> bool:
+    """Is the virtual display running? OBSERVED — `pgrep -x Xvfb`, never `-f`.
+
+    `-x` matches the process NAME. A `-f` pattern here would be a claim about every argv in the
+    container, and this repo has now been bitten by that in both directions: `[z]aproxy` matched
+    too little because the wrapper exec'd the JVM, and `[c]hrome` matched too much and killed the
+    ZAP daemon because an unrelated fix put "chromedriver" on its command line.
+    """
+    argv = ["docker", "exec", container, "pgrep", "-x", "Xvfb"]
+    try:
+        return subprocess.run(argv, capture_output=True, timeout=15).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def ensure_display(container: str) -> bool:
+    """Bring up ``Xvfb`` for the headed crawl browser, and REPORT whether it is actually there.
+
+    Returns the OBSERVED state, not "we ran the start command" — starting Xvfb and assuming it
+    worked is the same shape as `setOptionBrowserId` answering OK for a browser it cannot use.
+    """
+    if display_is_up(container):
+        return True
+    subprocess.run(
+        ["docker", "exec", "-d", container, "Xvfb", SPIDER_DISPLAY,
+         "-screen", "0", "1280x1024x24"],
+        capture_output=True, timeout=30, check=False,
+    )
+    for _ in range(20):
+        if display_is_up(container):
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def start_spider(req: SpiderStartRequest) -> Spider:
     """Start a browser-driven crawl. GATED — no browser launches on a refusal.
 
@@ -1898,6 +1955,20 @@ def start_spider(req: SpiderStartRequest) -> Spider:
             f"a browser crawl is already running on {container}:{req.port} "
             f"({live.results} URLs found so far) — stop it first, or wait for it to finish",
             gate="limit",
+        )
+
+    # *** THE DISPLAY, BEFORE THE CRAWL — a headed browser with nowhere to draw does not start.
+    # It fails inside ZAP's own log, and the symptom is `{"Result":"OK"}` followed by zero URLs,
+    # which is the identical symptom of the two defects build #15 spent a day on. Refusing here
+    # turns the third instance of that symptom into a sentence the operator can read.
+    if not ensure_display(container):
+        raise ProxyRefused(
+            f"no virtual display in {container}: Xvfb {SPIDER_DISPLAY} did not come up, so the "
+            f"headed crawl browser ({SPIDER_BROWSER_ID!r}) would die at launch and the crawl "
+            "would report OK and find nothing. Is `xvfb` installed in this image? If Xvfb is "
+            "present but refuses to exec, strip its file capabilities (`setcap -r`) — "
+            "no-new-privileges makes the kernel refuse a setcap'd binary.",
+            gate="display",
         )
 
     # The approved bounds, applied BEFORE the crawl starts. These are action URLs and they are

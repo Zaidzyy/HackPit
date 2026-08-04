@@ -143,6 +143,32 @@ case "$LAUNCH_ERR" in
     ok "chromium starts as $(docker exec "$ENGAGE" whoami 2>/dev/null | tr -d '\r') (the --no-sandbox drop-in is in force)" ;;
 esac
 
+# 2b. THE BROWSER MUST TALK TO THE TARGET AND NOTHING ELSE. A crawl aimed at a local two-page
+#     lab site also produced requests to www.google.com, gstatic.com and play.google.com —
+#     Chromium's variations seed and search preconnect, going out through the ZAP proxy because
+#     the engage sandbox has full egress. On an engagement that is traffic nobody asked for,
+#     leaving the operator's IP and landing in the capture a report is written from.
+#
+#     WHAT THIS CHECK PROVES, STATED EXACTLY: that the drop-in SOURCES CLEANLY and yields the
+#     flags. That it is sourced AT ALL is proven by check 2 above — the browser only starts as
+#     root because --no-sandbox from this same file reaches it. The two together are the real
+#     property; this one alone would be a grep against a file, which is what "the file existing
+#     is not the same as the flag reaching the browser" warns about one line up.
+DROPIN_FLAGS="$(MSYS_NO_PATHCONV=1 docker exec "$ENGAGE" \
+  sh -c 'CHROMIUM_FLAGS=""; . /etc/chromium.d/hackpit-container 2>/dev/null; printf "%s" "$CHROMIUM_FLAGS"' \
+  2>/dev/null | tr -d '\r')"
+MISSING_FLAGS=""
+for f in --disable-background-networking --no-first-run --no-default-browser-check; do
+  case " $DROPIN_FLAGS " in *" $f "*) ;; *) MISSING_FLAGS="$MISSING_FLAGS $f" ;; esac
+done
+if [ -z "$MISSING_FLAGS" ]; then
+  ok "the drop-in suppresses Chromium's background networking (variations seed, search preconnect)"
+else
+  bad "the drop-in is missing:$MISSING_FLAGS — the crawl browser will phone Google through the
+        proxy, attributing traffic nobody asked for to the operator's IP and putting it in the
+        capture. Got: '$DROPIN_FLAGS'"
+fi
+
 # --- 2. the port is PUBLISHED, and bound where the profile said ------------------------------
 PUBLISHED="$(docker inspect "$ENGAGE" \
   --format "{{json .NetworkSettings.Ports}}" 2>/dev/null || echo '{}')"

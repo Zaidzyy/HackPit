@@ -141,10 +141,21 @@ RUN apt-get update \
 #      on every daemon start, which is also why the MAJOR VERSIONS ARE COMPARED BELOW. Proving
 #      the driver runs proves nothing about whether it can drive the browser that is here —
 #      "an exit code is not a result", one level deeper than part 1 phrased it.
+#
+#   3. CHROMIUM PHONED GOOGLE THROUGH THE PROXY. Found by reading the live run's capture, not
+#      by a test: a crawl aimed at a local two-page lab site also produced requests to
+#      www.google.com, gstatic.com and play.google.com — the variations seed and search
+#      preconnect, egressing through the ZAP proxy because the engage sandbox has full egress.
+#      Harmless in the lab and WRONG on an engagement: traffic nobody asked for, leaving the
+#      operator's IP, landing in the capture that a report is written from. The browser must
+#      talk to the target and nothing else. (`--no-default-browser-check` is also set by
+#      Debian's own /etc/chromium.d/default-flags; it is repeated here so this one file states
+#      the whole intent rather than depending on a packaging file we do not control.)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends chromium-driver \
     && rm -rf /var/lib/apt/lists/* \
-    && printf '%s\n' 'CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-dev-shm-usage"' \
+    && printf '%s %s\n' 'CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-dev-shm-usage' \
+              '--disable-background-networking --no-first-run --no-default-browser-check"' \
          > /etc/chromium.d/hackpit-container \
     && command -v chromedriver \
     && command -v chromium \

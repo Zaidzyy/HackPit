@@ -334,6 +334,17 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#two-defects-only-the-browser-found-again">Two defects only the browser found, again</a></li>
 </ul>
 </li>
+<li><a href="#build-17-closing-out-build-15-2026-08-04">Build #17 — closing out build #15 (2026-08-04)</a></li>
+</ul>
+</li>
+<li><a href="#17-is-that-close-out-plus-a-diagnostic-that-must-land-before-anything-is-built-on-top-of-it">17 is that close-out, plus a diagnostic that must land before anything is built on top of it.</a><ul>
+<li><a href="#the-rules-of-engagement-free-text-field-reviewed-and-accepted">The rules-of-engagement free-text field — reviewed and ACCEPTED</a></li>
+<li><a href="#item-1-the-record-was-corrected-not-made-enforceable">Item 1 — the record was corrected, not made enforceable</a></li>
+<li><a href="#item-4-choosing-the-endpoint-is-the-safety-decision">Item 4 — choosing the endpoint IS the safety decision</a></li>
+<li><a href="#the-pacing-added-in-build-16-does-not-cover-this-path-checked-not-assumed">The pacing added in build #16 does not cover this path — checked, not assumed</a></li>
+<li><a href="#item-5-the-browser-must-talk-to-the-target-and-nothing-else">Item 5 — the browser must talk to the target and nothing else</a></li>
+<li><a href="#what-is-prepared-and-not-yet-run-stated-plainly-because-last-time-it-was-not">What is prepared and NOT yet run — stated plainly, because last time it was not</a></li>
+<li><a href="#verification_6">Verification</a></li>
 </ul>
 </li>
 </ul>
@@ -3043,5 +3054,103 @@ pentest report carried a Bugcrowd VRT priority and a known-issue check — jargo
 OSCP grader did not ask for. Both are gated to the bug-bounty template now. CVSS is
 deliberately not gated: a base score is meaningful everywhere, and it has been spliced
 unconditionally since the block existed. Verified against a running backend on both templates.</p>
+<h2 id="build-17-closing-out-build-15-2026-08-04">Build #17 — closing out build #15 (2026-08-04)</h2>
+<p>Build #15 shipped with its acceptance runbook only partly run. §3.4 — attack one captured URL
+with the scanner — was never executed, and §5, teardown, was never done: the port is still
+published and the daemon still running. §3.3 was <em>answered</em> (refused) rather than run. Build</p>
+<h1 id="17-is-that-close-out-plus-a-diagnostic-that-must-land-before-anything-is-built-on-top-of-it">17 is that close-out, plus a diagnostic that must land before anything is built on top of it.</h1>
+<h3 id="the-rules-of-engagement-free-text-field-reviewed-and-accepted">The rules-of-engagement free-text field — reviewed and ACCEPTED</h3>
+<p>Build #15's live run surfaced that an engagement's <code>authorization</code> prose is enforced by
+nothing, and recorded it in the same sentence as the audit's credential-precondition finding:
+<em>a documented constraint with nothing behind it.</em> Reviewed 2026-08-04 and <strong>accepted, in the
+same voice as D1 and D2 — it is not an open defect and is not to be re-opened.</strong></p>
+<p>The reasoning is the one already written into the target lock's own docstring: <strong>scope is
+enforced in code, and human approval of every command is the actual bound.</strong> The authorization
+line is a note from the operator to their future self and to whoever reads the report. A
+<code>passive_only</code> flag derived from free text would be a gate whose predicate is English prose —
+the least dependable input this system has — and its real effect would be to teach an operator
+that the box means something the moment it happened to fire. That is the same failure the
+<code>-daemon</code> red-confirm had: a control whose stated meaning is not the one it enforces.</p>
+<p>What is worth fixing is the <strong>contradiction</strong>, not the enforcement, and that is item 1 below.</p>
+<h3 id="item-1-the-record-was-corrected-not-made-enforceable">Item 1 — the record was corrected, not made enforceable</h3>
+<p><code>eng-69ec01d0fe74</code> carried <em>"…PASSIVE RECON ONLY this session (operator asleep); no active
+scanning per rules of engagement."</em> True when written for an unattended session; false now.
+Running §3.4's active scan under it would leave an audit trail contradicting the action — the
+one cost of an unenforced field that is real regardless of whether it is enforced.</p>
+<p>So the record was re-entered with accurate text, same target and same 11-host scope. <strong>Exit,
+then enter — not enter alone.</strong> <code>enter()</code> mints a fresh id rather than amending, so entering
+without exiting would leave the forbidding string active <em>beside</em> the corrected one, and
+<code>GET /cockpit/engagement</code> would still return it. The precondition is then checked inside the
+live-fire script itself rather than assumed: if the passive-only text is still active, the
+scanner script refuses to start. <strong>The check belongs in the thing that would create the
+contradiction, not in the product</strong> — which is exactly the line that keeps this from becoming
+the <code>passive_only</code> gate that was declined.</p>
+<h3 id="item-4-choosing-the-endpoint-is-the-safety-decision">Item 4 — choosing the endpoint IS the safety decision</h3>
+<p>The active scanner sent <strong>376 requests against a single endpoint</strong> in the build #14
+measurement, with payloads at every parameter. Against a production storefront, which URL is
+picked is not a detail. It was chosen out of the 55 requests the proxy actually captured, not
+guessed: a category listing carrying a real application filter parameter, <code>recurse=false</code>.</p>
+<p><strong>What was rejected matters more than what was picked.</strong> The capture contains <code>/en-ae/cart</code>,
+<code>/en-ae/login/register</code>, <code>/en-ae/gift-registry</code> and <code>/en-ae/guest/order</code> — injection payloads
+at a cart or checkout parameter on a live storefront can create orders or empty a basket,
+which is the AJAX spider's hazard arriving through a different door. The endpoint is therefore
+a <strong>constant in the script with a forbidden-token guard checked against it at run time</strong>, not
+an argument: a comment explaining why a URL is safe does not survive somebody editing the URL.</p>
+<p>It also rejected the most interesting thing in the whole capture, and that is the judgement
+call worth recording. <code>www.crateandbarrel.me/api?endpoint=https%3A%2F%2Fapi.crateandbarrel.me%2Frest%2Fv2%2F…</code>
+is a <strong>server-side proxy that takes a full URL in a query parameter</strong> — the classic shape of an
+SSRF, and precisely why it is not scanned here. Active-scanning it means asking the target's
+own infrastructure to fetch whatever the scanner puts in that parameter. That is not a
+read-only endpoint; it is outbound request generation from someone else's servers, and it
+deserves a deliberate decision of its own rather than riding along inside a pipeline test.
+<strong>It is a finding, and it is logged as one, not exercised.</strong></p>
+<h3 id="the-pacing-added-in-build-16-does-not-cover-this-path-checked-not-assumed">The pacing added in build #16 does not cover this path — checked, not assumed</h3>
+<p>Build #16 added per-tool throttle-flag injection for engagement runs. <code>pace</code> is a field on
+<code>ExecRequest</code>, applied on the <strong>executor</strong> path; <code>cockpit/proxy.py</code> contains no reference to
+it, and the scanner drives ZAP's API directly. So §3.4 is unpaced, and saying otherwise would
+be the most dangerous kind of wrong — a safety feature credited on a path it never reaches.</p>
+<p>The only rate control on this path is that <strong>stop is ungated</strong>, which is why it is ungated.
+The live-fire script adds a request ceiling and a wall-clock cap that stop the scan through
+that same route. The real fix is ZAP's own <code>scanner.setOptionDelayInMs</code>, and it is deliberately
+not in this build.</p>
+<h3 id="item-5-the-browser-must-talk-to-the-target-and-nothing-else">Item 5 — the browser must talk to the target and nothing else</h3>
+<p>A crawl aimed at a local two-page lab site also produced requests to <code>www.google.com</code>,
+<code>gstatic.com</code> and <code>play.google.com</code> — Chromium's variations seed and search preconnect, going
+out through the ZAP proxy because the engage sandbox has full egress. Harmless in a lab and
+wrong on an engagement: traffic nobody asked for, leaving the operator's IP, landing in the
+capture a report is written from. <code>/etc/chromium.d/hackpit-container</code> now also carries
+<code>--disable-background-networking --no-first-run --no-default-browser-check</code>.</p>
+<p>The proof check for it states exactly what it proves, because the honest version is narrower
+than it looks: it asserts the drop-in <strong>sources cleanly and yields the flags</strong>. That the file
+is sourced <em>at all</em> is proven by the check above it — the browser only starts as root because
+<code>--no-sandbox</code> from this same file reaches it. The two together are the property; this one
+alone would be a grep against a file, which is what "the file existing is not the same as the
+flag reaching the browser" already warns about one line up. Verified to <strong>bite</strong>: run against
+the pre-rebuild container it fails, which is the only way to know a new check is not vacuous.</p>
+<h3 id="what-is-prepared-and-not-yet-run-stated-plainly-because-last-time-it-was-not">What is prepared and NOT yet run — stated plainly, because last time it was not</h3>
+<p>Build #15's section had to be amended after the fact because the runbook was described as
+finished when it was not. Not repeating that: as of this commit, <strong>items 2 and 4 are written,
+syntax-checked and gate-verified, and have NOT been executed.</strong></p>
+<p>Every one of them reaches a real, in-scope bug-bounty target, and live fire against a real
+target is refused by the real-time classifier from inside the agent — the recorded convention
+is to run it in a plain shell and document from the log. They are therefore committed as
+scripts (<code>docs/proof/build17_run.sh</code> and the three it drives) rather than as results, and the
+measurements follow in a later commit. <strong>The diagnostic's outcome, including a "we could not
+make this work honestly" outcome, is a legitimate result and will be recorded as one.</strong></p>
+<p>Two things in the harness are worth keeping regardless of what it measures. <strong>Every probe
+carries its own control</strong> — a headed browser that cannot start would otherwise read as "Akamai
+refuses headed browsers", which is the one decision-table row that must never be reached by
+accident, since it is the row that would put UA spoofing on the table. And <strong><code>RC=$?</code> after a
+pipe is the repo's non-gating defect wearing a hat</strong>: in <code>cmd | tee log</code>, <code>$?</code> is <em>tee's</em>
+status, which is zero whenever tee could write the file. Both live-fire wrappers were written
+with that bug and both were fixed before anything ran, with the fix proved in both directions.</p>
+<h3 id="verification_6">Verification</h3>
+<p>Hermetic safety suite <strong>78 test files, every one exited 0</strong>. <code>tsc --noEmit</code> exits 0,
+<code>next build</code> exits 0, eslint sits at the accepted baseline of <strong>11 errors + 1 warning</strong>
+(unchanged — this build touches no frontend file). <code>data/kb/entries.jsonl</code> still <strong>2743</strong>
+entries. <code>docker/proof/browser_intercept_proof.sh</code> gains one check, so it becomes <strong>23</strong> on a
+rebuilt image; it is not re-run here because the rebuild that makes it pass would destroy the
+running daemon and the ~1000 captured messages items 2 and 4 depend on. <strong>The rebuild and
+teardown are deliberately last</strong>, after the live-fire runs, for that reason.</p>
 </body>
 </html>

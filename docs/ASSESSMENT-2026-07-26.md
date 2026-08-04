@@ -2800,3 +2800,126 @@ pentest report carried a Bugcrowd VRT priority and a known-issue check — jargo
 OSCP grader did not ask for. Both are gated to the bug-bounty template now. CVSS is
 deliberately not gated: a base score is meaningful everywhere, and it has been spliced
 unconditionally since the block existed. Verified against a running backend on both templates.
+
+## Build #17 — closing out build #15 (2026-08-04)
+
+Build #15 shipped with its acceptance runbook only partly run. §3.4 — attack one captured URL
+with the scanner — was never executed, and §5, teardown, was never done: the port is still
+published and the daemon still running. §3.3 was *answered* (refused) rather than run. Build
+#17 is that close-out, plus a diagnostic that must land before anything is built on top of it.
+
+### The rules-of-engagement free-text field — reviewed and ACCEPTED
+
+Build #15's live run surfaced that an engagement's `authorization` prose is enforced by
+nothing, and recorded it in the same sentence as the audit's credential-precondition finding:
+*a documented constraint with nothing behind it.* Reviewed 2026-08-04 and **accepted, in the
+same voice as D1 and D2 — it is not an open defect and is not to be re-opened.**
+
+The reasoning is the one already written into the target lock's own docstring: **scope is
+enforced in code, and human approval of every command is the actual bound.** The authorization
+line is a note from the operator to their future self and to whoever reads the report. A
+`passive_only` flag derived from free text would be a gate whose predicate is English prose —
+the least dependable input this system has — and its real effect would be to teach an operator
+that the box means something the moment it happened to fire. That is the same failure the
+`-daemon` red-confirm had: a control whose stated meaning is not the one it enforces.
+
+What is worth fixing is the **contradiction**, not the enforcement, and that is item 1 below.
+
+### Item 1 — the record was corrected, not made enforceable
+
+`eng-69ec01d0fe74` carried *"…PASSIVE RECON ONLY this session (operator asleep); no active
+scanning per rules of engagement."* True when written for an unattended session; false now.
+Running §3.4's active scan under it would leave an audit trail contradicting the action — the
+one cost of an unenforced field that is real regardless of whether it is enforced.
+
+So the record was re-entered with accurate text, same target and same 11-host scope. **Exit,
+then enter — not enter alone.** `enter()` mints a fresh id rather than amending, so entering
+without exiting would leave the forbidding string active *beside* the corrected one, and
+`GET /cockpit/engagement` would still return it. The precondition is then checked inside the
+live-fire script itself rather than assumed: if the passive-only text is still active, the
+scanner script refuses to start. **The check belongs in the thing that would create the
+contradiction, not in the product** — which is exactly the line that keeps this from becoming
+the `passive_only` gate that was declined.
+
+### Item 4 — choosing the endpoint IS the safety decision
+
+The active scanner sent **376 requests against a single endpoint** in the build #14
+measurement, with payloads at every parameter. Against a production storefront, which URL is
+picked is not a detail. It was chosen out of the 55 requests the proxy actually captured, not
+guessed: a category listing carrying a real application filter parameter, `recurse=false`.
+
+**What was rejected matters more than what was picked.** The capture contains `/en-ae/cart`,
+`/en-ae/login/register`, `/en-ae/gift-registry` and `/en-ae/guest/order` — injection payloads
+at a cart or checkout parameter on a live storefront can create orders or empty a basket,
+which is the AJAX spider's hazard arriving through a different door. The endpoint is therefore
+a **constant in the script with a forbidden-token guard checked against it at run time**, not
+an argument: a comment explaining why a URL is safe does not survive somebody editing the URL.
+
+It also rejected the most interesting thing in the whole capture, and that is the judgement
+call worth recording. `www.crateandbarrel.me/api?endpoint=https%3A%2F%2Fapi.crateandbarrel.me%2Frest%2Fv2%2F…`
+is a **server-side proxy that takes a full URL in a query parameter** — the classic shape of an
+SSRF, and precisely why it is not scanned here. Active-scanning it means asking the target's
+own infrastructure to fetch whatever the scanner puts in that parameter. That is not a
+read-only endpoint; it is outbound request generation from someone else's servers, and it
+deserves a deliberate decision of its own rather than riding along inside a pipeline test.
+**It is a finding, and it is logged as one, not exercised.**
+
+### The pacing added in build #16 does not cover this path — checked, not assumed
+
+Build #16 added per-tool throttle-flag injection for engagement runs. `pace` is a field on
+`ExecRequest`, applied on the **executor** path; `cockpit/proxy.py` contains no reference to
+it, and the scanner drives ZAP's API directly. So §3.4 is unpaced, and saying otherwise would
+be the most dangerous kind of wrong — a safety feature credited on a path it never reaches.
+
+The only rate control on this path is that **stop is ungated**, which is why it is ungated.
+The live-fire script adds a request ceiling and a wall-clock cap that stop the scan through
+that same route. The real fix is ZAP's own `scanner.setOptionDelayInMs`, and it is deliberately
+not in this build.
+
+### Item 5 — the browser must talk to the target and nothing else
+
+A crawl aimed at a local two-page lab site also produced requests to `www.google.com`,
+`gstatic.com` and `play.google.com` — Chromium's variations seed and search preconnect, going
+out through the ZAP proxy because the engage sandbox has full egress. Harmless in a lab and
+wrong on an engagement: traffic nobody asked for, leaving the operator's IP, landing in the
+capture a report is written from. `/etc/chromium.d/hackpit-container` now also carries
+`--disable-background-networking --no-first-run --no-default-browser-check`.
+
+The proof check for it states exactly what it proves, because the honest version is narrower
+than it looks: it asserts the drop-in **sources cleanly and yields the flags**. That the file
+is sourced *at all* is proven by the check above it — the browser only starts as root because
+`--no-sandbox` from this same file reaches it. The two together are the property; this one
+alone would be a grep against a file, which is what "the file existing is not the same as the
+flag reaching the browser" already warns about one line up. Verified to **bite**: run against
+the pre-rebuild container it fails, which is the only way to know a new check is not vacuous.
+
+### What is prepared and NOT yet run — stated plainly, because last time it was not
+
+Build #15's section had to be amended after the fact because the runbook was described as
+finished when it was not. Not repeating that: as of this commit, **items 2 and 4 are written,
+syntax-checked and gate-verified, and have NOT been executed.**
+
+Every one of them reaches a real, in-scope bug-bounty target, and live fire against a real
+target is refused by the real-time classifier from inside the agent — the recorded convention
+is to run it in a plain shell and document from the log. They are therefore committed as
+scripts (`docs/proof/build17_run.sh` and the three it drives) rather than as results, and the
+measurements follow in a later commit. **The diagnostic's outcome, including a "we could not
+make this work honestly" outcome, is a legitimate result and will be recorded as one.**
+
+Two things in the harness are worth keeping regardless of what it measures. **Every probe
+carries its own control** — a headed browser that cannot start would otherwise read as "Akamai
+refuses headed browsers", which is the one decision-table row that must never be reached by
+accident, since it is the row that would put UA spoofing on the table. And **`RC=$?` after a
+pipe is the repo's non-gating defect wearing a hat**: in `cmd | tee log`, `$?` is *tee's*
+status, which is zero whenever tee could write the file. Both live-fire wrappers were written
+with that bug and both were fixed before anything ran, with the fix proved in both directions.
+
+### Verification
+
+Hermetic safety suite **78 test files, every one exited 0**. `tsc --noEmit` exits 0,
+`next build` exits 0, eslint sits at the accepted baseline of **11 errors + 1 warning**
+(unchanged — this build touches no frontend file). `data/kb/entries.jsonl` still **2743**
+entries. `docker/proof/browser_intercept_proof.sh` gains one check, so it becomes **23** on a
+rebuilt image; it is not re-run here because the rebuild that makes it pass would destroy the
+running daemon and the ~1000 captured messages items 2 and 4 depend on. **The rebuild and
+teardown are deliberately last**, after the live-fire runs, for that reason.

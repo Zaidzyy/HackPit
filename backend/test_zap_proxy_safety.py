@@ -588,7 +588,138 @@ def test_the_container_follows_the_mode() -> None:
     print("  lab -> isolated sandbox, engagement -> engage sandbox: PASS")
 
 
+def test_a_recovered_key_is_never_sent_to_a_different_port() -> None:
+    """Build #17's defect, and the one way its fix could be WORSE than the defect.
+
+    A daemon states its API key in its own argv, and that is how a restarted backend recovers it.
+    But `observed_daemon` reports ONE daemon per container, so adopting its key without checking
+    the port would send a live secret to whatever else happens to be listening on the port we
+    were actually asked about. Hermetic: the observation is stubbed, no Docker.
+    """
+    real = proxy.observed_daemon
+    try:
+        proxy.observed_daemon = lambda container: (8090, KEY)  # type: ignore[assignment]
+        proxy._adopted.clear()
+        assert proxy.api_key_for("c", 8090) == KEY, "the key was not recovered at all"
+        proxy._adopted.clear()
+        assert proxy.api_key_for("c", 9999) == "", (
+            "a key read off the daemon on :8090 was handed to a caller asking about :9999"
+        )
+        assert not proxy._adopted, "a mismatched port still cached a key"
+
+        # and no daemon at all must stay "" — the honest answer, not a stale one
+        proxy.observed_daemon = lambda container: None  # type: ignore[assignment]
+        proxy._adopted.clear()
+        assert proxy.api_key_for("c", 8090) == ""
+    finally:
+        proxy.observed_daemon = real  # type: ignore[assignment]
+        proxy._adopted.clear()
+    print("  a recovered key is bound to the port it was read from: PASS")
+
+
+def test_the_daemon_probe_cannot_match_itself() -> None:
+    """The `[z]aproxy` lesson, statically enforced on a grep instead of a pkill.
+
+    The probe's own command line is visible in /proc while it runs. An unbracketed `api.key=`
+    would match the probe itself and return a fragment of this module's source as a credential.
+    `pkill -f` has now been wrong in BOTH directions in this repo; this locks the shape.
+    """
+    assert "api.key=" not in proxy._DAEMON_PROBE, (
+        "the daemon probe contains a literal 'api.key=' and will match its own /proc entry"
+    )
+    assert "api[.]key=" in proxy._DAEMON_PROBE, (
+        "the bracketed self-match guard is gone from the daemon probe"
+    )
+    # The guard has to survive the VALUE extraction too. `${K#api.key=}` is the obvious way to
+    # strip the prefix and it puts the literal straight back; the first run of this test caught
+    # exactly that, which is the only reason the property is written down rather than assumed.
+    assert "${K#*=}" in proxy._DAEMON_PROBE, (
+        "the probe strips the prefix by naming it, reintroducing the literal the guard removed"
+    )
+    print("  the daemon probe cannot match its own command line: PASS")
+
+
+def test_the_api_reader_survives_bytes_the_local_codec_cannot_decode() -> None:
+    """A capture is arbitrary bytes from arbitrary sites; the reader must not depend on the
+    operator's locale.
+
+    `text=True` decodes with the AMBIENT codec — cp1252 on a Windows host — so one byte outside
+    that codepage raised UnicodeDecodeError in subprocess's reader thread and left `stdout` as
+    None. It was invisible because `history()` catches the downstream error and returns `[]`:
+    a real capture read as no capture, on every Windows machine, for as long as the code existed.
+    Found only when build #17's key recovery let a read reach real bodies for the first time.
+    """
+    import subprocess as sp
+
+    real = proxy.subprocess.run
+    seen: dict = {}
+
+    def fake(argv, **kw):
+        seen.update(kw)
+        # 0x8f is undefined in cp1252 and is not valid UTF-8 either — the exact shape that broke
+        return sp.CompletedProcess(argv, 0, stdout=b'{"v":"\x8f\xff ok"}', stderr=b"")
+
+    try:
+        proxy.subprocess.run = fake  # type: ignore[assignment]
+        got = proxy._api_get("c", 8090, "/JSON/core/view/version/")
+        assert isinstance(got, str), f"the reader returned {type(got).__name__}, not str"
+        assert "ok" in got, f"the readable part of the body was lost: {got!r}"
+        assert seen.get("text") is not True, (
+            "_api_get is decoding with the ambient locale codec again — a capture containing "
+            "one byte outside it will read as no capture"
+        )
+
+        # and stdout=None (what the decode failure actually produced) must not raise
+        proxy.subprocess.run = lambda argv, **kw: sp.CompletedProcess(  # type: ignore[assignment]
+            argv, 0, stdout=None, stderr=b"")
+        assert proxy._api_get("c", 8090, "/JSON/core/view/version/") == ""
+    finally:
+        proxy.subprocess.run = real  # type: ignore[assignment]
+    print("  the API reader survives bytes the local codec cannot decode: PASS")
+
+
+def test_an_orphaned_daemon_blocks_a_new_proxy_and_says_why() -> None:
+    """clash_refusal used to protect against a state it could not observe.
+
+    `_models` is in-process, so after a backend restart the check saw nothing and would let a
+    second daemon spawn — which dies on ZAP's home-directory lock while the port stays bound by
+    the first. PURE, so the observation is injected: this is exactly the function whose test
+    once reached for Docker, passed locally and failed in CI.
+    """
+    with proxy._lock:
+        proxy._models.clear()
+    # unchanged behaviour: nothing known, nothing observed -> no refusal
+    assert proxy.clash_refusal("c", 8090) is None
+    assert proxy.clash_refusal("c", 8090, observed_port=None) is None
+
+    refused = proxy.clash_refusal("c", 8090, observed_port=8090)
+    assert refused is not None, (
+        "a daemon is running in the container and a second start was still permitted"
+    )
+    assert refused.gate == "limit", refused.gate
+    reason = refused.reason.lower()
+    assert "home directory" in reason, (
+        "the refusal does not state ZAP's actual reason, so the operator sees a proxy that "
+        f"will not start and no explanation: {refused.reason!r}"
+    )
+    assert "restart" in reason or "other than this backend" in reason, (
+        f"the refusal does not say WHY there is no proxy to stop in the UI: {refused.reason!r}"
+    )
+    # the gated start must actually observe, or the argument above is decorative
+    import inspect
+
+    src = inspect.getsource(proxy.start_proxy)
+    assert "observed_daemon" in src and "observed_port" in src, (
+        "start_proxy no longer passes an observation to clash_refusal — the check is blind again"
+    )
+    print("  an orphaned daemon is refused, with ZAP's reason and the restart context: PASS")
+
+
 if __name__ == "__main__":
+    test_a_recovered_key_is_never_sent_to_a_different_port()
+    test_the_daemon_probe_cannot_match_itself()
+    test_the_api_reader_survives_bytes_the_local_codec_cannot_decode()
+    test_an_orphaned_daemon_blocks_a_new_proxy_and_says_why()
     test_an_unapproved_start_is_refused_with_a_control()
     test_the_red_confirm_is_required()
     test_the_gated_argv_is_the_spawned_argv()

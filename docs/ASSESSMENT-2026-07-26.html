@@ -343,6 +343,8 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#item-4-choosing-the-endpoint-is-the-safety-decision">Item 4 — choosing the endpoint IS the safety decision</a></li>
 <li><a href="#the-pacing-added-in-build-16-does-not-cover-this-path-checked-not-assumed">The pacing added in build #16 does not cover this path — checked, not assumed</a></li>
 <li><a href="#the-defect-that-blocked-item-4-the-product-goes-blind-to-its-own-daemon-silently">The defect that blocked item 4 — the product goes blind to its own daemon, silently</a></li>
+<li><a href="#the-fix-the-key-is-recovered-and-the-clash-check-can-finally-see">The fix — the key is recovered, and the clash check can finally see</a></li>
+<li><a href="#the-defect-underneath-it-a-capture-was-unreadable-on-windows-and-read-as-no-capture">The defect underneath it: a capture was unreadable on Windows, and read as no capture</a></li>
 <li><a href="#item-5-the-browser-must-talk-to-the-target-and-nothing-else">Item 5 — the browser must talk to the target and nothing else</a></li>
 <li><a href="#what-is-prepared-and-not-yet-run-stated-plainly-because-last-time-it-was-not">What is prepared and NOT yet run — stated plainly, because last time it was not</a></li>
 <li><a href="#verification_6">Verification</a></li>
@@ -3136,12 +3138,57 @@ docstrings say counts are "READ BACK FROM ZAP, never assigned at launch".</p>
 less, not more. It is a <em>correctness and honesty</em> defect, and it lands squarely on the
 distinction the acceptance runbook draws in bold — <em>"a broken proxy is a bug in this build,
 and a refused browser is a finding about the target. Do not report one as the other."</em></p>
-<p><strong>So item 4 is held rather than run.</strong> In this state the scan would have sent nothing, printed
+<p><strong>Item 4 was held rather than run.</strong> In that state the scan would have sent nothing, printed
 <code>REFUSED</code>, and been written down as <em>"Akamai blocks the scanner even though capture works"</em> —
 which the plan itself calls "a significantly larger finding than the spider's refusal". It
 would have been the most consequential wrong conclusion available in this build, arrived at
-through a green-looking script. The precondition that catches it is now in the live-fire
-script, and it names both ways forward rather than picking one.</p>
+through a green-looking script. The precondition that catches it is in the live-fire script,
+and it named both ways forward rather than picking one. <strong>Zaid chose the fix</strong> (2026-08-04),
+keeping the 1,076-message capture.</p>
+<h3 id="the-fix-the-key-is-recovered-and-the-clash-check-can-finally-see">The fix — the key is recovered, and the clash check can finally see</h3>
+<p>A daemon states its own key in its own argv, and that argv is readable inside a container we
+own. <code>/proc/&lt;pid&gt;/cmdline</code> is <em>already</em> the accepted residual of passing <code>-config api.key=</code> at
+all, written down in the build #15 section — so this reads what that residual exposes rather
+than widening anything. Recovered keys live in <code>_adopted</code>, deliberately <strong>not</strong> in <code>_keys</code>:
+"what this process minted" and "what we read off a process we did not start" are different
+facts, and one dict would lose the distinction the moment anyone needed it.</p>
+<p>Three things make it safe rather than merely convenient:</p>
+<ul>
+<li><strong>The port is checked, not assumed.</strong> <code>observed_daemon</code> reports one daemon per container, so
+  adopting its key for whatever port the caller asked about would send a live secret to
+  something else listening there. A mismatched port returns <code>""</code> and caches nothing.</li>
+<li><strong>An empty answer drops the adopted key.</strong> ZAP replies to a wrong or missing key with an
+  empty body — the same thing a dead daemon looks like — so either way the recovered key is
+  suspect and the next call re-reads the argv. Self-healing across a daemon swap.</li>
+<li><strong>The probe cannot match itself.</strong> <code>grep '^api[.]key='</code>, because the probe's own command line
+  is in <code>/proc</code> while it runs and an unbracketed pattern would return a fragment of the probe
+  as a credential. This is the <code>[z]aproxy</code> lesson applied to a <code>grep</code> instead of a <code>pkill</code> —
+  now wrong in both directions <strong>and</strong> in a third tool. The test caught the obvious follow-on
+  immediately: <code>${K#api.key=}</code> puts the literal straight back, so the strip is <code>${K#*=}</code>.</li>
+</ul>
+<p><code>clash_refusal</code> stays <strong>pure</strong> and takes the observation as an argument. Doing the <code>docker exec</code>
+inside it is exactly the mistake its own docstring records — a test that reached for Docker in
+a pure check passed locally and failed in CI, twice in this repo. <code>start_proxy</code> observes and
+injects; an orphaned daemon now earns a refusal that says a <em>restart lost the record, not the
+daemon</em>, because there is no proxy in the UI to press stop on.</p>
+<h3 id="the-defect-underneath-it-a-capture-was-unreadable-on-windows-and-read-as-no-capture">The defect underneath it: a capture was unreadable on Windows, and read as no capture</h3>
+<p>Fixing the key let a read reach real response bodies for the first time on this machine, and it
+<strong>crashed</strong>. <code>_api_get</code> ran <code>subprocess.run(..., text=True)</code>, which decodes with the <strong>ambient
+locale codec</strong> — cp1252 here. A capture is arbitrary bytes from arbitrary sites, so one byte
+outside that codepage raised <code>UnicodeDecodeError</code> inside subprocess's own reader thread and left
+<code>stdout</code> as <code>None</code>.</p>
+<p><strong>It has been failing for as long as the code has existed, and it looked like success.</strong>
+<code>history()</code> catches the downstream error and returns <code>[]</code> — this module's recurring silent
+empty, one layer <em>below</em> the one build #17 came here to fix. Every Windows operator reading a
+real capture would have seen "no traffic". It was invisible because on this machine <code>history()</code>
+was already returning <code>[]</code> for the key reason, and in tests the bodies are ASCII.</p>
+<p>The fix is to stop letting the environment decide: capture bytes, decode UTF-8 with
+<code>errors="replace"</code>. The regression test feeds <code>0x8f</code> — undefined in cp1252 and not valid UTF-8
+either — and asserts both that a <code>str</code> comes back with the readable part intact and that
+<code>text=True</code> is not passed. Verified to bite: the old code returns <code>bytes</code> for that input.</p>
+<p>After both fixes, against the live daemon: <strong>200 exchanges read, session health <code>ok</code>, 96
+sampled.</strong> That is the signal item 4 needs to tell "zero findings" from "a dead session", and
+it was returning <code>unknown</code> from an empty list an hour ago.</p>
 <h3 id="item-5-the-browser-must-talk-to-the-target-and-nothing-else">Item 5 — the browser must talk to the target and nothing else</h3>
 <p>A crawl aimed at a local two-page lab site also produced requests to <code>www.google.com</code>,
 <code>gstatic.com</code> and <code>play.google.com</code> — Chromium's variations seed and search preconnect, going
@@ -3159,8 +3206,8 @@ the pre-rebuild container it fails, which is the only way to know a new check is
 <h3 id="what-is-prepared-and-not-yet-run-stated-plainly-because-last-time-it-was-not">What is prepared and NOT yet run — stated plainly, because last time it was not</h3>
 <p>Build #15's section had to be amended after the fact because the runbook was described as
 finished when it was not. Not repeating that: as of this commit, <strong>item 1 has run and passes,
-item 2 is written and not yet executed, and item 4 is BLOCKED</strong> by the key-recovery defect
-above — held deliberately, not skipped.</p>
+the two proxy defects above are fixed and locked, and items 2 and 4 are written, gate-verified
+and NOT YET EXECUTED.</strong> Item 4 is no longer blocked — it is queued.</p>
 <p><strong>Item 1 ran, and its first version was wrong in an instructive way.</strong> It asserted <em>"exactly
 one active engagement"</em>, written against a truncated read of <code>GET /cockpit/engagement</code> that
 showed one record when there were <strong>21</strong> — twenty of them old lab engagements against RFC1918
@@ -3184,7 +3231,12 @@ pipe is the repo's non-gating defect wearing a hat</strong>: in <code>cmd | tee 
 status, which is zero whenever tee could write the file. Both live-fire wrappers were written
 with that bug and both were fixed before anything ran, with the fix proved in both directions.</p>
 <h3 id="verification_6">Verification</h3>
-<p>Hermetic safety suite <strong>78 test files, every one exited 0</strong>. <code>tsc --noEmit</code> exits 0,
+<p>Hermetic safety suite <strong>78 test files, every one exited 0</strong> — and the two touched files re-run
+with <code>docker</code> removed from <code>PATH</code>, both 0, <strong>with the strip checked to bite first</strong> (<code>docker</code>
+not found, <code>git</code> still found, since the KB ingester's recovery path needs it). Four new locks:
+a recovered key is bound to the port it was read from, the daemon probe cannot match its own
+command line, the API reader survives bytes the local codec cannot decode, and an orphaned
+daemon is refused with ZAP's real reason. <code>tsc --noEmit</code> exits 0,
 <code>next build</code> exits 0, eslint sits at the accepted baseline of <strong>11 errors + 1 warning</strong>
 (unchanged — this build touches no frontend file). <code>data/kb/entries.jsonl</code> still <strong>2743</strong>
 entries. <code>docker/proof/browser_intercept_proof.sh</code> gains one check, so it becomes <strong>23</strong> on a

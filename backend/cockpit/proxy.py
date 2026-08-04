@@ -189,10 +189,29 @@ _watched: dict[str, Any] = {}
 # though false is ZAP's own default: the default is not what is in that file.
 #
 # The key is RANDOM PER START and lives only here, in memory. Nothing persists it, so there is no
-# long-lived secret to leak and a backend restart simply loses the ability to read that daemon —
-# honest, and no worse than today, since `_models` is in-memory too and a restart already orphans
-# a running proxy.
+# long-lived secret to leak.
+#
+# *** THIS BLOCK USED TO SAY A BACKEND RESTART "SIMPLY LOSES THE ABILITY TO READ THAT DAEMON —
+# HONEST, AND NO WORSE THAN TODAY". THE POSITION WAS DEFENSIBLE; THE WORD "HONEST" WAS NOT. ***
+# Measured 2026-08-04 (build #17): with a daemon holding 1,076 captured messages still running,
+# `GET /cockpit/proxy` returned `[]` and the history route returned zero exchanges. Losing the key
+# is fine. What was NOT fine is how the loss reported itself: `_api_get` omits the header, ZAP
+# answers with an EMPTY BODY, and `history()` parses that into `[]` — indistinguishable from "this
+# proxy captured nothing". A backend restart is an ordinary event across a multi-day engagement,
+# and it silently turned the whole read surface into a confident zero.
+#
+# So the key is now RECOVERABLE: a daemon states its own key in its own argv, and that argv is
+# readable inside the container we own. `/proc/<pid>/cmdline` is already the accepted residual of
+# passing `-config api.key=` at all (see the build #15 section) — this reads what that residual
+# already exposes rather than widening anything. Recovered keys live in `_adopted`, kept SEPARATE
+# from `_keys` on purpose: "what this process minted" and "what we read off a process we did not
+# start" are different facts, and a single dict would lose the distinction the moment anyone
+# needed it.
 _keys: dict[str, str] = {}
+
+#: Keys read back from a live daemon THIS PROCESS DID NOT START. Never minted, never persisted,
+#: and dropped the moment a read comes back empty so a stale one cannot survive a daemon swap.
+_adopted: dict[str, str] = {}
 
 #: What `_gate_request` passes instead of a key. THE GATE IS NEVER GIVEN THE REAL ONE — not
 #: redacted afterwards, never handed over in the first place, which is the only version of that
@@ -209,10 +228,75 @@ def _key_slot(container: str, port: int) -> str:
     return f"{container}:{port}"
 
 
+#: Read a running ZAP daemon's port and API key out of its OWN argv, inside the container.
+#:
+#: THE `api[.]key=` IS NOT A TYPO — it is the `[z]aproxy` lesson applied to a `grep` instead of a
+#: `pkill`. This command's own cmdline contains the pattern text, so an unbracketed `api.key=`
+#: would match the probe itself and hand back a fragment of this string as a credential. The
+#: value is stripped with `${K#*=}` for the same reason and not `${K#api.key=}`, which the test
+#: caught on its first run: the obvious spelling reintroduces the literal the guard removed.
+#:
+#: It also skips the `sh -c` wrapper for free, and that is the OTHER half of the same lesson. The
+#: wrapper's whole command is a SINGLE argv element, so splitting on NULs leaves it as one line
+#: beginning `zaproxy …`, which `^api[.]key=` cannot match; only the real JVM, whose settings are
+#: separate argv entries, does. Build #14 was bitten by `-f` seeing the wrapper instead of the
+#: JVM; here the same structural difference is what makes the match precise.
+_DAEMON_PROBE = (
+    'for f in /proc/[0-9]*/cmdline; do '
+    'L=$(tr "\\0" "\\n" < "$f" 2>/dev/null) || continue; '
+    'K=$(printf "%s\\n" "$L" | grep -m1 -e "^api[.]key=") || continue; '
+    'P=$(printf "%s\\n" "$L" | grep -A1 -x -e "-port" | tail -1); '
+    'printf "%s %s\\n" "$P" "${K#*=}"; break; done'
+)
+
+
+def observed_daemon(container: str) -> tuple[int, str] | None:
+    """``(port, api_key)`` of a ZAP daemon ACTUALLY RUNNING in ``container``, else ``None``.
+
+    IMPURE — it runs `docker exec`. Deliberately kept out of :func:`clash_refusal`, which is pure
+    and hermetically tested; that function takes this as an argument instead. A test that reached
+    for Docker inside a pure check is precisely what passed locally and failed in CI twice.
+    """
+    argv = ["docker", "exec", container, "sh", "-c", _DAEMON_PROBE]
+    try:
+        # Bytes + explicit decode for the same reason as `_api_get`: never let the ambient
+        # locale codec decide whether this function works.
+        out = subprocess.run(argv, capture_output=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    parts = (out.stdout or b"").decode("utf-8", "replace").strip().split()
+    if len(parts) != 2 or not parts[0].isdigit():
+        return None
+    return int(parts[0]), parts[1]
+
+
 def api_key_for(container: str, port: int) -> str:
-    """The key this process minted for that daemon, or "" if it did not start it."""
+    """The key for that daemon: minted by this process, or READ BACK from the daemon itself.
+
+    Returns "" only when there is genuinely no daemon to talk to — which is the distinction the
+    old version could not make, because "we lost the key" and "there is nothing there" both came
+    out as "" and then as an empty API response and then as `[]`.
+    """
+    slot = _key_slot(container, port)
     with _lock:
-        return _keys.get(_key_slot(container, port), "")
+        known = _keys.get(slot) or _adopted.get(slot, "")
+    if known:
+        return known
+    found = observed_daemon(container)
+    # The port is checked, not assumed: adopting a key from a daemon on a DIFFERENT port would
+    # send a valid-looking secret to whatever else is listening on the one we were asked about.
+    if found is None or found[0] != port:
+        return ""
+    with _lock:
+        _adopted[slot] = found[1]
+    return found[1]
+
+
+def forget_adopted(container: str, port: int) -> None:
+    """Drop a recovered key. Called when a read comes back empty, so a key adopted from a daemon
+    that has since been replaced cannot keep being sent to its successor."""
+    with _lock:
+        _adopted.pop(_key_slot(container, port), None)
 
 
 def _now() -> str:
@@ -599,11 +683,27 @@ def _api_get(container: str, port: int, path: str, timeout: int = 10) -> str:
     if key:
         argv += ["-H", f"X-ZAP-API-Key: {key}"]
     argv.append(url)
+    # *** BYTES, THEN AN EXPLICIT DECODE — NOT `text=True` (build #17). ***
+    # `text=True` decodes with the AMBIENT LOCALE codec, which on this Windows host is cp1252.
+    # What comes back here is CAPTURED RESPONSE BODIES from arbitrary sites, so a single byte
+    # outside that codepage raises UnicodeDecodeError inside subprocess's own reader thread and
+    # `out.stdout` lands as None. Reading 200 real messages from a live capture did exactly
+    # that. The failure was invisible for as long as it has existed because `history()` catches
+    # the downstream TypeError and returns `[]` — this module's recurring silent empty, one
+    # layer below the one build #17 came here to fix, and it would have made a real capture look
+    # like no capture on every Windows operator's machine.
     try:
-        out = subprocess.run(argv, capture_output=True, text=True, timeout=timeout + 5)
+        out = subprocess.run(argv, capture_output=True, timeout=timeout + 5)
     except (OSError, subprocess.SubprocessError):
         return ""
-    return out.stdout
+    body = (out.stdout or b"").decode("utf-8", "replace")
+    # ZAP answers a keyless or wrong-keyed call with an EMPTY BODY, which is also what a dead
+    # daemon looks like. Either way an ADOPTED key is now suspect, so it is dropped and the next
+    # call re-reads the daemon's argv. Self-healing across a daemon swap, and it costs one extra
+    # `docker exec` only on a path that is already returning nothing.
+    if not body.strip() and key:
+        forget_adopted(container, port)
+    return body
 
 
 def _wait_ready(container: str, port: int) -> bool:
@@ -620,8 +720,23 @@ def _wait_ready(container: str, port: int) -> bool:
     return False
 
 
-def clash_refusal(container: str, port: int) -> ProxyRefused | None:
+def clash_refusal(
+    container: str, port: int, observed_port: int | None = None
+) -> ProxyRefused | None:
     """The refusal a new proxy in ``container`` would earn from one already there. PURE.
+
+    *** IT USED TO PROTECT AGAINST A STATE IT COULD NOT OBSERVE (build #17). *** The check read
+    only ``_models``, which is in-process, so after a backend restart it saw no daemon and would
+    happily let ``start_proxy`` spawn a second one — which dies instantly on the home-directory
+    lock described below, while ``lifecycle.observe()`` finds the port bound BY THE OLD DAEMON
+    and reports the new proxy `up`, holding a key the listening process will never accept. Every
+    read after that returns empty. The one function whose entire job is to prevent that failure
+    was blind to the only state that produces it.
+
+    ``observed_port`` is what a ZAP daemon is ACTUALLY listening on in that container, from
+    :func:`observed_daemon`. It is injected rather than looked up here so this stays pure and
+    hermetically testable — running Docker inside this function is the mistake its own history
+    records, and CI has no Docker.
 
     *** ONE PROXY PER CONTAINER, NOT PER PORT — AND THE REASON IS ZAP'S, NOT OURS. ***
 
@@ -646,6 +761,18 @@ def clash_refusal(container: str, port: int) -> ProxyRefused | None:
             None,
         )
     if clash is None:
+        # No model — but a daemon can be there without one, and that is the case this function
+        # was blind to. Reported as ORPHANED rather than as an ordinary clash, because the fix
+        # differs: there is no proxy in the UI to press stop on.
+        if observed_port is not None:
+            return ProxyRefused(
+                f"a ZAP daemon is already running in {container} on :{observed_port}, started "
+                "by something other than this backend process (a restart loses the record, not "
+                "the daemon). ZAP locks its HOME DIRECTORY rather than its port, so a second "
+                "daemon here would die at startup while the port stayed bound by the first — "
+                "stop the running one before starting a new proxy",
+                gate="limit",
+            )
         return None
     return ProxyRefused(
         f"a proxy is already live on {clash.container}:{clash.port} — stop it first"
@@ -677,7 +804,9 @@ def start_proxy(req: ProxyStartRequest) -> Proxy:
         )
 
     pid = f"zapproxy-{container}-{req.port}"
-    clash = clash_refusal(container, req.port)
+    # OBSERVED, not assumed: `_models` cannot see a daemon this process did not start.
+    seen = observed_daemon(container)
+    clash = clash_refusal(container, req.port, observed_port=seen[0] if seen else None)
     if clash is not None:
         raise clash
 
@@ -739,8 +868,11 @@ def stop_proxy(pid: str) -> Proxy:
         _watched.pop(pid, None)
         # The key dies with the daemon. Keeping it would mean a later start on the same
         # container:port inherits a secret the new process was never given, and every read
-        # against it would fail for a reason nothing in the UI could explain.
+        # against it would fail for a reason nothing in the UI could explain. A RECOVERED key
+        # is dropped for the same reason and in the same breath — it was read off the process
+        # this call just killed.
         _keys.pop(_key_slot(model.container, model.port), None)
+        _adopted.pop(_key_slot(model.container, model.port), None)
     return stopped
 
 

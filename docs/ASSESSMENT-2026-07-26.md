@@ -2903,12 +2903,65 @@ less, not more. It is a *correctness and honesty* defect, and it lands squarely 
 distinction the acceptance runbook draws in bold — *"a broken proxy is a bug in this build,
 and a refused browser is a finding about the target. Do not report one as the other."*
 
-**So item 4 is held rather than run.** In this state the scan would have sent nothing, printed
+**Item 4 was held rather than run.** In that state the scan would have sent nothing, printed
 `REFUSED`, and been written down as *"Akamai blocks the scanner even though capture works"* —
 which the plan itself calls "a significantly larger finding than the spider's refusal". It
 would have been the most consequential wrong conclusion available in this build, arrived at
-through a green-looking script. The precondition that catches it is now in the live-fire
-script, and it names both ways forward rather than picking one.
+through a green-looking script. The precondition that catches it is in the live-fire script,
+and it named both ways forward rather than picking one. **Zaid chose the fix** (2026-08-04),
+keeping the 1,076-message capture.
+
+### The fix — the key is recovered, and the clash check can finally see
+
+A daemon states its own key in its own argv, and that argv is readable inside a container we
+own. `/proc/<pid>/cmdline` is *already* the accepted residual of passing `-config api.key=` at
+all, written down in the build #15 section — so this reads what that residual exposes rather
+than widening anything. Recovered keys live in `_adopted`, deliberately **not** in `_keys`:
+"what this process minted" and "what we read off a process we did not start" are different
+facts, and one dict would lose the distinction the moment anyone needed it.
+
+Three things make it safe rather than merely convenient:
+
+* **The port is checked, not assumed.** `observed_daemon` reports one daemon per container, so
+  adopting its key for whatever port the caller asked about would send a live secret to
+  something else listening there. A mismatched port returns `""` and caches nothing.
+* **An empty answer drops the adopted key.** ZAP replies to a wrong or missing key with an
+  empty body — the same thing a dead daemon looks like — so either way the recovered key is
+  suspect and the next call re-reads the argv. Self-healing across a daemon swap.
+* **The probe cannot match itself.** `grep '^api[.]key='`, because the probe's own command line
+  is in `/proc` while it runs and an unbracketed pattern would return a fragment of the probe
+  as a credential. This is the `[z]aproxy` lesson applied to a `grep` instead of a `pkill` —
+  now wrong in both directions **and** in a third tool. The test caught the obvious follow-on
+  immediately: `${K#api.key=}` puts the literal straight back, so the strip is `${K#*=}`.
+
+`clash_refusal` stays **pure** and takes the observation as an argument. Doing the `docker exec`
+inside it is exactly the mistake its own docstring records — a test that reached for Docker in
+a pure check passed locally and failed in CI, twice in this repo. `start_proxy` observes and
+injects; an orphaned daemon now earns a refusal that says a *restart lost the record, not the
+daemon*, because there is no proxy in the UI to press stop on.
+
+### The defect underneath it: a capture was unreadable on Windows, and read as no capture
+
+Fixing the key let a read reach real response bodies for the first time on this machine, and it
+**crashed**. `_api_get` ran `subprocess.run(..., text=True)`, which decodes with the **ambient
+locale codec** — cp1252 here. A capture is arbitrary bytes from arbitrary sites, so one byte
+outside that codepage raised `UnicodeDecodeError` inside subprocess's own reader thread and left
+`stdout` as `None`.
+
+**It has been failing for as long as the code has existed, and it looked like success.**
+`history()` catches the downstream error and returns `[]` — this module's recurring silent
+empty, one layer *below* the one build #17 came here to fix. Every Windows operator reading a
+real capture would have seen "no traffic". It was invisible because on this machine `history()`
+was already returning `[]` for the key reason, and in tests the bodies are ASCII.
+
+The fix is to stop letting the environment decide: capture bytes, decode UTF-8 with
+`errors="replace"`. The regression test feeds `0x8f` — undefined in cp1252 and not valid UTF-8
+either — and asserts both that a `str` comes back with the readable part intact and that
+`text=True` is not passed. Verified to bite: the old code returns `bytes` for that input.
+
+After both fixes, against the live daemon: **200 exchanges read, session health `ok`, 96
+sampled.** That is the signal item 4 needs to tell "zero findings" from "a dead session", and
+it was returning `unknown` from an empty list an hour ago.
 
 ### Item 5 — the browser must talk to the target and nothing else
 
@@ -2931,8 +2984,8 @@ the pre-rebuild container it fails, which is the only way to know a new check is
 
 Build #15's section had to be amended after the fact because the runbook was described as
 finished when it was not. Not repeating that: as of this commit, **item 1 has run and passes,
-item 2 is written and not yet executed, and item 4 is BLOCKED** by the key-recovery defect
-above — held deliberately, not skipped.
+the two proxy defects above are fixed and locked, and items 2 and 4 are written, gate-verified
+and NOT YET EXECUTED.** Item 4 is no longer blocked — it is queued.
 
 **Item 1 ran, and its first version was wrong in an instructive way.** It asserted *"exactly
 one active engagement"*, written against a truncated read of `GET /cockpit/engagement` that
@@ -2961,7 +3014,12 @@ with that bug and both were fixed before anything ran, with the fix proved in bo
 
 ### Verification
 
-Hermetic safety suite **78 test files, every one exited 0**. `tsc --noEmit` exits 0,
+Hermetic safety suite **78 test files, every one exited 0** — and the two touched files re-run
+with `docker` removed from `PATH`, both 0, **with the strip checked to bite first** (`docker`
+not found, `git` still found, since the KB ingester's recovery path needs it). Four new locks:
+a recovered key is bound to the port it was read from, the daemon probe cannot match its own
+command line, the API reader survives bytes the local codec cannot decode, and an orphaned
+daemon is refused with ZAP's real reason. `tsc --noEmit` exits 0,
 `next build` exits 0, eslint sits at the accepted baseline of **11 errors + 1 warning**
 (unchanged — this build touches no frontend file). `data/kb/entries.jsonl` still **2743**
 entries. `docker/proof/browser_intercept_proof.sh` gains one check, so it becomes **23** on a

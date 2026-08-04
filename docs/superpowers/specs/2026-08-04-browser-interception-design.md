@@ -88,9 +88,11 @@ session the human established by hand.
   match Zaid's standing rule: if the lab constrains a feature, build it for engagements.
 - **Our own headless-Chromium driver.** Considered and rejected in favour of A′ — see §6.
 - **Mobile.** Decided against separately (audit §3.1a).
-- **Bot-detection evasion.** This build uses a real browser because that is what a real user has.
-  It does not spoof TLS fingerprints, rotate identities, or defeat a CAPTCHA. If a target refuses
-  a genuine browser, that is a result and it gets recorded, not worked around.
+- **Anything beyond using a real browser.** This build's whole mechanism is that the traffic comes
+  from a genuine browser with a genuine profile — which is why it is expected to work where a bare
+  HTTP client does not. Whether to go further if that turns out not to be enough is a separate
+  decision and a separate build; it is not foreclosed here, it is simply not what this one does.
+  If a real browser is refused, record what happened — that result is the input to that decision.
 
 ---
 
@@ -273,8 +275,9 @@ artefact.
 - The AJAX spider crawls from a manually-authenticated session and its finds appear in the same
   history.
 - **Verified against a real Akamai-fronted in-scope host that a bare `curl` cannot reach** — that
-  is the acceptance test for this entire build, and if a real browser is refused too, that is the
-  finding and it gets written down rather than worked around.
+  is the acceptance test for this entire build. If a real browser is refused too, record exactly
+  what came back (status, headers, timing, which protocol), because that is the evidence any
+  follow-up decision would rest on.
 - `:proxy` ships the new controls with their endpoints — no orphaned routes, and the screen is
   **looked at in a browser**, not merely typechecked.
 - `docs/ASSESSMENT-2026-07-26.md` updated and regenerated in the **same commit**, verified against

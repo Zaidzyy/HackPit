@@ -2963,6 +2963,15 @@ After both fixes, against the live daemon: **200 exchanges read, session health 
 sampled.** That is the signal item 4 needs to tell "zero findings" from "a dead session", and
 it was returning `unknown` from an empty list an hour ago.
 
+**What was deliberately NOT fixed: `GET /cockpit/proxy` still returns `[]`.** Reading and
+driving an adopted daemon works; *listing* it does not, because a `Proxy` model carries
+`started_at`, `bind_host`, `published` and `engagement_id` — facts about how a daemon was
+launched that its argv does not fully carry. Synthesising them would put invented values in
+front of the operator, in a module whose stated rule is that counts are read back and never
+assigned. Better a visibly empty list than a confidently wrong row. The consequence is stated
+rather than buried: after a backend restart the `:proxy` panel shows no proxy while the
+history and scan panels work, and the live-fire precondition therefore accepts *either* signal.
+
 ### Item 5 — the browser must talk to the target and nothing else
 
 A crawl aimed at a local two-page lab site also produced requests to `www.google.com`,

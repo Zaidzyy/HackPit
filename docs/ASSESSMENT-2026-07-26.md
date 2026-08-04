@@ -1938,6 +1938,22 @@ attack path composed in 147s, `context_leaks: 0`, every step citing a real KB en
 **The lesson: a documented decision can carry an unenforced precondition, and the audit that
 finds it will be looking at configuration, not code.** Both halves passed every test.
 
+**Reviewed and deliberately left unchanged (2026-08-04, Zaid).** Five enforcement designs were
+put to him — derive inclusion from the provider, pass it from the caller, guard the config write,
+scrub at the egress boundary, or scope it to lab-vs-engagement — and he declined all five. His
+reasoning holds for the case he is in: the credentials in the store are from his own `corp.local`
+lab VM, a box built to be popped, so sending them to a model costs nothing. Recording the decision
+was the point rather than winning the argument, so the acceptance and its *boundary* now sit in
+`state/render.py` beside the constant: this path is not scoped to the lab, so the same render runs
+during a real engagement, where a client's domain-admin hash reaches the same endpoint by the same
+route — and there it stops being a matter of taste, because most pentest contracts forbid sending
+client data to third parties. The risk accepted is precisely *"my own lab credentials reach my own
+model endpoint"*, and Option E is the smallest change that would close the rest if HackPit is ever
+pointed at a client under contract.
+
+That is the right shape for a disagreement to end in. The behaviour is his call and it is
+unchanged; what changed is that the next reader finds reasoning instead of a landmine.
+
 ### Every gate fires, and every gate can fail — 27 checks, both directions
 
 The 2026-07-27 audit found seven guards that never fired. A harness drove the real

@@ -17,6 +17,36 @@ no substitution step. Note what that means operationally: every captured credent
 to whatever LLM endpoint is configured, including a remote one. Flip this single constant
 to False to send only the fact that a credential exists and what it is for; the planner can
 still reason "I have creds for that account" and placeholders get filled locally instead.
+
+*** RE-EXAMINED AND DELIBERATELY LEFT AS IS — 2026-08-04, Zaid. ***
+The overnight audit raised this as its headline finding, because the docstring above states a
+precondition ("safe when the endpoint is local") that NOTHING ENFORCES: the provider is one
+dropdown away from `claude-agent-sdk`, which needs no API key, and at the time of the audit it
+WAS set there with six real credentials in the store.
+
+Four enforcement designs were offered (derive from provider / pass from caller / guard the
+config write / scrub at the egress boundary), plus a fifth that scopes the behaviour to LAB vs
+ENGAGEMENT mode. Zaid declined all five and chose to leave the behaviour unchanged.
+
+His reasoning, and it is sound for the case he is in: the credentials in the store are from his
+own `corp.local` lab VM — a box built to be popped — so sending them to a model costs nothing.
+
+WHAT REMAINS TRUE, so this is an INFORMED acceptance rather than a blind one, and so the next
+reader inherits the reasoning rather than the ambiguity:
+
+  * This code path is NOT scoped to the lab. The same render runs during a real engagement, so
+    a client's domain-admin hash — or a credential captured on a bug bounty asset — reaches the
+    configured endpoint by the same route.
+  * That case is not a matter of taste: most pentest contracts forbid sending client data to
+    third parties, and a credential captured under a bug bounty is not the researcher's to
+    redistribute.
+  * Nothing here warns when the mode changes. Lab and engagement are indistinguishable to this
+    function.
+
+So the risk accepted is specifically "my own lab credentials reach my own model endpoint". If
+the day comes that HackPit is pointed at a client under contract, THIS is the constant to
+revisit first, and Option E (withhold only in engagement mode when the endpoint is remote) is
+the smallest change that would close it without touching the lab workflow at all.
 """
 
 from __future__ import annotations

@@ -2204,6 +2204,20 @@ The provider is now <code>ollama</code> / <code>qwen3:8b</code> per the standing
 attack path composed in 147s, <code>context_leaks: 0</code>, every step citing a real KB entry id).</p>
 <p><strong>The lesson: a documented decision can carry an unenforced precondition, and the audit that
 finds it will be looking at configuration, not code.</strong> Both halves passed every test.</p>
+<p><strong>Reviewed and deliberately left unchanged (2026-08-04, Zaid).</strong> Five enforcement designs were
+put to him — derive inclusion from the provider, pass it from the caller, guard the config write,
+scrub at the egress boundary, or scope it to lab-vs-engagement — and he declined all five. His
+reasoning holds for the case he is in: the credentials in the store are from his own <code>corp.local</code>
+lab VM, a box built to be popped, so sending them to a model costs nothing. Recording the decision
+was the point rather than winning the argument, so the acceptance and its <em>boundary</em> now sit in
+<code>state/render.py</code> beside the constant: this path is not scoped to the lab, so the same render runs
+during a real engagement, where a client's domain-admin hash reaches the same endpoint by the same
+route — and there it stops being a matter of taste, because most pentest contracts forbid sending
+client data to third parties. The risk accepted is precisely <em>"my own lab credentials reach my own
+model endpoint"</em>, and Option E is the smallest change that would close the rest if HackPit is ever
+pointed at a client under contract.</p>
+<p>That is the right shape for a disagreement to end in. The behaviour is his call and it is
+unchanged; what changed is that the next reader finds reasoning instead of a landmine.</p>
 <h3 id="every-gate-fires-and-every-gate-can-fail-27-checks-both-directions">Every gate fires, and every gate can fail — 27 checks, both directions</h3>
 <p>The 2026-07-27 audit found seven guards that never fired. A harness drove the real
 <code>executor.validate_request</code> with a refusal <strong>and</strong> a positive control for each gate, in lab and

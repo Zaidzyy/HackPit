@@ -2725,6 +2725,22 @@ whose entire job is to be read.
 Neither is subtle once seen, and neither was visible to any tool. The rule stands: **a
 frontend change is not verified until it has been looked at.**
 
+A third came out of the same pass, once the new action rows put it under a spotlight:
+`hp-tn-olhint` is a **label** style — 10px, 1px letter-spacing, ALL CAPS, bottom margin only —
+and ten places were using it for whole paragraphs. Three lines of prose rendered in it are
+close to unreadable, and with no top margin they sit crammed against whatever is above. Those
+are now `hp-tn-note`; the genuine labels (`expected: 8090/tcp`, `path`, `mode · exit · run`)
+keep the label style, which is the point of having two. One element on `:exposure` was doing
+both jobs at once — a port list and a paragraph sharing a tag, so the paragraph inherited the
+label's styling — and was split in two. Pre-existing on `:exposure`, `:oob` and `:windows`,
+and fixed there because this build is what put a ruled row directly above each one.
+
+**Still outstanding, deliberately not changed:** the acknowledgement checkbox labels ("I
+understand this is a public listener that relays into this machine") are also 10px uppercase.
+That is text an operator is meant to actually read before ticking a safety control, so the
+styling is arguably wrong there too — but it sits inside the form flex row, where a size
+change moves layout, and it was not part of what this build touched.
+
 ### What was not done
 
 * **No UI for the VRT / known-issues fields yet.** `PUT /sessions/{id}/submission` and

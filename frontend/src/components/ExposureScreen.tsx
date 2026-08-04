@@ -221,10 +221,15 @@ export function ExposureScreen() {
               aria-label="Engagement"
             />
           </div>
-          <p className="hp-tn-olhint">
-            {extra.length > 0
-              ? `extra: ${extra.map(([p, q]) => `${p}/${q}`).join(", ")} · `
-              : ""}
+          {/* A LABEL and a PARAGRAPH were sharing one element, so the paragraph inherited the
+              label's 10px uppercase styling. Split: the port list stays a label, the prose
+              becomes prose. */}
+          {extra.length > 0 && (
+            <p className="hp-tn-olhint">
+              extra: {extra.map(([p, q]) => `${p}/${q}`).join(", ")}
+            </p>
+          )}
+          <p className="hp-tn-note">
             A plain reverse shell is not one of the known kinds — add 443 or 4444 above. Ranges
             are refused: one typo publishes hundreds of ports and the summary stops being
             readable, which is the whole point of it.
@@ -283,7 +288,7 @@ export function ExposureScreen() {
               {busy === "apply-local" ? "…" : "apply (recreates container)"}
             </button>
           </div>
-          <p className="hp-tn-olhint">
+          <p className="hp-tn-note">
             Applying recreates the container, which kills every listener, session and background
             job inside it — hence the approval below. The lab sandbox is never in this list: its
             network is internal, and publishing a port would break the isolation gate that
@@ -300,7 +305,7 @@ export function ExposureScreen() {
         {/* ---- remote ----------------------------------------------------- */}
         <section className="hp-tn-card">
           <div className="hp-tn-cardhead">2b · remote — a redirector on your VPS</div>
-          <p className="hp-tn-olhint">
+          <p className="hp-tn-note">
             For a target that cannot route to you at all. A bounded forwarder runs on the VPS
             configured on the <code>:oob</code> screen, accepts on a public port, and relays down
             a reverse tunnel you dial outward. It forwards to one loopback port and nowhere else.
@@ -388,7 +393,7 @@ export function ExposureScreen() {
               <pre className="hp-tn-pre">{describe.reverse_tunnel.join(" ")}</pre>
               <CopyButton text={describe.reverse_tunnel.join(" ")} />
             </div>
-            <p className="hp-tn-olhint">
+            <p className="hp-tn-note">
               HackPit renders this and does not run it — it is a long-lived outbound process on
               your machine, and starting it deliberately is the approval. Until it is up, the
               redirector accepts connections and drops them.

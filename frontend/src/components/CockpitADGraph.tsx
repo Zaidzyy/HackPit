@@ -230,7 +230,11 @@ export function CockpitADGraph({
               {loading ? "loading…" : "load the sample domain (GOAD-style)"}
             </button>
           </div>
-          <p className="hp-tn-olhint">
+          {/* `hp-tn-note`, NOT `hp-tn-olhint`. The latter is a LABEL style — 10px, 1px
+              letter-spacing, ALL CAPS, and a bottom margin with no top one — which is right
+              for "expected:" or "path" and wrong for three lines of prose: it comes out
+              unreadable and crammed against the row above. */}
+          <p className="hp-tn-note">
             No AD lab needed — the sample is a synthetic domain with a real 5-hop route to Domain
             Admins. A live collection (bloodhound-python) wires in the same way, through the gated
             executor, when a domain is in scope.

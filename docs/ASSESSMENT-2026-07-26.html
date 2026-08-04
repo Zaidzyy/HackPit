@@ -2976,6 +2976,20 @@ text following it when a line break falls between them. A missing space in the o
 whose entire job is to be read.</p>
 <p>Neither is subtle once seen, and neither was visible to any tool. The rule stands: <strong>a
 frontend change is not verified until it has been looked at.</strong></p>
+<p>A third came out of the same pass, once the new action rows put it under a spotlight:
+<code>hp-tn-olhint</code> is a <strong>label</strong> style — 10px, 1px letter-spacing, ALL CAPS, bottom margin only —
+and ten places were using it for whole paragraphs. Three lines of prose rendered in it are
+close to unreadable, and with no top margin they sit crammed against whatever is above. Those
+are now <code>hp-tn-note</code>; the genuine labels (<code>expected: 8090/tcp</code>, <code>path</code>, <code>mode · exit · run</code>)
+keep the label style, which is the point of having two. One element on <code>:exposure</code> was doing
+both jobs at once — a port list and a paragraph sharing a tag, so the paragraph inherited the
+label's styling — and was split in two. Pre-existing on <code>:exposure</code>, <code>:oob</code> and <code>:windows</code>,
+and fixed there because this build is what put a ruled row directly above each one.</p>
+<p><strong>Still outstanding, deliberately not changed:</strong> the acknowledgement checkbox labels ("I
+understand this is a public listener that relays into this machine") are also 10px uppercase.
+That is text an operator is meant to actually read before ticking a safety control, so the
+styling is arguably wrong there too — but it sits inside the form flex row, where a size
+change moves layout, and it was not part of what this build touched.</p>
 <h3 id="what-was-not-done">What was not done</h3>
 <ul>
 <li><strong>No UI for the VRT / known-issues fields yet.</strong> <code>PUT /sessions/{id}/submission</code> and

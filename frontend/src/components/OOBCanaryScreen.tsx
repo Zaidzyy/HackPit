@@ -291,7 +291,7 @@ export function OOBCanaryScreen() {
               </button>
             )}
           </div>
-          <p className="hp-tn-olhint">
+          <p className="hp-tn-note">
             The read secret is write-only: stored server-side, never sent back to this page. The
             SSH key is a <em>path</em> — HackPit never stores a private key. &ldquo;Forget&rdquo;
             removes HackPit&rsquo;s knowledge of the canary; a server already running on the VPS
@@ -307,7 +307,7 @@ export function OOBCanaryScreen() {
               <pre className="hp-tn-pre">{status.ns.zonefile}</pre>
               <CopyButton text={status.ns.zonefile} />
             </div>
-            <p className="hp-tn-olhint">
+            <p className="hp-tn-note">
               Add these to the <strong>{status.ns.parent_zone}</strong> zone. {status.ns.warning}
             </p>
           </section>
@@ -317,7 +317,7 @@ export function OOBCanaryScreen() {
         {config && (
           <section className="hp-tn-card">
             <div className="hp-tn-cardhead">3 · deploy</div>
-            <p className="hp-tn-olhint">
+            <p className="hp-tn-note">
               Ships <code>oob/server.py</code> to <code>{config.ssh_user}@{config.host}</code> and
               starts it. This is a remote-execution path and starts a listener on the public
               internet, so it needs an explicit approval every time. The button sends no
@@ -365,7 +365,7 @@ export function OOBCanaryScreen() {
         {config && (
           <section className="hp-tn-card">
             <div className="hp-tn-cardhead">4 · verify</div>
-            <p className="hp-tn-olhint">
+            <p className="hp-tn-note">
               Every link in this chain fails <em>silently</em> — a payload that produces no hit
               looks the same whether the target was not vulnerable or the zone was never
               delegated. Each check reports itself; a check that cannot run here says so rather
@@ -479,7 +479,7 @@ export function OOBCanaryScreen() {
         {config && (
           <section className="hp-tn-card">
             <div className="hp-tn-cardhead">6 · collect callbacks</div>
-            <p className="hp-tn-olhint">
+            <p className="hp-tn-note">
               Fetches everything newer than the cursor, correlates each hit back to the step that
               minted its token, and files the correlated ones as findings. Hits that cannot be
               attributed are listed rather than dropped — &ldquo;something arrived I could not

@@ -202,7 +202,7 @@ export function WindowsTargetsScreen() {
               {creating ? "saving…" : "save target"}
             </button>
           </div>
-          <p className="hp-tn-olhint">
+          <p className="hp-tn-note">
             A captured credential from an engagement can fill a connection — its hash/password
             stays server-side. (Tip: `secretsdump` a hash, then create the profile from it.)
           </p>

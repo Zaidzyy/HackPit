@@ -64,8 +64,19 @@ def zap(view: str, **params: str):
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
+def site_of(url: str) -> str:
+    """ZAP's `baseurl` is a PREFIX filter over the history. Measured: the bare host and the
+    host-with-slash give different counts (170 vs 169), and a full URL with a query narrows to
+    that one page's subtree. Every probe here loads the same page, so the comparison must be
+    against one stable prefix -- scheme://host -- or two probes would silently be counting
+    different things and the whole decision table would rest on it."""
+    p = urllib.parse.urlsplit(url)
+    return f"{p.scheme}://{p.netloc}"
+
+
 def msg_count(baseurl: str) -> int:
-    return int(zap("core/view/numberOfMessages", baseurl=baseurl)["numberOfMessages"])
+    return int(zap("core/view/numberOfMessages",
+                   baseurl=site_of(baseurl))["numberOfMessages"])
 
 
 def answered(baseurl: str, start: int, count: int) -> tuple[int, int, list[str]]:
@@ -75,7 +86,8 @@ def answered(baseurl: str, start: int, count: int) -> tuple[int, int, list[str]]
     exact signature of the original curl failure and the thing being diagnosed."""
     if count <= 0:
         return 0, 0, []
-    got = zap("core/view/messages", baseurl=baseurl, start=str(start), count=str(count))
+    got = zap("core/view/messages", baseurl=site_of(baseurl),
+              start=str(start), count=str(count))
     msgs = got.get("messages", [])
     lines, ok = [], 0
     for m in msgs:

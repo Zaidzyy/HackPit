@@ -2250,6 +2250,27 @@ program's web/API targets parse, resolve and enforce.</p>
 <code>parse_scope("THAT Concept Store iOS")</code> splits on whitespace into four bogus hostnames and fails
 only because none of them resolve. Had one resolved, a garbage host would have entered the scope.
 A fail-open shape inside a fail-closed result.</p>
+<p><strong>Reviewed with Zaid and ACCEPTED — no change (2026-08-04).</strong> Following the audit, the finding was
+measured further and turned out not to be about mobile at all: the trigger is <strong>whitespace</strong>, and
+the worst case is not a store URL but a scope block that names its own out-of-scope hosts in
+prose — measured, <code>"out of scope: iana.org"</code> puts <code>iana.org</code> in the <strong>allowed</strong> set. Two fixes
+were designed and both declined: a strict tokeniser (comma/semicolon/newline separators, with
+anything not host-shaped recorded as "not understood"; zero of the 21 live engagements affected),
+and a dedicated out-of-scope box wired to the <code>!host</code> exclusion machinery — which is viable and
+already enforced end to end, <strong>provided it marks every token rather than every line</strong>, since
+per-line marking leaks even on a clean comma list. That per-token trick is recorded in the audit
+report in case the box is built later; the asymmetry behind it is that over-<em>inclusion</em> is
+dangerous while over-<em>exclusion</em> is free.</p>
+<p>The acceptance is defensible for a reason the audit under-weighted, and it is worth stating
+because it corrects the framing rather than excusing it: <strong><code>check_target_lock</code> describes itself as
+"cheap defense-in-depth… NOT a load-bearing control", and says that in engagement mode "HUMAN
+APPROVAL of every command is the actual bound and this lock is an aid to the human, not a
+guarantee."</strong> An over-wide scope runs nothing on its own; every command is still approved
+individually with the hostname visible in the argv. The audit treated the scope as the wall; the
+codebase treats it as a handrail. Zaid's stated workflow — a clean comma-separated list — parses
+perfectly, as do all 21 existing engagements. The residual, accepted knowingly: pasting a scope
+straight off a program page can still admit an out-of-scope host, caught only by reading the
+hostname before approving.</p>
 <h3 id="defects-fixed-in-this-commit">Defects fixed in this commit</h3>
 <p><strong>A tool-file id dropped two files out of the product.</strong> <code>pipeline/ingest_corpora.py</code> built the id
 from <code>path.stem</code>, so files differing only by extension collided: <code>nc</code>/<code>nc.exe</code> (linux vs windows)

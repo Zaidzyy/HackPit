@@ -1994,6 +1994,29 @@ What it cannot express is **mobile** — and the failure shape matters more than
 only because none of them resolve. Had one resolved, a garbage host would have entered the scope.
 A fail-open shape inside a fail-closed result.
 
+**Reviewed with Zaid and ACCEPTED — no change (2026-08-04).** Following the audit, the finding was
+measured further and turned out not to be about mobile at all: the trigger is **whitespace**, and
+the worst case is not a store URL but a scope block that names its own out-of-scope hosts in
+prose — measured, `"out of scope: iana.org"` puts `iana.org` in the **allowed** set. Two fixes
+were designed and both declined: a strict tokeniser (comma/semicolon/newline separators, with
+anything not host-shaped recorded as "not understood"; zero of the 21 live engagements affected),
+and a dedicated out-of-scope box wired to the `!host` exclusion machinery — which is viable and
+already enforced end to end, **provided it marks every token rather than every line**, since
+per-line marking leaks even on a clean comma list. That per-token trick is recorded in the audit
+report in case the box is built later; the asymmetry behind it is that over-*inclusion* is
+dangerous while over-*exclusion* is free.
+
+The acceptance is defensible for a reason the audit under-weighted, and it is worth stating
+because it corrects the framing rather than excusing it: **`check_target_lock` describes itself as
+"cheap defense-in-depth… NOT a load-bearing control", and says that in engagement mode "HUMAN
+APPROVAL of every command is the actual bound and this lock is an aid to the human, not a
+guarantee."** An over-wide scope runs nothing on its own; every command is still approved
+individually with the hostname visible in the argv. The audit treated the scope as the wall; the
+codebase treats it as a handrail. Zaid's stated workflow — a clean comma-separated list — parses
+perfectly, as do all 21 existing engagements. The residual, accepted knowingly: pasting a scope
+straight off a program page can still admit an out-of-scope host, caught only by reading the
+hostname before approving.
+
 ### Defects fixed in this commit
 
 **A tool-file id dropped two files out of the product.** `pipeline/ingest_corpora.py` built the id

@@ -90,6 +90,74 @@ RUN apt-get update \
     && command -v zaproxy \
     && zaproxy -cmd -version
 
+# --- 3b. A WEBDRIVER, so ZAP's AJAX spider can drive a real browser (build #15) ------
+#
+# WHY A BROWSER IS THE WHOLE FEATURE. A passive sweep of a live bug bounty program returned
+# nothing at all from every host: HTTP/2 answered with an instant stream reset, HTTP/1.1 with a
+# total timeout. Two DIFFERENT failure modes on two protocols is an edge actively refusing the
+# client, not a protocol quirk — nine of eleven assets sit behind Akamai Bot Manager. HackPit's
+# egress was fine; it reached Akamai and Akamai said no. A real browser is what passes: correct
+# TLS fingerprint, real headers, JS execution.
+#
+# *** THE PACKAGE NAME WAS UNVERIFIED WHEN THIS WAS WRITTEN, AND THAT IS WHY IT IS SHAPED
+#     LIKE THIS. *** The running container has ZERO apt list files, so `apt-cache` inside it
+#     cannot see any uninstalled package and the obvious check proves nothing. This is exactly
+#     how build #14 part 1 was written against `zap-baseline.py`, which Kali does not ship —
+#     caught only by the image build. So: install it, then PROVE it, and let the layer fail
+#     loudly here rather than at crawl time inside ZAP's log.
+#
+# Chromium is already present (150.0.7871.124, pulled in by the kali metapackage) and Firefox is
+# NOT — while ZAP's own default browser id is `firefox-headless`. That mismatch is the trap: it
+# fails at CRAWL time, not at set time, because `setOptionBrowserId` accepts anything (measured:
+# it returned {"Result":"OK"} for `not-a-browser`). cockpit/proxy.SPIDER_BROWSER_ID is
+# `chrome-headless` for that reason and reads the value back rather than trusting the OK.
+#
+# *** TWO DEFECTS ONLY A REAL CRAWL FOUND, AND THE SECOND WAS HIDDEN BY THE FIRST. ***
+# The first version of this layer installed the driver, proved it runs, proved a browser exists,
+# and was still completely broken. Both failures produced the same symptom — the AJAX spider
+# returning `{"Result":"OK"}` and then finding zero URLs — and neither is visible without
+# actually crawling something:
+#
+#   1. CHROMIUM REFUSES TO RUN AS ROOT WITHOUT `--no-sandbox`. The ENGAGE sandbox runs
+#      `user: root` (docker-compose.yml), so every browser Crawljax launched died instantly:
+#        "Running as root without --no-sandbox is not supported"
+#      ZAP's Selenium addon exposes no API for adding Chrome arguments in this version, so the
+#      flag goes in via `/etc/chromium.d/`, which Debian's own launcher sources (it already
+#      ships a `dev-shm` file there). It is the packaged extension point, not a hack.
+#
+#      WHAT --no-sandbox COSTS, STATED RATHER THAN GLOSSED: it turns off Chromium's internal
+#      process sandbox, and this browser visits TARGET-CONTROLLED content. The boundary that
+#      actually holds here is the container — unprivileged-or-root inside a cap-dropped,
+#      no-new-privileges sandbox on a disposable image — not Chromium's own. It is not a
+#      trade so much as an acknowledgement that as root the alternative is a browser that
+#      does not start. `--disable-dev-shm-usage` is the companion fix for Docker's 64MB
+#      /dev/shm, which crashes Chromium on any real page.
+#
+#   2. ZAP SHIPS ITS OWN CHROMEDRIVER AND PREFERS IT TO THIS PACKAGE. The `webdriverlinux`
+#      add-on bundles a driver built for Chrome 151; Kali ships Chromium 150. So installing
+#      `chromium-driver` was necessary and NOT sufficient — the crawl failed with
+#        "This version of ChromeDriver only supports Chrome version 151"
+#      cockpit/proxy.py therefore passes `-config selenium.chromeDriver=/usr/bin/chromedriver`
+#      on every daemon start, which is also why the MAJOR VERSIONS ARE COMPARED BELOW. Proving
+#      the driver runs proves nothing about whether it can drive the browser that is here —
+#      "an exit code is not a result", one level deeper than part 1 phrased it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends chromium-driver \
+    && rm -rf /var/lib/apt/lists/* \
+    && printf '%s\n' 'CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-dev-shm-usage"' \
+         > /etc/chromium.d/hackpit-container \
+    && command -v chromedriver \
+    && command -v chromium \
+    && DRV="$(chromedriver --version | sed -E 's/^ChromeDriver ([0-9]+)\..*/\1/')" \
+    && BRW="$(chromium --version | sed -E 's/^Chromium ([0-9]+)\..*/\1/')" \
+    && echo "chromedriver major=$DRV  chromium major=$BRW" \
+    && [ -n "$DRV" ] && [ -n "$BRW" ] \
+    && { [ "$DRV" = "$BRW" ] || { \
+           echo "FATAL: chromedriver $DRV cannot drive chromium $BRW. Selenium refuses the" \
+                "session with 'only supports Chrome version $DRV' and the AJAX spider returns" \
+                "OK while crawling nothing."; exit 1; }; } \
+    && chromium --headless=new --dump-dom about:blank >/dev/null 2>&1
+
 # --- 4. Network / Active Directory (from Linux) ------------------------------
 # The AD graph + AD orchestration modules generate commands from exactly this set;
 # without these packages every proposed AD step failed "executable not found".

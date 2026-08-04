@@ -42,3 +42,16 @@ SLIVER_DEFAULT_PORT = 31337
 
 # dnscat2 / iodine: both DNS tunnel servers bind UDP/53 inside the sandbox.
 DNS_TUNNEL_PORT = 53
+
+# ZAP: the recording proxy's listener (its HTTP proxy and its API share this one socket).
+#
+# THE ODD ONE OUT, AND WORTH SAYING SO. Every other port here is a CALLBACK — a target dials in.
+# This one faces the other way: a browser on the operator's own machine dials the sandbox, which
+# is why build #15 publishes it and why it rides into a profile as an explicit `extra` rather
+# than as a fifth entry in `exposure.KIND_PORTS` (ticking a "kind" would imply a listener
+# lifecycle this port does not have).
+#
+# It lives HERE rather than only in cockpit/proxy.py for this module's original reason: exposure
+# has to know the port, and importing it from the module that owns the listener is what this file
+# exists to avoid. cockpit/proxy.py imports it back, so there is exactly one definition.
+ZAP_PROXY_PORT = 8090

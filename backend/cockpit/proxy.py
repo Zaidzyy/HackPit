@@ -16,6 +16,33 @@ socket to it; the only way in is ``docker exec``, which is the one channel into 
 thing the gates already classify. The API exists and is still unreachable from anywhere that
 could bypass a gate.
 
+*** BUILD #15 MAKES HALF OF THAT PARAGRAPH DELIBERATELY OPTIONAL, AND REPLACES THE ARGUMENT. ***
+
+An engagement proxy started with ``publish=True`` binds every interface inside its container so
+that a host port published through ``cockpit/exposure.py`` can reach it — because a real browser
+on Windows is the only client that gets past Akamai's bot management, and nine of eleven assets
+in a live bug bounty program refused a bare HTTP client outright (h2 stream reset, h1.1 timeout:
+two different failure modes on two protocols is an edge refusing the client, not a quirk).
+
+The safety argument is NOT weakened, but it is different and it is stated in full, because the
+old one no longer applies:
+
+  1. The bind is narrow BY DEFAULT and every widening is chosen. ``publish`` is engagement-only
+     (:func:`publish_refusal`), and the HOST port is a separate, explicit step through an
+     exposure profile whose broad binds carry a machine-readable acknowledgement.
+  2. THE API KEY IS ENFORCED AND RANDOM PER START. Measured on views AND actions, 2026-08-04.
+     What is published unauthenticated is an HTTP PROXY — which is the entire point — while the
+     control channel behind the same listener refuses everything without a secret only this
+     process holds. That is what makes a published port an acceptable choice rather than an
+     unacceptable one: the exposure is a proxy, not scan control.
+  3. THE LAB IS UNTOUCHED. ``hackpit-isolated`` stays ``internal: true``, the lab proxy stays
+     loopback-bound, and ``docker/proof/zap_proxy_proof.sh``'s load-bearing check — the ZAP API
+     is UNREACHABLE from this host — still runs against the lab sandbox and must still pass.
+  4. RESIDUAL, ACCEPTED, WRITTEN DOWN: anything that can reach the bound address can USE the
+     proxy (it cannot scan — that needs the key). On loopback that is a privacy annoyance on a
+     single-user machine. On a wildcard bind it is an open proxy with full egress, which is why
+     that case carries a red-confirm rather than being forbidden or being free.
+
 WHAT IT CAPTURES: tools run inside the sandbox, pointed at the proxy (the executor's ``proxy``
 flag). It RECORDS.
 
@@ -52,6 +79,7 @@ this path even if every gate here were bypassed. A bound, not a control; the gat
 from __future__ import annotations
 
 import json
+import secrets
 import subprocess
 import threading
 import time
@@ -62,10 +90,28 @@ from urllib.parse import quote, quote_plus
 from pydantic import BaseModel, Field, field_validator
 
 from . import config
+from .listener_ports import ZAP_PROXY_PORT
 
-#: ZAP's API and its proxy share one listener. Loopback-only, inside the container.
-PROXY_HOST = "127.0.0.1"
-DEFAULT_PROXY_PORT = 8090
+#: ZAP's API and its proxy share one listener.
+#:
+#: *** THE BIND ADDRESS IS NO LONGER A CONSTANT, AND BUILD #15 IS WHY. ***
+#: Parts 1-3 pinned this to 127.0.0.1 and called it "the isolation property". It still is, for
+#: every run that is not deliberately published. But a container process bound to loopback
+#: cannot be reached through a published port at all: `docker -p` forwards to the container's
+#: bridge interface, and nothing is listening there. So a proxy the operator has chosen to
+#: publish MUST bind 0.0.0.0 inside its own container or the feature is simply inert — this was
+#: the first thing part 1's design did not state and the implementation had to answer.
+#:
+#: The two are therefore separate constants with separate meanings, never one value with a flag.
+PROXY_HOST = "127.0.0.1"          # the default: unreachable from outside the container
+PUBLISHED_PROXY_HOST = "0.0.0.0"  # noqa: S104 - required for a published port to have a listener
+
+#: The SYSTEM chromedriver, which matches the image's Chromium. ZAP bundles its own and prefers
+#: it, and the bundled one targets a different Chrome major version — see :func:`server_argv_for`.
+SPIDER_DRIVER_PATH = "/usr/bin/chromedriver"
+#: Re-exported from listener_ports so `exposure.py` can publish this port without importing this
+#: module. ONE definition, two readers — see listener_ports.py for why that file exists.
+DEFAULT_PROXY_PORT = ZAP_PROXY_PORT
 
 #: The JVM needs this long before the API answers. MEASURED at ~7s; the headroom is for a loaded
 #: host. lifecycle's default settle is far shorter, so both values are passed explicitly.
@@ -104,13 +150,69 @@ _VIEW_SCANS = "/JSON/ascan/view/scans/"
 _VIEW_SCAN_STATUS = "/JSON/ascan/view/status/"
 _VIEW_ALERTS = "/JSON/core/view/alerts/"
 
-# action, GATED (except _ACTION_STOP — see above)
+_VIEW_SPIDER_STATUS = "/JSON/ajaxSpider/view/status/"
+_VIEW_SPIDER_RESULTS = "/JSON/ajaxSpider/view/numberOfResults/"
+_VIEW_SPIDER_BROWSER = "/JSON/ajaxSpider/view/optionBrowserId/"
+
+# action, GATED (except the two stops — see above)
 _ACTION_SCAN = "/JSON/ascan/action/scan/"
 _ACTION_STOP = "/JSON/ascan/action/stop/"
+_ACTION_SPIDER_SCAN = "/JSON/ajaxSpider/action/scan/"
+_ACTION_SPIDER_STOP = "/JSON/ajaxSpider/action/stop/"
+# Configuration actions, reached ONLY from inside the gated :func:`start_spider` — after
+# validate_request has returned None for that request, never from the read path. They set the
+# crawl's own bounds, so they are part of performing the approved action rather than a second
+# capability: a browser id and a depth that could be set WITHOUT approval would let one operator
+# silently change what the next one's approved crawl actually does.
+_ACTION_SPIDER_BROWSER = "/JSON/ajaxSpider/action/setOptionBrowserId/"
+_ACTION_SPIDER_DEPTH = "/JSON/ajaxSpider/action/setOptionMaxCrawlDepth/"
+_ACTION_SPIDER_DURATION = "/JSON/ajaxSpider/action/setOptionMaxDuration/"
 
 _lock = threading.Lock()
 _models: dict[str, "Proxy"] = {}
 _watched: dict[str, Any] = {}
+
+# --------------------------------------------------------------------------- #
+# THE API KEY (build #15)
+#
+# *** THE FINDING THIS RESTS ON WAS ORIGINALLY RECORDED BACKWARDS. ***
+# Build #14 part 2 measured `api.key` as enforcing NOTHING, and that finding blocked browser
+# interception for a day. Re-measured 2026-08-04 against the same ZAP 2.17.0, started with the
+# flag stated EXPLICITLY, it enforces on views AND on actions; the proxy meanwhile still serves
+# normally. The original test had passed `-config api.key=…` with no explicit `disablekey` and
+# inherited `true` from `$HOME/.ZAP/config.xml` — which HackPit itself had written on an earlier
+# `server_argv_for` start. We disabled our own lock and blamed the tool.
+#
+# GENERALISE IT, because it outlives this feature: A DAEMON THAT PERSISTS ITS CONFIGURATION MAKES
+# EVERY MEASUREMENT CONDITIONAL ON WHAT A PREVIOUS RUN WROTE. State the flag explicitly or you
+# are measuring history. That is why `api.disablekey=false` is passed on every start below even
+# though false is ZAP's own default: the default is not what is in that file.
+#
+# The key is RANDOM PER START and lives only here, in memory. Nothing persists it, so there is no
+# long-lived secret to leak and a backend restart simply loses the ability to read that daemon —
+# honest, and no worse than today, since `_models` is in-memory too and a restart already orphans
+# a running proxy.
+_keys: dict[str, str] = {}
+
+#: What `_gate_request` passes instead of a key. THE GATE IS NEVER GIVEN THE REAL ONE — not
+#: redacted afterwards, never handed over in the first place, which is the only version of that
+#: property a future edit cannot quietly undo. Locked by test_zap_proxy_safety.
+GATE_KEY_PLACEHOLDER = "<not-yet-minted>"
+
+
+def mint_api_key() -> str:
+    """A fresh API key. 32 hex chars from `secrets` — never `random`, never derived from the port."""
+    return secrets.token_hex(16)
+
+
+def _key_slot(container: str, port: int) -> str:
+    return f"{container}:{port}"
+
+
+def api_key_for(container: str, port: int) -> str:
+    """The key this process minted for that daemon, or "" if it did not start it."""
+    with _lock:
+        return _keys.get(_key_slot(container, port), "")
 
 
 def _now() -> str:
@@ -129,6 +231,14 @@ class ProxyStartRequest(BaseModel):
         description="Engagement to attribute against. OMIT for LAB mode — unlike a pivot "
         "listener, this runs in whichever sandbox you are using, so lab mode is coherent and "
         "its isolation gate is about the very container the proxy occupies.",
+    )
+    publish: bool = Field(
+        False,
+        description="Bind the daemon to every interface INSIDE its container so a published "
+        "host port can reach it. Required for a real browser on this machine to use the proxy, "
+        "and ENGAGEMENT-ONLY: the lab network is `internal: true`, so a published port there "
+        "has no route in the first place. Publishing the HOST port is a separate, explicit step "
+        "through the exposure profile — this flag alone exposes nothing.",
     )
     # THE GATE FIELDS. Both default False, so a client that omits them is REFUSED rather than
     # allowed — a default of True would mean an omitted field silently grants exactly what the
@@ -158,6 +268,17 @@ class Proxy(BaseModel):
     captured: int = 0
     started_at: str
     engagement_id: str | None = None
+    #: The address it bound INSIDE the container. Reported, never assigned from the request alone
+    #: — the panel has to be able to say which posture is actually running.
+    bind_host: str = PROXY_HOST
+    published: bool = Field(
+        False,
+        description="Bound wide inside its container so a published host port can reach it. "
+        "This does NOT mean a host port exists — that is the exposure profile's job.",
+    )
+    #: NEVER the key itself. The panel needs to know a key is in force; it never needs the value,
+    #: and a model field is exactly the thing that ends up in a log line or a report.
+    api_key_enforced: bool = True
 
 
 class CapturedHeader(BaseModel):
@@ -221,7 +342,7 @@ class ProxyRefused(RuntimeError):
 # --------------------------------------------------------------------------- #
 # the gate — approval + the heuristic red-confirm, before anything spawns
 # --------------------------------------------------------------------------- #
-def container_for(req: "ProxyStartRequest | ScanStartRequest") -> str:
+def container_for(req: "ProxyStartRequest | ScanStartRequest | SpiderStartRequest") -> str:
     """Engagement runs use the engage sandbox; everything else the isolated lab one.
 
     Getting this wrong is not cosmetic: a real-target proxy in the egress-less lab box would
@@ -234,22 +355,90 @@ def container_for(req: "ProxyStartRequest | ScanStartRequest") -> str:
     return config.ENGAGE_SANDBOX_CONTAINER if req.engagement_id else config.SANDBOX_CONTAINER
 
 
-def server_argv_for(req: ProxyStartRequest) -> list[str]:
+def bind_host_for(req: ProxyStartRequest) -> str:
+    """The address the daemon binds INSIDE its container. One derivation, both callers.
+
+    ``127.0.0.1`` unless the operator asked to publish. A container process on loopback cannot be
+    reached through `docker -p` at all — the mapping forwards to the container's bridge
+    interface, where nothing is listening — so a published proxy that stayed loopback-bound would
+    be silently inert, which is the worst of both worlds: the port is open on the host and the
+    feature still does not work.
+    """
+    return PUBLISHED_PROXY_HOST if req.publish else PROXY_HOST
+
+
+def server_argv_for(req: ProxyStartRequest, *, api_key: str) -> list[str]:
     """The daemon argv this request will run. THE SINGLE DERIVATION.
 
     Both the gate and :func:`start_proxy` come through here, for the same reason the WinRM path
     funnels through one join: classifying a DIFFERENT argv than the one that executes reproduces
     Critical 2 in a new place. A test asserts the two are equal.
 
-    ``-host 127.0.0.1`` IS THE ISOLATION PROPERTY. Do not widen it. The API is only safe to leave
-    ungated on the read path because nothing outside this container can reach it at all.
+    *** ``api_key`` IS A REQUIRED ARGUMENT AND THE GATE IS NEVER GIVEN A REAL ONE. ***
+    :func:`_gate_request` passes :data:`GATE_KEY_PLACEHOLDER`. That is not ceremony — the gate's
+    output is an ExecRequest, and an ExecRequest is the thing this codebase RECORDS, reports and
+    feeds to the model. Redacting a secret after handing it over depends on the redactor being
+    correct forever; never handing it over cannot regress. Redaction still exists as the second
+    layer (``secretargs`` knows ``api.key``), and both are asserted.
+
+    *** ``-config api.disablekey=false`` IS STATED EVEN THOUGH FALSE IS THE DEFAULT. ***
+    ZAP persists ``-config`` values into ``$HOME/.ZAP/config.xml``, so "the default" is whatever
+    the last run wrote — and the last run was HackPit itself, which used to write
+    ``disablekey=true`` on every start. Stating it explicitly is what makes the lock a property
+    of this argv rather than of the container's history. See the block on :data:`_keys`.
+
+    *** WHAT ``publish`` WIDENS, AND WHAT PAYS FOR IT. ***
+    For a published proxy the bind moves to every interface inside the container AND the API's
+    own address filter has to allow a non-loopback caller: a request arriving through a published
+    port reaches ZAP from the docker bridge gateway, not from 127.0.0.1, and ZAP's default
+    ``api.addrs`` would refuse it. Both widenings are real. What pays for them is that the key is
+    ENFORCED on views and actions alike (measured), so what becomes reachable is an HTTP PROXY —
+    which is the entire point of the feature — while scan control still refuses everyone who
+    cannot present a secret only this process holds.
     """
-    return [
+    argv = [
         "zaproxy", "-daemon",
-        "-host", PROXY_HOST,
+        "-host", bind_host_for(req),
         "-port", str(req.port),
-        "-config", "api.disablekey=true",
+        "-config", "api.disablekey=false",
+        "-config", f"api.key={api_key}",
+        # *** THE AJAX SPIDER DOES NOT WORK WITHOUT THIS, AND IT FAILS SILENTLY. ***
+        # ZAP's `webdriverlinux` add-on bundles its own chromedriver, built for Chrome 151, and
+        # PREFERS it to the system one. Kali ships Chromium 150, so Selenium refuses the session
+        # with "This version of ChromeDriver only supports Chrome version 151" — while the API
+        # still answers `{"Result":"OK"}` and the crawl reports zero results. Measured; found by
+        # the proof, invisible to every hermetic test.
+        #
+        # Stated on EVERY start, including lab starts, for the reason the whole build turns on:
+        # ZAP persists `-config` values, so an unstated key inherits whatever a previous run
+        # wrote. The Dockerfile compares the driver's major version against the browser's, so a
+        # future image whose packages drift apart fails the build instead of failing here.
+        "-config", f"selenium.chromeDriver={SPIDER_DRIVER_PATH}",
     ]
+    if req.publish:
+        # Address filter, NOT authentication — the key above is the authentication. Without this
+        # ZAP answers "API not available from this address" to a correctly-keyed request that
+        # arrived through the published port, which reads as a broken feature rather than as a
+        # control doing its job.
+        argv += [
+            "-config", "api.addrs.addr.name=.*",
+            "-config", "api.addrs.addr.regex=true",
+        ]
+    return argv
+
+
+def recorded_argv_for(req: ProxyStartRequest, *, api_key: str) -> list[str]:
+    """The daemon argv as it may be WRITTEN DOWN — key redacted, everything else intact.
+
+    The second layer behind "the gate is never given the key". Anything that persists, renders or
+    prompts with this argv uses this function; ``secretargs`` masks the ``api.key`` value and
+    deliberately leaves ``api.disablekey=false`` visible, because that token is the evidence the
+    lock was on and redacting it would destroy the audit trail it exists to provide.
+    """
+    from . import secretargs
+
+    argv = server_argv_for(req, api_key=api_key)
+    return [argv[0], *secretargs.redact_argv(argv[0], argv[1:])]
 
 
 def kill_pattern_for(port: int) -> list[str]:
@@ -309,7 +498,9 @@ def _gate_request(req: ProxyStartRequest):
     """
     from .models import ExecRequest
 
-    argv = server_argv_for(req)
+    # THE PLACEHOLDER, NOT A KEY. What comes back from here is an ExecRequest, and an ExecRequest
+    # is what gets recorded, reported and put in front of the model. See :func:`server_argv_for`.
+    argv = server_argv_for(req, api_key=GATE_KEY_PLACEHOLDER)
     # ``-daemon`` IS IN THE SURFACE, and it has to be. The danger verdict for this binary is
     # argument-based (allowlist._TOOL_ATTACK_FLAGS: `-quickurl` attacks, `-daemon` records), so a
     # surface carrying only the binary name would make the red-confirm unfirable and
@@ -326,6 +517,33 @@ def _gate_request(req: ProxyStartRequest):
         dangerous_ack=req.dangerous_ack,
         engagement_id=req.engagement_id,
     )
+
+
+def publish_refusal(req: ProxyStartRequest) -> "ProxyRefused | None":
+    """Refuse a publish that cannot mean what it says. PURE — spawns nothing.
+
+    ENGAGEMENT ONLY, and by physics before preference. The lab sandbox sits on
+    ``hackpit-isolated``, which is ``internal: true``: Docker attaches no gateway, so a published
+    host port there has no route to the container and ``exposure.py`` refuses that container
+    outright anyway ("exposure and lab isolation are mutually exclusive by construction"). What a
+    published lab proxy WOULD do is bind the ZAP API to every interface inside the isolated
+    network, where the lab target itself lives — a real widening buying literally nothing.
+
+    Checked BEFORE the executor gates on purpose. This is not a safety verdict about a coherent
+    request; it is a request that does not describe a reachable state, and refusing it at
+    ``approval`` or ``danger`` would tell the operator to tick a box that cannot help.
+    """
+    if not req.publish:
+        return None
+    if not req.engagement_id:
+        return ProxyRefused(
+            "publish is engagement-only. The lab sandbox runs on an `internal: true` network "
+            "with no gateway, so a published port has no route to it — binding wide there would "
+            "expose the ZAP API inside the isolated network and still not be reachable from this "
+            "machine. Start a lab proxy without publish, or enter an engagement.",
+            gate="publish",
+        )
+    return None
 
 
 def validate_start(req: ProxyStartRequest):
@@ -364,13 +582,25 @@ def _api_get(container: str, port: int, path: str, timeout: int = 10) -> str:
     """Read one of this module's fixed URLs, via ``docker exec``. NEVER a socket from the backend.
 
     ``path`` is only ever one of the module constants above; no caller passes a computed value.
+
+    *** THE KEY GOES IN A HEADER, NOT THE QUERY STRING. *** ZAP accepts ``?apikey=`` too, and
+    that spelling would put the secret into ZAP's OWN history — the proxy records what passes
+    through it, this module's whole purpose is to read that history back, and a report is
+    rendered from it. A header keeps the credential out of the artefact the feature produces.
+    It also keeps it off the `docker exec` argv's URL, which `ps` on the host can read.
+
+    Always dials 127.0.0.1: this runs INSIDE the container, so loopback reaches the daemon
+    whichever address it bound. A published daemon is reachable both ways; an unpublished one is
+    reachable only this way, and that asymmetry is the isolation property.
     """
     url = f"http://{PROXY_HOST}:{port}{path}"
+    argv = ["docker", "exec", container, "curl", "-s", "--max-time", str(timeout)]
+    key = api_key_for(container, port)
+    if key:
+        argv += ["-H", f"X-ZAP-API-Key: {key}"]
+    argv.append(url)
     try:
-        out = subprocess.run(
-            ["docker", "exec", container, "curl", "-s", "--max-time", str(timeout), url],
-            capture_output=True, text=True, timeout=timeout + 5,
-        )
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=timeout + 5)
     except (OSError, subprocess.SubprocessError):
         return ""
     return out.stdout
@@ -430,6 +660,10 @@ def start_proxy(req: ProxyStartRequest) -> Proxy:
     """Start the recording proxy in the sandbox. GATED — nothing spawns on a refusal."""
     from . import lifecycle
 
+    incoherent = publish_refusal(req)
+    if incoherent is not None:
+        raise incoherent
+
     rejected = validate_start(req)
     if rejected is not None:
         raise ProxyRefused(rejected.reason, gate=rejected.gate,
@@ -447,7 +681,14 @@ def start_proxy(req: ProxyStartRequest) -> Proxy:
     if clash is not None:
         raise clash
 
-    argv = server_argv_for(req)
+    # Minted here and nowhere else, AFTER every gate has passed: a refused start must not leave a
+    # key behind for a slot that has no daemon, or the next reader would send a stale secret to
+    # whatever does answer on that port.
+    key = mint_api_key()
+    with _lock:
+        _keys[_key_slot(container, req.port)] = key
+
+    argv = server_argv_for(req, api_key=key)
     # interactive=False: a daemon needs no stdin, so it gets DEVNULL and proc.stdin is None.
     watched = lifecycle.spawn_watched(
         lifecycle.exec_argv(container, argv, interactive=False), interactive=False
@@ -466,6 +707,7 @@ def start_proxy(req: ProxyStartRequest) -> Proxy:
         status=live.status, liveness=detail,
         captured=captured_count(container, req.port) if ready else 0,
         started_at=_now(), engagement_id=req.engagement_id,
+        bind_host=bind_host_for(req), published=req.publish, api_key_enforced=True,
     )
     with _lock:
         _models[pid] = model
@@ -495,6 +737,10 @@ def stop_proxy(pid: str) -> Proxy:
     with _lock:
         _models[pid] = stopped
         _watched.pop(pid, None)
+        # The key dies with the daemon. Keeping it would mean a later start on the same
+        # container:port inherits a secret the new process was never given, and every read
+        # against it would fail for a reason nothing in the UI could explain.
+        _keys.pop(_key_slot(model.container, model.port), None)
     return stopped
 
 
@@ -1108,3 +1354,318 @@ def alert_endpoints_from(alerts, session_id: str, run_id: str | None = None):
             params=params, source_run_id=run_id,
         ))
     return out
+
+
+# --------------------------------------------------------------------------- #
+# THE AJAX SPIDER (build #15 part 2) — GATED start, OBSERVED status, UNGATED stop
+#
+# WHY ZAP'S CRAWLER AND NOT OUR OWN HEADLESS BROWSER, and the reason exists only because part 1
+# landed first: manual browsing through the published proxy establishes an AUTHENTICATED SESSION
+# INSIDE ZAP, and the AJAX spider runs through that same ZAP — so it inherits those cookies and
+# crawls the logged-in application. A separate headless Chromium would start cold and need
+# scripted authentication per target, an auth-automation problem this build would then own
+# forever. Log in once by hand, let the spider expand from there, let part 3's scanner attack
+# what both produced. Three stages, one pipeline, no glue code.
+#
+# *** AN OK IS NOT A RESULT. *** `setOptionBrowserId` DOES NOT VALIDATE: it accepted
+# `not-a-browser` and answered `{"Result":"OK"}` (measured 2026-08-04). The image ships Chromium
+# but no Firefox, while ZAP's configured default is `firefox-headless` — so the one thing that
+# must never be trusted here is a successful-looking response to the call that sets the browser.
+# :func:`start_spider` therefore reads the value BACK and, more importantly, the proof asserts a
+# browser actually launched and messages were captured. Same family as part 1's "an exit code is
+# not a result".
+# --------------------------------------------------------------------------- #
+#: The image has Chromium (150.0.7871.124) and NO Firefox, so ZAP's own default of
+#: `firefox-headless` would fail at crawl time rather than at set time. Headless because there is
+#: no display in the container.
+SPIDER_BROWSER_ID = "chrome-headless"
+
+#: ZAP's own defaults are depth 10 / 60 minutes. These are lower on purpose: they are what the
+#: human approves, and a crawl the operator did not expect to still be clicking an hour later is
+#: the thing this bounds.
+DEFAULT_CRAWL_DEPTH = 5
+DEFAULT_CRAWL_MINUTES = 10
+
+
+class SpiderStartRequest(BaseModel):
+    """Crawl a target with a REAL BROWSER, through the session the proxy already holds."""
+
+    target_url: str = Field(
+        description="Where the crawl starts. The browser drives from here and follows what it "
+        "finds, so this is a starting point rather than a boundary — the depth and duration "
+        "below are the boundary."
+    )
+    port: int = Field(DEFAULT_PROXY_PORT, ge=1024, le=65535)
+    # *** IN THE APPROVED SURFACE, NOT JUST IN THE REQUEST. ***
+    # Same reason `-autorun` was excluded from the catalog in part 1: a crawler that decides its
+    # own depth means the command the human approved has stopped describing what runs.
+    max_depth: int = Field(
+        DEFAULT_CRAWL_DEPTH, ge=1, le=10,
+        description="How deep the browser follows links. Appears in the approved command.",
+    )
+    max_duration_minutes: int = Field(
+        DEFAULT_CRAWL_MINUTES, ge=1, le=60,
+        description="Wall-clock ceiling on the crawl. Appears in the approved command.",
+    )
+    engagement_id: str | None = Field(
+        None, description="Engagement to attribute against. OMIT for LAB mode."
+    )
+    # THE GATE FIELDS. Both default False so an omitted field is REFUSED, never granted.
+    approved: bool = Field(False, description="Explicit human approval. Never defaulted true.")
+    dangerous_ack: bool = Field(
+        False,
+        description="The explicit red-confirm — earned for a DIFFERENT reason than the active "
+        "scanner's. This sends no injection payloads. It drives a real browser that CLICKS "
+        "every control it finds, which on a production site can submit a form, empty a basket, "
+        "trigger an email or place an order. Always required.",
+    )
+
+    @field_validator("target_url")
+    @classmethod
+    def _must_be_http(cls, v: str) -> str:
+        """Refuse anything that is not an http(s) URL, before any gate runs.
+
+        Same reasoning as :class:`ScanStartRequest`: the gate surface carries this URL and the
+        scope extractor reads a HOST out of it, so a shape with no host would reach the target
+        gate as a target-less command and be refused for a confusing reason. Refusing the shape
+        up front means the surface the gate sees always contains a real host.
+        """
+        v = (v or "").strip()
+        if not v.lower().startswith(("http://", "https://")):
+            raise ValueError("target_url must be an http:// or https:// URL")
+        return v
+
+
+class Spider(BaseModel):
+    """One browser-driven crawl. Every field here is READ BACK FROM ZAP, never assigned."""
+
+    container: str
+    port: int
+    target_url: str = ""
+    state: str = Field(
+        "", description="ZAP's own word: running | stopped. OBSERVED, never assumed."
+    )
+    results: int = Field(0, description="URLs the crawl has found so far.")
+    captured: int = Field(0, description="Messages in ZAP's history — proof a browser ran.")
+    browser_id: str = Field(
+        "", description="READ BACK from ZAP. setOptionBrowserId does not validate, so the value "
+        "we sent proves nothing and only the value ZAP reports is worth reporting."
+    )
+    max_depth: int = 0
+    max_duration_minutes: int = 0
+    started_at: str = ""
+    engagement_id: str | None = None
+
+
+# --------------------------------------------------------------------------- #
+# the gate — the same four gates, given an honest surface
+# --------------------------------------------------------------------------- #
+def spider_target_for(req: SpiderStartRequest) -> str:
+    """*** THE SINGLE DERIVATION OF WHAT GETS CRAWLED. ***
+
+    Part 3's lock, restated for this action: the gate classifies an ARGV and what executes is a
+    URL, so string equality between them would be theatre — but *the thing the gate scoped is the
+    thing that gets hit* still holds, and that is the property worth locking. Both sides come
+    through here: :func:`_gate_spider_request` puts this output in the surface the scope
+    extractor reads, and :func:`spider_url_for` percent-encodes the SAME output into ZAP's
+    ``url=`` parameter.
+    """
+    return req.target_url.strip()
+
+
+def spider_argv_for(req: SpiderStartRequest) -> list[str]:
+    """The command this crawl is EQUIVALENT TO, which is what the human approves.
+
+    ``-ajaxspider`` IS A DECLARED MARKER, NOT A REAL ZAP FLAG, and that is recorded in
+    ``allowlist._ATTACK_FLAG_IS_REAL`` so a second one cannot arrive unnoticed. ZAP drives this
+    over its API and ships no command-line switch for it, exactly as ``ascan/action/scan`` has
+    none — part 3 established that the gate classifies an equivalent command.
+
+    ``-zapit`` is deliberately ABSENT even though the spec first proposed it. Once the marker
+    carries the danger verdict and the URL carries the scope, adding ``-zapit`` would make the
+    declared command claim two crawl modes at once — and it would collide with
+    ``test_zap_safety``'s lock that a plain ``-zapit`` recon run must NOT demand a red-confirm.
+
+    Depth and duration are in the surface because they are the bounds. A crawler that decides its
+    own is a command that has stopped describing what runs.
+    """
+    return [
+        "zaproxy", "-ajaxspider", spider_target_for(req),
+        "-maxdepth", str(req.max_depth),
+        "-maxduration", str(req.max_duration_minutes),
+    ]
+
+
+def spider_url_for(req: SpiderStartRequest) -> str:
+    """The API path+query that launches the crawl.
+
+    Percent-encoded for the reason part 3 wrote down: the operator-supplied target is
+    interpolated into a URL carrying THE CRAWL'S OWN PARAMETERS, so a target containing
+    ``&subtreeOnly=false`` would append to ZAP's parameter list and silently change the approved
+    crawl's shape. ``quote(safe="")`` encodes ``&``, ``=``, ``?`` and ``#`` so the target cannot
+    escape its own parameter. That is Critical 2 in a query string, and a text field does not
+    stop a ``&``.
+
+    ``inScope=false`` for the same reason ``inScopeOnly=false`` is set on the scanner: HackPit
+    does not configure ZAP CONTEXTS, so with none defined ZAP considers nothing in scope and the
+    parameter would refuse every crawl. Scope is enforced at HackPit's own target gate
+    (:func:`validate_spider`), which reads the real host out of the surface.
+    """
+    target = quote(spider_target_for(req), safe="")
+    return f"{_ACTION_SPIDER_SCAN}?url={target}&inScope=false&subtreeOnly=false"
+
+
+def _gate_spider_request(req: SpiderStartRequest):
+    """The ExecRequest the real gates run against. The FULL equivalent argv, nothing omitted."""
+    from .models import ExecRequest
+
+    argv = spider_argv_for(req)
+    return ExecRequest(
+        command=argv[0],
+        args=argv[1:],
+        approved=req.approved,
+        dangerous_ack=req.dangerous_ack,
+        engagement_id=req.engagement_id,
+    )
+
+
+def validate_spider(req: SpiderStartRequest):
+    """The gate verdict for this crawl, crawling nothing. PURE.
+
+    All four gates run, in the executor's order and unchanged: an unapproved crawl is refused at
+    ``approval``; one without the red-confirm at ``danger``; a target outside the lab at
+    ``target``. No new gate is needed or added — the existing scope extractor reads the host out
+    of a full URL with a port and a query string.
+    """
+    from . import executor
+
+    return executor.validate_request(_gate_spider_request(req))
+
+
+# --------------------------------------------------------------------------- #
+# spider lifecycle
+# --------------------------------------------------------------------------- #
+_spiders: dict[str, Spider] = {}
+
+
+def _spider_view(container: str, port: int, path: str, key: str, timeout: int = 15) -> str:
+    """One ajaxSpider view, unwrapped to its scalar. "" when the API did not answer."""
+    raw = _api_get(container, port, path, timeout=timeout)
+    value = _json(raw).get(key)
+    return "" if value is None else str(value)
+
+
+def observed_spider(container: str, port: int) -> Spider:
+    """What ZAP says the crawl is doing right now. OBSERVED — nothing here is remembered.
+
+    ``browser_id`` is READ BACK rather than echoed from :data:`SPIDER_BROWSER_ID`, because
+    ``setOptionBrowserId`` accepted ``not-a-browser`` with ``{"Result":"OK"}``. Reporting what we
+    sent would report a wish.
+    """
+    remembered = _spiders.get(_key_slot(container, port))
+    return Spider(
+        container=container, port=port,
+        target_url=remembered.target_url if remembered else "",
+        state=_spider_view(container, port, _VIEW_SPIDER_STATUS, "status"),
+        results=_int(_spider_view(container, port, _VIEW_SPIDER_RESULTS, "numberOfResults")),
+        captured=captured_count(container, port),
+        browser_id=_spider_view(container, port, _VIEW_SPIDER_BROWSER, "optionBrowserId"),
+        max_depth=remembered.max_depth if remembered else 0,
+        max_duration_minutes=remembered.max_duration_minutes if remembered else 0,
+        started_at=remembered.started_at if remembered else "",
+        engagement_id=remembered.engagement_id if remembered else None,
+    )
+
+
+def spider_is_running(spider: Spider) -> bool:
+    """ZAP reports ``running`` / ``stopped`` for the AJAX spider — no progress percentage."""
+    return spider.state.strip().lower() == "running"
+
+
+def start_spider(req: SpiderStartRequest) -> Spider:
+    """Start a browser-driven crawl. GATED — no browser launches on a refusal.
+
+    Order is the point, and it is part 3's: validate, then check the world, then act. The gate
+    runs FIRST and against the equivalent argv, so a refusal happens before ZAP is contacted.
+    """
+    rejected = validate_spider(req)
+    if rejected is not None:
+        raise ProxyRefused(rejected.reason, gate=rejected.gate,
+                           dangerous_flags=list(rejected.dangerous_flags))
+
+    container = container_for(req)
+    if not _container_running(container):
+        raise ProxyRefused(
+            f"sandbox '{container}' is not running — bring the stack up "
+            "(docker compose -f docker/docker-compose.yml up -d)"
+        )
+
+    # ONE CRAWL AT A TIME, decided by OBSERVATION. ZAP runs a single AJAX spider per session, so
+    # a second start would either be refused by ZAP or silently replace the first — and either
+    # way the operator would be watching a crawl they did not approve the shape of.
+    live = observed_spider(container, req.port)
+    if spider_is_running(live):
+        raise ProxyRefused(
+            f"a browser crawl is already running on {container}:{req.port} "
+            f"({live.results} URLs found so far) — stop it first, or wait for it to finish",
+            gate="limit",
+        )
+
+    # The approved bounds, applied BEFORE the crawl starts. These are action URLs and they are
+    # reached only here, after validate_spider returned None — see the constant block.
+    _api_get(container, req.port,
+             f"{_ACTION_SPIDER_BROWSER}?String={quote_plus(SPIDER_BROWSER_ID)}")
+    _api_get(container, req.port, f"{_ACTION_SPIDER_DEPTH}?Integer={int(req.max_depth)}")
+    _api_get(container, req.port,
+             f"{_ACTION_SPIDER_DURATION}?Integer={int(req.max_duration_minutes)}")
+
+    # *** AN OK IS NOT A RESULT — CHECK WHAT ZAP HOLDS, NOT WHAT IT ANSWERED. ***
+    # setOptionBrowserId returns {"Result":"OK"} for `not-a-browser` (measured), so the only
+    # thing worth reading is the value back out. A wrong browser id fails at CRAWL time with a
+    # driver error buried in ZAP's log, which is a far worse place to discover it.
+    configured = _spider_view(container, req.port, _VIEW_SPIDER_BROWSER, "optionBrowserId")
+    if configured and configured != SPIDER_BROWSER_ID:
+        raise ProxyRefused(
+            f"ZAP reports browser {configured!r} after being set to {SPIDER_BROWSER_ID!r} — the "
+            "crawl would launch the wrong browser (or none). The image ships Chromium and no "
+            "Firefox, so a `firefox-headless` value here means the option did not take.",
+            gate="browser",
+        )
+
+    raw = _api_get(container, req.port, spider_url_for(req), timeout=30)
+    body = _json(raw)
+    if not body:
+        raise ProxyRefused(
+            f"the ZAP API on {container}:{req.port} did not answer — is the recording proxy "
+            f"running on that port? (raw: {raw[:200]!r})"
+        )
+    if str(body.get("Result", "")).upper() != "OK":
+        raise ProxyRefused(
+            f"ZAP refused the crawl: {body.get('code') or body}"
+            f" — {body.get('message', '')}".rstrip(" —")
+        )
+
+    model = Spider(
+        container=container, port=req.port, target_url=spider_target_for(req),
+        state="running", max_depth=req.max_depth,
+        max_duration_minutes=req.max_duration_minutes,
+        browser_id=configured or SPIDER_BROWSER_ID,
+        started_at=_now(), engagement_id=req.engagement_id,
+    )
+    with _lock:
+        _spiders[_key_slot(container, req.port)] = model
+    # and immediately replace the assumed state with an observed one, so a crawl whose browser
+    # died on arrival is never reported as running just because we launched it.
+    return observed_spider(container, req.port)
+
+
+def stop_spider(container: str, port: int) -> Spider:
+    """Stop an in-flight crawl.
+
+    NOT GATED, for the reason :func:`stop_scan` and :func:`stop_proxy` are not: stopping removes
+    capability, and a gate that can refuse to press the panic button makes the system less safe.
+    It matters as much here as for the scanner — what is running is a real browser clicking real
+    controls on a production site.
+    """
+    _api_get(container, port, _ACTION_SPIDER_STOP, timeout=20)
+    return observed_spider(container, port)

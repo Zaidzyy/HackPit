@@ -138,11 +138,11 @@ run_test test_state.py "Phase-2 state (parsers / upserts / task tree / prompt gr
 
 run_test test_zap.py "ZAP report parser (report dug out of progress noise / 4 risk codes / registry keys match program_name's .py spelling / -zap.json does not claim every json / detection covers the names that run)"
 
-run_test test_zap_safety.py "ZAP gating split (active fires + passive does not, with both controls / verdict survives every spelling / proxychains cannot launder it / COMMAND and SCRIPT heuristics agree)"
+run_test test_zap_safety.py "ZAP gating split (active fires + passive does not, with both controls / verdict survives every spelling / proxychains cannot launder it / COMMAND and SCRIPT heuristics agree / EACH FLAG STATES ITS OWN REASON — -daemon no longer claims it sends injection payloads — and the script heuristic derives the reason, not just the flag / every attack flag is declared a real flag or a declared marker)"
 
 run_test test_zap_proxy.py "ZAP recording proxy history (REAL captured message -> exchange / malformed response keeps the request / bodies stay RAW / endpoints + params / report redaction with a control / routes registered, history GET-only)"
 
-run_test test_zap_proxy_safety.py "ZAP recording proxy GATING (approval + red-confirm with controls / gated argv == spawned argv / loopback-only bind / lab declares the lab, engagement declares nothing / no stdin writer / gate before spawn / stop ungated / per-tool proxy flag, unknown tool untouched / the rewrite cancels a stale prevalidated verdict)"
+run_test test_zap_proxy_safety.py "ZAP recording proxy GATING (approval + red-confirm with controls / gated argv == spawned argv / loopback by default and 0.0.0.0 ONLY when publish was asked for / publish is engagement-only / THE API KEY IS ENFORCED, absent from the gate surface and redacted in the record, with a control / lab declares the lab, engagement declares nothing / no stdin writer / gate before spawn / stop ungated / AJAX SPIDER: every crawl gate fires, the confirm states the BROWSER hazard not the scanner's, the scoped host is the crawled host, a target carrying '&' cannot set a crawl parameter, depth+duration are in the approved surface, the browser id is read BACK because an OK is not a result)"
 
 run_test test_zap_scan.py "ZAP active-scan mapping (REAL API response -> alerts / High lands as high, not info / plugin ref matches parse_zap so one issue fingerprints once / attacked param survives as an endpoint / malformed never raises / THE REPORT PARSER AND THIS MAPPER ARE NOT INTERCHANGEABLE, with a control / RUNNING+PAUSED block a second scan, STOPPED does not)"
 

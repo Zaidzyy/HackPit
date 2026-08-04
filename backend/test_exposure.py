@@ -333,6 +333,84 @@ def test_vmnet8_preset_matches_what_build10_hand_wrote() -> None:
     print(f"  the vmnet8-dns preset exposes exactly what c2-lab.yml exposed ({want}): PASS")
 
 
+def test_the_zap_proxy_port_is_just_a_profile() -> None:
+    """*** BUILD #15's MOST IMPORTANT DESIGN DECISION, ASSERTED. ***
+
+    The browser-interception port goes through THIS machinery, not a hardcoded
+    `127.0.0.1:8090:8090` in docker-compose.yml. That matters for two reasons: the generated file
+    is gitignored (it can name a client's internal address and this repo is public), and the
+    operator can bind anything — including every interface, which is what a phone needs — with
+    one acknowledgement, instead of editing compose to escape a constant.
+
+    So the check is that it needed NO new model, NO new field and NO second publish path.
+    """
+    import tempfile
+    from pathlib import Path as _P
+    from test_exposure_safety import published_ports, unacknowledged_broad_binds
+
+    from cockpit.listener_ports import ZAP_PROXY_PORT
+
+    preset = exposure.PRESETS["zap-proxy"]
+    result = exposure.validate(preset)
+    assert result.ok, f"the default zap-proxy preset does not validate: {result.refusals}"
+    assert result.ports == [(ZAP_PROXY_PORT, "tcp")], result.ports
+    assert preset.container == "engage-sandbox", (
+        "the ZAP proxy preset names a container other than the engage sandbox — the lab one is "
+        "`internal: true` and exposure.py refuses it outright"
+    )
+
+    with tempfile.TemporaryDirectory() as d:
+        gen = _P(d) / "listener-profile.yml"
+        gen.write_text(exposure.render(preset, at=_AT), encoding="utf-8")
+        entries = [e for _, e in published_ports(gen)]
+        assert entries == [f"127.0.0.1:{ZAP_PROXY_PORT}:{ZAP_PROXY_PORT}/tcp"], entries
+        assert unacknowledged_broad_binds(gen) == [], (
+            "a loopback bind demanded an acknowledgement — the confirm must cost nothing when "
+            "nothing broad is happening, or operators learn to tick it reflexively"
+        )
+    print(f"  the ZAP proxy port renders through the existing profile path ({entries}): PASS")
+
+
+def test_the_lan_preset_does_not_pre_acknowledge_its_own_confirm() -> None:
+    """*** A PRESET MUST NOT SATISFY A GATE. *** (Zaid, 2026-08-04)
+
+    `zap-proxy-lan` fills in 0.0.0.0 for the phone / second-machine case. If it also carried
+    `ack_wildcard=True`, then CHOOSING A DROPDOWN ENTRY would silently satisfy the red-confirm —
+    gate-audit finding I2's exact shape, a gate field that exists and is never enforced. The
+    preset supplies the address; the human still confirms what it means.
+    """
+    lan = exposure.PRESETS["zap-proxy-lan"]
+    assert lan.ip == "0.0.0.0", lan.ip
+    assert lan.ack_wildcard is False, (
+        "the LAN preset pre-acknowledges its own wildcard bind — picking it from a list would "
+        "then be the whole confirm, which is finding I2's shape"
+    )
+    assert lan.ack_public is False, "the LAN preset pre-acknowledges a public bind"
+
+    refused = exposure.validate(lan)
+    assert not refused.ok, "the wildcard preset validates with no acknowledgement at all"
+    assert "wildcard" in refused.needs_ack, refused.needs_ack
+
+    # CONTROL: it is not simply broken — with the operator's ack it goes through, and the
+    # rendered file then carries a marker naming that exact address.
+    acked = lan.model_copy(update={"ack_wildcard": True, "engagement": "e-1"})
+    ok = exposure.validate(acked)
+    assert ok.ok, f"the acknowledged wildcard is still refused: {ok.refusals}"
+
+    import tempfile
+    from pathlib import Path as _P
+    from test_exposure_safety import unacknowledged_broad_binds
+
+    with tempfile.TemporaryDirectory() as d:
+        gen = _P(d) / "listener-profile.yml"
+        gen.write_text(exposure.render(acked, at=_AT), encoding="utf-8")
+        assert unacknowledged_broad_binds(gen) == [], (
+            "the acknowledged wildcard renders without a marker the static scan can see"
+        )
+        assert "hackpit-ack: wildcard  bind=0.0.0.0" in gen.read_text(encoding="utf-8")
+    print("  the LAN preset supplies the address and NOT the acknowledgement: PASS")
+
+
 def test_live_profile_round_trips() -> None:
     import tempfile
     from pathlib import Path as _P
@@ -380,6 +458,8 @@ if __name__ == "__main__":
     test_apply_runs_the_compose_command_it_showed()
     test_apply_surfaces_a_compose_failure()
     test_vmnet8_preset_matches_what_build10_hand_wrote()
+    test_the_zap_proxy_port_is_just_a_profile()
+    test_the_lan_preset_does_not_pre_acknowledge_its_own_confirm()
     test_live_profile_round_trips()
     print("all listener-profile tests passed")
     sys.exit(0)

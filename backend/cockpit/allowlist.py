@@ -218,8 +218,9 @@ _TOOL_EXEC_FLAGS: dict[str, frozenset[str]] = {
     "crackmapexec": frozenset({"-x", "-X", "--exec-method"}),
     "cme": frozenset({"-x", "-X", "--exec-method"}),
 }
-# Per-tool flags that mean "ATTACK this target", as opposed to crawling or fingerprinting it.
-# Same shape as _TOOL_EXEC_FLAGS above and for the same reason: the BINARY is not the tell.
+# Per-tool flags that mean "this ARGUMENT is the dangerous part", as opposed to crawling or
+# fingerprinting. Same shape as _TOOL_EXEC_FLAGS above and for the same reason: the BINARY is
+# not the tell.
 #
 # Kali's `zaproxy` package ships no scan scripts — only the one launcher — so the whole
 # passive/active distinction lives in the arguments:
@@ -233,15 +234,62 @@ _TOOL_EXEC_FLAGS: dict[str, frozenset[str]] = {
 #
 # ZAP is deliberately stricter than sqlmap/nikto/dalfox/nuclei, which stay unflagged. Recorded
 # decision (2026-08-03); see docs/superpowers/plans/2026-08-03-zap-scanner-integration.md.
-# `-daemon` is here for a DIFFERENT reason than `-quickurl`, and both belong. `-quickurl`
-# attacks. `-daemon` attacks nothing — it starts a long-lived listener that RECORDS every request
-# and response passing through it, including credentials, session tokens and payloads in
-# cleartext. The three existing listener surfaces (sliver, tunnels, obfuscation) all demand the
-# red-confirm for that same shape of capability, and finding I2 of the 2026-07-27 gate audit
-# exists precisely because one of them did not. `-zapit` stays absent: it crawls and fingerprints.
-_TOOL_ATTACK_FLAGS: dict[str, frozenset[str]] = {
-    "zaproxy": frozenset({"-quickurl", "-daemon"}),
-    "owasp-zap": frozenset({"-quickurl", "-daemon"}),
+# `-zapit` stays absent: it crawls and fingerprints, and test_zap_safety.py locks that.
+#
+# *** THE VALUE IS A PER-FLAG REASON, AND THAT SHAPE FIXED A REAL DEFECT (build #15). ***
+# This map was `tool -> frozenset(flags)` and the consumer appended ONE hardcoded sentence for
+# whatever matched. Three flags now live under `zaproxy` and they are dangerous for three
+# genuinely different reasons, so one sentence could only ever be true of one of them. Measured
+# against the old shape:
+#
+#     -quickurl    -> "active web scan — sends live injection payloads…"   TRUE
+#     -daemon      -> "active web scan — sends live injection payloads…"   FALSE
+#     -ajaxspider  -> would have inherited that same false sentence again
+#
+# So starting the RECORDING PROXY told the operator it was sending injection payloads at a
+# target it never touches. A red-confirm whose stated reason is false is worse than no reason —
+# it is what teaches an operator that the text is noise and the checkbox is a formality. Per-flag
+# reasons close that, and adding a fourth flag now forces whoever adds it to say what it does.
+#
+# The alternative — a second `_TOOL_BROWSER_FLAGS` map beside this one — was REJECTED (Zaid,
+# 2026-08-04). Two lists of the same kind of fact have to agree forever: that is the drift shape
+# build #5 named ("fix the predicate, never add a parallel one"), and the one this very file
+# already removed once when `dangerous_script_heuristic` was made to DERIVE from this dict
+# instead of restating it. One map, richer values.
+#
+# *** REAL FLAG vs DECLARED MARKER — recorded so a third marker cannot arrive unnoticed. ***
+# real=True   the token is an actual ZAP command-line flag; the argv could be run as written.
+# real=False  the token is a DECLARED MARKER for a capability driven over ZAP's API, which has
+#             no command line at all. Part 3 established the pattern: the gate classifies an
+#             equivalent command, and the lock is "the scoped host is the host that gets hit",
+#             never string equality between the surface and what executes. A marker must
+#             describe AT LEAST what runs — declaring more aggression than you perform is safe,
+#             declaring less is the Critical 2 defect.
+_ATTACK_FLAG_IS_REAL: dict[str, bool] = {
+    "-quickurl": True,
+    "-daemon": True,
+    # Driven via `ajaxSpider/action/scan`. ZAP ships no command-line switch for it.
+    "-ajaxspider": False,
+}
+_ZAP_ATTACK_FLAGS: dict[str, str] = {
+    "-quickurl": "active web scan — sends live injection payloads at every discovered parameter",
+    # Attacks nothing. It starts a long-lived listener that RECORDS every request and response
+    # passing through it. The three existing listener surfaces (sliver, tunnels, obfuscation) all
+    # demand the red-confirm for that same shape of capability, and finding I2 of the 2026-07-27
+    # gate audit exists precisely because one of them did not.
+    "-daemon": "recording proxy — captures every request and response in full, including "
+               "credentials, session tokens and payloads in cleartext",
+    # Sends no injection payloads either, and earns its confirm for a third reason again: it
+    # drives a REAL BROWSER around the target. On the production e-commerce sites that are in
+    # scope for a bug bounty, clicking everything reachable can empty a basket, submit a form,
+    # trigger an email or place an order — a different hazard from SQLi and arguably a more
+    # embarrassing one.
+    "-ajaxspider": "browser-driven crawl — a real browser CLICKS every control it finds, which "
+                   "can submit forms, empty a basket, trigger email or place an order",
+}
+_TOOL_ATTACK_FLAGS: dict[str, dict[str, str]] = {
+    "zaproxy": _ZAP_ATTACK_FLAGS,
+    "owasp-zap": _ZAP_ATTACK_FLAGS,
 }
 # Substrings anywhere in the args that signal a reverse shell / code exec shape.
 _SHELL_MARKERS = (
@@ -401,14 +449,16 @@ def dangerous_command_heuristic(command: str, args: list[str]) -> list[str]:
         reasons.append(f"{cmd}: turns a vulnerability into command execution / a shell")
     if cmd in _PERSISTENCE_TOOLS:
         reasons.append(f"{cmd}: installs persistence that executes a payload")
-    # An ATTACK flag on a scanner: the binary crawls or attacks depending on this argument, so
-    # the flag is the tell. Same shape as the exec-flag check just below.
-    attack_flags = sorted(flags & _TOOL_ATTACK_FLAGS.get(cmd, frozenset()))
-    if attack_flags:
-        reasons.append(
-            f"{lead}{cmd} {', '.join(attack_flags)}: active web scan — sends live injection "
-            "payloads at every discovered parameter"
-        )
+    # An ATTACK flag on a scanner: the binary crawls, records or attacks depending on this
+    # argument, so the flag is the tell. Same shape as the exec-flag check just below.
+    #
+    # ONE REASON PER FLAG, not one reason for the set. Two flags of the same tool can both be
+    # dangerous and be dangerous for unrelated things — `-quickurl` sends injection payloads,
+    # `-daemon` records credentials, `-ajaxspider` clicks buttons — so collapsing them into a
+    # single sentence necessarily states something false about all but one. See the map.
+    tool_flags = _TOOL_ATTACK_FLAGS.get(cmd, {})
+    for flag in sorted(flags & set(tool_flags)):
+        reasons.append(f"{lead}{cmd} {flag}: {tool_flags[flag]}")
 
     # Argument shapes that turn an otherwise-clean tool into remote command execution.
     exec_flags = sorted(flags & _TOOL_EXEC_FLAGS.get(cmd, frozenset()))
@@ -587,8 +637,16 @@ _SCRIPT_SHAPE_MARKERS: tuple[tuple[str, str], ...] = (
     # directly; if this line duplicated the flags instead, the two paths could disagree about
     # the same tool — the Critical 2 / D22 / D24 shape, which this codebase has produced three
     # times. Deriving means adding a scanner to the dict updates BOTH paths at once.
-    + tuple((flag, "active web scan — sends live injection payloads")
-            for flags in _TOOL_ATTACK_FLAGS.values() for flag in sorted(flags))
+    #
+    # *** THE REASON IS DERIVED TOO, AND THAT IS THE HALF THAT NEARLY SLIPPED (build #15). ***
+    # When the map went from `tool -> frozenset(flags)` to `tool -> {flag: reason}` this line
+    # KEPT WORKING WITHOUT AN EDIT — `sorted(some_dict)` yields its keys, so the loop still
+    # produced the right flags while silently stamping the old hardcoded sentence onto every one
+    # of them. It would not have failed loudly; it would have re-introduced, in the script
+    # scanner, exactly the false-reason defect the map reshape exists to fix. `.items()` makes
+    # the reason travel with the flag, so the two paths agree on WHAT is dangerous and on WHY.
+    + tuple((flag, reason)
+            for flags in _TOOL_ATTACK_FLAGS.values() for flag, reason in sorted(flags.items()))
 )
 
 _MAX_DECODE_DEPTH = 2

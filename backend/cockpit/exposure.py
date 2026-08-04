@@ -38,6 +38,7 @@ from .listener_ports import (
     DNS_TUNNEL_PORT,
     LIGOLO_DEFAULT_PORT,
     SLIVER_DEFAULT_PORT,
+    ZAP_PROXY_PORT,
 )
 
 
@@ -579,6 +580,36 @@ PRESETS: dict[str, ListenerProfile] = {
     # generalisation stays provably faithful to the file it replaced.
     "vmnet8-dns": ListenerProfile(
         ip="192.168.13.1", container="engage-sandbox", kinds=["dns-tunnel"],
+    ),
+    # --- build #15: the browser-interception proxy ---------------------------------------
+    # The default and the one to use unless you need otherwise: a browser on THIS machine points
+    # at 127.0.0.1:8090 and everything it fetches lands in ZAP's history. Loopback needs no
+    # acknowledgement, so picking this preset asks nothing of the operator that it should not.
+    "zap-proxy": ListenerProfile(
+        ip="127.0.0.1", container="engage-sandbox", extra=[(ZAP_PROXY_PORT, "tcp")],
+    ),
+    # For a PHONE or a SECOND MACHINE — the case loopback cannot serve, and the only reason this
+    # entry exists.
+    #
+    # *** ack_wildcard IS DELIBERATELY FALSE AND MUST STAY FALSE. ***
+    # A preset that pre-acknowledged its own red-confirm would mean choosing a dropdown entry
+    # silently satisfies the gate — finding I2's shape, a gate field that exists and is never
+    # enforced. The preset fills in the ADDRESS; the human still confirms what it means. Locked
+    # by test_exposure.
+    #
+    # 0.0.0.0 IS THE BLUNT INSTRUMENT AND YOU SHOULD USUALLY TYPE SOMETHING NARROWER. It binds
+    # every interface, which includes VPN adapters and mobile hotspots, not just the LAN you had
+    # in mind. It is offered because the LAN address is dynamic and `exposure.py` deliberately
+    # cannot enumerate interfaces (that needs a third-party package the hermetic suite forbids).
+    # Someone who knows their LAN address should type it: `address_is_live()` will confirm it can
+    # bind, and it is strictly narrower than this.
+    #
+    # What a wide bind actually exposes is an OPEN HTTP PROXY with the engage sandbox's full
+    # egress behind it — not scan control, which stays key-protected. On a home LAN that is
+    # negligible; on café, hotel or conference wifi it is the classic open-proxy problem and
+    # scanners find it quickly.
+    "zap-proxy-lan": ListenerProfile(
+        ip="0.0.0.0", container="engage-sandbox", extra=[(ZAP_PROXY_PORT, "tcp")],
     ),
 }
 

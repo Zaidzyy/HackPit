@@ -9,10 +9,18 @@ from __future__ import annotations
 from cockpit import proxy
 
 
+#: A fixed stand-in so argv assertions are deterministic. The real key is minted per start.
+KEY = "0123456789abcdef0123456789abcdef"
+
+
 def _req(**kw):
     base = dict(approved=True, dangerous_ack=True, engagement_id=None)
     base.update(kw)
     return proxy.ProxyStartRequest(**base)
+
+
+def _argv(**kw) -> list[str]:
+    return proxy.server_argv_for(_req(**kw), api_key=KEY)
 
 
 def test_an_unapproved_start_is_refused_with_a_control() -> None:
@@ -54,7 +62,7 @@ def test_the_gated_argv_is_the_spawned_argv() -> None:
     import inspect
 
     req = _req()
-    argv = proxy.server_argv_for(req)
+    argv = proxy.server_argv_for(req, api_key=KEY)
     gated = proxy._gate_request(req)
     assert gated.command == argv[0], (
         f"the gate classifies {gated.command!r} but the spawn runs {argv[0]!r}"
@@ -69,16 +77,105 @@ def test_the_gated_argv_is_the_spawned_argv() -> None:
     print("  the gated argv and the spawned argv come from one derivation: PASS")
 
 
-def test_the_daemon_binds_loopback_only() -> None:
-    """THE ISOLATION PROPERTY. `-host 127.0.0.1` is what keeps the API unreachable from the host.
-    A change to 0.0.0.0 would publish nothing by itself, but it removes the last thing standing
-    between a published port and an ungated control channel."""
-    argv = proxy.server_argv_for(_req())
-    joined = " ".join(argv)
-    assert "-host 127.0.0.1" in joined, f"the daemon does not bind loopback: {joined}"
+def test_the_daemon_binds_loopback_unless_publish_was_asked_for() -> None:
+    """THE ISOLATION PROPERTY, now with exactly one way out of it.
+
+    `-host 127.0.0.1` is what keeps the API unreachable from the host, and it stays the DEFAULT.
+    Build #15 adds a single opt-in — `publish=True` — because a container process on loopback
+    cannot be reached through a published port at all. The lock therefore moves from "this
+    constant never changes" to "it changes only when the operator asked, and never in lab mode".
+    """
+    joined = " ".join(_argv())
+    assert "-host 127.0.0.1" in joined, f"the DEFAULT daemon does not bind loopback: {joined}"
     for bad in ("0.0.0.0", "api.addrs.addr.name=.*"):
-        assert bad not in joined, f"the argv opens the API beyond loopback: {bad!r} in {joined}"
-    print("  the daemon binds 127.0.0.1 only: PASS")
+        assert bad not in joined, f"an unpublished argv opens the API beyond loopback: {bad!r}"
+
+    # the one way out, and it has to actually work or the feature is inert
+    published = " ".join(_argv(publish=True, engagement_id="e1"))
+    assert "-host 0.0.0.0" in published, (
+        "a published proxy still binds loopback INSIDE the container — `docker -p` forwards to "
+        "the bridge interface, so nothing would be listening there and the port would be open "
+        "on the host while the feature silently did not work"
+    )
+    assert "api.addrs.addr.regex=true" in published, (
+        "a published proxy does not widen api.addrs — a correctly-keyed request arriving through "
+        "the published port comes from the bridge gateway, not 127.0.0.1, and ZAP would refuse it"
+    )
+    print("  loopback by default; 0.0.0.0 only when publish was asked for: PASS")
+
+
+def test_publishing_is_engagement_only() -> None:
+    """The lab network is `internal: true` — a published port there has no route.
+
+    Refused BEFORE the executor gates, because this is not a safety verdict about a coherent
+    request; it is a request that cannot describe a reachable state. Control in the same test:
+    the identical request WITH an engagement is not refused here.
+    """
+    refused = proxy.publish_refusal(_req(publish=True, engagement_id=None))
+    assert refused is not None, "a published LAB proxy was not refused"
+    assert refused.gate == "publish", f"refused at {refused.gate!r}"
+
+    assert proxy.publish_refusal(_req(publish=True, engagement_id="e1")) is None, (
+        "control failed — an engagement publish is refused too, so the check fires on everything"
+    )
+    assert proxy.publish_refusal(_req(publish=False)) is None, (
+        "control failed — an ordinary unpublished start is refused"
+    )
+    print("  publish is engagement-only, both controls hold: PASS")
+
+
+def test_the_api_key_is_enforced_and_never_reaches_a_record() -> None:
+    """*** THE SINGLE EASIEST WAY FOR THIS BUILD TO LEAK A CREDENTIAL. ***
+
+    Closed twice over, because one of the two cannot regress:
+      1. the GATE IS NEVER GIVEN A REAL KEY — an ExecRequest is the thing this codebase records,
+         reports and puts in the model's prompt, so the key is not handed over in the first place
+      2. and if it ever were, `secretargs` masks the `api.key` VALUE while deliberately leaving
+         `api.disablekey=false` visible, because that token is the evidence the lock was on
+    """
+    argv = _argv()
+    joined = " ".join(argv)
+    assert "api.disablekey=false" in joined, (
+        "the daemon does not state disablekey=false. ZAP PERSISTS -config values into "
+        "$HOME/.ZAP/config.xml, so an unstated flag inherits whatever the last run wrote — which "
+        "is how the original 'api.key enforces nothing' finding came to be wrong"
+    )
+    assert f"api.key={KEY}" in joined, "the daemon does not set an API key at all"
+
+    # 1. the gate never sees it
+    gated = " ".join(proxy._gate_request(_req()).args)
+    assert KEY not in gated, f"THE KEY IS IN THE GATE SURFACE — it will be recorded: {gated!r}"
+    assert proxy.GATE_KEY_PLACEHOLDER not in gated, (
+        "the placeholder leaked into the surface — the surface should carry no key token at all"
+    )
+
+    # 2. and the recorded form is redacted, with the audit token intact
+    recorded = " ".join(proxy.recorded_argv_for(_req(), api_key=KEY))
+    assert KEY not in recorded, f"the recorded argv contains the API key: {recorded!r}"
+    assert "api.key=<redacted>" in recorded, f"the key was not redacted, just dropped: {recorded!r}"
+    assert "api.disablekey=false" in recorded, (
+        "redaction ate `api.disablekey=false` — that token is the EVIDENCE the lock was on, and "
+        "masking it destroys the audit trail redaction exists to protect (the `nmap -p 445` rule)"
+    )
+
+    # POSITIVE CONTROL: the check can fail. A tool with no registered secret keeps its value, so
+    # a redaction rule that silently stopped matching would show up here as an unmasked key.
+    from cockpit import secretargs
+
+    unknown = secretargs.redact_argv("some-unknown-binary", ["-config", f"api.key={KEY}"])
+    assert KEY in " ".join(unknown), (
+        "control failed — redaction fires on tools it has no rule for, so the assertions above "
+        "would pass even if the zaproxy rule were removed"
+    )
+    print("  key enforced, absent from the gate surface, redacted in the record: PASS")
+
+
+def test_the_key_is_different_on_two_consecutive_starts() -> None:
+    """Random per start, so nothing long-lived exists to leak."""
+    keys = {proxy.mint_api_key() for _ in range(8)}
+    assert len(keys) == 8, f"mint_api_key repeats itself: {keys}"
+    assert all(len(k) >= 32 for k in keys), f"a key is too short to be worth having: {keys}"
+    print("  every minted key is fresh and long: PASS")
 
 
 def test_both_modes_are_reachable() -> None:
@@ -133,7 +230,7 @@ def test_the_lab_surface_declares_the_lab_and_nothing_else() -> None:
     assert "-daemon" in eng_surface, "engagement mode drops -daemon — the red-confirm cannot fire"
 
     # and the claim must stay true: the real argv must not carry some other host
-    argv = " ".join(proxy.server_argv_for(_req()))
+    argv = " ".join(_argv())
     assert config.LAB_TARGET_HOST not in argv, (
         "the daemon argv now names the lab target — if the argv ever gains a real target, the "
         "gate surface must be derived from it rather than declared"
@@ -264,6 +361,210 @@ def test_a_request_that_did_not_ask_is_untouched() -> None:
     print("  proxy=False and unknown-tool requests are returned untouched: PASS")
 
 
+# --------------------------------------------------------------------------- #
+# THE AJAX SPIDER (build #15 part 2)
+# --------------------------------------------------------------------------- #
+def _spider(**kw):
+    base = dict(target_url="http://hackpit-lab-target:3000/", approved=True, dangerous_ack=True)
+    base.update(kw)
+    return proxy.SpiderStartRequest(**base)
+
+
+def test_every_crawl_gate_fires_each_with_a_control() -> None:
+    """All four gates, in the executor's order, against the real validator.
+
+    Each case carries its control in the SAME test: a heuristic stuck on always-refuse would
+    otherwise satisfy every assertion here and look correct.
+    """
+    clean = proxy.validate_spider(_spider())
+    assert clean is None, f"a fully approved in-scope crawl was refused: {clean}"
+
+    unapproved = proxy.validate_spider(_spider(approved=False))
+    assert unapproved is not None and unapproved.gate == "approval", unapproved
+
+    unconfirmed = proxy.validate_spider(_spider(dangerous_ack=False))
+    assert unconfirmed is not None and unconfirmed.gate == "danger", (
+        f"refused at {unconfirmed.gate if unconfirmed else None!r}, expected 'danger'. If this "
+        "says None, the -ajaxspider marker is not in allowlist._TOOL_ATTACK_FLAGS and "
+        "dangerous_ack is decorative — gate-audit finding I2's shape."
+    )
+
+    off_scope = proxy.validate_spider(_spider(target_url="http://example.com/"))
+    assert off_scope is not None and off_scope.gate == "target", off_scope
+    print("  crawl gates: approval / danger / target all fire, controls hold: PASS")
+
+
+def test_the_crawl_confirm_states_the_BROWSER_hazard_not_the_scanner_s() -> None:  # noqa: N802
+    """*** THE WHOLE REASON THIS ACTION GOT ITS OWN REASON STRING. ***
+
+    The active scanner earns its confirm by sending injection payloads. A crawl earns one because
+    it drives a real browser that clicks things. If the operator reads the scanner's sentence
+    here, the confirm is describing traffic that is not being sent — and a red-confirm whose
+    stated reason is false is what teaches people the text is noise.
+    """
+    rejected = proxy.validate_spider(_spider(dangerous_ack=False))
+    assert rejected is not None
+    flags = " ".join(rejected.dangerous_flags).lower()
+    assert "browser" in flags and "click" in flags, (
+        f"the crawl's red-confirm does not mention the browser hazard: {flags!r}"
+    )
+    assert "injection payload" not in flags, (
+        f"the crawl claims it sends injection payloads. It sends none: {flags!r}"
+    )
+    print("  the crawl's confirm states the browser hazard, not the scanner's: PASS")
+
+
+def test_the_scoped_host_is_the_crawled_host() -> None:
+    """*** PART 3's LOCK, RESTATED FOR THIS ACTION. ***
+
+    The gate classifies an ARGV; what executes is a URL. String equality between them would be
+    theatre, so the property locked is the one underneath: the host the gate scoped is the host
+    the browser is pointed at. Exercised with a port, a path and a query string, because that is
+    where a naive split falls over.
+    """
+    from urllib.parse import unquote, urlparse
+
+    target = "http://hackpit-lab-target:3000/rest/products/search?q=a&b=c"
+    req = _spider(target_url=target)
+
+    surface = " ".join(proxy._gate_spider_request(req).args)
+    assert target in surface, f"the gate surface does not carry the real target: {surface!r}"
+
+    url = proxy.spider_url_for(req)
+    sent = unquote(url.split("url=", 1)[1].split("&", 1)[0])
+    assert sent == target, f"the API is aimed at {sent!r} but the gate scoped {target!r}"
+    assert urlparse(sent).hostname == urlparse(target).hostname
+    print("  the scoped host is the crawled host, through port/path/query: PASS")
+
+
+def test_a_target_cannot_smuggle_a_crawl_parameter() -> None:
+    """*** CRITICAL 2 IN A QUERY STRING. *** Part 3's defect class, in this action's parameters.
+
+    The target is interpolated into a URL that carries THE CRAWL'S OWN parameters, so a `&` in
+    the target would append to ZAP's parameter list and change the shape of the approved crawl.
+    Nothing about a text field stops a `&`.
+    """
+    sneaky = proxy.spider_url_for(
+        _spider(target_url="http://hackpit-lab-target:3000/?x=1&subtreeOnly=true"))
+    assert "subtreeOnly=false" in sneaky, f"the crawl's own parameter was overridden: {sneaky}"
+    assert sneaky.count("subtreeOnly=") == 1, (
+        f"the target smuggled a second subtreeOnly parameter into the query: {sneaky}"
+    )
+    assert "&inScope=false" in sneaky, f"the target displaced inScope: {sneaky}"
+
+    # CONTROL: the encoding is not simply mangling everything — a legitimate query survives and
+    # round-trips, so this cannot pass by breaking the feature.
+    from urllib.parse import unquote
+
+    plain = proxy.spider_url_for(_spider(target_url="http://hackpit-lab-target:3000/a?q=1"))
+    assert unquote(plain.split("url=", 1)[1].split("&", 1)[0]) == \
+        "http://hackpit-lab-target:3000/a?q=1", plain
+    print("  a target carrying '&' cannot set a crawl parameter, control holds: PASS")
+
+
+def test_depth_and_duration_are_in_the_approved_surface() -> None:
+    """A crawler that decides its own bounds is a command that stopped describing what runs.
+
+    Same reason `-autorun` is excluded from the ZAP catalog entry: the human approved a shape,
+    and the shape has to include the numbers that decide how far it goes.
+    """
+    surface = proxy.spider_argv_for(_spider(max_depth=3, max_duration_minutes=7))
+    joined = " ".join(surface)
+    assert "-maxdepth 3" in joined, f"depth is not in the approved surface: {joined}"
+    assert "-maxduration 7" in joined, f"duration is not in the approved surface: {joined}"
+
+    # and they track the request rather than being pinned to the defaults
+    other = " ".join(proxy.spider_argv_for(_spider(max_depth=9, max_duration_minutes=45)))
+    assert "-maxdepth 9" in other and "-maxduration 45" in other, other
+    print("  crawl depth and duration appear in the gated surface: PASS")
+
+
+def test_the_crawl_surface_does_not_claim_two_modes() -> None:
+    """`-zapit` stays OUT, and this is the lock that keeps it out.
+
+    The spec first proposed `zaproxy -zapit <target>` as the surface. Once `-ajaxspider` carries
+    the danger verdict and the URL carries the scope, adding `-zapit` would make the declared
+    command claim two crawl modes at once — and it would collide head-on with test_zap_safety's
+    lock that a plain `-zapit` recon run must NOT demand a red-confirm.
+    """
+    argv = proxy.spider_argv_for(_spider())
+    assert "-ajaxspider" in argv, f"the marker that carries the danger verdict is gone: {argv}"
+    assert "-zapit" not in argv, (
+        "the crawl surface declares -zapit as well. Two modes in one declared command, and "
+        "-zapit is locked as a NON-dangerous recon flag by test_zap_safety.py"
+    )
+    assert "-quickurl" not in argv, (
+        "the crawl surface borrows the SCANNER's flag — the confirm would then tell the operator "
+        "injection payloads are being sent, which is false for a crawl"
+    )
+    print("  the crawl declares -ajaxspider only, never -zapit or -quickurl: PASS")
+
+
+def test_stopping_a_crawl_is_not_gated() -> None:
+    """A real browser is clicking real controls on a live site. The stop must never be refusable."""
+    import inspect
+
+    src = inspect.getsource(proxy.stop_spider)
+    assert "validate_spider" not in src and "validate_request" not in src, (
+        "stop_spider runs a gate — a browser is mid-crawl on a production site and this is the "
+        "panic button"
+    )
+    print("  stopping a crawl is not gated: PASS")
+
+
+def test_a_refused_crawl_launches_no_browser() -> None:
+    """The gate must be checked BEFORE any API call, including the option-setting ones."""
+    import inspect
+
+    src = inspect.getsource(proxy.start_spider)
+    gate_at = src.find("validate_spider")
+    act_at = min(i for i in (src.find("_ACTION_SPIDER_BROWSER"), src.find("spider_url_for"))
+                 if i != -1)
+    assert gate_at != -1, "start_spider never calls validate_spider"
+    assert gate_at < act_at, (
+        "start_spider contacts ZAP before it gates — a refused crawl would still have changed "
+        "the browser id or launched Chromium"
+    )
+    print("  a refused crawl contacts ZAP not at all: PASS")
+
+
+def test_the_browser_id_is_read_back_not_trusted() -> None:
+    """*** AN OK IS NOT A RESULT. ***
+
+    `setOptionBrowserId` accepted `not-a-browser` and answered `{"Result":"OK"}` (measured).
+    The image ships Chromium and no Firefox while ZAP's default is `firefox-headless`, so
+    trusting the OK means discovering the failure later, in a driver stack trace inside ZAP's log.
+    """
+    import inspect
+
+    src = inspect.getsource(proxy.start_spider)
+    assert "_VIEW_SPIDER_BROWSER" in src, (
+        "start_spider never reads the browser id back — it trusts setOptionBrowserId's OK, and "
+        "that call returns OK for values ZAP cannot use"
+    )
+    assert 'gate="browser"' in src, "a mismatched browser id does not refuse"
+    assert proxy.SPIDER_BROWSER_ID == "chrome-headless", (
+        f"the browser id is {proxy.SPIDER_BROWSER_ID!r} — the image has Chromium and NO Firefox"
+    )
+
+    # observed_spider must report ZAP's value, never the constant we hoped for.
+    #
+    # AST, NOT A SUBSTRING — build #8's recorded lesson, and it fired here on the first run: the
+    # function's own DOCSTRING says "rather than echoed from SPIDER_BROWSER_ID", and a text scan
+    # failed the test for explaining itself. A scan that a comment can trip is a scan that gets
+    # silenced by rewording rather than by fixing the code.
+    import ast
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(proxy.observed_spider)))
+    referenced = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    assert "SPIDER_BROWSER_ID" not in referenced, (
+        "observed_spider references the id we SET rather than reporting the one ZAP holds — "
+        "that reports a wish, which is the failure mode this build's measurement warned about"
+    )
+    print("  the browser id is read back from ZAP and a mismatch refuses: PASS")
+
+
 def test_the_container_follows_the_mode() -> None:
     """Lab runs in the isolated sandbox; an engagement run in the open one. Picking the wrong
     container would either put a real-target proxy in the egress-less box (it would capture
@@ -279,7 +580,10 @@ if __name__ == "__main__":
     test_an_unapproved_start_is_refused_with_a_control()
     test_the_red_confirm_is_required()
     test_the_gated_argv_is_the_spawned_argv()
-    test_the_daemon_binds_loopback_only()
+    test_the_daemon_binds_loopback_unless_publish_was_asked_for()
+    test_publishing_is_engagement_only()
+    test_the_api_key_is_enforced_and_never_reaches_a_record()
+    test_the_key_is_different_on_two_consecutive_starts()
     test_both_modes_are_reachable()
     test_the_lab_surface_declares_the_lab_and_nothing_else()
     test_the_daemon_gets_no_stdin_writer()
@@ -288,5 +592,14 @@ if __name__ == "__main__":
     test_the_proxy_flag_is_per_tool_and_never_silent()
     test_the_rewrite_cancels_a_prevalidated_verdict()
     test_a_request_that_did_not_ask_is_untouched()
+    test_every_crawl_gate_fires_each_with_a_control()
+    test_the_crawl_confirm_states_the_BROWSER_hazard_not_the_scanner_s()
+    test_the_scoped_host_is_the_crawled_host()
+    test_a_target_cannot_smuggle_a_crawl_parameter()
+    test_depth_and_duration_are_in_the_approved_surface()
+    test_the_crawl_surface_does_not_claim_two_modes()
+    test_stopping_a_crawl_is_not_gated()
+    test_a_refused_crawl_launches_no_browser()
+    test_the_browser_id_is_read_back_not_trusted()
     test_the_container_follows_the_mode()
     print("ALL ZAP proxy gating locks pass")

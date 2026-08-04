@@ -11,6 +11,17 @@
 # If check 3 ever reports REACHABLE, stop. Nothing else in this build matters until it is
 # understood: it would mean the backend has a socket to an ungated control surface.
 #
+# *** BUILD #15 SPLIT THIS PROPERTY IN TWO, AND THIS FILE KEEPS THE HALF THAT DID NOT MOVE. ***
+# The ENGAGE sandbox's proxy port can now be published deliberately, so "unreachable from the
+# host" is no longer true there — what replaces it is an ENFORCED API KEY, and
+# docker/proof/browser_intercept_proof.sh asserts the refusal, the with-key control, and that
+# what a published port exposes is a PROXY rather than scan control.
+#
+# THIS FILE IS ABOUT THE LAB SANDBOX ($SANDBOX below) AND ITS ANSWER IS UNCHANGED: still
+# loopback-bound, still no published port, still unreachable. `exposure.py` refuses that
+# container by construction (its network is `internal: true`), so there is no supported way to
+# make check 3 fail here. If it ever does, something bypassed the profile path entirely.
+#
 # Conventions here were paid for in part 1 and are not decoration:
 #   * compare the running container's image id against the built image BEFORE exec'ing into it
 #     (six name checks once passed against a new image while the container ran the old one)

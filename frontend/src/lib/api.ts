@@ -1527,6 +1527,15 @@ export type Proxy = {
   captured: number;
   started_at: string;
   engagement_id: string | null;
+  /** The address it bound INSIDE the container — 127.0.0.1 unless it was published. */
+  bind_host: string;
+  /**
+   * Bound wide inside its container so a published host port can reach it. This does NOT mean
+   * a host port exists — publishing one is the exposure profile's separate, explicit job.
+   */
+  published: boolean;
+  /** Whether the API requires a key. NEVER the key itself — that value never leaves the backend. */
+  api_key_enforced: boolean;
 };
 
 export type ProxyStatus = {
@@ -1565,6 +1574,13 @@ export const startProxy = (
   body: {
     port?: number;
     engagement_id?: string | null;
+    /**
+     * Bind the daemon wide INSIDE its container so a published host port can reach it — what
+     * lets a real browser on this machine use the proxy. ENGAGEMENT-ONLY (409 at gate
+     * `publish` in lab mode: that network is `internal: true`, so a published port has no
+     * route). It publishes nothing on its own; the host port is a separate exposure profile.
+     */
+    publish?: boolean;
     // A recording proxy holds full request bodies — credentials and session tokens in
     // cleartext — so starting it clears an explicit approval AND the danger red-confirm.
     // Both default false on the backend, so omitting them is a refusal, never a silent grant.
@@ -1702,6 +1718,69 @@ export const ingestScanAlerts = (
     body,
     signal
   );
+
+/* -------------------------------------------------------------------------- */
+/* the AJAX SPIDER — a browser-driven crawl (build #15 part 2)                 */
+/*                                                                             */
+/* Gated like the scanner, for a DIFFERENT reason. This sends NO injection      */
+/* payloads. It drives a real browser that CLICKS things, and on a production   */
+/* site that can submit a form, empty a basket, trigger email or place an       */
+/* order. The confirm copy must say that, not borrow the scanner's words.       */
+/* -------------------------------------------------------------------------- */
+export type Spider = {
+  container: string;
+  port: number;
+  target_url: string;
+  /** ZAP's own word: running | stopped. OBSERVED on every poll, never assumed. */
+  state: string;
+  /** URLs the crawl has found so far. */
+  results: number;
+  /** Messages in ZAP's history — the evidence a browser actually ran. */
+  captured: number;
+  /**
+   * READ BACK from ZAP, never echoed from what we set: `setOptionBrowserId` answers
+   * `{"Result":"OK"}` for values it cannot use (it accepted `not-a-browser`), so the value we
+   * sent proves nothing. An OK is not a result.
+   */
+  browser_id: string;
+  max_depth: number;
+  max_duration_minutes: number;
+  started_at: string;
+  engagement_id: string | null;
+};
+
+/**
+ * Crawl a target with a real browser, through the session ZAP already holds.
+ *
+ * `max_depth` and `max_duration_minutes` are in the APPROVED COMMAND, not just in this request:
+ * a crawler that decides its own bounds is a command that has stopped describing what runs.
+ */
+export const startSpider = (
+  body: {
+    target_url: string;
+    port?: number;
+    max_depth?: number;
+    max_duration_minutes?: number;
+    engagement_id?: string | null;
+    approved?: boolean;
+    dangerous_ack?: boolean;
+  },
+  signal?: AbortSignal
+) => postJSON<Spider>("/cockpit/proxy/spider", body, signal);
+
+/** What the crawl is doing right now. Read-only, ungated — a panel polls it. */
+export const spiderStatus = (container: string, port: number, signal?: AbortSignal) =>
+  getJSON<Spider>(
+    `/cockpit/proxy/spider?container=${encodeURIComponent(container)}&port=${port}`,
+    signal
+  );
+
+/** Stop an in-flight crawl. NOT gated — a browser is mid-click on a live site. */
+export const stopSpider = (container: string, port: number, signal?: AbortSignal) =>
+  fetch(
+    `${API_URL}/cockpit/proxy/spider?container=${encodeURIComponent(container)}&port=${port}`,
+    { method: "DELETE", signal }
+  ).then((r) => r.json() as Promise<Spider>);
 
 /** Resolve the tunnel for a host and get the rewritten command to APPROVE. Pure — nothing runs. */
 export type RouteResult = {

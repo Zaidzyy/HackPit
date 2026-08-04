@@ -96,6 +96,43 @@ def test_nmap_ports_are_NOT_redacted() -> None:
     print("  nmap/ffuf/masscan -p is NOT touched (negative control): PASS")
 
 
+def test_a_config_assignment_masks_the_secret_and_keeps_the_evidence() -> None:
+    """Build #15: `-config api.key=<secret>` — where the FLAG is not the discriminator.
+
+    `-config` carries both the secret and the single most audit-relevant token in the whole
+    argv, so a rule keyed on the flag would redact the evidence that the lock was ON. Same
+    failure as `nmap -p 445` becoming `nmap -p <redacted>`, one level down.
+    """
+    key = "0123456789abcdef0123456789abcdef"
+    argv = ["-daemon", "-host", "0.0.0.0", "-port", "8090",
+            "-config", "api.disablekey=false", "-config", f"api.key={key}"]
+    out = redact_argv("zaproxy", argv)
+    joined = " ".join(out)
+
+    assert key not in joined, f"the ZAP API key survived redaction: {joined}"
+    assert "api.key=<redacted>" in joined, f"the key was dropped rather than masked: {joined}"
+    assert "api.disablekey=false" in joined, (
+        "`api.disablekey=false` was redacted. That token is the EVIDENCE the API required a key "
+        "for this run, and masking it destroys exactly the audit trail redaction protects."
+    )
+    # every non-secret token survives untouched
+    assert out[:5] == argv[:5], f"the redactor rewrote unrelated tokens: {out[:5]}"
+
+    # both spellings Kali installs
+    assert key not in " ".join(redact_argv("owasp-zap", argv)), "owasp-zap has no rule"
+    assert key not in " ".join(redact_argv("/usr/bin/zaproxy", argv)), "a path prefix bypasses it"
+
+    # NEGATIVE CONTROL: a tool with no registered config secret keeps its value, so this cannot
+    # have quietly become a global "anything containing key= is a secret" rule.
+    other = ["-config", f"api.key={key}"]
+    assert key in " ".join(redact_argv("nmap", other)), (
+        "config redaction fired on nmap — it has become global, which is how a `-p 445` style "
+        "corruption of the audit trail starts"
+    )
+    assert secretargs.secret_config_names_for("nmap") == frozenset()
+    print("  -config api.key is masked, api.disablekey survives, control holds: PASS")
+
+
 def test_unknown_tools_pass_through_verbatim() -> None:
     """An unrecognised tool's argv is stored exactly as before — empty is the safe default."""
     argv = ["--weird", "value", "user:notapassword@host", "-p", "x"]
@@ -134,6 +171,7 @@ if __name__ == "__main__":
     test_impacket_positional_credential()
     test_a_password_containing_an_at_sign_is_fully_masked()
     test_nmap_ports_are_NOT_redacted()
+    test_a_config_assignment_masks_the_secret_and_keeps_the_evidence()
     test_unknown_tools_pass_through_verbatim()
     test_url_and_bare_user_at_host_are_not_mangled()
     test_executor_persists_redacted_args()

@@ -90,6 +90,90 @@ def test_both_heuristics_agree_the_shared_predicate_lock() -> None:
     print("  the command and script heuristics agree on both ZAP verdicts: PASS")
 
 
+def test_each_flag_states_its_own_reason_not_the_set_s(  # noqa: N802
+) -> None:
+    """*** BUILD #15. *** Three flags, three unrelated hazards, three different sentences.
+
+    The map used to be `tool -> frozenset(flags)` and the consumer appended ONE hardcoded
+    sentence for whatever matched, so starting the RECORDING PROXY told the operator it was
+    "sending live injection payloads" at a target `-daemon` never touches. A red-confirm whose
+    stated reason is false is worse than no reason: it is what teaches an operator that the
+    text is noise. This asserts the reason is ABOUT THE FLAG THAT FIRED.
+    """
+    def reason_for(args: list[str]) -> str:
+        return " ".join(allowlist.dangerous_command_heuristic(BIN, args)).lower()
+
+    attack = reason_for(ACTIVE_ARGS)
+    assert "injection payload" in attack, f"-quickurl lost its own reason: {attack!r}"
+
+    daemon = reason_for(["-daemon", "-host", "127.0.0.1"])
+    assert daemon, "-daemon stopped firing the red-confirm"
+    assert "cleartext" in daemon and "captures" in daemon, (
+        f"-daemon does not state what it actually does: {daemon!r}"
+    )
+    assert "injection payload" not in daemon, (
+        "-daemon claims it sends injection payloads. It starts a recording proxy and attacks "
+        f"nothing — this is the exact false-reason defect the per-flag map exists to fix: {daemon!r}"
+    )
+
+    spider = reason_for(["-ajaxspider", "http://target"])
+    assert spider, "-ajaxspider does not demand the red-confirm"
+    assert "browser" in spider and "click" in spider, (
+        f"-ajaxspider does not state the browser hazard: {spider!r}"
+    )
+    assert "injection payload" not in spider, (
+        f"-ajaxspider claims it sends injection payloads; it drives a browser: {spider!r}"
+    )
+
+    # and the three are genuinely DIFFERENT strings, not one sentence with the flag swapped in
+    bodies = {r.split(": ", 1)[-1] for r in (attack, daemon, spider)}
+    assert len(bodies) == 3, f"two flags share one reason body: {bodies}"
+    print("  each attack flag states its OWN reason (3 distinct): PASS")
+
+
+def test_the_script_heuristic_carries_the_per_flag_reason_too() -> None:
+    """The derivation half of the same defect — and the half that nearly slipped through.
+
+    `_SCRIPT_SHAPE_MARKERS` derives its ZAP entries from `_TOOL_ATTACK_FLAGS`. When that map
+    went from `frozenset` to `dict`, the loop KEPT WORKING WITHOUT AN EDIT (`sorted(a_dict)`
+    yields keys) while still stamping the old hardcoded sentence onto every flag. It would not
+    have failed loudly; it would have re-introduced the false reason on the WinRM path only.
+    """
+    daemon = " ".join(allowlist.dangerous_script_heuristic(f"{BIN} -daemon -host 127.0.0.1")).lower()
+    assert daemon, "the script heuristic stopped flagging -daemon"
+    assert "injection payload" not in daemon, (
+        "the SCRIPT heuristic still stamps the active-scan sentence onto -daemon while the "
+        f"command heuristic states the real one — the two have drifted on WHY: {daemon!r}"
+    )
+    assert "cleartext" in daemon, f"the script reason lost the recording hazard: {daemon!r}"
+    print("  the script heuristic derives the REASON, not just the flag: PASS")
+
+
+def test_every_attack_flag_is_declared_real_or_a_marker() -> None:
+    """A declared marker is not a real ZAP flag, and that must stay visible.
+
+    `-ajaxspider` is a token this codebase invented to describe an API-driven capability that
+    has no command line. That is legitimate — part 3 established that the gate classifies an
+    equivalent command — but a THIRD one arriving without anyone noticing there is now a pattern
+    is how a surface stops describing what runs. Every flag in the map must be classified.
+    """
+    for tool, flags in allowlist._TOOL_ATTACK_FLAGS.items():
+        for flag, reason in flags.items():
+            assert flag in allowlist._ATTACK_FLAG_IS_REAL, (
+                f"{tool} {flag} is in the attack map but is not declared real-flag-or-marker. "
+                "Add it to _ATTACK_FLAG_IS_REAL and say which it is."
+            )
+            assert reason.strip(), f"{tool} {flag} has an empty reason"
+
+    assert allowlist._ATTACK_FLAG_IS_REAL["-quickurl"] is True
+    assert allowlist._ATTACK_FLAG_IS_REAL["-daemon"] is True
+    assert allowlist._ATTACK_FLAG_IS_REAL["-ajaxspider"] is False, (
+        "-ajaxspider is a DECLARED MARKER for an API-driven crawl, not a ZAP command-line flag"
+    )
+    markers = [f for f, real in allowlist._ATTACK_FLAG_IS_REAL.items() if not real]
+    print(f"  every attack flag is declared real or marker ({len(markers)} marker(s)): PASS")
+
+
 def test_the_catalog_really_contains_both_invocations() -> None:
     """Draw from the real source of truth: if the catalog stops shipping these templates the
     tests above are asserting about nothing, and this fails instead of quietly passing."""
@@ -123,5 +207,8 @@ if __name__ == "__main__":
     test_the_verdict_survives_every_spelling_the_executor_may_see()
     test_a_wrapped_active_scan_still_fires()
     test_both_heuristics_agree_the_shared_predicate_lock()
+    test_each_flag_states_its_own_reason_not_the_set_s()
+    test_the_script_heuristic_carries_the_per_flag_reason_too()
+    test_every_attack_flag_is_declared_real_or_a_marker()
     test_the_catalog_really_contains_both_invocations()
     print("ALL ZAP gating locks pass")

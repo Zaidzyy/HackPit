@@ -696,6 +696,12 @@ def get_proxy_status() -> dict[str, Any]:
 def start_proxy(req: proxy_mod.ProxyStartRequest) -> proxy_mod.Proxy:
     """Start the ZAP recording proxy inside a sandbox.
 
+    BUILD #15 adds ``publish``: bind the daemon wide INSIDE its container so a host port
+    published through an exposure profile can reach it, which is what lets a real browser on this
+    machine use it. It is engagement-only (409 at gate ``publish`` in lab mode — that network is
+    ``internal: true``, so a published port has no route), and it publishes nothing on its own:
+    the host port is a separate, explicit step through ``POST /cockpit/exposure/profile``.
+
     HUMAN-ONLY AND GATED. ``executor.validate_request`` runs before anything spawns, so an
     unapproved or un-red-confirmed start leaves NOTHING running. The red-confirm is not
     ceremonial here: the proxy records full request and response bodies, so it sees credentials,
@@ -704,14 +710,18 @@ def start_proxy(req: proxy_mod.ProxyStartRequest) -> proxy_mod.Proxy:
     A SAFETY refusal (target / approval / danger / isolation) is **403** naming the gate; an
     AVAILABILITY problem (sandbox down, one already live) is **409**. Nothing runs on either.
 
-    The daemon binds 127.0.0.1 INSIDE the container and no port is published, so the API it
-    exposes is unreachable from the host — verified by docker/proof/zap_proxy_proof.sh. That is
-    what keeps this from being the ungated control channel build #14 part 1 refused.
+    UNLESS PUBLISHED, the daemon binds 127.0.0.1 INSIDE the container and no port exists, so its
+    API is unreachable from the host — verified for the LAB sandbox by
+    docker/proof/zap_proxy_proof.sh, which still runs and must still pass. When it IS published,
+    what replaces that argument is the API KEY: enforced on views and actions alike (measured
+    2026-08-04), random per start, and never handed to the gate. What becomes reachable is an
+    HTTP proxy, not scan control — docker/proof/browser_intercept_proof.sh asserts exactly that,
+    including the without-key refusal.
     """
     try:
         return proxy_mod.start_proxy(req)
     except proxy_mod.ProxyRefused as exc:
-        status_code = 409 if exc.gate in {"unavailable", "limit"} else 403
+        status_code = 409 if exc.gate in {"unavailable", "limit", "publish"} else 403
         raise HTTPException(status_code=status_code, detail={
             "gate": exc.gate,
             "reason": exc.reason,
@@ -811,6 +821,67 @@ def stop_scan(
     stop_proxy already take; it just matters more here.
     """
     return proxy_mod.stop_scan(container, port, scan_id)
+
+
+# --------------------------------------------------------------------------- #
+# the AJAX SPIDER (build #15 part 2) — a browser-driven crawl through the same ZAP
+#
+# Its red-confirm is earned for a DIFFERENT reason than the scanner's, and the routes say so
+# rather than reusing the scanner's words: this sends no injection payloads, it drives a real
+# browser that CLICKS things.
+# --------------------------------------------------------------------------- #
+@router.post("/proxy/spider", response_model=proxy_mod.Spider)
+def start_spider(req: proxy_mod.SpiderStartRequest) -> proxy_mod.Spider:
+    """Crawl a target with a REAL BROWSER, through the session ZAP already holds.
+
+    *** THIS CLICKS THINGS ON A LIVE SITE. *** No injection payloads are sent — that is the
+    scanner. What runs here is Chromium driving the application, and on the production
+    e-commerce sites that are in scope for a bug bounty, clicking everything reachable can
+    submit a form, empty a basket, trigger an email or place an order. HUMAN-ONLY AND GATED:
+    ``executor.validate_request`` runs against ``zaproxy -ajaxspider <target> -maxdepth N
+    -maxduration M`` — bounds included, because a crawler that picks its own depth means the
+    command the human approved has stopped describing what runs.
+
+    The value of doing it HERE rather than from a fresh headless browser is the session: the
+    operator logs in by hand through the published proxy, and the crawl inherits those cookies.
+
+    A SAFETY refusal is **403** naming the gate. An AVAILABILITY problem is **409** — sandbox
+    down, or a crawl already running. A wrong browser id is **409** at gate ``browser``: ZAP's
+    ``setOptionBrowserId`` answers ``{"Result":"OK"}`` for values it cannot use, so the value is
+    read back and a mismatch is refused rather than discovered later in a driver stack trace.
+    """
+    try:
+        return proxy_mod.start_spider(req)
+    except proxy_mod.ProxyRefused as exc:
+        status_code = 409 if exc.gate in {"unavailable", "limit", "notfound", "browser"} else 403
+        raise HTTPException(status_code=status_code, detail={
+            "gate": exc.gate,
+            "reason": exc.reason,
+            "dangerous_flags": exc.dangerous_flags,
+        })
+
+
+@router.get("/proxy/spider", response_model=proxy_mod.Spider)
+def spider_status(
+    container: str = Query(..., description="Sandbox container the proxy runs in."),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+) -> proxy_mod.Spider:
+    """What the crawl is doing right now. Read-only, ungated — a panel polls.
+
+    ``browser_id`` is READ BACK from ZAP rather than echoed from what we set, because
+    ``setOptionBrowserId`` does not validate its input. Reporting the value we sent would be
+    reporting a wish; an OK is not a result.
+    """
+    return proxy_mod.observed_spider(container, port)
+
+
+@router.delete("/proxy/spider", response_model=proxy_mod.Spider)
+def stop_spider(
+    container: str = Query(...),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+) -> proxy_mod.Spider:
+    """Stop an in-flight crawl. NOT GATED — the same panic button, for a browser this time."""
+    return proxy_mod.stop_spider(container, port)
 
 
 @router.get("/proxy/alerts", response_model=list[proxy_mod.ScanAlert])

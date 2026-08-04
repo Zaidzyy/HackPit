@@ -68,6 +68,33 @@ _IMPACKET_NAMES = frozenset({
     "ticketer", "raisechild", "rbcd", "describeticket", "owneredit", "dacledit",
 })
 
+# Config-assignment secrets: `-config api.key=<secret>` (build #15).
+#
+# NOT A SECOND COPY OF _SECRET_FLAGS, AND THE DIFFERENCE IS THE POINT. That map answers "whose
+# NEXT TOKEN is a credential" — a question about a flag. This one answers "which SETTING NAME
+# has a secret VALUE" — a question about the token itself. `-config` is the wrong discriminator
+# for ZAP because the very same flag carries the thing an auditor most needs to keep:
+#
+#     zaproxy -daemon -config api.disablekey=false -config api.key=9f3c…
+#                             ^ MUST survive: it is the evidence the lock was ON
+#                                                     ^ MUST NOT survive
+#
+# A rule keyed on `-config` would redact both and destroy the record of whether the API was
+# protected — the same failure as redacting `nmap -p 445` into `nmap -p <redacted>`, which is
+# why that map is per-tool rather than per-flag in the first place.
+#
+# WHY THE SECRET IS ON A COMMAND LINE AT ALL. ZAP reads `api.key` from `-config` or from its
+# persisted `$HOME/.ZAP/config.xml`, and nothing else — there is no stdin or env path, so the
+# build #13 part 3 trick (ride the secret in on stdin into a 0700 file) is not available. What
+# remains is `/proc/<pid>/cmdline` inside a single-tenant container we own, which is the
+# RESIDUAL, written down rather than hidden: anyone who can already exec into that sandbox can
+# read the key. What this closes is the durable path — the run record, the rendered report and
+# the LLM proposer context, which is where a secret actually escapes the machine.
+_SECRET_CONFIG_NAMES: dict[str, frozenset[str]] = {
+    "zaproxy": frozenset({"api.key"}),
+    "owasp-zap": frozenset({"api.key"}),
+}
+
 # The impacket/`evil-winrm`-style positional: `DOMAIN/user:password@host` (domain optional).
 # Anchored and deliberately narrow — a URL (`http://…`) has no `:` before an `@`, and a bare
 # `user@host` has no password to mask, so neither matches.
@@ -91,6 +118,15 @@ def _normalize(command: str) -> str:
     return name
 
 
+def secret_config_names_for(command: str) -> frozenset[str]:
+    """The `name=value` settings whose VALUE is a credential FOR THIS TOOL — empty if unknown.
+
+    Same empty-by-default posture as :func:`secret_flags_for`: an unknown tool's argv is stored
+    verbatim, exactly as before.
+    """
+    return _SECRET_CONFIG_NAMES.get(_normalize(command), frozenset())
+
+
 def secret_flags_for(command: str) -> frozenset[str]:
     """The flags that carry a credential FOR THIS TOOL — empty for anything unknown.
 
@@ -109,11 +145,19 @@ def secret_flags_for(command: str) -> frozenset[str]:
 def redact_argv(command: str, args: list[str]) -> list[str]:
     """``args`` with credential values replaced by ``<redacted>``. Never raises.
 
-    Three shapes are covered: ``-p secret`` (value in the next token), ``--password=secret``
-    (value after ``=``), and the impacket positional ``DOMAIN/user:secret@host`` (only the
-    password span is masked, so the record still shows WHO ran against WHAT).
+    Four shapes are covered: ``-p secret`` (value in the next token), ``--password=secret``
+    (value after ``=``), ``-config api.key=secret`` (a SETTING whose value is a secret, where
+    the flag itself carries non-secrets too — build #15), and the impacket positional
+    ``DOMAIN/user:secret@host`` (only the password span is masked, so the record still shows
+    WHO ran against WHAT).
+
+    The ``name=value`` branch takes its names from BOTH maps because the rewrite is identical
+    once a name has matched; what differs is the QUESTION each map answers, and that stays where
+    the maps are defined. Splitting the branch as well would be two code paths doing one thing.
     """
     flags = secret_flags_for(command)
+    configs = secret_config_names_for(command)
+    assignable = flags | configs
     out: list[str] = []
     expect_secret = False
     for raw in args or []:
@@ -126,9 +170,9 @@ def redact_argv(command: str, args: list[str]) -> list[str]:
             out.append(token)
             expect_secret = True
             continue
-        if flags and "=" in token:
+        if assignable and "=" in token:
             head = token.split("=", 1)[0]
-            if head in flags:
+            if head in assignable:
                 out.append(f"{head}={REDACTED}")
                 continue
         match = _CRED_POSITIONAL.match(token)
@@ -139,4 +183,4 @@ def redact_argv(command: str, args: list[str]) -> list[str]:
     return out
 
 
-__all__ = ["REDACTED", "redact_argv", "secret_flags_for"]
+__all__ = ["REDACTED", "redact_argv", "secret_config_names_for", "secret_flags_for"]

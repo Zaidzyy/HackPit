@@ -299,6 +299,20 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#verification_4">Verification</a></li>
 </ul>
 </li>
+<li><a href="#build-15-browser-interception-2026-08-04">Build #15 — browser interception (2026-08-04)</a><ul>
+<li><a href="#the-measurement-that-unblocked-it-was-a-correction-not-a-discovery">The measurement that unblocked it was a correction, not a discovery</a></li>
+<li><a href="#part-1-the-port-is-published-through-exposurepy-not-hardcoded">Part 1 — the port is published through exposure.py, not hardcoded</a></li>
+<li><a href="#what-the-design-spec-did-not-state-and-the-implementation-had-to-answer">What the design spec did not state, and the implementation had to answer</a></li>
+<li><a href="#the-key-is-closed-twice-and-one-of-the-two-cannot-regress">The key is closed twice, and one of the two cannot regress</a></li>
+<li><a href="#part-2-the-ajax-spider-and-the-red-confirm-that-could-not-fire">Part 2 — the AJAX spider, and the red-confirm that could not fire</a></li>
+<li><a href="#why-zaps-spider-and-not-our-own-headless-browser">Why ZAP's spider and not our own headless browser</a></li>
+<li><a href="#an-ok-is-not-a-result">An OK is not a result</a></li>
+<li><a href="#the-isolation-argument-was-rebuilt-not-relaxed">The isolation argument was rebuilt, not relaxed</a></li>
+<li><a href="#two-defects-the-proof-found-that-nothing-else-could-and-the-second-was-hidden-by-the-first">Two defects the proof found that nothing else could — and the second was hidden by the first</a></li>
+<li><a href="#two-more-defects-this-time-in-the-proof-itself-and-one-is-a-lesson-arriving-backwards">Two more defects, this time in the proof itself — and one is a lesson arriving backwards</a></li>
+<li><a href="#verification_5">Verification</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -2165,6 +2179,9 @@ the ingester and belongs in its own session.</p>
 <p>The measurement that justifies the feature: <strong>one captured endpoint, 376 real attack requests, one live High SQL injection</strong> — on a route <code>-quickurl</code>'s spider had no reliable path to.</p>
 <h3 id="the-finding-that-came-first-and-still-blocks-the-other-half">The finding that came first, and still blocks the other half</h3>
 <p>Before designing anything, <code>-config api.key=SECRETKEY123</code> was tested against the running daemon. It <strong>enforces nothing</strong>: <code>spider/action/scan</code> and <code>ascan/action/scan</code> both launched with no key at all. ZAP's proxy and its API share one listener, so publishing that port for <strong>browser interception</strong> would also publish an unauthenticated scan trigger to the host — and HackPit has no route auth. Browser interception therefore stays blocked, now for a measured reason rather than a suspected one. Scanner-over-API is unaffected: nothing is published, and the transport stays <code>docker exec</code>.</p>
+<blockquote>
+<p><strong>⚠ THIS FINDING WAS WRONG, AND IT IS LEFT HERE UNEDITED ON PURPOSE.</strong> Re-measured on 2026-08-04 with the flag stated explicitly, <code>api.key</code> <strong>does</strong> enforce — on views <em>and</em> on actions. The original test inherited <code>api.disablekey=true</code> from <code>$HOME/.ZAP/config.xml</code>, which <strong>HackPit itself had written</strong> on an earlier proxy start. It is left in place because a corrected record that hides the mistake also hides the lesson, which generalises: <em>a daemon that persists its configuration makes every measurement conditional on what a previous run wrote.</em> See <strong>build #15</strong> below, which this unblocked.</p>
+</blockquote>
 <h3 id="the-gate-an-honest-surface-not-a-new-one">The gate: an honest surface, not a new one</h3>
 <p>A scan start builds <code>zaproxy -quickurl &lt;target&gt;</code> and runs it through the <strong>real</strong> <code>executor.validate_request</code> before ZAP is contacted. No new gate exists. <code>-quickurl</code> is already defined in the attack-flag table as <em>spider then active scan</em>, and an API scan is that attack minus the spider — so the declared command describes strictly <strong>more</strong> aggression than what runs, which is the safe direction. Putting the full target URL in the surface is what matters: measured against the real validator, an unapproved scan is refused at <code>approval</code>, one without the red-confirm at <code>danger</code>, and <code>http://example.com/x</code> at <code>target</code> — the existing scope extractor reads the host out of a URL carrying a port and a query string.</p>
 <h3 id="part-2s-central-lock-could-not-be-restated-so-it-was-replaced">Part 2's central lock could not be restated, so it was replaced</h3>
@@ -2308,5 +2325,281 @@ end-to-end report-redaction observation (refused, correctly, because it meant du
 domain credentials — the property is verified by its existing test instead). Exactly <strong>one</strong>
 packet-generating command touched a program asset all night: a single <code>dig</code>, which returned
 <code>crateandbarrel.edgekey.net</code>. Nothing was submitted anywhere.</p>
+<hr />
+<h2 id="build-15-browser-interception-2026-08-04">Build #15 — browser interception (2026-08-04)</h2>
+<p>Against WAF/bot-managed targets HackPit did not reach rate limiting. <strong>It did not reach request
+one.</strong> A passive sweep of a live Bugcrowd program — one <code>HEAD</code> per host, in scope — returned
+nothing at all from every host:</p>
+<table>
+<thead>
+<tr>
+<th>protocol</th>
+<th>result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HTTP/2</td>
+<td>instant stream reset, <code>INTERNAL_ERROR</code></td>
+</tr>
+<tr>
+<td>HTTP/1.1</td>
+<td>total timeout, 0 bytes in 15s</td>
+</tr>
+</tbody>
+</table>
+<p>Two <em>different</em> failure modes on two protocols is an edge actively refusing the client, not a
+protocol quirk. Nine of the eleven assets sit behind Akamai Bot Manager. Egress was fine —
+HackPit reached Akamai and Akamai said no. So the audit's "can it run a full bug bounty?" answer
+of <em>"partly — breaks at volume"</em> was generous: volume is a problem you would like to have.</p>
+<p>A real browser is what passes: correct TLS fingerprint, real headers, JS execution, a real
+profile. <strong>That is the whole of this build</strong>, and the boundary is stated because it is the
+interesting part: nothing here imitates a browser or evades a control. It uses one.</p>
+<h3 id="the-measurement-that-unblocked-it-was-a-correction-not-a-discovery">The measurement that unblocked it was a correction, not a discovery</h3>
+<p>Part 3 recorded, as MEASURED, that ZAP's <code>api.key</code> <em>"enforces nothing"</em> — and that finding
+blocked browser interception for a day. It is wrong. Re-measured against the same ZAP 2.17.0
+with the flag stated explicitly:</p>
+<table>
+<thead>
+<tr>
+<th>check</th>
+<th>result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>core/view/version</code> <strong>without</strong> key</td>
+<td>refused</td>
+</tr>
+<tr>
+<td>same <strong>with</strong> key</td>
+<td><code>{"version":"2.17.0"}</code></td>
+</tr>
+<tr>
+<td><strong><code>ascan/action/stop</code> without key</strong></td>
+<td><strong>refused</strong></td>
+</tr>
+<tr>
+<td>wrong key</td>
+<td>refused</td>
+</tr>
+<tr>
+<td><strong>the PROXY meanwhile</strong></td>
+<td><code>HTTP 200</code> — serves normally</td>
+</tr>
+</tbody>
+</table>
+<p><code>cockpit/proxy.py::server_argv_for</code> had been passing <code>-config api.disablekey=true</code> on <em>every</em>
+proxy start, and ZAP <strong>persists <code>-config</code> values into <code>$HOME/.ZAP/config.xml</code></strong>. The original
+test set a key with no explicit <code>disablekey</code>, inherited <code>true</code> from a previous HackPit run, and
+concluded the tool was broken. <strong>HackPit was disabling its own lock and we blamed ZAP.</strong></p>
+<p>Generalised, beside "the container is not the image": <strong>a daemon that persists its configuration
+makes every measurement conditional on what a previous run wrote.</strong> State the flag explicitly, or
+you are measuring history. Both the wrong finding and its correction are kept in this document,
+because a corrected record that hides the mistake hides the lesson too.</p>
+<h3 id="part-1-the-port-is-published-through-exposurepy-not-hardcoded">Part 1 — the port is published through <code>exposure.py</code>, not hardcoded</h3>
+<p>The single most important decision in part 1, and it replaced an earlier draft that baked
+<code>127.0.0.1:8090:8090</code> into <code>docker-compose.yml</code>. HackPit already has a designed, tested answer
+for "publish a port on the engage sandbox", built across builds #10 and #13, and this uses it:
+the ZAP port is <code>extra=[(8090, "tcp")]</code> on a <code>ListenerProfile</code>. <strong>No new model, no new field, no
+new file format, no second publish path</strong> — the generated override is gitignored (it can name a
+client's internal address and this repo is public), and a wildcard bind is a red-confirm whose
+acknowledgement is written into the file as a machine-readable marker that
+<code>test_exposure_safety.py</code> statically enforces.</p>
+<p>That is <em>freer</em> than hardcoding loopback, which is the point. The operator can bind anything,
+including every interface for a phone or a second machine, with one confirm — recorded against
+the engagement so a report can state honestly that the proxy was open on all interfaces during
+that window. A hardcoded <code>127.0.0.1</code> would have been a constant to edit compose to escape; this
+is a switch they hold. Two presets ship: <code>zap-proxy</code> (loopback) and <code>zap-proxy-lan</code> (<code>0.0.0.0</code>).
+<strong>Neither pre-acknowledges its own confirm</strong> — a preset that did would mean picking a dropdown
+entry silently satisfies the gate, which is gate-audit finding I2's exact shape.</p>
+<h3 id="what-the-design-spec-did-not-state-and-the-implementation-had-to-answer">What the design spec did not state, and the implementation had to answer</h3>
+<p><strong>A container process bound to loopback cannot be reached through a published port at all.</strong>
+<code>docker -p</code> forwards to the container's bridge interface, where nothing would be listening. A
+published proxy that stayed loopback-bound would have been the worst of both worlds: a port open
+on the host and a feature that silently did not work. So <code>-host</code> became conditional
+(<code>bind_host_for</code>), and a published daemon also needs <code>api.addrs</code> widened — a request arriving
+through a published port reaches ZAP from the bridge gateway, not from <code>127.0.0.1</code>, and ZAP's
+default address filter would refuse it while looking exactly like a broken feature.</p>
+<p>Both are real widenings. What pays for them is the key: what becomes reachable is an <strong>HTTP
+proxy</strong>, which is the entire point, while scan control still refuses everyone who cannot present
+a secret only the backend holds. Publishing is <strong>engagement-only</strong>, refused before the executor
+gates — the lab network is <code>internal: true</code>, so a published port there has no route, and binding
+wide would expose the API <em>inside the isolated network</em> while still being unreachable from here.</p>
+<h3 id="the-key-is-closed-twice-and-one-of-the-two-cannot-regress">The key is closed twice, and one of the two cannot regress</h3>
+<p><code>-config api.key=&lt;secret&gt;</code> puts a credential in the spawned argv, and this codebase records argv
+into run records that feed the state store, the LLM prompt and rendered reports. Two layers:</p>
+<ol>
+<li><strong>The gate is never given the key.</strong> <code>_gate_request</code> passes a placeholder. An <code>ExecRequest</code> is
+   the thing that gets recorded, reported and put in front of the model — redacting a secret
+   after handing it over depends on the redactor being right forever; never handing it over
+   cannot regress.</li>
+<li><strong><code>secretargs</code> masks it anyway</strong>, and this needed a new <em>shape</em>: <code>-config</code> is the wrong
+   discriminator, because the same flag carries <code>api.disablekey=false</code> — the single most
+   audit-relevant token in the argv, and <strong>the evidence the lock was on</strong>. A rule keyed on the
+   flag would redact both, which is <code>nmap -p 445</code> becoming <code>nmap -p &lt;redacted&gt;</code> one level down.
+   So the map keys on the <em>setting name</em>, and a control proves an unregistered tool keeps its
+   value.</li>
+</ol>
+<p>The residual is written down rather than hidden: <code>/proc/&lt;pid&gt;/cmdline</code> inside a single-tenant
+container we own. ZAP reads <code>api.key</code> from <code>-config</code> or its persisted config and nothing else —
+there is no stdin path, so build #13's "ride the secret in on stdin" is unavailable here.</p>
+<h3 id="part-2-the-ajax-spider-and-the-red-confirm-that-could-not-fire">Part 2 — the AJAX spider, and the red-confirm that could not fire</h3>
+<p>The spec said the crawl's equivalent surface is <code>zaproxy -zapit &lt;target&gt;</code> and that it must
+require <code>dangerous_ack</code>. <strong>Those two cannot both be true.</strong> <code>-zapit</code> is deliberately absent from
+<code>_TOOL_ATTACK_FLAGS</code>, and <code>test_zap_safety.py</code> explicitly locks that a <code>-zapit</code> recon run must
+<em>not</em> demand a red-confirm. As written, the spec's own test could never pass.</p>
+<p>Fixing it exposed a defect that was already shipping. The map was <code>tool -&gt; frozenset(flags)</code> and
+the consumer appended <strong>one hardcoded sentence</strong> for whatever matched:</p>
+<table>
+<thead>
+<tr>
+<th>flag</th>
+<th>reason the operator was shown</th>
+<th>true?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-quickurl</code></td>
+<td>"active web scan — sends live injection payloads…"</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>-daemon</code></td>
+<td>"active web scan — sends live injection payloads…"</td>
+<td><strong>no</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Starting the recording proxy told the operator it was sending injection payloads at a target it
+never touches.</strong> A red-confirm whose stated reason is false is worse than no reason: it is what
+teaches an operator that the text is noise and the checkbox is a formality.</p>
+<p>The fix was to change the one map to <code>tool -&gt; {flag: reason}</code> — <em>not</em> to add a second
+<code>_TOOL_BROWSER_FLAGS</code> beside it (Zaid, 2026-08-04). Two lists of the same kind of fact have to
+agree forever: that is build #5's "fix the predicate, never add a parallel one", and the same
+drift this very file removed once when <code>dangerous_script_heuristic</code> was made to DERIVE from this
+dict instead of restating it. <strong>That the reshape fixes an existing defect as a side effect is the
+tell that it is the right shape.</strong></p>
+<p><strong>The half that nearly slipped through:</strong> that derivation <em>kept working without an edit</em>, because
+<code>sorted(a_dict)</code> yields its keys. It would not have failed loudly — it would have gone on
+stamping the old false sentence onto every flag, re-introducing the defect on the WinRM path
+only. <code>.items()</code> makes the reason travel with the flag, and a test now asserts the two heuristics
+agree on WHY, not just on WHAT.</p>
+<p>So the crawl earns its confirm for a third, genuinely different reason: <strong>it drives a real
+browser that clicks things.</strong> On the production e-commerce sites in scope for a bug bounty,
+clicking everything reachable can submit a form, empty a basket, trigger an email or place an
+order — a different hazard from SQLi and arguably a more embarrassing one. <code>-ajaxspider</code> is a
+<strong>declared marker</strong>, not a real ZAP flag (the crawl is API-driven and has no command line), and
+<code>_ATTACK_FLAG_IS_REAL</code> records which tokens are which so a third marker cannot arrive unnoticed.
+<code>-zapit</code> is dropped from the surface entirely: once the marker carries the danger verdict and the
+URL carries the scope, including it would make the declared command claim two modes at once.</p>
+<p><strong>Depth and duration are in the approved surface</strong>, for the same reason <code>-autorun</code> was excluded
+from the catalog in part 1: a crawler that decides its own bounds is a command that has stopped
+describing what runs.</p>
+<h3 id="why-zaps-spider-and-not-our-own-headless-browser">Why ZAP's spider and not our own headless browser</h3>
+<p>The reason exists only because part 1 landed first. Manual browsing through the published proxy
+establishes an <strong>authenticated session inside ZAP</strong>, and the AJAX spider runs through that same
+ZAP — so it inherits those cookies and crawls the logged-in application. A separate headless
+Chromium would start cold and need scripted authentication per target, an auth-automation problem
+this build would then own forever. Log in once by hand, let the spider expand from there, let
+part 3's scanner attack what both produced.</p>
+<h3 id="an-ok-is-not-a-result">An OK is not a result</h3>
+<p><code>setOptionBrowserId</code> <strong>does not validate</strong>: it accepted <code>not-a-browser</code> and answered
+<code>{"Result":"OK"}</code>. The image ships Chromium and <strong>no Firefox</strong>, while ZAP's configured default is
+<code>firefox-headless</code> — so the failure surfaces at <em>crawl</em> time, in a driver stack trace inside
+ZAP's log, not at set time. <code>start_spider</code> therefore reads the value back and refuses a mismatch,
+<code>observed_spider</code> reports what ZAP holds rather than what we sent (asserted <strong>by AST</strong>, because a
+substring scan failed on the function's own docstring — build #8's lesson, firing on the first
+run), and the proof asserts a browser <em>process</em> appeared and the message count rose.</p>
+<h3 id="the-isolation-argument-was-rebuilt-not-relaxed">The isolation argument was rebuilt, not relaxed</h3>
+<p>Part 2's argument was <em>"no port is published, so the API is unreachable, so the only channel is
+<code>docker exec</code>."</em> <strong>Half of that is now deliberately false.</strong> The property being proven changes
+from <em>"nothing can reach the control channel"</em> to <em>"the control channel refuses everyone who
+does"</em> — and the second needs <strong>more</strong> assertions, not fewer. <code>zap_proxy_proof.sh</code>'s load-bearing
+lab check is untouched and still runs; <code>browser_intercept_proof.sh</code> adds the engage half:
+reachable, <strong>refuses without the key</strong> (view <em>and</em> action), <strong>answers with it</strong>, <strong>still serves
+as a proxy</strong>, the lab still publishes nothing, and a control proves the refusal is enforcement
+rather than a dead port.</p>
+<p><strong>Residual risk, accepted and written down:</strong> anything that can reach the bound address can <em>use</em>
+the proxy — it cannot scan, which needs the key. On loopback that is a privacy annoyance on a
+single-user machine. On a wildcard bind it is an open proxy with the engage sandbox's full egress
+behind it, which is why that case carries a confirm rather than being forbidden or being free.</p>
+<h3 id="two-defects-the-proof-found-that-nothing-else-could-and-the-second-was-hidden-by-the-first">Two defects the proof found that nothing else could — and the second was hidden by the first</h3>
+<p>The hermetic suite was green, <code>tsc</code> was clean, the image built, the API key enforced, the port
+published, and the AJAX spider answered <code>{"Result":"OK"}</code> and <strong>crawled nothing</strong>. Twice over,
+for two unrelated reasons that produce the identical symptom:</p>
+<p><strong>1. Chromium refuses to run as root without <code>--no-sandbox</code>.</strong> The engage sandbox runs
+<code>user: root</code> by design (build #3's privilege decision), so every browser Crawljax launched died
+at creation — the log simply stops after <code>Loaded ... DummyPlugin as a OnBrowserCreatedPlugin</code>,
+with no error on the ZAP side at all. ZAP's Selenium add-on exposes <strong>no API</strong> for adding Chrome
+arguments in this version (<code>addChromeArgument</code> answers <code>bad_action</code>), so the flag goes in through
+<code>/etc/chromium.d/</code> — Debian's own launcher extension point, which already ships a <code>dev-shm</code> file.</p>
+<p><code>--no-sandbox</code> turns off Chromium's internal process sandbox, and this browser visits
+target-controlled content, so it is written down rather than glossed: the boundary that holds
+here is the container, not Chromium's own, and as root the alternative is a browser that does not
+start at all. <code>--disable-dev-shm-usage</code> rides along for Docker's 64MB <code>/dev/shm</code>.</p>
+<p><strong>2. ZAP bundles its own chromedriver and prefers it.</strong> With the first defect fixed, the crawl
+failed differently: <code>This version of ChromeDriver only supports Chrome version 151</code>. The
+<code>webdriverlinux</code> add-on ships a driver for Chrome 151; Kali ships Chromium 150. So installing
+<code>chromium-driver</code> was <strong>necessary and not sufficient</strong>, and every daemon start now passes
+<code>-config selenium.chromeDriver=/usr/bin/chromedriver</code>.</p>
+<p><strong>The lesson is about the check, not the flags.</strong> The Dockerfile layer already followed part 1's
+discipline — it proved the driver was on PATH, proved it <em>ran</em>, and proved a browser existed. All
+three passed while the feature was completely broken, because <strong>proving a driver runs proves
+nothing about whether it can drive the browser that is there</strong>. The layer now compares the two
+major versions and fails the build on a mismatch. That is "an exit code is not a result" one
+level deeper than part 1 phrased it: a <em>successful</em> version string is not a result either.</p>
+<p>Both were then given their own proof checks, because they fail separately and because a future
+image whose packages drift apart would otherwise reappear as an unexplained empty crawl.</p>
+<p><strong>A third, smaller one, in the proof itself.</strong> The "a real browser process was observed" check
+passed <em>"after 0s"</em> on a run where the crawl found nothing — it had matched a leftover Chrome
+from the previous attempt. A check that reports success from another run's residue is worse than
+no check, so strays are now reaped before the crawl starts (and deliberately <em>before</em>, since
+doing it after would kill the very process the evidence depends on).</p>
+<h3 id="two-more-defects-this-time-in-the-proof-itself-and-one-is-a-lesson-arriving-backwards">Two more defects, this time in the proof itself — and one is a lesson arriving backwards</h3>
+<p><strong><code>pkill -f</code> matched too much, because a fix earlier in this build changed an unrelated argv.</strong>
+The proof reaps stray browsers before crawling, and did it with <code>pkill -f "[c]hrome"</code>. That killed
+<strong>the ZAP daemon</strong>: its command line now carries
+<code>-config selenium.chromeDriver=/usr/bin/chromedriver</code>, so it contains the string "chrome". Every
+API call after that point returned empty and three checks failed for reasons that had nothing to
+do with what they test.</p>
+<p>This is the <code>[z]aproxy</code> lesson arriving from the opposite direction. There, <code>-f</code> matched too
+LITTLE — the wrapper exec'd the JVM, so the spawned argv was not the running one. Here it matched
+too MUCH, and it began matching only because a fix elsewhere in the same build put a new word on
+a different process's command line. <strong>A <code>pkill -f</code> pattern is a claim about every argv on the box,
+and it stops being true silently when an unrelated argv changes.</strong> Now <code>pkill -x</code>, which matches
+the process NAME and cannot be broadened by somebody else's flags.</p>
+<p><strong>A check whose own plumbing decided the verdict.</strong> The "can chromium start as this user" check
+piped into <code>grep -c</code>, which prints <code>0</code> and <em>exits 1</em> when it finds nothing — so the <code>|| echo 1</code>
+fallback fired on the SUCCESS path, appended a second line, and the comparison could never match.
+It reported FAIL while the thing it tests was working perfectly. Read the output; do not infer it
+from an exit code. That is the same sentence as part 1's, applied to the harness rather than the
+tool.</p>
+<p>Neither is a product defect, and both are worth writing down: a proof that fails for its own
+reasons trains you to discount it, which is exactly the failure mode a proof exists to prevent.</p>
+<h3 id="verification_5">Verification</h3>
+<p>Suite <strong>71 files, 0 failures</strong>. <code>docker/proof/browser_intercept_proof.sh</code> <strong>22 passed, 0 failed</strong>,
+including the four that carry the safety argument — an unauthenticated <strong>view</strong> refused, an
+unauthenticated <strong>action</strong> refused, a <strong>wrong key</strong> refused, and the same call <strong>with</strong> the key
+answering <code>{"version":"2.17.0"}</code> as the control proving the refusals are enforcement rather than a
+dead port. A request made <strong>from the host</strong> through the published proxy was captured (0 → 2), the
+browser-driven crawl captured <strong>2 → 41 messages and found 29 URLs</strong>, and the real captured traffic
+parsed through the real parser into exchanges and endpoints. The <strong>lab</strong> sandbox still publishes
+nothing, and teardown left nothing listening on either side of the boundary.
+<code>docker/proof/zap_proxy_proof.sh</code> <strong>7 passed, 0 failed</strong> with its load-bearing check — <em>the ZAP API
+is UNREACHABLE from this host</em> — still passing for the lab sandbox, and <code>isolation_proof.sh</code>
+<strong>4 passed, 0 failed</strong>. The half of the argument that did not move did not move.</p>
+<p><code>tsc --noEmit</code> exits 0, <code>next build</code> exits 0, and eslint sits at the accepted baseline of 11 — the
+same count with the frontend changes stashed, so this build adds none. <code>:proxy</code> was <strong>looked at in
+a browser</strong>, not merely typechecked: the publish control is disabled until an engagement id is
+entered, and the crawl panel's red-confirm carries its own copy rather than the scanner's. All
+three spider routes are registered and all three are called by the client — no orphans.</p>
+<p><strong>Not verified, and not to be read as passing: the acceptance test.</strong> A real browser reaching an
+Akamai-fronted in-scope host that a bare client cannot is the point of the whole build, and it
+needs a human at a real browser with a real session. The runbook is
+<code>docs/proof/build15-acceptance-runbook.md</code>, including exactly what to capture (status, headers,
+timing, protocol) <strong>if a real browser is refused too</strong> — that result is the input to a separate
+decision, deliberately left open rather than foreclosed here.</p>
 </body>
 </html>

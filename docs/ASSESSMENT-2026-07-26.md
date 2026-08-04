@@ -1871,6 +1871,8 @@ The measurement that justifies the feature: **one captured endpoint, 376 real at
 
 Before designing anything, `-config api.key=SECRETKEY123` was tested against the running daemon. It **enforces nothing**: `spider/action/scan` and `ascan/action/scan` both launched with no key at all. ZAP's proxy and its API share one listener, so publishing that port for **browser interception** would also publish an unauthenticated scan trigger to the host — and HackPit has no route auth. Browser interception therefore stays blocked, now for a measured reason rather than a suspected one. Scanner-over-API is unaffected: nothing is published, and the transport stays `docker exec`.
 
+> **⚠ THIS FINDING WAS WRONG, AND IT IS LEFT HERE UNEDITED ON PURPOSE.** Re-measured on 2026-08-04 with the flag stated explicitly, `api.key` **does** enforce — on views *and* on actions. The original test inherited `api.disablekey=true` from `$HOME/.ZAP/config.xml`, which **HackPit itself had written** on an earlier proxy start. It is left in place because a corrected record that hides the mistake also hides the lesson, which generalises: *a daemon that persists its configuration makes every measurement conditional on what a previous run wrote.* See **build #15** below, which this unblocked.
+
 ### The gate: an honest surface, not a new one
 
 A scan start builds `zaproxy -quickurl <target>` and runs it through the **real** `executor.validate_request` before ZAP is contacted. No new gate exists. `-quickurl` is already defined in the attack-flag table as *spider then active scan*, and an API scan is that attack minus the spider — so the declared command describes strictly **more** aggression than what runs, which is the safe direction. Putting the full target URL in the surface is what matters: measured against the real validator, an unapproved scan is refused at `approval`, one without the red-confirm at `danger`, and `http://example.com/x` at `target` — the existing scope extractor reads the host out of a URL carrying a port and a query string.
@@ -2060,3 +2062,277 @@ end-to-end report-redaction observation (refused, correctly, because it meant du
 domain credentials — the property is verified by its existing test instead). Exactly **one**
 packet-generating command touched a program asset all night: a single `dig`, which returned
 `crateandbarrel.edgekey.net`. Nothing was submitted anywhere.
+
+---
+
+## Build #15 — browser interception (2026-08-04)
+
+Against WAF/bot-managed targets HackPit did not reach rate limiting. **It did not reach request
+one.** A passive sweep of a live Bugcrowd program — one `HEAD` per host, in scope — returned
+nothing at all from every host:
+
+| protocol | result |
+|---|---|
+| HTTP/2 | instant stream reset, `INTERNAL_ERROR` |
+| HTTP/1.1 | total timeout, 0 bytes in 15s |
+
+Two *different* failure modes on two protocols is an edge actively refusing the client, not a
+protocol quirk. Nine of the eleven assets sit behind Akamai Bot Manager. Egress was fine —
+HackPit reached Akamai and Akamai said no. So the audit's "can it run a full bug bounty?" answer
+of *"partly — breaks at volume"* was generous: volume is a problem you would like to have.
+
+A real browser is what passes: correct TLS fingerprint, real headers, JS execution, a real
+profile. **That is the whole of this build**, and the boundary is stated because it is the
+interesting part: nothing here imitates a browser or evades a control. It uses one.
+
+### The measurement that unblocked it was a correction, not a discovery
+
+Part 3 recorded, as MEASURED, that ZAP's `api.key` *"enforces nothing"* — and that finding
+blocked browser interception for a day. It is wrong. Re-measured against the same ZAP 2.17.0
+with the flag stated explicitly:
+
+| check | result |
+|---|---|
+| `core/view/version` **without** key | refused |
+| same **with** key | `{"version":"2.17.0"}` |
+| **`ascan/action/stop` without key** | **refused** |
+| wrong key | refused |
+| **the PROXY meanwhile** | `HTTP 200` — serves normally |
+
+`cockpit/proxy.py::server_argv_for` had been passing `-config api.disablekey=true` on *every*
+proxy start, and ZAP **persists `-config` values into `$HOME/.ZAP/config.xml`**. The original
+test set a key with no explicit `disablekey`, inherited `true` from a previous HackPit run, and
+concluded the tool was broken. **HackPit was disabling its own lock and we blamed ZAP.**
+
+Generalised, beside "the container is not the image": **a daemon that persists its configuration
+makes every measurement conditional on what a previous run wrote.** State the flag explicitly, or
+you are measuring history. Both the wrong finding and its correction are kept in this document,
+because a corrected record that hides the mistake hides the lesson too.
+
+### Part 1 — the port is published through `exposure.py`, not hardcoded
+
+The single most important decision in part 1, and it replaced an earlier draft that baked
+`127.0.0.1:8090:8090` into `docker-compose.yml`. HackPit already has a designed, tested answer
+for "publish a port on the engage sandbox", built across builds #10 and #13, and this uses it:
+the ZAP port is `extra=[(8090, "tcp")]` on a `ListenerProfile`. **No new model, no new field, no
+new file format, no second publish path** — the generated override is gitignored (it can name a
+client's internal address and this repo is public), and a wildcard bind is a red-confirm whose
+acknowledgement is written into the file as a machine-readable marker that
+`test_exposure_safety.py` statically enforces.
+
+That is *freer* than hardcoding loopback, which is the point. The operator can bind anything,
+including every interface for a phone or a second machine, with one confirm — recorded against
+the engagement so a report can state honestly that the proxy was open on all interfaces during
+that window. A hardcoded `127.0.0.1` would have been a constant to edit compose to escape; this
+is a switch they hold. Two presets ship: `zap-proxy` (loopback) and `zap-proxy-lan` (`0.0.0.0`).
+**Neither pre-acknowledges its own confirm** — a preset that did would mean picking a dropdown
+entry silently satisfies the gate, which is gate-audit finding I2's exact shape.
+
+### What the design spec did not state, and the implementation had to answer
+
+**A container process bound to loopback cannot be reached through a published port at all.**
+`docker -p` forwards to the container's bridge interface, where nothing would be listening. A
+published proxy that stayed loopback-bound would have been the worst of both worlds: a port open
+on the host and a feature that silently did not work. So `-host` became conditional
+(`bind_host_for`), and a published daemon also needs `api.addrs` widened — a request arriving
+through a published port reaches ZAP from the bridge gateway, not from `127.0.0.1`, and ZAP's
+default address filter would refuse it while looking exactly like a broken feature.
+
+Both are real widenings. What pays for them is the key: what becomes reachable is an **HTTP
+proxy**, which is the entire point, while scan control still refuses everyone who cannot present
+a secret only the backend holds. Publishing is **engagement-only**, refused before the executor
+gates — the lab network is `internal: true`, so a published port there has no route, and binding
+wide would expose the API *inside the isolated network* while still being unreachable from here.
+
+### The key is closed twice, and one of the two cannot regress
+
+`-config api.key=<secret>` puts a credential in the spawned argv, and this codebase records argv
+into run records that feed the state store, the LLM prompt and rendered reports. Two layers:
+
+1. **The gate is never given the key.** `_gate_request` passes a placeholder. An `ExecRequest` is
+   the thing that gets recorded, reported and put in front of the model — redacting a secret
+   after handing it over depends on the redactor being right forever; never handing it over
+   cannot regress.
+2. **`secretargs` masks it anyway**, and this needed a new *shape*: `-config` is the wrong
+   discriminator, because the same flag carries `api.disablekey=false` — the single most
+   audit-relevant token in the argv, and **the evidence the lock was on**. A rule keyed on the
+   flag would redact both, which is `nmap -p 445` becoming `nmap -p <redacted>` one level down.
+   So the map keys on the *setting name*, and a control proves an unregistered tool keeps its
+   value.
+
+The residual is written down rather than hidden: `/proc/<pid>/cmdline` inside a single-tenant
+container we own. ZAP reads `api.key` from `-config` or its persisted config and nothing else —
+there is no stdin path, so build #13's "ride the secret in on stdin" is unavailable here.
+
+### Part 2 — the AJAX spider, and the red-confirm that could not fire
+
+The spec said the crawl's equivalent surface is `zaproxy -zapit <target>` and that it must
+require `dangerous_ack`. **Those two cannot both be true.** `-zapit` is deliberately absent from
+`_TOOL_ATTACK_FLAGS`, and `test_zap_safety.py` explicitly locks that a `-zapit` recon run must
+*not* demand a red-confirm. As written, the spec's own test could never pass.
+
+Fixing it exposed a defect that was already shipping. The map was `tool -> frozenset(flags)` and
+the consumer appended **one hardcoded sentence** for whatever matched:
+
+| flag | reason the operator was shown | true? |
+|---|---|---|
+| `-quickurl` | "active web scan — sends live injection payloads…" | yes |
+| `-daemon` | "active web scan — sends live injection payloads…" | **no** |
+
+**Starting the recording proxy told the operator it was sending injection payloads at a target it
+never touches.** A red-confirm whose stated reason is false is worse than no reason: it is what
+teaches an operator that the text is noise and the checkbox is a formality.
+
+The fix was to change the one map to `tool -> {flag: reason}` — *not* to add a second
+`_TOOL_BROWSER_FLAGS` beside it (Zaid, 2026-08-04). Two lists of the same kind of fact have to
+agree forever: that is build #5's "fix the predicate, never add a parallel one", and the same
+drift this very file removed once when `dangerous_script_heuristic` was made to DERIVE from this
+dict instead of restating it. **That the reshape fixes an existing defect as a side effect is the
+tell that it is the right shape.**
+
+**The half that nearly slipped through:** that derivation *kept working without an edit*, because
+`sorted(a_dict)` yields its keys. It would not have failed loudly — it would have gone on
+stamping the old false sentence onto every flag, re-introducing the defect on the WinRM path
+only. `.items()` makes the reason travel with the flag, and a test now asserts the two heuristics
+agree on WHY, not just on WHAT.
+
+So the crawl earns its confirm for a third, genuinely different reason: **it drives a real
+browser that clicks things.** On the production e-commerce sites in scope for a bug bounty,
+clicking everything reachable can submit a form, empty a basket, trigger an email or place an
+order — a different hazard from SQLi and arguably a more embarrassing one. `-ajaxspider` is a
+**declared marker**, not a real ZAP flag (the crawl is API-driven and has no command line), and
+`_ATTACK_FLAG_IS_REAL` records which tokens are which so a third marker cannot arrive unnoticed.
+`-zapit` is dropped from the surface entirely: once the marker carries the danger verdict and the
+URL carries the scope, including it would make the declared command claim two modes at once.
+
+**Depth and duration are in the approved surface**, for the same reason `-autorun` was excluded
+from the catalog in part 1: a crawler that decides its own bounds is a command that has stopped
+describing what runs.
+
+### Why ZAP's spider and not our own headless browser
+
+The reason exists only because part 1 landed first. Manual browsing through the published proxy
+establishes an **authenticated session inside ZAP**, and the AJAX spider runs through that same
+ZAP — so it inherits those cookies and crawls the logged-in application. A separate headless
+Chromium would start cold and need scripted authentication per target, an auth-automation problem
+this build would then own forever. Log in once by hand, let the spider expand from there, let
+part 3's scanner attack what both produced.
+
+### An OK is not a result
+
+`setOptionBrowserId` **does not validate**: it accepted `not-a-browser` and answered
+`{"Result":"OK"}`. The image ships Chromium and **no Firefox**, while ZAP's configured default is
+`firefox-headless` — so the failure surfaces at *crawl* time, in a driver stack trace inside
+ZAP's log, not at set time. `start_spider` therefore reads the value back and refuses a mismatch,
+`observed_spider` reports what ZAP holds rather than what we sent (asserted **by AST**, because a
+substring scan failed on the function's own docstring — build #8's lesson, firing on the first
+run), and the proof asserts a browser *process* appeared and the message count rose.
+
+### The isolation argument was rebuilt, not relaxed
+
+Part 2's argument was *"no port is published, so the API is unreachable, so the only channel is
+`docker exec`."* **Half of that is now deliberately false.** The property being proven changes
+from *"nothing can reach the control channel"* to *"the control channel refuses everyone who
+does"* — and the second needs **more** assertions, not fewer. `zap_proxy_proof.sh`'s load-bearing
+lab check is untouched and still runs; `browser_intercept_proof.sh` adds the engage half:
+reachable, **refuses without the key** (view *and* action), **answers with it**, **still serves
+as a proxy**, the lab still publishes nothing, and a control proves the refusal is enforcement
+rather than a dead port.
+
+**Residual risk, accepted and written down:** anything that can reach the bound address can *use*
+the proxy — it cannot scan, which needs the key. On loopback that is a privacy annoyance on a
+single-user machine. On a wildcard bind it is an open proxy with the engage sandbox's full egress
+behind it, which is why that case carries a confirm rather than being forbidden or being free.
+
+### Two defects the proof found that nothing else could — and the second was hidden by the first
+
+The hermetic suite was green, `tsc` was clean, the image built, the API key enforced, the port
+published, and the AJAX spider answered `{"Result":"OK"}` and **crawled nothing**. Twice over,
+for two unrelated reasons that produce the identical symptom:
+
+**1. Chromium refuses to run as root without `--no-sandbox`.** The engage sandbox runs
+`user: root` by design (build #3's privilege decision), so every browser Crawljax launched died
+at creation — the log simply stops after `Loaded ... DummyPlugin as a OnBrowserCreatedPlugin`,
+with no error on the ZAP side at all. ZAP's Selenium add-on exposes **no API** for adding Chrome
+arguments in this version (`addChromeArgument` answers `bad_action`), so the flag goes in through
+`/etc/chromium.d/` — Debian's own launcher extension point, which already ships a `dev-shm` file.
+
+`--no-sandbox` turns off Chromium's internal process sandbox, and this browser visits
+target-controlled content, so it is written down rather than glossed: the boundary that holds
+here is the container, not Chromium's own, and as root the alternative is a browser that does not
+start at all. `--disable-dev-shm-usage` rides along for Docker's 64MB `/dev/shm`.
+
+**2. ZAP bundles its own chromedriver and prefers it.** With the first defect fixed, the crawl
+failed differently: `This version of ChromeDriver only supports Chrome version 151`. The
+`webdriverlinux` add-on ships a driver for Chrome 151; Kali ships Chromium 150. So installing
+`chromium-driver` was **necessary and not sufficient**, and every daemon start now passes
+`-config selenium.chromeDriver=/usr/bin/chromedriver`.
+
+**The lesson is about the check, not the flags.** The Dockerfile layer already followed part 1's
+discipline — it proved the driver was on PATH, proved it *ran*, and proved a browser existed. All
+three passed while the feature was completely broken, because **proving a driver runs proves
+nothing about whether it can drive the browser that is there**. The layer now compares the two
+major versions and fails the build on a mismatch. That is "an exit code is not a result" one
+level deeper than part 1 phrased it: a *successful* version string is not a result either.
+
+Both were then given their own proof checks, because they fail separately and because a future
+image whose packages drift apart would otherwise reappear as an unexplained empty crawl.
+
+**A third, smaller one, in the proof itself.** The "a real browser process was observed" check
+passed *"after 0s"* on a run where the crawl found nothing — it had matched a leftover Chrome
+from the previous attempt. A check that reports success from another run's residue is worse than
+no check, so strays are now reaped before the crawl starts (and deliberately *before*, since
+doing it after would kill the very process the evidence depends on).
+
+### Two more defects, this time in the proof itself — and one is a lesson arriving backwards
+
+**`pkill -f` matched too much, because a fix earlier in this build changed an unrelated argv.**
+The proof reaps stray browsers before crawling, and did it with `pkill -f "[c]hrome"`. That killed
+**the ZAP daemon**: its command line now carries
+`-config selenium.chromeDriver=/usr/bin/chromedriver`, so it contains the string "chrome". Every
+API call after that point returned empty and three checks failed for reasons that had nothing to
+do with what they test.
+
+This is the `[z]aproxy` lesson arriving from the opposite direction. There, `-f` matched too
+LITTLE — the wrapper exec'd the JVM, so the spawned argv was not the running one. Here it matched
+too MUCH, and it began matching only because a fix elsewhere in the same build put a new word on
+a different process's command line. **A `pkill -f` pattern is a claim about every argv on the box,
+and it stops being true silently when an unrelated argv changes.** Now `pkill -x`, which matches
+the process NAME and cannot be broadened by somebody else's flags.
+
+**A check whose own plumbing decided the verdict.** The "can chromium start as this user" check
+piped into `grep -c`, which prints `0` and *exits 1* when it finds nothing — so the `|| echo 1`
+fallback fired on the SUCCESS path, appended a second line, and the comparison could never match.
+It reported FAIL while the thing it tests was working perfectly. Read the output; do not infer it
+from an exit code. That is the same sentence as part 1's, applied to the harness rather than the
+tool.
+
+Neither is a product defect, and both are worth writing down: a proof that fails for its own
+reasons trains you to discount it, which is exactly the failure mode a proof exists to prevent.
+
+### Verification
+
+Suite **71 files, 0 failures**. `docker/proof/browser_intercept_proof.sh` **22 passed, 0 failed**,
+including the four that carry the safety argument — an unauthenticated **view** refused, an
+unauthenticated **action** refused, a **wrong key** refused, and the same call **with** the key
+answering `{"version":"2.17.0"}` as the control proving the refusals are enforcement rather than a
+dead port. A request made **from the host** through the published proxy was captured (0 → 2), the
+browser-driven crawl captured **2 → 41 messages and found 29 URLs**, and the real captured traffic
+parsed through the real parser into exchanges and endpoints. The **lab** sandbox still publishes
+nothing, and teardown left nothing listening on either side of the boundary.
+`docker/proof/zap_proxy_proof.sh` **7 passed, 0 failed** with its load-bearing check — *the ZAP API
+is UNREACHABLE from this host* — still passing for the lab sandbox, and `isolation_proof.sh`
+**4 passed, 0 failed**. The half of the argument that did not move did not move.
+
+`tsc --noEmit` exits 0, `next build` exits 0, and eslint sits at the accepted baseline of 11 — the
+same count with the frontend changes stashed, so this build adds none. `:proxy` was **looked at in
+a browser**, not merely typechecked: the publish control is disabled until an engagement id is
+entered, and the crawl panel's red-confirm carries its own copy rather than the scanner's. All
+three spider routes are registered and all three are called by the client — no orphans.
+
+**Not verified, and not to be read as passing: the acceptance test.** A real browser reaching an
+Akamai-fronted in-scope host that a bare client cannot is the point of the whole build, and it
+needs a human at a real browser with a real session. The runbook is
+`docs/proof/build15-acceptance-runbook.md`, including exactly what to capture (status, headers,
+timing, protocol) **if a real browser is refused too** — that result is the input to a separate
+decision, deliberately left open rather than foreclosed here.

@@ -5,12 +5,18 @@ import { PageShell } from "./PageShell";
 import { CopyButton } from "./CopyButton";
 import {
   ApiError,
+  clearAuthContexts,
+  deleteBypassHeader,
+  getAuthContext,
   getProxyStatus,
   ingestScanAlerts,
   listProxies,
+  listScanPolicies,
   listScans,
   proxyHistory,
   scanAlerts,
+  setAuthContext,
+  setBypassHeader,
   spiderStatus,
   startProxy,
   startScan,
@@ -18,11 +24,15 @@ import {
   stopProxy,
   stopScan,
   stopSpider,
+  syncBypassHeaders,
+  type AuthContext,
   type CapturedExchange,
+  type HistoryPage,
   type Proxy,
   type ProxyStatus,
   type Scan,
   type ScanAlert,
+  type ScanPolicy,
   type Spider,
 } from "@/lib/api";
 
@@ -55,7 +65,12 @@ import {
 export function ProxyScreen() {
   const [status, setStatus] = useState<ProxyStatus | null>(null);
   const [proxies, setProxies] = useState<Proxy[]>([]);
-  const [history, setHistory] = useState<CapturedExchange[]>([]);
+  // THE WHOLE PAGE, not just the rows. A message the backend's parser could not read used to
+  // vanish from the array with nothing saying it existed, so 200 exchanges of which 50 were
+  // unparseable arrived as 150 and read as less traffic. `dropped` and `read_ok` are why this
+  // holds an object.
+  const [historyPage, setHistoryPage] = useState<HistoryPage | null>(null);
+  const history: CapturedExchange[] = historyPage?.exchanges ?? [];
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
 
@@ -86,6 +101,28 @@ export function ProxyScreen() {
   const [scanning, setScanning] = useState(false);
   const [sessionId, setSessionId] = useState("");
   const [ingested, setIngested] = useState<string | null>(null);
+  const [scanPolicy, setScanPolicy] = useState("targeted-web");
+  const [policies, setPolicies] = useState<ScanPolicy[]>([]);
+
+  // the WAF-bypass header (build #18 item 1). THE VALUE IS WRITE-ONLY: it is typed here, POSTed
+  // once, and cleared from this component's state immediately. No route returns it, so there is
+  // nothing to read back — what comes back is the NAME and what ZAP holds.
+  const [headerName, setHeaderName] = useState("");
+  const [headerValue, setHeaderValue] = useState("");
+  const [headerNames, setHeaderNames] = useState<string[]>([]);
+  const [headerBusy, setHeaderBusy] = useState(false);
+  const [headerNote, setHeaderNote] = useState<string | null>(null);
+
+  // the authenticated context (build #18 items 6 and 7)
+  const [ctxTarget, setCtxTarget] = useState("");
+  const [loggedIn, setLoggedIn] = useState("");
+  const [loggedOut, setLoggedOut] = useState("");
+  const [loginUrl, setLoginUrl] = useState("");
+  const [loginBody, setLoginBody] = useState("");
+  const [credSession, setCredSession] = useState("");
+  const [credPrincipal, setCredPrincipal] = useState("");
+  const [authCtx, setAuthCtx] = useState<AuthContext | null>(null);
+  const [ctxBusy, setCtxBusy] = useState(false);
 
   const refresh = useCallback(() => {
     getProxyStatus()
@@ -105,13 +142,123 @@ export function ProxyScreen() {
   const loadHistory = useCallback(() => {
     if (!live) return;
     proxyHistory(live.container, live.port)
-      .then(setHistory)
-      .catch(() => setHistory([]));
+      .then(setHistoryPage)
+      // `null`, NOT an empty page. A failed fetch and a daemon that captured nothing are
+      // different facts, and the panel below says which — the whole reason this route stopped
+      // answering with a bare list.
+      .catch(() => setHistoryPage(null));
   }, [live]);
 
   useEffect(() => {
     loadHistory();
   }, [loadHistory]);
+
+  useEffect(() => {
+    listScanPolicies()
+      .then(setPolicies)
+      .catch(() => setPolicies([]));
+  }, []);
+
+  const saveBypassHeader = useCallback(async () => {
+    const engagement = live?.engagement_id ?? engagementId.trim();
+    if (!engagement || !headerName.trim() || !headerValue.trim() || headerBusy) return;
+    setHeaderBusy(true);
+    setHeaderNote(null);
+    try {
+      const stored = await setBypassHeader({
+        engagement_id: engagement,
+        name: headerName.trim(),
+        value: headerValue,
+      });
+      // CLEARED THE MOMENT IT IS SENT. Leaving it in a React state field would keep a credential
+      // in the tab's memory for the rest of the session for no benefit — nothing reads it back.
+      setHeaderValue("");
+      setHeaderName("");
+      setHeaderNames(stored.bypass_header_names);
+      if (live) {
+        const held = await syncBypassHeaders(live.container, live.port, engagement);
+        setHeaderNames(held.installed);
+        setHeaderNote(
+          held.installed.length
+            ? `ZAP holds: ${held.installed.join(", ")} (read back from its replacer rules)`
+            : "stored, but ZAP reports holding NO rule — the install did not take"
+        );
+      } else {
+        setHeaderNote("stored. It installs when you start a proxy under this engagement.");
+      }
+    } catch (e) {
+      // ApiError already carries the gate + reason in its message (see errorMessage in api.ts).
+      setHeaderNote(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setHeaderBusy(false);
+    }
+  }, [live, engagementId, headerName, headerValue, headerBusy]);
+
+  const dropBypassHeader = useCallback(
+    async (name: string) => {
+      const engagement = live?.engagement_id ?? engagementId.trim();
+      if (!engagement) return;
+      setHeaderBusy(true);
+      try {
+        const left = await deleteBypassHeader(engagement, name);
+        setHeaderNames(left.bypass_header_names);
+        if (live) await syncBypassHeaders(live.container, live.port, engagement);
+        setHeaderNote(`removed ${name}`);
+      } catch (e) {
+        setHeaderNote(String(e));
+      } finally {
+        setHeaderBusy(false);
+      }
+    },
+    [live, engagementId]
+  );
+
+  const applyAuthContext = useCallback(async () => {
+    if (!ctxTarget.trim() || ctxBusy) return;
+    setCtxBusy(true);
+    try {
+      const held = await setAuthContext({
+        target_url: ctxTarget.trim(),
+        port: live?.port,
+        engagement_id: live?.engagement_id ?? engagementId.trim() ?? null,
+        logged_in_regex: loggedIn,
+        logged_out_regex: loggedOut,
+        login_url: loginUrl,
+        login_body: loginBody,
+        credential:
+          loginUrl.trim() && credSession.trim() && credPrincipal.trim()
+            ? {
+                session_id: credSession.trim(),
+                kind: "password",
+                principal: credPrincipal.trim(),
+              }
+            : null,
+      });
+      setAuthCtx(held);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setCtxBusy(false);
+    }
+  }, [
+    ctxTarget, ctxBusy, live, engagementId, loggedIn, loggedOut,
+    loginUrl, loginBody, credSession, credPrincipal,
+  ]);
+
+  const readAuthContext = useCallback(async () => {
+    if (!live || !ctxTarget.trim()) return;
+    try {
+      setAuthCtx(await getAuthContext(live.container, live.port, ctxTarget.trim()));
+    } catch {
+      setAuthCtx(null);
+    }
+  }, [live, ctxTarget]);
+
+  const dropAuthContexts = useCallback(async () => {
+    if (!live) return;
+    await clearAuthContexts(live.container, live.port).catch(() => undefined);
+    setAuthCtx(null);
+  }, [live]);
 
   const start = useCallback(async () => {
     if (starting) return;
@@ -186,6 +333,7 @@ export function ProxyScreen() {
         target_url: scanTarget.trim(),
         port: live?.port,
         recurse,
+        scan_policy: scanPolicy,
         engagement_id: engagementId.trim() || null,
         approved: scanApproved,
         dangerous_ack: scanAck,
@@ -200,7 +348,10 @@ export function ProxyScreen() {
     } finally {
       setScanning(false);
     }
-  }, [scanning, scanTarget, live, recurse, engagementId, scanApproved, scanAck, loadScans]);
+  }, [
+    scanning, scanTarget, live, recurse, scanPolicy, engagementId,
+    scanApproved, scanAck, loadScans,
+  ]);
 
   const haltScan = useCallback(
     async (scanId: string) => {
@@ -448,14 +599,43 @@ export function ProxyScreen() {
         {/* ---- history -------------------------------------------------------- */}
         <section className="hp-tn-card">
           <div className="hp-tn-cardhead">captured traffic</div>
+          {historyPage ? (
+            <div className="hp-tn-cardsub">
+              showing {historyPage.returned} of {historyPage.total} captured
+              {historyPage.window_start > 0
+                ? ` (window starts at ${historyPage.window_start})`
+                : ""}
+              {historyPage.dropped > 0 ? (
+                <>
+                  {" — "}
+                  <strong>
+                    {historyPage.dropped} row{historyPage.dropped === 1 ? "" : "s"} could not be
+                    parsed and are missing from this list
+                  </strong>
+                  . The traffic happened; it is the reading of it that failed, so a shorter list
+                  here is not less traffic.
+                </>
+              ) : null}
+            </div>
+          ) : null}
           <div className="hp-tn-form">
             <button type="button" onClick={loadHistory} disabled={!live}>
               refresh
             </button>
           </div>
+          {historyPage && !historyPage.read_ok ? (
+            <p className="hp-tn-error">
+              The ZAP API did not answer, so this is <strong>&ldquo;we could not read it&rdquo;</strong>{" "}
+              and not &ldquo;nothing was captured&rdquo;. A backend restart loses the API key; the
+              reader recovers it from the daemon&rsquo;s own argv, so an unreadable daemon usually
+              means it is gone.
+            </p>
+          ) : null}
           {history.length === 0 ? (
             <p className="hp-tn-note">
-              Nothing captured yet. Run a tool with <code>proxy: true</code> while the proxy is up.
+              {historyPage
+                ? "Nothing captured yet. Run a tool with proxy: true while the proxy is up."
+                : "No history read yet — start a proxy, then press refresh."}
             </p>
           ) : (
             <ul className="hp-tn-list">
@@ -504,6 +684,201 @@ export function ProxyScreen() {
               ))}
             </ul>
           )}
+        </section>
+
+        {/* ---- the WAF-BYPASS HEADER (build #18 item 1) ------------------------ */}
+        <section className="hp-tn-card">
+          <div className="hp-tn-cardhead">WAF bypass header</div>
+          <div className="hp-tn-cardsub">
+            Programs that invite testing and then buy an edge that refuses it issue researchers a
+            header that skips the WAF. Measured on a live target:{" "}
+            <strong>36 of 39 scanner requests came back 403 AkamaiGHost</strong> — those payloads
+            never reached the application, so the zero findings were not evidence about the
+            application at all. Set here, it is injected on{" "}
+            <strong>every request that leaves through this proxy</strong>: your browser, the
+            crawl, and the scanner alike.
+          </div>
+          <div className="hp-tn-cardsub">
+            The value is a <strong>credential and is write-only</strong>. It is sent once, cleared
+            from this page immediately, and no endpoint returns it — what comes back is the name
+            and what ZAP reports holding. It is removed when the proxy stops and when the
+            engagement exits, because ZAP persists its configuration and a rule left behind would
+            keep sending your credential to whatever the next engagement points this proxy at.
+          </div>
+
+          <div className="hp-tn-form">
+            <input
+              value={headerName}
+              onChange={(e) => setHeaderName(e.target.value)}
+              placeholder="X-Bug-Bounty"
+              aria-label="Bypass header name"
+            />
+            <input
+              type="password"
+              value={headerValue}
+              onChange={(e) => setHeaderValue(e.target.value)}
+              placeholder="the value the program issued"
+              aria-label="Bypass header value"
+            />
+            <button
+              type="button"
+              onClick={saveBypassHeader}
+              disabled={
+                headerBusy ||
+                !headerName.trim() ||
+                !headerValue.trim() ||
+                !(live?.engagement_id ?? engagementId.trim())
+              }
+            >
+              {headerBusy ? "storing…" : "store + install"}
+            </button>
+          </div>
+
+          {!(live?.engagement_id ?? engagementId.trim()) ? (
+            <p className="hp-tn-note">
+              A bypass header belongs to an engagement, because it belongs to a program. Enter an
+              engagement id above, or start the proxy under one.
+            </p>
+          ) : null}
+          {headerNote ? <p className="hp-tn-note">{headerNote}</p> : null}
+
+          {headerNames.length ? (
+            <ul className="hp-tn-list">
+              {headerNames.map((name) => (
+                <li key={name} className="hp-tn-row">
+                  <div className="hp-tn-rowtop">
+                    <span className="hp-tn-kind">{name}</span>
+                    <span className="hp-tn-subs" style={{ flex: "1 1 240px" }}>
+                      value held by the backend — never returned to this page
+                    </span>
+                    <button
+                      type="button"
+                      className="hp-tn-stop"
+                      onClick={() => dropBypassHeader(name)}
+                      disabled={headerBusy}
+                    >
+                      remove
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="hp-tn-note">No bypass header stored for this engagement.</p>
+          )}
+        </section>
+
+        {/* ---- the AUTHENTICATED CONTEXT (build #18 items 6 and 7) ------------- */}
+        <section className="hp-tn-card">
+          <div className="hp-tn-cardhead">scan behind a login</div>
+          <div className="hp-tn-cardsub">
+            <strong>The hard part already happened.</strong> Logging in by hand through this proxy
+            put a live session inside ZAP. What is missing is telling the scanner what that
+            session <em>means</em> — without a context it scans as an anonymous client and reports
+            zero findings off a login page, which reads exactly like a secure application.
+          </div>
+          <div className="hp-tn-cardsub">
+            <strong>Tier 2</strong> is the two indicator boxes and needs{" "}
+            <strong>no credentials at all</strong>. <strong>Tier 3</strong> adds automatic
+            re-login and is the three below it — the password is never typed here: you name a
+            credential already captured in the vault and the backend resolves it.
+          </div>
+
+          <div className="hp-tn-form">
+            <input
+              value={ctxTarget}
+              onChange={(e) => setCtxTarget(e.target.value)}
+              placeholder="https://host/any/page — its ORIGIN becomes the context"
+              aria-label="Context target URL"
+            />
+          </div>
+          <div className="hp-tn-form">
+            <input
+              value={loggedIn}
+              onChange={(e) => setLoggedIn(e.target.value)}
+              placeholder="logged-IN regex, e.g. Logout|Sign out"
+              aria-label="Logged in indicator"
+            />
+            <input
+              value={loggedOut}
+              onChange={(e) => setLoggedOut(e.target.value)}
+              placeholder="logged-OUT regex, e.g. name=.password.|Sign in"
+              aria-label="Logged out indicator"
+            />
+          </div>
+
+          <div className="hp-tn-olhint">
+            Tier 3 — leave blank for Tier 2, which is a complete and useful result
+          </div>
+          <div className="hp-tn-form">
+            <input
+              value={loginUrl}
+              onChange={(e) => setLoginUrl(e.target.value)}
+              placeholder="login POST url"
+              aria-label="Login URL"
+            />
+            <input
+              value={loginBody}
+              onChange={(e) => setLoginBody(e.target.value)}
+              placeholder="username={%username%}&password={%password%}"
+              aria-label="Login request body"
+            />
+          </div>
+          <div className="hp-tn-form">
+            <input
+              value={credSession}
+              onChange={(e) => setCredSession(e.target.value)}
+              placeholder="vault session id"
+              aria-label="Credential session id"
+            />
+            <input
+              value={credPrincipal}
+              onChange={(e) => setCredPrincipal(e.target.value)}
+              placeholder="account name"
+              aria-label="Credential principal"
+            />
+            <button type="button" onClick={applyAuthContext} disabled={ctxBusy || !ctxTarget.trim()}>
+              {ctxBusy ? "applying…" : "apply context"}
+            </button>
+            <button type="button" onClick={readAuthContext} disabled={!live || !ctxTarget.trim()}>
+              read back
+            </button>
+            <button type="button" className="hp-tn-stop" onClick={dropAuthContexts} disabled={!live}>
+              clear all
+            </button>
+          </div>
+
+          {authCtx ? (
+            authCtx.context_id ? (
+              <div className="hp-tn-oneliner">
+                <div className="hp-tn-olhint">
+                  what ZAP HOLDS — read back, never echoed from what was sent
+                </div>
+                <pre>
+                  {[
+                    `tier            ${authCtx.tier}`,
+                    `context         ${authCtx.context_name} (id ${authCtx.context_id})`,
+                    `included        ${authCtx.included.join(", ") || "—"}`,
+                    `session method  ${authCtx.session_method || "—"}`,
+                    `auth method     ${authCtx.auth_method || "— (Tier 2: none needed)"}`,
+                    `logged-in       ${authCtx.logged_in_regex || "—"}`,
+                    `logged-out      ${authCtx.logged_out_regex || "—"}`,
+                    `user            ${authCtx.user_name || "— (Tier 2 uses your own session)"}`,
+                  ].join("\n")}
+                </pre>
+                {authCtx.warnings.map((w) => (
+                  <div key={w} className="hp-tn-note">
+                    warning: {w}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="hp-tn-note">
+                ZAP holds no context for that target. That is an ordinary scan, not an error — it
+                is exactly how every scan before this build ran.
+              </p>
+            )
+          ) : null}
         </section>
 
         {/* ---- the BROWSER CRAWL (build #15 part 2) ---------------------------- */}
@@ -665,6 +1040,47 @@ export function ProxyScreen() {
               also attack everything below this URL (same host — more traffic, not more reach)
             </label>
           </div>
+
+          {/* SCAN POLICY (build #18 item 3). It changes HOW MANY requests go out, not whether
+              the scan may happen — an unknown name falls back to the default rather than
+              refusing, so this select can never be the thing that blocks a scan. */}
+          <div className="hp-tn-form">
+            <select
+              value={scanPolicy}
+              onChange={(e) => setScanPolicy(e.target.value)}
+              aria-label="Scan policy"
+            >
+              {policies.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name}
+                  {Object.keys(p.disabled_scanners).length
+                    ? ` — ${Object.keys(p.disabled_scanners).length} rules off`
+                    : " — every rule"}
+                </option>
+              ))}
+            </select>
+          </div>
+          {policies
+            .filter((p) => p.name === scanPolicy)
+            .map((p) => (
+              <div key={p.name} className="hp-tn-oneliner">
+                <div className="hp-tn-olhint">{p.description}</div>
+                {Object.entries(p.disabled_scanners).length ? (
+                  <ul className="hp-tn-list">
+                    {Object.entries(p.disabled_scanners).map(([id, why]) => (
+                      <li key={id} className="hp-tn-row">
+                        <div className="hp-tn-rowtop">
+                          <span className="hp-tn-kind">{id}</span>
+                          <span className="hp-tn-subs" style={{ flex: "1 1 320px" }}>
+                            {why}
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ))}
 
           {/* Separate from the proxy's own confirms, and never pre-ticked. Starting a recording
               proxy and launching an attack are different decisions. */}

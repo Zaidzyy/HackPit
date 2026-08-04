@@ -1028,6 +1028,12 @@ export type EngagementRecord = {
   discovered_in_scope: string[];
   /** Hosts recon revealed that the scope does NOT cover — read-only, never targetable. */
   discovered_out_of_scope: string[];
+  /**
+   * NAMES of the WAF-bypass headers this engagement holds. The VALUES are credentials and are
+   * deliberately absent — this record is returned to the browser, joined into the LLM proposer
+   * context and rendered into reports. There is no field here for a value to leak from.
+   */
+  bypass_header_names: string[];
 };
 
 /** Active engagement(s) + sandbox availability (GET /cockpit/engagement). Drives the UI mode
@@ -1574,6 +1580,16 @@ export type RepeaterRequest = {
   timeout_seconds?: number | null;
   engagement_id?: string | null;
   session_id?: string | null;
+  /**
+   * PAYLOAD SHAPING (build #18 item 4) — transforms applied to every `[[…]]` span in the URL
+   * and body, in order. An OPTION, NOT A GATE: no confirm, no acknowledgement, no refusal if
+   * unset. With no shapes the markers are simply stripped, which is what makes shaped-versus-
+   * unshaped a one-variable comparison rather than two different requests.
+   *
+   * It lives here and not on the scanner because ZAP's API exposes no arbitrary payload
+   * transform — a knob there would have been a switch with nothing different on the wire.
+   */
+  shapes?: string[];
 };
 
 export type RepeaterResponse = {
@@ -1597,7 +1613,38 @@ export type RepeaterExchange = {
   sent_at: string;
   container: string;
   session_id: string | null;
+  /**
+   * THE REQUEST AS SHAPED — what actually went on the wire. `request` above is what was
+   * composed, markers and all. A shaped request that comes back 200 is only evidence if you can
+   * see the bytes that produced it.
+   */
+  sent_url: string;
+  sent_body: string;
+  shapes_applied: string[];
+  /** Shapes that did nothing, and why. WARN AND CONTINUE — the request was still sent. */
+  shape_warnings: string[];
 };
+
+/** The shaping vocabulary, from the backend so the UI carries no second copy of the list. */
+export type ShapeVocabulary = {
+  open: string;
+  close: string;
+  shapes: Record<string, string>;
+};
+
+export const getRepeaterShapes = (signal?: AbortSignal) =>
+  getJSON<ShapeVocabulary>("/cockpit/repeater/shapes", signal);
+
+/**
+ * The request AS IT WOULD GO ON THE WIRE, without sending it. Calls the same function the send
+ * path uses, so what is previewed is what is transmitted — one derivation, not two.
+ */
+export const repeaterPreview = (req: RepeaterRequest, signal?: AbortSignal) =>
+  postJSON<{ url: string; body: string; shapes_applied: string[]; warnings: string[] }>(
+    "/cockpit/repeater/preview",
+    req,
+    signal
+  );
 
 export type RepeaterStatus = {
   container: string;
@@ -1706,6 +1753,13 @@ export type Proxy = {
   published: boolean;
   /** Whether the API requires a key. NEVER the key itself — that value never leaves the backend. */
   api_key_enforced: boolean;
+  /**
+   * NAMES of the WAF-bypass headers ZAP is actually holding, READ BACK from its replacer rules
+   * rather than echoed from what was sent. The VALUES are credentials and never leave the
+   * backend — there is no field here for one, which is the version of that property a future
+   * edit cannot quietly undo.
+   */
+  bypass_headers: string[];
 };
 
 export type ProxyStatus = {
@@ -1766,6 +1820,28 @@ export const stopProxy = (pid: string, signal?: AbortSignal) =>
     signal,
   }).then((r) => r.json() as Promise<Proxy>);
 
+/**
+ * One window of captured traffic, WITH THE ARITHMETIC THAT MAKES IT READABLE.
+ *
+ * It is an object rather than a bare list on purpose. A message the backend's parser cannot
+ * read used to vanish from the array with nothing anywhere saying it had existed, so a window
+ * of 200 exchanges of which 50 were unparseable arrived as 150 and read as less traffic. Not a
+ * confident zero — a confident UNDERCOUNT, which is harder to notice because it looks plausible.
+ */
+export type HistoryPage = {
+  exchanges: CapturedExchange[];
+  /** Messages ZAP holds in total, from its own counter. */
+  total: number;
+  /** Absolute offset of the first row in this window. */
+  window_start: number;
+  /** Rows you can actually read. */
+  returned: number;
+  /** Rows ZAP returned that could NOT be parsed. Non-zero means this list is INCOMPLETE. */
+  dropped: number;
+  /** False means the API did not answer — a different fact from "nothing was captured". */
+  read_ok: boolean;
+};
+
 /** Captured exchanges. READ-ONLY; bodies come back RAW (redaction applies only in reports). */
 export const proxyHistory = (
   container: string,
@@ -1773,10 +1849,108 @@ export const proxyHistory = (
   count = 50,
   signal?: AbortSignal
 ) =>
-  getJSON<CapturedExchange[]>(
+  getJSON<HistoryPage>(
     `/cockpit/proxy/history?container=${encodeURIComponent(container)}&port=${port}&count=${count}`,
     signal
   );
+
+/* -------------------------------------------------------------------------- */
+/* THE WAF-BYPASS HEADER (build #18 item 1)                                    */
+/*                                                                             */
+/* THE VALUE IS A CREDENTIAL AND ONLY TRAVELS ONE WAY. `setBypassHeader` sends  */
+/* it; every reader below answers with NAMES and with what ZAP holds. There is  */
+/* no call in this file that returns a bypass header's value, because there is  */
+/* no route that does.                                                          */
+/* -------------------------------------------------------------------------- */
+
+/** One replacer rule AS ZAP HOLDS IT. Note the absence of a `replacement` field. */
+export type ReplacerRule = {
+  description: string;
+  match_type: string;
+  /** For a REQ_HEADER rule this is the HEADER NAME — not a secret. */
+  match_string: string;
+  enabled: boolean;
+  /** ZAP holds a non-empty value. The value itself is never reported. */
+  replacement_set: boolean;
+  /** HackPit installed it and HackPit will remove it. Rules added in ZAP's own UI are left alone. */
+  hackpit_managed: boolean;
+};
+
+export const setBypassHeader = (
+  body: { engagement_id: string; name: string; value: string },
+  signal?: AbortSignal
+) =>
+  postJSON<{ engagement_id: string; bypass_header_names: string[] }>(
+    "/cockpit/engagement/bypass-header",
+    body,
+    signal
+  );
+
+export const deleteBypassHeader = (engagementId: string, name: string, signal?: AbortSignal) =>
+  fetch(
+    `${API_URL}/cockpit/engagement/${encodeURIComponent(engagementId)}/bypass-header/${encodeURIComponent(name)}`,
+    { method: "DELETE", signal }
+  ).then((r) => r.json() as Promise<{ bypass_header_names: string[] }>);
+
+/**
+ * Make a running daemon hold exactly this engagement's bypass headers. An EMPTY engagement id
+ * CLEARS — ZAP persists its configuration, so the failure worth preventing is a credential
+ * surviving into a session it was not issued for.
+ */
+export const syncBypassHeaders = (
+  container: string,
+  port: number,
+  engagementId: string,
+  signal?: AbortSignal
+) =>
+  postJSON<{ installed: string[]; cleared: string[]; rules: ReplacerRule[] }>(
+    `/cockpit/proxy/bypass-headers?container=${encodeURIComponent(container)}&port=${port}` +
+      `&engagement_id=${encodeURIComponent(engagementId)}`,
+    {},
+    signal
+  );
+
+export const getReplacerRules = (container: string, port: number, signal?: AbortSignal) =>
+  getJSON<ReplacerRule[]>(
+    `/cockpit/proxy/bypass-headers?container=${encodeURIComponent(container)}&port=${port}`,
+    signal
+  );
+
+/* -------------------------------------------------------------------------- */
+/* IS IT CDN-FRONTED? (build #18 item 2) — PASSIVE LOOKUPS ONLY                */
+/* -------------------------------------------------------------------------- */
+export type FrontingEvidence = { source: string; detail: string; provider: string };
+
+export type HostFronting = {
+  host: string;
+  /** fronted | not-fronted | unknown. `unknown` means the lookups failed — NOT "no CDN". */
+  verdict: string;
+  provider: string;
+  cname_chain: string[];
+  addresses: string[];
+  server_header: string;
+  asn: string;
+  asn_org: string;
+  evidence: FrontingEvidence[];
+  /** Leads for a human. REPORTED, never added to any scope. */
+  candidate_origins: string[];
+  spf: string[];
+  mx: string[];
+  notes: string[];
+};
+
+export type FrontingSweep = {
+  hosts: HostFronting[];
+  fronted: string[];
+  not_fronted: string[];
+  unknown: string[];
+  note: string;
+};
+
+export const analyseFronting = (
+  body: { hosts?: string[]; engagement_id?: string; with_ct?: boolean },
+  signal?: AbortSignal
+) => postJSON<FrontingSweep>("/cockpit/fronting", body, signal);
 
 /* -------------------------------------------------------------------------- */
 /* the ACTIVE SCANNER over the same API (build #14 part 3)                     */
@@ -1800,7 +1974,120 @@ export type Scan = {
   alerts: number;
   started_at: string;
   engagement_id: string | null;
+  /** The policy NAME requested. Blank for a scan this backend process did not start. */
+  scan_policy: string;
+  /** What ZAP actually HELD after the policy was applied — read back, never echoed. */
+  policy_observed: ObservedPolicy | null;
+  /**
+   * NAMES of the WAF-bypass headers in force when this scan started. This is what makes a 403
+   * share interpretable: "36 of 39 refused" means one thing with the program's bypass header on
+   * and something else entirely without it.
+   */
+  bypass_headers: string[];
+  /** The ZAP context this scan ran inside. Blank when none was configured — an ordinary scan. */
+  context_name: string;
+  /** 0 none | 2 context + session management | 3 form auth with re-login. */
+  auth_tier: number;
 };
+
+/* -------------------------------------------------------------------------- */
+/* SCAN POLICY (build #18 item 3) — fewer requests, and the ones that apply    */
+/* -------------------------------------------------------------------------- */
+export type ScanPolicy = {
+  name: string;
+  description: string;
+  attack_strength: string;
+  alert_threshold: string;
+  /** ZAP plugin id -> WHY it is off. The reason is the part a human can disagree with. */
+  disabled_scanners: Record<string, string>;
+};
+
+export type ObservedPolicy = {
+  requested: string;
+  attack_strength: string[];
+  alert_threshold: string[];
+  /** Requested off AND confirmed off by a read-back. */
+  disabled_ids: number[];
+  /** Requested off but NOT reported off — usually a plugin id this ZAP build does not have. */
+  not_held: number[];
+  /** 0 means THE READ FAILED, not that ZAP has no scan rules. */
+  scanners_seen: number;
+};
+
+export const listScanPolicies = (signal?: AbortSignal) =>
+  getJSON<ScanPolicy[]>("/cockpit/proxy/scan-policies", signal);
+
+export const getScanPolicy = (
+  container: string,
+  port: number,
+  requested = "",
+  signal?: AbortSignal
+) =>
+  getJSON<ObservedPolicy>(
+    `/cockpit/proxy/scan-policy?container=${encodeURIComponent(container)}&port=${port}` +
+      `&requested=${encodeURIComponent(requested)}`,
+    signal
+  );
+
+/* -------------------------------------------------------------------------- */
+/* AUTHENTICATED SCANNING (build #18 items 6 and 7)                            */
+/*                                                                             */
+/* THERE IS NO PASSWORD FIELD ANYWHERE BELOW, and that is the property. Tier 2  */
+/* needs no credential at all — the human already logged in through the proxy.  */
+/* Tier 3 NAMES a stored vault credential and the backend resolves it.          */
+/* -------------------------------------------------------------------------- */
+export type AuthContext = {
+  container: string;
+  port: number;
+  /** Empty means no context exists for this target. */
+  context_id: string;
+  context_name: string;
+  included: string[];
+  session_method: string;
+  auth_method: string;
+  logged_in_regex: string;
+  logged_out_regex: string;
+  user_id: string;
+  /** The ACCOUNT NAME a scan runs as. A username is not a secret; the password has no field. */
+  user_name: string;
+  /** 0 nothing | 2 context + session management | 3 form auth with automatic re-login. */
+  tier: number;
+  /** Things that did not take. WARN AND CONTINUE — a weaker context is not a refusal. */
+  warnings: string[];
+};
+
+export const setAuthContext = (
+  body: {
+    target_url: string;
+    port?: number;
+    engagement_id?: string | null;
+    logged_in_regex?: string;
+    logged_out_regex?: string;
+    // Tier 3 only. All absent = Tier 2, which needs no credentials whatsoever.
+    login_url?: string;
+    login_body?: string;
+    credential?: { session_id: string; kind: string; principal: string; domain?: string } | null;
+  },
+  signal?: AbortSignal
+) => postJSON<AuthContext>("/cockpit/proxy/auth-context", body, signal);
+
+export const getAuthContext = (
+  container: string,
+  port: number,
+  targetUrl: string,
+  signal?: AbortSignal
+) =>
+  getJSON<AuthContext>(
+    `/cockpit/proxy/auth-context?container=${encodeURIComponent(container)}&port=${port}` +
+      `&target_url=${encodeURIComponent(targetUrl)}`,
+    signal
+  );
+
+export const clearAuthContexts = (container: string, port: number, signal?: AbortSignal) =>
+  fetch(
+    `${API_URL}/cockpit/proxy/auth-context?container=${encodeURIComponent(container)}&port=${port}`,
+    { method: "DELETE", signal }
+  ).then((r) => r.json() as Promise<{ removed: string[] }>);
 
 export type ScanAlert = {
   id: string;
@@ -1831,6 +2118,13 @@ export const startScan = (
     target_url: string;
     port?: number;
     recurse?: boolean;
+    /**
+     * 'default' (every rule ZAP ships) or 'targeted-web' (the platform-locked rules off). An
+     * UNKNOWN NAME FALLS BACK TO THE DEFAULT rather than refusing — a policy decides how many
+     * requests to send, and nothing about it is a safety verdict. What actually ran comes back
+     * on the Scan as `policy_observed`.
+     */
+    scan_policy?: string;
     engagement_id?: string | null;
     approved?: boolean;
     dangerous_ack?: boolean;
@@ -1883,11 +2177,17 @@ export const ingestScanAlerts = (
   },
   signal?: AbortSignal
 ) =>
-  postJSON<{ alerts: number; findings: number; endpoints: number }>(
-    "/cockpit/proxy/alerts/ingest",
-    body,
-    signal
-  );
+  postJSON<{
+    alerts: number;
+    /**
+     * Alerts ZAP returned that could NOT be parsed and were therefore NOT ingested. A finding
+     * that never parsed is a finding that never reaches a report, so it is stated next to the
+     * count rather than left as a debug detail.
+     */
+    alerts_dropped: number;
+    findings: number;
+    endpoints: number;
+  }>("/cockpit/proxy/alerts/ingest", body, signal);
 
 /* -------------------------------------------------------------------------- */
 /* the AJAX SPIDER — a browser-driven crawl (build #15 part 2)                 */

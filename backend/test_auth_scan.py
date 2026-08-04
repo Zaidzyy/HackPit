@@ -273,6 +273,124 @@ def test_scan_url_for_stays_PURE() -> None:
     print("  scan_url_for takes the ids as arguments and stays pure: PASS")
 
 
+# --------------------------------------------------------------------------- #
+# THE SIX DEFECTS THE LIVE RUN FOUND (2026-08-05), each locked so it cannot come back.
+#
+# Every one of them was found by a READ-BACK rather than by an error: each call answered
+# `{"Result":"OK"}` and did nothing, or did something and was then read wrongly. That is this
+# module's oldest lesson arriving four more times in one session.
+# --------------------------------------------------------------------------- #
+def test_one_unknown_plugin_id_cannot_poison_the_whole_disable_list() -> None:
+    """*** MEASURED: ZAP rejects the ENTIRE list if ONE id is not installed. ***
+
+    `disableScanners?ids=7,10045,...,30003,...` answered `{"code":"does_not_exist"}` and disabled
+    NOTHING — not the eight ids that do exist, none of them — because 30003 (Integer Overflow
+    Error) is not in this build's 53 rules. `targeted-web` was therefore a policy that quietly
+    did nothing, which is exactly the fake knob the plan said not to ship.
+
+    The only reason it was caught is that `not_held` reports a requested id that ZAP does not
+    confirm as disabled, instead of counting it as a success.
+    """
+    src = inspect.getsource(proxy.apply_scan_policy)
+    assert "scanner_ids" in src, (
+        "apply_scan_policy sends its id list without checking which rules this ZAP HAS — one "
+        "missing id makes ZAP refuse the whole list and disable nothing"
+    )
+    assert "&" in src and "present" in src, "the intersection is not taken"
+    assert callable(proxy.scanner_ids)
+    # ...and the fallback exists: a rule refused individually must not take the others with it
+    assert "for one in wanted" in src, (
+        "there is no per-id fallback, so a single refusal still loses the whole policy"
+    )
+    print("  a missing plugin id cannot silently void the whole policy: PASS")
+
+
+def test_a_zap_field_that_is_a_JSON_STRING_is_still_read() -> None:
+    """*** MEASURED: `context/view/context` returns `includeRegexs` as a JSON-ENCODED STRING. ***
+
+    `"includeRegexs": "[\\"\\\\Qhttp://host:3000\\\\E.*\\"]"` — a str, not an array, while
+    `excludeRegexs` is the string `"[]"`. An `isinstance(x, list)` reader fell through to `[]`,
+    so a context whose include regex WAS correctly installed reported as having none.
+
+    An unexpected SHAPE read as an ABSENT VALUE — this build's own silent-empty family, produced
+    by the code written to hunt it.
+    """
+    assert proxy._maybe_json_list(["a", "b"]) == ["a", "b"]
+    assert proxy._maybe_json_list('["a", "b"]') == ["a", "b"]
+    assert proxy._maybe_json_list("[]") == []
+    assert proxy._maybe_json_list(None) == []
+    assert proxy._maybe_json_list("") == []
+    # not JSON at all: returned as the single value it is, rather than silently dropped
+    assert proxy._maybe_json_list("not json") == ["not json"]
+    print("  a list-shaped JSON string is parsed, not read as absent: PASS")
+
+
+def test_the_two_context_views_disagree_and_the_reader_handles_both() -> None:
+    """*** MEASURED: the session and authentication views nest differently. ***
+
+        getSessionManagementMethod -> {"methodName": "cookieBasedSessionManagement"}
+        getAuthenticationMethod    -> {"method": {"methodName": "formBasedAuthentication", ...}}
+
+    Reading only `methodName` reported NO authentication method for a context that had one, and
+    the proof failed with `tier=2` while ZAP held a tier-3 context.
+    """
+    src = inspect.getsource(proxy.observed_auth_context)
+    assert '"method"' in src, (
+        "the reader does not try the `method` key, so a nested authentication method reads as "
+        "absent and every Tier 3 context reports as Tier 2"
+    )
+    assert "methodName" in src, "the flat spelling was dropped — session management would break"
+    print("  both response shapes are read; neither view's spelling is assumed: PASS")
+
+
+def test_scanAsUser_names_the_scan_id_differently() -> None:
+    """*** MEASURED: `ascan/action/scan` answers `{"scan":"7"}`, `scanAsUser` answers
+    `{"scanAsUser":"6"}`. ***
+
+    Reading only "scan" made every AUTHENTICATED scan look like a refusal — `ZAP returned no
+    scan id` — while the scan was in fact RUNNING. That is the worst direction this error could
+    take: attack traffic in flight, reported as not started, with no id to stop it by.
+    """
+    src = inspect.getsource(proxy.start_scan)
+    assert '"scanAsUser"' in src or "scanAsUser" in src, (
+        "start_scan reads only the `scan` key, so an authenticated scan raises while running"
+    )
+    idx_scan = src.find('body.get("scan")')
+    assert idx_scan != -1, "the plain `scan` key is no longer read"
+    print("  both scan actions' id spellings are read: PASS")
+
+
+def test_the_indicators_are_set_AFTER_the_authentication_method() -> None:
+    """*** MEASURED: setting the auth method REPLACES it, taking any indicator with it. ***
+
+    A Tier 2 run held both indicators; the identical Tier 3 run held NEITHER, with no error from
+    any call — the setters had answered OK and then been overwritten. In ZAP's model an indicator
+    belongs TO the authentication method, so order is not cosmetic.
+    """
+    src = inspect.getsource(proxy.apply_auth_context)
+    auth_at = src.find("_ACTION_SET_AUTH_METHOD")
+    in_at = src.find("_ACTION_SET_LOGGED_IN")
+    assert auth_at != -1 and in_at != -1
+    assert auth_at < in_at, (
+        "the logged-in indicator is set BEFORE the authentication method — setting the method "
+        "replaces it and the indicator is silently lost"
+    )
+    print("  indicators are set after the auth method, so they survive it: PASS")
+
+
+def test_the_auth_config_params_are_percent_encoded() -> None:
+    """`authMethodConfigParams` is ITSELF a query string, so a login body full of `&` and `=`
+    has to be encoded before it goes inside one — or ZAP reads `password={%password%}` as a
+    third config parameter and the method never takes, silently."""
+    src = inspect.getsource(proxy.apply_auth_context)
+    assert "quote_plus(req.login_body)" in src, (
+        "the login body is interpolated raw into authMethodConfigParams — its `&` splits the "
+        "parameter and the authentication method does not take"
+    )
+    assert "quote_plus(req.login_url.strip())" in src, "the login URL is not encoded either"
+    print("  the login body and url are encoded before nesting in a query string: PASS")
+
+
 if __name__ == "__main__":
     print("== scan policy + authenticated scanning (build #18 items 3, 6, 7) ==")
     test_an_unknown_policy_name_is_a_DEFAULT_and_never_a_refusal()
@@ -292,4 +410,11 @@ if __name__ == "__main__":
     test_a_user_switches_the_scan_to_scanAsUser()
     test_the_target_still_cannot_smuggle_a_parameter_through_the_context_path()
     test_scan_url_for_stays_PURE()
+    print("-- the six defects the live run found (2026-08-05) --")
+    test_one_unknown_plugin_id_cannot_poison_the_whole_disable_list()
+    test_a_zap_field_that_is_a_JSON_STRING_is_still_read()
+    test_the_two_context_views_disagree_and_the_reader_handles_both()
+    test_scanAsUser_names_the_scan_id_differently()
+    test_the_indicators_are_set_AFTER_the_authentication_method()
+    test_the_auth_config_params_are_percent_encoded()
     print("ALL authenticated-scan and scan-policy locks pass")

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiError,
+  analyseFronting,
   enterEngagement,
   execCockpitStream,
   exitEngagement,
@@ -10,6 +11,7 @@ import {
   type EngagementRecord,
   type EngagementStatus,
   type ExecEvent,
+  type FrontingSweep,
 } from "@/lib/api";
 import { CockpitLoop } from "./CockpitLoop";
 
@@ -47,6 +49,13 @@ export function CockpitEngagementMode({
   const [auth, setAuth] = useState("");
   const [entering, setEntering] = useState(false);
   const [enterErr, setEnterErr] = useState<string | null>(null);
+
+  // IS EACH IN-SCOPE HOST BEHIND A CDN? (build #18 item 2) It lives HERE, next to the scope,
+  // because the scope is its input and its answer is about those exact hosts. It is passive:
+  // DNS lookups, public certificate-transparency logs and ONE HEAD request per host.
+  const [fronting, setFronting] = useState<FrontingSweep | null>(null);
+  const [frontingBusy, setFrontingBusy] = useState(false);
+  const [frontingErr, setFrontingErr] = useState<string | null>(null);
 
   // loop (drafts, human approves each) vs manual approve-each. Defaults to the guided loop for
   // symmetry with lab mode; never-auto-run still gates every run (the loop drafts, you approve).
@@ -109,6 +118,24 @@ export function CockpitEngagementMode({
       )
       .finally(() => setEntering(false));
   }, [target, auth, scopeSpec, entering, sessionId, refresh]);
+
+  const runFronting = useCallback(
+    (withCt: boolean) => {
+      if (!active || frontingBusy) return;
+      setFrontingBusy(true);
+      setFrontingErr(null);
+      // Passive: DNS + public CT logs + one HEAD per host. Nothing here scans or brute-forces,
+      // and a candidate origin it surfaces is a LEAD — add_pivot_subnet is the one audited
+      // widening path in this codebase and a human uses it.
+      analyseFronting({ engagement_id: active.engagement_id, with_ct: withCt })
+        .then(setFronting)
+        .catch((e) =>
+          setFrontingErr(e instanceof ApiError ? e.message : String(e))
+        )
+        .finally(() => setFrontingBusy(false));
+    },
+    [active, frontingBusy]
+  );
 
   const doExit = useCallback(() => {
     if (!active) return;
@@ -390,6 +417,142 @@ export function CockpitEngagementMode({
               ))}
             </span>
           </div>
+        )}
+      </section>
+
+      {/* ---- IS IT CDN-FRONTED? (build #18 item 2) ---------------------------------------
+          It sits next to the scope because the scope is its input. Build #17 measured that an
+          Akamai-fronted host is TWO walls -- Bot Manager refuses the CLIENT (bare curl/ffuf/
+          nuclei never reach request one) and the WAF refuses the REQUEST CONTENT (36 of 39
+          scanner payloads came back 403). Knowing WHICH hosts are fronted is what decides
+          whether any of that applies. */}
+      <section className="hp-eng-scope" aria-label="CDN fronting">
+        <div className="hp-eng-scope-row">
+          <span className="hp-eng-scope-key">edge</span>
+          <span className="hp-eng-scope-vals">
+            <button
+              type="button"
+              className="hp-ck-report-btn"
+              onClick={() => runFronting(false)}
+              disabled={frontingBusy}
+            >
+              {frontingBusy ? "looking up..." : "check what fronts these hosts"}
+            </button>
+            <button
+              type="button"
+              className="hp-ck-report-btn"
+              onClick={() => runFronting(true)}
+              disabled={frontingBusy}
+              title="Also query crt.sh, a third-party public certificate log"
+            >
+              + certificate transparency
+            </button>
+          </span>
+        </div>
+
+        <p className="hp-ck-hint">
+          PASSIVE. DNS (CNAME, A, TXT, MX), public ASN and certificate-transparency lookups, and
+          ONE <code>HEAD</code>{" "}
+          request per host &mdash; the same request a browser makes opening
+          the page. It does not scan, brute-force or guess subdomains. It runs from inside the
+          open sandbox, so no new outbound path from this machine is created.
+        </p>
+
+        {frontingErr && <p className="hp-cv-error">{frontingErr}</p>}
+
+        {fronting && (
+          <>
+            <div className="hp-eng-scope-row">
+              <span className="hp-eng-scope-key">
+                fronted{" "}
+                <span className="hp-eng-scope-count">({fronting.fronted.length})</span>
+              </span>
+              <span className="hp-eng-scope-vals">
+                {fronting.hosts
+                  .filter((h) => h.verdict === "fronted")
+                  .map((h) => (
+                    <code
+                      key={h.host}
+                      className="hp-eng-chip is-out"
+                      title={h.evidence.map((e) => `[${e.source}] ${e.detail}`).join(" | ")}
+                    >
+                      {h.host} &middot; {h.provider}
+                    </code>
+                  ))}
+              </span>
+            </div>
+
+            <div className="hp-eng-scope-row">
+              <span className="hp-eng-scope-key">
+                reachable directly{" "}
+                <span className="hp-eng-scope-count">({fronting.not_fronted.length})</span>
+              </span>
+              <span className="hp-eng-scope-vals">
+                {fronting.hosts
+                  .filter((h) => h.verdict === "not-fronted")
+                  .map((h) => (
+                    <code
+                      key={h.host}
+                      className="hp-eng-chip is-new"
+                      title={
+                        h.server_header
+                          ? `Server: ${h.server_header}`
+                          : "answered, and no CDN marker was found"
+                      }
+                    >
+                      {h.host}
+                    </code>
+                  ))}
+              </span>
+            </div>
+
+            {fronting.unknown.length > 0 && (
+              <div className="hp-eng-scope-row">
+                <span className="hp-eng-scope-key">
+                  could not tell{" "}
+                  <span className="hp-eng-scope-count">({fronting.unknown.length})</span>
+                </span>
+                <span className="hp-eng-scope-vals">
+                  {fronting.unknown.map((host) => (
+                    <code
+                      key={host}
+                      className="hp-eng-chip"
+                      title="the lookups failed -- this is NOT a statement that there is no CDN"
+                    >
+                      {host}
+                    </code>
+                  ))}
+                </span>
+              </div>
+            )}
+
+            {fronting.hosts.some((h) => h.candidate_origins.length > 0) && (
+              <div className="hp-eng-scope-row">
+                <span className="hp-eng-scope-key">candidate origins</span>
+                <span className="hp-eng-scope-vals">
+                  {fronting.hosts.flatMap((h) =>
+                    h.candidate_origins.map((o) => (
+                      <code
+                        key={`${h.host}:${o}`}
+                        className="hp-eng-chip is-out"
+                        title={`surfaced from ${h.host} -- a LEAD, not scope`}
+                      >
+                        {o}
+                      </code>
+                    ))
+                  )}
+                </span>
+              </div>
+            )}
+
+            <p className="hp-ck-hint">
+              <b>&ldquo;could not tell&rdquo; is a real answer and is never reported as
+              &ldquo;no CDN&rdquo;</b> &mdash; a host whose lookups failed is not a host without
+              an edge in front of it. Candidate origins are <b>reported only</b>: they are out of
+              scope until the scope says otherwise, and adding one is a deliberate, audited human
+              action.
+            </p>
+          </>
         )}
       </section>
 

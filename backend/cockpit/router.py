@@ -789,17 +789,26 @@ def stop_proxy(pid: str) -> proxy_mod.Proxy:
         raise HTTPException(status_code=404, detail={"reason": exc.reason})
 
 
-@router.get("/proxy/history", response_model=list[proxy_mod.CapturedExchange])
+@router.get("/proxy/history", response_model=proxy_mod.HistoryPage)
 def proxy_history(
     container: str = Query(..., description="Sandbox container the proxy runs in."),
     port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
     start: int = Query(0, ge=0),
     count: int = Query(50, ge=1, le=500),
-) -> list[proxy_mod.CapturedExchange]:
+) -> proxy_mod.HistoryPage:
     """Captured exchanges, newest window first. READ-ONLY and deliberately UNGATED — a panel
     that refreshes cannot demand approval per refresh, the same reason lifecycle's port probe
-    runs ungated. Bodies come back RAW; redaction applies only when a report is rendered."""
-    return proxy_mod.history(container, port, start=start, count=count)
+    runs ungated. Bodies come back RAW; redaction applies only when a report is rendered.
+
+    *** IT ANSWERS WITH AN OBJECT RATHER THAN A BARE LIST, AND THAT IS THE POINT. ***
+    A message ZAP returns that `parse_message` cannot read used to vanish from the list with
+    nothing anywhere saying it had existed — so a window of 200 exchanges of which 50 were
+    unparseable came back as 150 and read as less traffic. `dropped` says how many are missing
+    and `read_ok` says whether the API answered at all. This repo's recurring silent empty at
+    partial strength: not a confident zero but a confident UNDERCOUNT, which is harder to notice
+    because it looks plausible.
+    """
+    return proxy_mod.history_page(container, port, start=start, count=count)
 
 
 @router.get("/proxy/session-health")
@@ -1209,9 +1218,10 @@ def ingest_scan_alerts(req: AlertIngestRequest) -> dict[str, Any]:
     # deliverable. `read_ok` is returned rather than swallowed, and a failed read raises instead
     # of quietly ingesting nothing: writing "0 findings" from a failed read is worse than
     # writing nothing at all, because only one of the two is visible.
-    alerts, read_ok = proxy_mod.alerts_snapshot(
+    page = proxy_mod.alerts_page(
         req.container, req.port, base_url=req.base_url, count=req.count
     )
+    alerts, read_ok = page.alerts, page.read_ok
     if not read_ok:
         raise HTTPException(status_code=409, detail={
             "gate": "unavailable",
@@ -1251,6 +1261,12 @@ def ingest_scan_alerts(req: AlertIngestRequest) -> dict[str, Any]:
 
     return {
         "alerts": len(alerts),
+        # *** WHAT DID NOT MAKE IT, STATED NEXT TO WHAT DID. ***
+        # An alert `parse_alert` could not read used to vanish, so nine alerts ingested as seven
+        # and the response said "7" with total confidence. A finding that never parsed is a
+        # finding that never reaches a report, which makes this the ingest route's business and
+        # not a debug detail.
+        "alerts_dropped": page.dropped,
         "findings": state_store.upsert_findings(findings),
         "endpoints": state_store.upsert_endpoints(endpoints),
         # Surfaced immediately as well as persisted: an operator watching a scan finish with

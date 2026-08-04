@@ -6,8 +6,11 @@ import { CopyButton } from "./CopyButton";
 import {
   ApiError,
   getRepeaterStatus,
+  getRepeaterShapes,
+  repeaterPreview,
   repeaterSend,
   type RepeaterExchange,
+  type ShapeVocabulary,
   type RepeaterHeader,
   type RepeaterRequest,
   type RepeaterStatus,
@@ -54,6 +57,19 @@ export function RepeaterScreen() {
   // A second exchange pinned for diffing against `selected`.
   const [diffAgainst, setDiffAgainst] = useState<string | null>(null);
 
+  // PAYLOAD SHAPING (build #18 item 4). An OPTION, not a gate: no confirm, no acknowledgement,
+  // no refusal if unset. A human clicking Send is already the approval, and this changes the
+  // bytes of that same request. It lives on the repeater and NOT on the scanner because ZAP's
+  // API exposes no arbitrary payload transform -- a switch there would have had nothing behind it.
+  const [vocab, setVocab] = useState<ShapeVocabulary | null>(null);
+  const [shapes, setShapes] = useState<string[]>([]);
+  const [preview, setPreview] = useState<{
+    url: string;
+    body: string;
+    shapes_applied: string[];
+    warnings: string[];
+  } | null>(null);
+
   const ctrlRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -61,6 +77,11 @@ export function RepeaterScreen() {
     getRepeaterStatus(ctrl.signal)
       .then(setStatus)
       .catch(() => setStatus(null));
+    // The list comes FROM THE BACKEND so this screen carries no second copy of it -- the drift
+    // trap the credential vault's docstring names.
+    getRepeaterShapes(ctrl.signal)
+      .then(setVocab)
+      .catch(() => setVocab(null));
     return () => ctrl.abort();
   }, []);
 
@@ -86,6 +107,7 @@ export function RepeaterScreen() {
       http2: false,
       engagement_id: engagementId.trim() || null,
       session_id: engagementId.trim() || null,
+      shapes,
     };
     try {
       const ex = await repeaterSend(req, ctrl.signal);
@@ -97,7 +119,41 @@ export function RepeaterScreen() {
     } finally {
       setSending(false);
     }
-  }, [method, url, headers, body, follow, insecure, engagementId, sending]);
+  }, [method, url, headers, body, follow, insecure, engagementId, sending, shapes]);
+
+  /**
+   * Show the request AS IT WOULD GO ON THE WIRE, without sending it. It calls the same backend
+   * function the send path uses, so what is previewed IS what is transmitted -- one derivation
+   * rather than a second implementation that can drift.
+   */
+  const showPreview = useCallback(async () => {
+    if (!url.trim()) return;
+    try {
+      setPreview(
+        await repeaterPreview({
+          method,
+          url: url.trim(),
+          headers: headers
+            .filter((h) => h.name.trim())
+            .map((h) => ({ name: h.name, value: h.value })),
+          body,
+          follow_redirects: follow,
+          insecure,
+          http2: false,
+          engagement_id: null,
+          session_id: null,
+          shapes,
+        })
+      );
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    }
+  }, [method, url, headers, body, follow, insecure, shapes]);
+
+  const toggleShape = (name: string) =>
+    setShapes((cur) =>
+      cur.includes(name) ? cur.filter((s) => s !== name) : [...cur, name]
+    );
 
   /** Load a past exchange's request back into the editor to tweak-and-resend. */
   const loadForEdit = useCallback((ex: RepeaterExchange) => {
@@ -242,6 +298,66 @@ export function RepeaterScreen() {
                 aria-label="Engagement id"
               />
             </div>
+
+            {/* ---- PAYLOAD SHAPING (build #18 item 4) --------------------------------
+                No confirm and no acknowledgement: the repeater is human-only and clicking Send
+                IS the approval. Mark the payload with the span markers below; everything
+                outside them is untouched, and with no shapes selected the markers are simply
+                stripped -- which is what makes shaped-vs-unshaped a ONE-VARIABLE comparison
+                rather than two different requests. */}
+            {vocab && (
+              /* `hp-rp-headers` is the LABELLED-BLOCK wrapper, the same one the headers and
+                 body sections use. The subhead has to sit OUTSIDE `hp-rp-opts`, which is a
+                 flex ROW — inside it the heading rendered on the same line as the first
+                 checkbox. Found by looking at the screen, which is the only way it could be. */
+              <div className="hp-rp-headers">
+                <div className="hp-rp-subhead">
+                  shape the payload &mdash; mark it {vocab.open}like this{vocab.close}
+                </div>
+                <div className="hp-rp-opts">
+                  {Object.entries(vocab.shapes).map(([name, desc]) => (
+                    <label key={name} className="hp-rp-opt" title={desc}>
+                      <input
+                        type="checkbox"
+                        checked={shapes.includes(name)}
+                        onChange={() => toggleShape(name)}
+                      />
+                      {name}
+                    </label>
+                  ))}
+                </div>
+                <button type="button" className="hp-rp-addh" onClick={showPreview}>
+                  preview the bytes
+                </button>
+              </div>
+            )}
+
+            {preview && (
+              <div className="hp-rp-bodywrap">
+                <div className="hp-rp-subhead">
+                  what goes on the wire
+                  {preview.shapes_applied.length
+                    ? ` — ${preview.shapes_applied.join(", ")}`
+                    : " — nothing applied; the markers are stripped either way"}
+                </div>
+                <pre className="hp-rp-body">{preview.url}</pre>
+                {preview.body ? <pre className="hp-rp-body">{preview.body}</pre> : null}
+                {preview.warnings.map((w) => (
+                  <div key={w} className="hp-rp-error">
+                    {w}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {current && current.shapes_applied.length > 0 && (
+              <div className="hp-rp-bodywrap">
+                <div className="hp-rp-subhead">
+                  last send was SHAPED &mdash; {current.shapes_applied.join(", ")}
+                </div>
+                <pre className="hp-rp-body">{current.sent_url}</pre>
+              </div>
+            )}
 
             {error && <div className="hp-rp-error">{error}</div>}
           </section>

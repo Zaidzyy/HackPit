@@ -1,0 +1,108 @@
+{
+  "hosts": [
+    {
+      "host": "api-prod.thatconceptstore.com",
+      "verdict": "fronted",
+      "provider": "Akamai",
+      "cname_chain": [
+        "thatconceptstore.com.edgekey.net",
+        "e28210.a.akamaiedge.net"
+      ],
+      "addresses": [
+        "23.206.197.98",
+        "23.206.197.75",
+        "23.206.197.98",
+        "23.206.197.75",
+        "23.206.197.98",
+        "23.206.197.75",
+        "23.206.197.98",
+        "23.206.197.75"
+      ],
+      "server_header": "",
+      "asn": "20940",
+      "asn_org": "AKAMAI-ASN1 - Akamai International B.V., NL",
+      "evidence": [
+        {
+          "source": "cname",
+          "detail": "CNAME chain reaches thatconceptstore.com.edgekey.net",
+          "provider": "Akamai"
+        },
+        {
+          "source": "cname",
+          "detail": "CNAME chain reaches e28210.a.akamaiedge.net",
+          "provider": "Akamai"
+        },
+        {
+          "source": "asn",
+          "detail": "addresses live in AKAMAI-ASN1 - Akamai International B.V., NL",
+          "provider": "Akamai"
+        }
+      ],
+      "candidate_origins": [],
+      "spf": [],
+      "mx": [
+        "thatconceptstore.com.edgekey.net.",
+        "e28210.a.akamaiedge.net.",
+        "e28210.a.akamaiedge.net."
+      ],
+      "notes": []
+    },
+    {
+      "host": "lapi.yellowblocks.me",
+      "verdict": "fronted",
+      "provider": "Akamai",
+      "cname_chain": [
+        "yellowblocks.me.edgekey.net",
+        "e28210.a.akamaiedge.net"
+      ],
+      "addresses": [
+        "23.206.197.98",
+        "23.206.197.75",
+        "23.206.197.98",
+        "23.206.197.75",
+        "23.206.197.98",
+        "23.206.197.75",
+        "23.206.197.98",
+        "23.206.197.75",
+        "23.206.197.98",
+        "23.206.197.75",
+        "23.206.197.98",
+        "23.206.197.75"
+      ],
+      "server_header": "",
+      "asn": "20940",
+      "asn_org": "AKAMAI-ASN1 - Akamai International B.V., NL",
+      "evidence": [
+        {
+          "source": "cname",
+          "detail": "CNAME chain reaches yellowblocks.me.edgekey.net",
+          "provider": "Akamai"
+        },
+        {
+          "source": "cname",
+          "detail": "CNAME chain reaches e28210.a.akamaiedge.net",
+          "provider": "Akamai"
+        },
+        {
+          "source": "asn",
+          "detail": "addresses live in AKAMAI-ASN1 - Akamai International B.V., NL",
+          "provider": "Akamai"
+        }
+      ],
+      "candidate_origins": [],
+      "spf": [],
+      "mx": [
+        "yellowblocks.me.edgekey.net.",
+        "e28210.a.akamaiedge.net.",
+        "e28210.a.akamaiedge.net."
+      ],
+      "notes": []
+    }
+  ],
+  "fronted": [
+    "api-prod.thatconceptstore.com",
+    "lapi.yellowblocks.me"
+  ],
+  "not_fronted": [],
+  "unknown": []
+}

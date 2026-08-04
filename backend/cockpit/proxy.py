@@ -1355,6 +1355,66 @@ def captured_count(container: str, port: int) -> int:
         return 0
 
 
+class HistoryPage(BaseModel):
+    """One window of captured traffic, WITH THE ARITHMETIC THAT MAKES IT READABLE.
+
+    *** THIS EXISTS BECAUSE A BARE LIST COULD NOT SAY WHAT WAS MISSING (build #18, second pass).
+    :func:`parse_message` returns ``None`` for a message it cannot make sense of and
+    :func:`history` filtered those out, so a window of 200 exchanges of which 50 were unparseable
+    came back as 150 — and nothing anywhere said the other 50 had existed. The operator sees a
+    shorter list and reads it as less traffic.
+
+    That is this repo's recurring silent empty at partial strength: not a confident zero, a
+    confident UNDERCOUNT, which is harder to notice precisely because it looks plausible.
+
+    ``read_ok`` is the same distinction one level up: False means ZAP did not answer with a
+    parseable body at all, which is different from "this daemon captured nothing".
+    """
+
+    exchanges: list["CapturedExchange"] = Field(default_factory=list)
+    total: int = Field(0, description="Messages ZAP holds in total, from its own counter.")
+    window_start: int = Field(0, description="Absolute offset of the first row in this window.")
+    returned: int = Field(0, description="Rows in `exchanges` — what you can actually read.")
+    dropped: int = Field(
+        0, description="Rows ZAP returned that could NOT be parsed and are therefore absent from "
+        "`exchanges`. Non-zero means the list is INCOMPLETE, not that the traffic did not happen."
+    )
+    read_ok: bool = Field(
+        True, description="False means the API did not answer with a parseable body — which is a "
+        "different fact from 'this daemon captured nothing'."
+    )
+
+
+def history_page(container: str, port: int, start: int = 0, count: int = 50) -> HistoryPage:
+    """A window of captured traffic AND what could not be read. See :class:`HistoryPage`.
+
+    The counting half of :func:`history`, split out rather than bolted on so the plain list
+    stays available to the callers that legitimately only want rows (``session_health`` judges
+    shapes; a dropped row has no shape to judge).
+    """
+    total = captured_count(container, port)
+    end = max(0, total - int(start))
+    begin = max(0, end - int(count))
+    span = end - begin
+    if span <= 0:
+        # NOT a failure: an empty window on a daemon that answered is a real, trustworthy zero.
+        # `read_ok` stays True precisely so this case is distinguishable from the one below.
+        return HistoryPage(total=total, window_start=begin, read_ok=True)
+
+    raw = _api_get(container, port, f"{_VIEW_MSGS}?start={begin}&count={span}")
+    try:
+        msgs = json.loads(raw).get("messages") or []
+    except (ValueError, AttributeError, TypeError):
+        return HistoryPage(total=total, window_start=begin, read_ok=False)
+
+    parsed = [parse_message(m, container) for m in msgs]
+    kept = [e for e in parsed if e is not None]
+    return HistoryPage(
+        exchanges=kept, total=total, window_start=begin,
+        returned=len(kept), dropped=len(parsed) - len(kept), read_ok=True,
+    )
+
+
 def history(container: str, port: int, start: int = 0, count: int = 50):
     """RECENT captured exchanges — the NEWEST window, which is not what this used to return.
 
@@ -1381,20 +1441,13 @@ def history(container: str, port: int, start: int = 0, count: int = 50):
     ``start`` is now an offset BACK from the newest, so paging still works and ``start=0`` means
     "the latest window". Order within the window stays chronological — a traffic log reads that
     way, and reversing it would change what every existing caller sees for no stated need.
+
+    THE ROWS ONLY. Whatever could not be parsed is silently absent from this list, which is
+    exactly the undercount build #18's second pass came back for — so anything that REPORTS a
+    count to a human uses :func:`history_page` instead, and this stays the convenience for
+    callers that only want shapes to judge (``session_health``) or records to fold in.
     """
-    total = captured_count(container, port)
-    end = max(0, total - int(start))
-    begin = max(0, end - int(count))
-    count = end - begin
-    if count <= 0:
-        return []
-    raw = _api_get(container, port, f"{_VIEW_MSGS}?start={begin}&count={count}")
-    try:
-        msgs = json.loads(raw).get("messages") or []
-    except (ValueError, AttributeError, TypeError):
-        return []
-    parsed = [parse_message(m, container) for m in msgs]
-    return [e for e in parsed if e is not None]
+    return history_page(container, port, start=start, count=count).exchanges
 
 
 # --------------------------------------------------------------------------- #
@@ -1677,6 +1730,22 @@ class ObservedPolicy(BaseModel):
                               "means the read FAILED, not that ZAP has no rules.")
 
 
+def scanner_ids(container: str, port: int) -> set[int]:
+    """Every active-scan rule id THIS ZAP actually holds. Empty set means the read failed.
+
+    *** WHY THIS EXISTS: ONE UNKNOWN ID POISONS THE WHOLE LIST. *** Measured 2026-08-05 against
+    ZAP 2.17.0: ``disableScanners?ids=7,10045,...,30003,...`` answers
+    ``{"code":"does_not_exist"}`` and disables NOTHING — not the eight ids that do exist, none of
+    them — because one id in the list (30003, Integer Overflow Error) is not installed here. The
+    rule set depends on which add-ons a build ships, so a hard-coded list is a claim about
+    somebody else's install.
+    """
+    rows = _json(_api_get(container, port, _VIEW_SCANNERS, timeout=30)).get("scanners")
+    if not isinstance(rows, list):
+        return set()
+    return {_int(r.get("id")) for r in rows if isinstance(r, dict) and r.get("id") is not None}
+
+
 def observed_scan_policy(container: str, port: int,
                          requested: str = "") -> ObservedPolicy:
     """What the daemon's active-scan configuration actually is. READ-ONLY.
@@ -1687,7 +1756,7 @@ def observed_scan_policy(container: str, port: int,
     """
     wanted = set(scan_policy_for(requested).disabled_scanners) if requested else set()
 
-    rows = _json(_api_get(container, port, _VIEW_SCANNERS)).get("scanners")
+    rows = _json(_api_get(container, port, _VIEW_SCANNERS, timeout=30)).get("scanners")
     disabled: set[int] = set()
     seen = 0
     if isinstance(rows, list):
@@ -1726,6 +1795,14 @@ def apply_scan_policy(container: str, port: int, name: str) -> ObservedPolicy:
     policy — the same class of mistake as measuring `api.key` against a config a previous run
     wrote.
 
+    *** IT DISABLES ONLY THE IDS THIS ZAP ACTUALLY HOLDS, AND THAT IS NOT A CONVENIENCE. ***
+    Measured 2026-08-05: ``disableScanners`` rejects the ENTIRE list with
+    ``{"code":"does_not_exist"}`` if ONE id in it is not installed — so a single missing rule
+    silently disabled nothing at all. `targeted-web` named nine ids, this build has eight of
+    them, and the policy was a no-op for exactly that reason. The intersection is taken against
+    :func:`scanner_ids` first, and the ids that are not there come back as ``not_held`` instead
+    of being counted as a success.
+
     Never raises and never refuses. A policy that would not apply leaves a wider scan, which is
     a worse measurement and not a safety event; the returned :class:`ObservedPolicy` says so.
     """
@@ -1740,8 +1817,22 @@ def apply_scan_policy(container: str, port: int, name: str) -> ObservedPolicy:
                      f"{_ACTION_POLICY_THRESHOLD}?id={category}"
                      f"&alertThreshold={quote_plus(policy.alert_threshold)}")
         if policy.disabled_scanners:
-            ids = ",".join(str(i) for i in sorted(policy.disabled_scanners))
-            _api_get(container, port, f"{_ACTION_DISABLE_SCANNERS}?ids={quote_plus(ids)}")
+            present = scanner_ids(container, port)
+            # An EMPTY read means we could not see the rule list at all. Sending the full list
+            # anyway would reproduce the poisoning above; sending nothing is the honest choice,
+            # and the read-back reports every requested id as `not_held`.
+            wanted = sorted(set(policy.disabled_scanners) & present) if present else []
+            if wanted:
+                ids = ",".join(str(i) for i in wanted)
+                answer = _api_get(container, port,
+                                  f"{_ACTION_DISABLE_SCANNERS}?ids={quote_plus(ids)}")
+                # The answer is READ, not discarded. Ignoring it is what let a `does_not_exist`
+                # look like a policy that applied.
+                if str(_json(answer).get("code", "")):
+                    # Fall back to one call per id: a rule ZAP refuses individually is a fact
+                    # about that rule, and it must not take the other eight down with it.
+                    for one in wanted:
+                        _api_get(container, port, f"{_ACTION_DISABLE_SCANNERS}?ids={one}")
     except Exception:  # noqa: BLE001 - the read-back below is what the caller is told
         pass
     return observed_scan_policy(container, port, requested=policy.name)
@@ -2178,7 +2269,13 @@ def start_scan(req: ScanStartRequest) -> Scan:
             )
         raise ProxyRefused(f"ZAP refused the scan: {code} — {body.get('message', '')}")
 
-    sid = str(body.get("scan", "")).strip()
+    # *** THE TWO SCAN ACTIONS NAME THE ID DIFFERENTLY, AND IT COST A FAILED PROOF. ***
+    # `ascan/action/scan` answers `{"scan":"7"}`; `ascan/action/scanAsUser` answers
+    # `{"scanAsUser":"6"}` (measured, ZAP 2.17.0). Reading only "scan" made every authenticated
+    # scan look like a refusal — `ZAP returned no scan id` — while the scan was in fact RUNNING.
+    # That is the worst direction for this particular error: attack traffic in flight, reported
+    # as not started, with no id to stop it by.
+    sid = str(body.get("scan") or body.get("scanAsUser") or "").strip()
     if not sid:
         raise ProxyRefused(f"ZAP returned no scan id: {raw[:200]!r}")
 
@@ -2269,19 +2366,36 @@ def scan_alerts(container: str, port: int, base_url: str = "",
     return alerts
 
 
-def alerts_snapshot(container: str, port: int, base_url: str = "",
-                    start: int = 0, count: int = 50) -> tuple[list[ScanAlert], bool]:
-    """``(alerts, read_ok)`` — THE SAME READ, WITH THE FAILURE TOLD APART FROM THE ZERO.
+class AlertPage(BaseModel):
+    """Alerts, WITH what could not be read and what could not be parsed. See :class:`HistoryPage`.
 
-    *** BUILD #18 ITEM 8, AND THIS IS THE ONE WITH TEETH. ***
+    Same two distinctions, one layer over: ``read_ok`` separates "ZAP holds no alerts" from "we
+    could not ask", and ``dropped`` separates "seven alerts" from "nine alerts, two of which this
+    parser could not make sense of".
+    """
+
+    alerts: list[ScanAlert] = Field(default_factory=list)
+    returned: int = 0
+    dropped: int = Field(
+        0, description="Rows ZAP returned that could NOT be parsed. Non-zero means this list is "
+        "INCOMPLETE — and it is the ingest route's business, because a finding that never "
+        "parsed is a finding that never reaches a report."
+    )
+    read_ok: bool = True
+
+
+def alerts_page(container: str, port: int, base_url: str = "",
+                start: int = 0, count: int = 50) -> AlertPage:
+    """*** BUILD #18 ITEM 8, AND THIS IS THE ONE WITH TEETH. ***
+
     :func:`scan_alerts` returns ``[]`` both when ZAP holds no alerts and when the read failed —
     a wrong key, a dead daemon, bytes that would not decode, a `docker exec` that errored. Its
     caller `POST /proxy/alerts/ingest` then writes "0 findings ingested" into engagement state,
     and a REPORT is rendered from that state. That is a confident zero travelling all the way to
     a deliverable, which is the exact failure shape build #17 found three of.
 
-    ``read_ok`` is False when ZAP did not answer with a JSON object carrying an ``alerts`` key.
-    An empty list WITH ``read_ok`` True is a real, trustworthy zero.
+    ``dropped`` closes the partial-strength version of the same thing: an alert `parse_alert`
+    could not read used to vanish, so nine alerts came back as seven and nothing said so.
     """
     query = f"?start={int(start)}&count={int(count)}"
     if base_url:
@@ -2289,9 +2403,21 @@ def alerts_snapshot(container: str, port: int, base_url: str = "",
     body = _json(_api_get(container, port, _VIEW_ALERTS + query, timeout=20))
     rows = body.get("alerts")
     if not isinstance(rows, list):
-        return [], False
+        return AlertPage(read_ok=False)
     parsed = [parse_alert(a) for a in rows]
-    return [a for a in parsed if a is not None], True
+    kept = [a for a in parsed if a is not None]
+    return AlertPage(alerts=kept, returned=len(kept),
+                     dropped=len(parsed) - len(kept), read_ok=True)
+
+
+def alerts_snapshot(container: str, port: int, base_url: str = "",
+                    start: int = 0, count: int = 50) -> tuple[list[ScanAlert], bool]:
+    """``(alerts, read_ok)`` — the two-value form, for callers that do not report a count.
+
+    An empty list WITH ``read_ok`` True is a real, trustworthy zero.
+    """
+    page = alerts_page(container, port, base_url=base_url, start=start, count=count)
+    return page.alerts, page.read_ok
 
 
 def findings_from(alerts, session_id: str, run_id: str | None = None):
@@ -2898,6 +3024,35 @@ class AuthContext(BaseModel):
     )
 
 
+def _maybe_json_list(raw: Any) -> list[str]:
+    """A ZAP field that is EITHER a list OR a JSON-encoded string containing one.
+
+    *** MEASURED, AND IT COST A FAILED PROOF (2026-08-05). *** `context/view/context` returns::
+
+        "includeRegexs": "[\\"\\\\\\\\Qhttp://host:3000\\\\\\\\E.*\\"]"
+
+    — a *string*, not an array, while `excludeRegexs` is the string ``"[]"``. The first reader
+    here did ``if isinstance(included, list)`` and fell through to ``[]``, so a context whose
+    include regex WAS correctly installed reported as having none. That is this build's own
+    silent-empty family, produced by the code written to hunt it: an unexpected SHAPE read as an
+    absent VALUE.
+
+    Both shapes are handled, and something that is neither comes back empty — which is the
+    honest answer, because there is nothing to report.
+    """
+    if isinstance(raw, list):
+        return [str(item) for item in raw]
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return [raw]
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed]
+        return [str(parsed)]
+    return []
+
+
 def observed_auth_context(container: str, port: int, context_name: str) -> AuthContext:
     """What ZAP holds for this context. READ-ONLY. ``context_id == ""`` means it does not exist.
 
@@ -2911,7 +3066,7 @@ def observed_auth_context(container: str, port: int, context_name: str) -> AuthC
         return AuthContext(container=container, port=port, context_name=context_name)
 
     ctx_id = str(body.get("id", "")).strip()
-    included = body.get("includeRegexs") or body.get("includedRegexs") or []
+    included = _maybe_json_list(body.get("includeRegexs") or body.get("includedRegexs"))
     users = _json(_api_get(container, port,
                            f"{_VIEW_USERS}?contextId={quote_plus(ctx_id)}")).get("usersList")
     user_id = user_name = ""
@@ -2920,29 +3075,50 @@ def observed_auth_context(container: str, port: int, context_name: str) -> AuthC
         user_id = str(first.get("id", "")).strip()
         user_name = str(first.get("name", "")).strip()
 
-    def _scalar(path: str, key: str) -> str:
-        answer = _json(_api_get(container, port, f"{path}?contextId={quote_plus(ctx_id)}"))
-        value = answer.get(key)
-        if isinstance(value, dict):
-            return str(value.get("methodName") or value.get("className") or "")
-        return "" if value is None else str(value)
+    def _scalar(path: str, *keys: str) -> str:
+        """One context view, unwrapped to a scalar WHATEVER SHAPE ZAP CHOSE FOR IT.
 
-    session_method = _scalar(_VIEW_SESSION_METHOD, "methodName") or _scalar(
-        _VIEW_SESSION_METHOD, "getSessionManagementMethod")
-    auth_method = _scalar(_VIEW_AUTH_METHOD, "methodName") or _scalar(
-        _VIEW_AUTH_METHOD, "getAuthenticationMethod")
+        *** THE TWO VIEWS DISAGREE, AND THE FIRST READER ASSUMED THEY DID NOT (measured). ***
+        `getSessionManagementMethod` answers ``{"methodName": "cookieBasedSessionManagement"}``
+        — the value at the top level. `getAuthenticationMethod` answers
+        ``{"method": {"methodName": "formBasedAuthentication", "loginUrl": ...}}`` — a nested
+        object under a different key. Reading only ``methodName`` therefore reported NO
+        authentication method for a context that had one correctly configured, and the proof
+        failed with `tier=2` while ZAP held a tier-3 context.
+
+        That is the same defect as `includeRegexs` arriving as a JSON string, and as the alert
+        list arriving unreadable: **an unexpected SHAPE read as an ABSENT VALUE**. Three
+        instances in one build, in the code written to hunt exactly that. So this tries every
+        spelling and unwraps a nested object rather than assuming either.
+        """
+        answer = _json(_api_get(container, port, f"{path}?contextId={quote_plus(ctx_id)}"))
+        for key in keys:
+            value = answer.get(key)
+            if isinstance(value, dict):
+                name = value.get("methodName") or value.get("className")
+                if name:
+                    return str(name)
+                continue
+            if value not in (None, ""):
+                return str(value)
+        return ""
+
+    session_method = _scalar(
+        _VIEW_SESSION_METHOD, "methodName", "method", "getSessionManagementMethod"
+    )
+    auth_method = _scalar(
+        _VIEW_AUTH_METHOD, "method", "methodName", "getAuthenticationMethod"
+    )
 
     tier = 0
     if ctx_id:
         tier = 3 if (user_id and "form" in auth_method.lower()) else 2
     return AuthContext(
         container=container, port=port, context_id=ctx_id, context_name=context_name,
-        included=[str(r) for r in included] if isinstance(included, list) else [],
+        included=included,
         session_method=session_method, auth_method=auth_method,
-        logged_in_regex=_scalar(_VIEW_LOGGED_IN, "logged_in_regex")
-        or _scalar(_VIEW_LOGGED_IN, "getLoggedInIndicator"),
-        logged_out_regex=_scalar(_VIEW_LOGGED_OUT, "logged_out_regex")
-        or _scalar(_VIEW_LOGGED_OUT, "getLoggedOutIndicator"),
+        logged_in_regex=_scalar(_VIEW_LOGGED_IN, "logged_in_regex", "getLoggedInIndicator"),
+        logged_out_regex=_scalar(_VIEW_LOGGED_OUT, "logged_out_regex", "getLoggedOutIndicator"),
         user_id=user_id, user_name=user_name, tier=tier,
     )
 
@@ -3039,19 +3215,6 @@ def apply_auth_context(req: AuthContextRequest, container: str) -> AuthContext:
              f"{_ACTION_SET_SESSION_METHOD}?contextId={quote_plus(ctx_id)}"
              f"&methodName={quote_plus(SESSION_METHOD_COOKIE)}&methodConfigParams=")
 
-    for regex, action, label in (
-        (req.logged_in_regex, _ACTION_SET_LOGGED_IN, "loggedInIndicatorRegex"),
-        (req.logged_out_regex, _ACTION_SET_LOGGED_OUT, "loggedOutIndicatorRegex"),
-    ):
-        if not regex.strip():
-            continue
-        # POST, not GET: an indicator regex is not a secret, but it is arbitrary operator text
-        # with `&` and `#` in it as often as not, and the same escaping argument that percent-
-        # encodes the scan target applies — a regex containing `&` on a query string would set
-        # half a regex and silently add a parameter.
-        _api_post(container, req.port, action,
-                  {"contextId": ctx_id, label: regex.strip()})
-
     tier = 2
     if req.login_url.strip():
         tier = 3
@@ -3066,11 +3229,20 @@ def apply_auth_context(req: AuthContextRequest, container: str) -> AuthContext:
                 "no logged-out indicator was set, so ZAP has no trigger for automatic re-login — "
                 "Tier 3 will authenticate once and never notice the session ending"
             )
+        # *** THE INNER VALUES ARE PERCENT-ENCODED, AND THAT IS NOT DECORATION. ***
+        # `authMethodConfigParams` is ITSELF a query string, so the login body — which is a
+        # query string too, full of `&` and `=` — has to be encoded before it goes inside one,
+        # or ZAP reads `password={%password%}` as a THIRD config parameter and the method never
+        # takes. Measured: without this, `getAuthenticationMethod` came back empty and the
+        # context stayed at tier 2 with no error anywhere.
+        config_params = (
+            f"loginUrl={quote_plus(req.login_url.strip())}"
+            f"&loginRequestData={quote_plus(req.login_body)}"
+        )
         _api_post(container, req.port, _ACTION_SET_AUTH_METHOD, {
             "contextId": ctx_id,
             "authMethodName": AUTH_METHOD_FORM,
-            "authMethodConfigParams":
-                f"loginUrl={req.login_url.strip()}&loginRequestData={req.login_body}",
+            "authMethodConfigParams": config_params,
         })
         if req.credential is not None:
             username, secret = _resolve_login_secret(req.credential)
@@ -3101,6 +3273,25 @@ def apply_auth_context(req: AuthContextRequest, container: str) -> AuthContext:
                 "there is no account to log in as — this is a Tier 2 context with a login form "
                 "described but never submitted"
             )
+
+    # *** THE INDICATORS GO LAST, AFTER THE AUTHENTICATION METHOD. ***
+    # In ZAP's model an indicator belongs TO the authentication method, so setting the method
+    # replaces the method object and takes any indicator set before it with it. Measured: a
+    # Tier 2 run held both indicators and the identical Tier 3 run held neither, with no error
+    # from any call — the setters had answered OK and then been overwritten. An OK is not a
+    # result, for the third time in this module.
+    for regex, action, label in (
+        (req.logged_in_regex, _ACTION_SET_LOGGED_IN, "loggedInIndicatorRegex"),
+        (req.logged_out_regex, _ACTION_SET_LOGGED_OUT, "loggedOutIndicatorRegex"),
+    ):
+        if not regex.strip():
+            continue
+        # POST, not GET: an indicator regex is not a secret, but it is arbitrary operator text
+        # with `&` and `#` in it as often as not, and the same escaping argument that percent-
+        # encodes the scan target applies — a regex containing `&` on a query string would set
+        # half a regex and silently add a parameter.
+        _api_post(container, req.port, action,
+                  {"contextId": ctx_id, label: regex.strip()})
 
     held = observed_auth_context(container, req.port, name)
     if held.tier and held.tier < tier:

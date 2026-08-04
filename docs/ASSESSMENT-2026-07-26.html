@@ -365,6 +365,9 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#item-9-one-authored-entry-and-the-kb-was-checked-rather-than-assumed">Item 9 — one authored entry, and the KB was checked rather than assumed</a></li>
 <li><a href="#what-was-not-built-and-why">What was NOT built, and why</a></li>
 <li><a href="#verification_7">Verification</a></li>
+<li><a href="#build-18-run-the-image-rebuilt-the-proofs-executed-and-eight-defects-the-read-backs-caught">Build #18, RUN — the image rebuilt, the proofs executed, and eight defects the read-backs caught</a></li>
+<li><a href="#the-frontend-built-and-looked-at">The frontend — built, and LOOKED AT</a></li>
+<li><a href="#the-parse-drop-count-closed">The parse-drop count, closed</a></li>
 </ul>
 </li>
 </ul>
@@ -3667,14 +3670,13 @@ and the KB fixture regenerated. Three separate guards fired, each naming its own
 <h3 id="what-was-not-built-and-why">What was NOT built, and why</h3>
 <ul>
 <li><strong>Route auth and scanner pacing</strong> — Zaid's call, skipped for this build.</li>
-<li><strong>No frontend.</strong> Every capability here is reachable over the API and exercised by the proof
-  scripts; a cockpit panel for bypass headers, policies and auth contexts is real work with a real
-  trap attached (a bare <code>.hp-card</code> is <code>opacity:0</code>, and tsc, build and eslint cannot see whether a
-  CSS class exists), and doing it unverified overnight would have shipped screens nobody had
-  looked at. <code>tsc --noEmit</code> exits 0, <code>next build</code> exits 0, and eslint sits at the accepted
-  baseline of <strong>11 errors + 1 warning</strong>, unchanged — this build touches no frontend file.</li>
-<li><strong>The parse-drop count</strong> from item 8, for the reason given above.</li>
-<li><strong>The image is NOT rebuilt in this commit.</strong> Layer 9g is written and asserted at build time, but
+<li>
+<p>~~<strong>No frontend.</strong>~~ <strong>SUPERSEDED — the frontend was built and looked at; see the RUN section below.</strong></p>
+</li>
+<li>
+<p>~~<strong>The parse-drop count</strong> from item 8.~~ <strong>SUPERSEDED — closed; see the RUN section.</strong></p>
+</li>
+<li>~~<strong>The image is NOT rebuilt in this commit.</strong>~~ <strong>SUPERSEDED — rebuilt, recreated and every proof run; see the RUN section.</strong> The original note read: Layer 9g is written and asserted at build time, but
   a rebuild is about 45 minutes and recreating the engage sandbox destroys the ZAP daemon and its
   capture. It is bundled as ONE rebuild, deliberately last, and <code>docs/proof/build18_run.sh</code> prints
   the exact sequence — <code>docker compose ... build engage-sandbox</code> (the SERVICE) then
@@ -3708,5 +3710,144 @@ a self-verifying script under <code>docs/proof/</code>, each printing <code>VERD
 failure, with <code>build18_run.sh</code> chaining them on <strong>captured</strong> exit codes — <code>RC=$?</code> after a pipe is
 tee's status, which is 0 whenever tee could write the file, and that bug shipped into two wrappers
 in build #17 before it was caught.</p>
+<h3 id="build-18-run-the-image-rebuilt-the-proofs-executed-and-eight-defects-the-read-backs-caught">Build #18, RUN — the image rebuilt, the proofs executed, and eight defects the read-backs caught</h3>
+<p>The image was rebuilt (layer 9g), the engage sandbox recreated onto it, the port re-published
+through <code>exposure.py</code>'s own path, and every proof run. <code>docker/proof/browser_intercept_proof.sh</code>
+is <strong>25 passed, 0 failed</strong> on the new image, so nothing build #17 established was disturbed.</p>
+<p><strong>Item 5, the headline result. curl-impersonate completes requests bare curl cannot.</strong></p>
+<table>
+<thead>
+<tr>
+<th>host</th>
+<th>bare curl</th>
+<th><code>curl_chrome116</code></th>
+<th>verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>example.com (control)</td>
+<td>200, 559 B</td>
+<td>200, 318 B</td>
+<td>both fine — no client wall</td>
+</tr>
+<tr>
+<td><code>api-prod.thatconceptstore.com</code></td>
+<td><strong>000, 0 B</strong></td>
+<td><strong>404, 431 B</strong></td>
+<td>IMPERSONATION WINS</td>
+</tr>
+<tr>
+<td><code>lapi.yellowblocks.me</code></td>
+<td><strong>000, 0 B</strong></td>
+<td><strong>404, 431 B</strong></td>
+<td>IMPERSONATION WINS</td>
+</tr>
+</tbody>
+</table>
+<p><code>000</code> is curl never completing a request — the same h2-reset/timeout wall build #17 measured on
+nine of eleven hosts. A <code>404</code> is the ORIGIN answering: these are API hosts, so <code>/</code> legitimately
+has nothing at it, and the point is that the request arrived at all. <strong>The Chrome 116 fingerprint
+is enough for this edge</strong>, which was an open question when the layer was written. The control
+matters as much as the result: without example.com answering both clients, "both refused" and "no
+egress" would look identical.</p>
+<p><strong>Item 2 answers the question the build exists for, and the answer is NO.</strong> The plan hoped
+<code>api-prod.thatconceptstore.com</code> and <code>lapi.yellowblocks.me</code> might be reachable directly, in which
+case two of eleven hosts would need none of items 1, 3, 4 or 5. They are not. Both are Akamai —
+and they resolve through the <strong>same edge node</strong>, <code>e28210.a.akamaiedge.net</code>, to the same two
+addresses in AS20940. They are two hostnames on one Akamai property, so they need all of it.
+A premise of the plan, tested and false.</p>
+<p><strong>Item 4 measured, after the proof caught its own harness being wrong.</strong> Against a naive
+single-decode signature matcher, with both controls blocking: <strong>5 of 7 shapes turn a 403 into a
+200</strong> — double-url-encode, case-vary, sql-comment, whitespace-tab, and sql-comment+url-encode.
+Two correctly do not: plain <code>url-encode</code> (the matcher decodes once, which is exactly what that
+transform is a probe FOR) and <code>param-pollution</code> against a matcher that reads the whole query
+string. That is the honest shape of a result — some transforms defeat this rule and some do not,
+and which is which is the useful part.</p>
+<p><strong>The first run of that proof FAILED, and it was right to.</strong> Four cases came back HTTP 000: the
+payload carried a raw space and a space is not legal in a URL, so curl never sent them. The
+control did not block, the script said so and exited 1 rather than reporting four bypasses that
+were really four requests that never left. The payload now travels in a POST body, <code>param-pollution</code>
+gets its own block with its own control, and a request that never completed is counted as
+NOTHING rather than as a bypass. Build #17's lesson — three of its findings came from its own
+scripts being wrong — arriving on schedule, and caught in one run by the control.</p>
+<p><strong>Item 3's first measurement was <code>PASS-NO-BENEFIT</code>, and the read-back said why.</strong>
+<code>targeted-web</code> saved <strong>-1 requests of 376</strong> while <code>not_held</code> listed all nine plugin ids. The
+cause: <strong>ZAP rejects the ENTIRE <code>disableScanners</code> list if ONE id in it is not installed.</strong> This
+build has 30001 and 30002 but not 30003, so <code>ids=7,10045,...,30003,...</code> answered
+<code>{"code":"does_not_exist"}</code> and disabled <strong>nothing at all</strong> — a policy that quietly did nothing,
+which is precisely the fake knob the plan forbade. <code>apply_scan_policy</code> now intersects against
+<code>scanner_ids()</code> first, READS the answer instead of discarding it, and falls back to one call per
+id. Re-measured: <strong>targeted-web sends 264 requests where default sends 376 — 112 fewer, 29.8%,
+with no alerts lost.</strong></p>
+<p><strong>Items 6 and 7: Tier 2 and Tier 3 both green against the lab, after four more read-back
+catches.</strong> Every one of these answered <code>{"Result":"OK"}</code> and either did nothing or was read
+wrongly:</p>
+<ul>
+<li><strong><code>includeRegexs</code> comes back as a JSON-ENCODED STRING</strong>, not an array, while <code>excludeRegexs</code>
+  is the string <code>"[]"</code>. An <code>isinstance(x, list)</code> reader fell through to <code>[]</code>, so a context whose
+  include regex WAS installed reported as having none.</li>
+<li><strong>The two context views nest differently.</strong> <code>getSessionManagementMethod</code> answers
+  <code>{"methodName": …}</code>; <code>getAuthenticationMethod</code> answers <code>{"method": {"methodName": …}}</code>. Reading
+  only <code>methodName</code> reported no authentication method for a context that had one, and every
+  Tier 3 context read back as Tier 2.</li>
+<li><strong>Setting the authentication method REPLACES it, taking any indicator set beforehand with it.</strong>
+  A Tier 2 run held both indicators; the identical Tier 3 run held neither. Indicators now go
+  last.</li>
+<li><strong><code>authMethodConfigParams</code> is itself a query string</strong>, so a login body full of <code>&amp;</code> and <code>=</code> has
+  to be percent-encoded before being nested inside one.</li>
+<li><strong><code>ascan/action/scan</code> answers <code>{"scan":"7"}</code> but <code>scanAsUser</code> answers <code>{"scanAsUser":"6"}</code>.</strong>
+  Reading only <code>scan</code> made every authenticated scan raise <code>ZAP returned no scan id</code> <strong>while the
+  scan was running</strong> — attack traffic in flight, reported as not started, with no id to stop it
+  by. The worst direction that error could have taken.</li>
+</ul>
+<p>Three of those five are the same shape as item 8's whole subject: <strong>an unexpected SHAPE read as
+an ABSENT VALUE.</strong> They were found in the code written to hunt exactly that, which is worth
+stating plainly rather than smoothing over. All six are now locked by hermetic tests that assert
+the property rather than the spelling.</p>
+<p><strong>The measured fact item 1 was built to leave open is now closed.</strong> This ZAP 2.17.0 accepts
+<code>/JSON/replacer/action/addRule/</code>. The proof is 11 of 11: the rule is held (read back, not the
+OK), it is enabled, it holds a non-empty replacement, the reported rule does NOT carry the value,
+<strong>the header is on the outgoing request read back out of ZAP's own history</strong>, the value on the
+wire is the value that was set, and it comes off again.</p>
+<h3 id="the-frontend-built-and-looked-at">The frontend — built, and LOOKED AT</h3>
+<p>Every capability is now reachable from the cockpit: the bypass header and the authenticated
+context on <code>:proxy</code>, the scan-policy selector with each disabled rule's reason beside it, the
+shaping controls and a byte-level preview on <code>:repeater</code>, and the fronting sweep on the
+engagement panel — <strong>next to the scope, because the scope is its input</strong>. It gets no tile of its
+own: none of the four band hints is TRUE of a passive OSINT sweep, and a tile whose band makes a
+false posture claim is worse than no tile.</p>
+<p><code>tsc --noEmit</code> 0, <code>next build</code> 0, eslint back at the <strong>11 errors + 1 warning</strong> baseline —
+one new error appeared and was fixed by DERIVING the header names from the live proxy instead of
+storing-and-syncing them in an effect, per the frontend's own note.</p>
+<p><strong>Four things were only visible by looking, which is the whole point of the rule.</strong></p>
+<ol>
+<li>The shaping heading rendered <strong>on the same line as the first checkbox</strong> — <code>hp-rp-opts</code> is a
+   flex row and the subhead belonged outside it.</li>
+<li>The fronting buttons wore <code>hp-ck-approve</code>, the <strong>approve-a-real-target-command</strong> style, which
+   made two DNS lookups the loudest thing on the page. Same class of defect as the <code>.hp-tn-start</code>
+   visual-hierarchy bug the CSS-vocabulary test records.</li>
+<li><code>ONE &lt;code&gt;HEAD&lt;/code&gt;request per host</code> — a missing space in JSX.</li>
+<li><strong>A candidate origin rendered as an empty <code>mx:</code> chip.</strong> <code>example.com</code> publishes a NULL MX
+   (<code>0 .</code>, RFC 7505 — "this domain sends no mail"); stripping the trailing dot left an empty
+   host and the code appended a lead pointing at nowhere. It is now a note explaining the null
+   MX, and the SPF side is guarded the same way. <strong>No typecheck, build or lint could see any of
+   the four</strong>, and the CSS-vocabulary test — which passed throughout — only ever claimed the
+   classes exist.</li>
+</ol>
+<h3 id="the-parse-drop-count-closed">The parse-drop count, closed</h3>
+<p>Build #18's first pass left this open as "real but partly visible". It is closed now, because
+the partly-visible version is the dangerous one: not a confident zero but a <strong>confident
+UNDERCOUNT</strong>, which is harder to notice precisely because it looks plausible. A window of 200
+exchanges of which 50 were unparseable arrived as 150 and read as less traffic.</p>
+<p><code>GET /cockpit/proxy/history</code> now answers with a <code>HistoryPage</code> — <code>exchanges</code>, <code>total</code>,
+<code>window_start</code>, <code>returned</code>, <strong><code>dropped</code></strong> and <strong><code>read_ok</code></strong> — rather than a bare list, and the
+<code>:proxy</code> panel says <em>"showing N of M captured"</em> plus, when it is not zero, <em>"N rows could not be
+parsed and are missing from this list. The traffic happened; it is the reading of it that
+failed."</em> <code>alerts_page</code> does the same for alerts, and the ingest response carries
+<code>alerts_dropped</code> because a finding that never parsed is a finding that never reaches a report.
+<code>history()</code> keeps returning bare rows for the callers that only want shapes to judge.</p>
+<p>An empty window on a daemon that ANSWERED still reports <code>read_ok: true</code> — the trustworthy zero.
+That distinction is what makes <code>read_ok: false</code> mean anything.</p>
 </body>
 </html>

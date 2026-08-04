@@ -384,12 +384,26 @@ def analyse(host: str, *, with_ct: bool = False) -> HostFronting:
     # address a domain sends mail from is often the address the website is really on.
     for record in result.mx:
         parts = record.split()
-        if len(parts) >= 2:
-            result.candidate_origins.append(f"mx:{parts[-1].rstrip('.')}")
+        if len(parts) < 2:
+            continue
+        host = parts[-1].rstrip(".")
+        # A NULL MX is `0 .` (RFC 7505) — "this domain sends no mail". Stripping the dot leaves
+        # an EMPTY host, and the first version appended `mx:` with nothing after it: a lead
+        # pointing at nowhere, rendered as a chip an operator would try to chase. Seen in the
+        # browser on the first real run, which is the only place it was visible.
+        if not host:
+            result.notes.append(
+                "the MX record is a null MX (RFC 7505) — this domain publishes that it sends no "
+                "mail, so there is no mail host to use as an origin lead"
+            )
+            continue
+        result.candidate_origins.append(f"mx:{host}")
     for record in result.spf:
         for token in record.replace('"', "").split():
             if token.lower().startswith(("ip4:", "ip6:")):
-                result.candidate_origins.append(f"spf:{token.split(':', 1)[1]}")
+                value = token.split(":", 1)[1].strip()
+                if value:
+                    result.candidate_origins.append(f"spf:{value}")
 
     if with_ct:
         labels = clean.split(".")

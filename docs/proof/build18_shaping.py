@@ -81,9 +81,16 @@ HTTPServer(("127.0.0.1", {PORT}), H).serve_forever()
 
 PAYLOAD = "' OR 1=1"
 
-#: Each row is (shape list, what it is testing). The FIRST row is the CONTROL: unshaped, and it
-#: must be BLOCKED, or the matcher is not matching and every "bypass" below is meaningless.
-CASES: list[tuple[list[str], str]] = [
+#: *** THE PAYLOAD TRAVELS IN A POST BODY, AND THE FIRST RUN OF THIS SCRIPT IS WHY. ***
+#: Written against a query string, every case whose shaped payload still contained a RAW SPACE
+#: came back HTTP 000 — `' OR 1=1`, `' oR 1=1`, the tab variant and the polluted pair. curl never
+#: sent them: a space is not legal in a URL. So the CONTROL did not block, and the script said so
+#: and exited 1 rather than reporting four "bypasses" that were really four requests that never
+#: left. That is build #17's lesson arriving on schedule — three of its findings came from its
+#: own scripts being wrong — and the control is the only reason it was caught in one run.
+#:
+#: A form body carries a raw space fine, which is also where injection payloads usually go.
+BODY_CASES: list[tuple[list[str], str]] = [
     ([], "CONTROL: unshaped -- must be BLOCKED or this whole run proves nothing"),
     (["url-encode"], "percent-encode everything (one decode layer at the edge)"),
     (["double-url-encode"], "encode twice -- the edge decodes once, the app decodes again"),
@@ -91,7 +98,16 @@ CASES: list[tuple[list[str], str]] = [
     (["sql-comment"], "whitespace becomes /**/, which SQL reads as a space"),
     (["whitespace-tab"], "spaces become tabs"),
     (["sql-comment", "url-encode"], "comment first, then encode the comment"),
-    (["param-pollution"], "duplicate the parameter -- which copy is inspected?"),
+]
+
+#: `param-pollution` acts on a QUERY STRING and has nothing to do in a body, so it gets its own
+#: block — with its OWN control, because a block whose control is somewhere else is not a
+#: measurement. The payload here is pre-encoded so it is URL-legal unshaped; the matcher unquotes
+#: once, so it still trips the signature and the control still blocks.
+QUERY_PAYLOAD = "'%20OR%201=1"
+QUERY_CASES: list[tuple[list[str], str]] = [
+    ([], "CONTROL: unshaped query -- must be BLOCKED"),
+    (["param-pollution"], "duplicate the parameter -- which copy does the server read?"),
 ]
 
 
@@ -151,20 +167,42 @@ def main() -> int:
     print()
 
     rows: list[tuple[str, int, str, str]] = []
+    controls: list[tuple[str, int]] = []
     try:
-        for shapes, why in CASES:
+        print("-- payload in a POST BODY (a raw space is legal there; in a URL it is not) --")
+        for shapes, why in BODY_CASES:
+            req = repeater.RepeaterRequest(
+                method="POST",
+                url=f"http://127.0.0.1:{PORT}/search",
+                body=f"q={shaping.SHAPE_OPEN}{PAYLOAD}{shaping.SHAPE_CLOSE}",
+                shapes=shapes,
+            )
+            _, sent_body, _, warnings = repeater.shape_request(req)
+            status = repeater.send(req).response.status or 0
+            label = ",".join(shapes) or "(none)"
+            rows.append((label, status, sent_body, why))
+            if label == "(none)":
+                controls.append(("body", status))
+            print(f"  {status:<4} {label:<28} body={sent_body}")
+            for warning in warnings:
+                print(f"       warn: {warning}")
+
+        print()
+        print("-- payload in a QUERY STRING, pre-encoded so it is URL-legal unshaped --")
+        for shapes, why in QUERY_CASES:
             req = repeater.RepeaterRequest(
                 method="GET",
                 url=(f"http://127.0.0.1:{PORT}/search?q="
-                     f"{shaping.SHAPE_OPEN}{PAYLOAD}{shaping.SHAPE_CLOSE}"),
+                     f"{shaping.SHAPE_OPEN}{QUERY_PAYLOAD}{shaping.SHAPE_CLOSE}"),
                 shapes=shapes,
             )
-            sent_url, _, applied, warnings = repeater.shape_request(req)
-            exchange = repeater.send(req)
-            status = exchange.response.status or 0
-            rows.append((",".join(shapes) or "(none)", status,
-                         sent_url.split("?", 1)[-1], why))
-            print(f"  {status}  {','.join(shapes) or '(none)':<28} q={sent_url.split('q=', 1)[-1]}")
+            sent_url, _, _, warnings = repeater.shape_request(req)
+            status = repeater.send(req).response.status or 0
+            label = ("query:" + (",".join(shapes) or "(none)"))
+            rows.append((label, status, sent_url.split("?", 1)[-1], why))
+            if shapes == []:
+                controls.append(("query", status))
+            print(f"  {status:<4} {label:<28} {sent_url.split('?', 1)[-1]}")
             for warning in warnings:
                 print(f"       warn: {warning}")
     finally:
@@ -174,28 +212,35 @@ def main() -> int:
     print("-" * 74)
     print(f"{'shape':<28} {'status':<8} verdict")
     print("-" * 74)
-    control = rows[0]
     for name, status, _, why in rows:
-        if name == "(none)":
+        if name.endswith("(none)"):
             verdict = "BLOCKED (as required)" if status == 403 else "*** CONTROL DID NOT BLOCK ***"
         elif status == 200:
             verdict = "BYPASSES this rule"
         elif status == 403:
             verdict = "still blocked"
         else:
-            verdict = f"no verdict (HTTP {status})"
+            verdict = f"NO VERDICT -- the request never completed (HTTP {status})"
         print(f"{name:<28} {status:<8} {verdict}")
         print(f"{'':<28} {'':<8} {why}")
 
     print()
-    if control[1] != 403:
-        print("VERDICT=FAIL -- the UNSHAPED control was not blocked, so the matcher never")
-        print("  matched and every 200 below it means nothing. This is the same defect as")
-        print("  build #17's single DOM threshold declaring both controls broken.")
+    broken = [where for where, status in controls if status != 403]
+    if broken:
+        print(f"VERDICT=FAIL -- the UNSHAPED control did not block in: {broken}. The matcher")
+        print("  never matched, so every 200 above it means nothing. Same defect as build #17's")
+        print("  single DOM threshold declaring both of its controls broken.")
         return 1
 
-    bypassed = [n for n, s, _, _ in rows if n != "(none)" and s == 200]
-    print(f"VERDICT=PASS -- control blocked; {len(bypassed)} of {len(rows) - 1} shapes turned")
+    # A request that never completed is NOT a bypass, and counting it as one is precisely how
+    # the first run of this script would have reported four.
+    stalled = [n for n, s, _, _ in rows if not n.endswith("(none)") and s == 0]
+    bypassed = [n for n, s, _, _ in rows if not n.endswith("(none)") and s == 200]
+    tested = len([r for r in rows if not r[0].endswith("(none)")])
+    if stalled:
+        print(f"NOTE: {len(stalled)} case(s) never completed and are counted as NOTHING, not as")
+        print(f"  bypasses: {stalled}")
+    print(f"VERDICT=PASS -- both controls blocked; {len(bypassed)} of {tested} shapes turned")
     print(f"  the 403 into a 200: {bypassed}")
     print()
     print("SCOPE OF THE CLAIM: this measures the TRANSFORMS against a naive, single-decode,")

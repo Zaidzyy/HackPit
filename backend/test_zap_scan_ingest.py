@@ -191,11 +191,13 @@ def test_the_ingest_route_executes_nothing() -> None:
             f"the ingest route calls {banned!r} — it must read ZAP and write the store, nothing "
             f"else. Calls found: {sorted(c for c in called if c)}"
         )
-    # THE PROPERTY, NOT THE NAME (build #18). This first fired when `scan_alerts` was split into
-    # `alerts_snapshot`, which does the same read and additionally reports whether it SUCCEEDED —
-    # so the route can stop writing "0 findings" into engagement state off a failed read. A lock
-    # pinned to the old literal would only ever say "you renamed something".
-    assert called & {"scan_alerts", "alerts_snapshot"}, (
+    # THE PROPERTY, NOT THE NAME (build #18). This has now fired TWICE on a rename — first when
+    # `scan_alerts` became `alerts_snapshot`, then again when that became `alerts_page` so the
+    # route could also report how many alerts FAILED TO PARSE. Both times the property held and
+    # only the spelling moved. Enumerating spellings would just defer the same failure, so the
+    # assertion is now the shape: the route reads alerts through SOME alert reader.
+    readers = {c for c in called if c.startswith(("scan_alerts", "alerts_"))}
+    assert readers, (
         f"the route no longer reads alerts at all: {sorted(c for c in called if c)}"
     )
     print("  the ingest route reads and writes only — it executes nothing: PASS")

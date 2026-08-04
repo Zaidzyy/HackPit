@@ -124,6 +124,24 @@ def test_a_discovered_origin_is_reported_and_never_added() -> None:
     print("  candidate origins are reported; the module cannot widen a scope (AST): PASS")
 
 
+def test_a_null_MX_does_not_become_an_empty_lead() -> None:
+    """*** FOUND BY LOOKING AT THE SCREEN, not by any test. ***
+
+    `dig +short MX example.com` answers `0 .` — a NULL MX (RFC 7505), which says "this domain
+    sends no mail". Stripping the trailing dot leaves an EMPTY host, and the first version
+    appended the origin `mx:` with nothing after it. It rendered in the browser as a chip an
+    operator would try to chase: a lead pointing at nowhere.
+
+    A blank lead is worse than no lead, and no typecheck, build or lint could see it.
+    """
+    src = inspect.getsource(fronting.analyse)
+    assert "null MX" in src, "the null-MX case is not handled"
+    assert "if not host:" in src, "an empty MX host still becomes a candidate origin"
+    # the SPF side had the same shape and is guarded too
+    assert "if value:" in src, "an empty spf: value can still become a lead"
+    print("  a null MX becomes a NOTE, not an empty candidate origin: PASS")
+
+
 def test_an_empty_certificate_transparency_answer_says_so() -> None:
     """A failed crt.sh query and a domain with no certificates look identical from here, and
     only one of them is a statement about the world."""
@@ -197,18 +215,74 @@ def test_the_scan_list_read_can_fail_distinguishably() -> None:
 
 def test_the_alert_read_can_fail_distinguishably() -> None:
     """This one travelled furthest: a failed read wrote "0 findings" into engagement state, and a
-    REPORT is rendered from that state."""
-    alerts, ok = proxy.alerts_snapshot.__doc__, proxy.alerts_snapshot
-    assert "read_ok" in (alerts or ""), "alerts_snapshot does not document the distinction"
+    REPORT is rendered from that state.
+
+    THE ASSERTION IS THE PROPERTY, NOT THE FUNCTION NAME — it has fired on a rename twice now."""
+    assert "read_ok" in (proxy.AlertPage.model_fields), (
+        "AlertPage cannot say whether the read succeeded"
+    )
     from cockpit import router
 
     ingest_src = inspect.getsource(router.ingest_scan_alerts)
-    assert "alerts_snapshot" in ingest_src, "the ingest route still cannot tell the two apart"
     assert "read_ok" in ingest_src and "409" in ingest_src, (
-        "the ingest route reads the flag but does not act on it — it would still write a "
+        "the ingest route does not act on whether the read succeeded — it would still write a "
         "confident zero into engagement state"
     )
     print("  a failed alert read refuses the ingest instead of persisting a zero: PASS")
+
+
+def test_an_UNPARSEABLE_row_is_counted_rather_than_vanishing() -> None:
+    """*** THE UNDERCOUNT — the silent empty at partial strength (build #18, second pass). ***
+
+    `parse_message` returns None for a message it cannot read and `history()` filtered those out,
+    so a window of 200 exchanges of which 50 were unparseable came back as 150 and nothing said
+    the other 50 existed. Not a confident zero — a confident UNDERCOUNT, which is harder to
+    notice precisely because it looks plausible.
+
+    Exercised on the PARSERS directly, because that is the half that can be tested without a
+    daemon, plus the models that carry the count.
+    """
+    # the parsers really do refuse a row rather than raising
+    assert proxy.parse_message({"requestHeader": "garbage with no url"}, "c") is None
+    assert proxy.parse_message("not even a dict", "c") is None
+    assert proxy.parse_alert("not even a dict") is None
+    # ...and a GOOD row still parses, or the check above passes for the wrong reason
+    good = proxy.parse_message(
+        {"id": "1", "requestHeader": "GET https://h/x HTTP/1.1\r\nHost: h\r\n",
+         "responseHeader": "HTTP/1.1 200 OK\r\n", "responseBody": "hi", "rtt": "5"},
+        "c",
+    )
+    assert good is not None and good.request.url == "https://h/x"
+
+    for model, label in ((proxy.HistoryPage, "HistoryPage"), (proxy.AlertPage, "AlertPage")):
+        assert "dropped" in model.model_fields, (
+            f"{label} cannot say how many rows could not be parsed, so a shorter list reads as "
+            "less traffic"
+        )
+        assert "read_ok" in model.model_fields, f"{label} cannot say whether the read succeeded"
+
+    # An EMPTY window on a daemon that answered is read_ok=True — the trustworthy zero. That
+    # distinction is what makes `read_ok=False` mean something.
+    empty = proxy.HistoryPage(total=0, window_start=0)
+    assert empty.read_ok and empty.dropped == 0 and empty.returned == 0
+
+    # and the route hands the object out rather than flattening it back to a list
+    from cockpit import router
+
+    # Compared as a STRING: router.py carries `from __future__ import annotations`, so the
+    # annotation is unevaluated text and an `is` comparison against the class would be comparing
+    # a str to a type and always failing — for a reason that has nothing to do with the property.
+    annotation = str(inspect.signature(router.proxy_history).return_annotation)
+    assert "HistoryPage" in annotation, (
+        f"the history route returns {annotation!r} — if that is a bare list, `dropped` never "
+        "reaches the operator"
+    )
+    ingest_src = inspect.getsource(router.ingest_scan_alerts)
+    assert "alerts_dropped" in ingest_src, (
+        "the ingest response does not report how many alerts failed to parse — a finding that "
+        "never parsed is a finding that never reaches a report"
+    )
+    print("  an unparseable row is COUNTED rather than vanishing, both readers: PASS")
 
 
 def test_the_sweep_runs_and_reports_rather_than_gating() -> None:
@@ -233,9 +307,11 @@ if __name__ == "__main__":
     test_evidence_from_all_three_sources_is_kept()
     test_nothing_in_this_module_scans_or_brute_forces()
     test_a_discovered_origin_is_reported_and_never_added()
+    test_a_null_MX_does_not_become_an_empty_lead()
     test_an_empty_certificate_transparency_answer_says_so()
     test_the_scanner_uses_an_AST_and_a_docstring_cannot_fool_it()
     test_the_scan_list_read_can_fail_distinguishably()
     test_the_alert_read_can_fail_distinguishably()
+    test_an_UNPARSEABLE_row_is_counted_rather_than_vanishing()
     test_the_sweep_runs_and_reports_rather_than_gating()
     print("ALL fronting and silent-empty locks pass")

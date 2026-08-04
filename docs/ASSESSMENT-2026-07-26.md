@@ -2876,6 +2876,40 @@ The live-fire script adds a request ceiling and a wall-clock cap that stop the s
 that same route. The real fix is ZAP's own `scanner.setOptionDelayInMs`, and it is deliberately
 not in this build.
 
+### The defect that blocked item 4 — the product goes blind to its own daemon, silently
+
+Found while dry-running item 4's preconditions, and it is the most consequential thing in this
+build so far. **`GET /cockpit/proxy` returns `[]` while ZAP holds 1,076 captured messages.**
+
+`cockpit/proxy.py` keeps API keys in an **in-process dict**. `api_key_for()` documents this
+honestly — *"the key this process minted for that daemon, or '' if it did not start it"* — but
+nothing downstream treats the empty case as unknown. `_api_get` simply omits the header, ZAP
+answers with an **empty body**, and `history()` parses that into `[]`. So a backend restart —
+an ordinary event across a multi-day engagement — turns every read route blind and reports the
+blindness as *"no traffic captured"*. Silent empty, again, and this repo's fourth or fifth.
+
+**The second face is worse, because it is the check that is supposed to prevent it.**
+`clash_refusal()` also reads the in-process `_models`, so after a restart it can see no
+existing daemon and would let `start_proxy` spawn a second one in the same container. That
+second daemon dies immediately on ZAP's home-directory lock — the exact failure whose comment
+sits directly above the function — while `lifecycle.observe()` finds the port **bound by the
+old daemon** and reports the new proxy up, holding a key the listening process will never
+accept. A `Proxy` model reading `status=up` whose every subsequent call returns empty.
+**The clash check protects against a state it cannot observe**, in a module whose own
+docstrings say counts are "READ BACK FROM ZAP, never assigned at launch".
+
+Nothing here is a safety hole: no gate is bypassed, and the failure direction is toward doing
+less, not more. It is a *correctness and honesty* defect, and it lands squarely on the
+distinction the acceptance runbook draws in bold — *"a broken proxy is a bug in this build,
+and a refused browser is a finding about the target. Do not report one as the other."*
+
+**So item 4 is held rather than run.** In this state the scan would have sent nothing, printed
+`REFUSED`, and been written down as *"Akamai blocks the scanner even though capture works"* —
+which the plan itself calls "a significantly larger finding than the spider's refusal". It
+would have been the most consequential wrong conclusion available in this build, arrived at
+through a green-looking script. The precondition that catches it is now in the live-fire
+script, and it names both ways forward rather than picking one.
+
 ### Item 5 — the browser must talk to the target and nothing else
 
 A crawl aimed at a local two-page lab site also produced requests to `www.google.com`,
@@ -2896,8 +2930,19 @@ the pre-rebuild container it fails, which is the only way to know a new check is
 ### What is prepared and NOT yet run — stated plainly, because last time it was not
 
 Build #15's section had to be amended after the fact because the runbook was described as
-finished when it was not. Not repeating that: as of this commit, **items 2 and 4 are written,
-syntax-checked and gate-verified, and have NOT been executed.**
+finished when it was not. Not repeating that: as of this commit, **item 1 has run and passes,
+item 2 is written and not yet executed, and item 4 is BLOCKED** by the key-recovery defect
+above — held deliberately, not skipped.
+
+**Item 1 ran, and its first version was wrong in an instructive way.** It asserted *"exactly
+one active engagement"*, written against a truncated read of `GET /cockpit/engagement` that
+showed one record when there were **21** — twenty of them old lab engagements against RFC1918
+addresses, still active because engagement expiry (D4) was reviewed and declined. The check
+caught it, which is the only reason it is a footnote rather than a defect. The property is
+**per-target**, and it is now stated that way in both scripts: *no active engagement naming
+this host may forbid active scanning*. Exiting twenty unrelated records to satisfy a global
+assertion would have been a destructive tidy-up nobody asked for. The corrected record is
+`eng-d3807b5bd170`; the script is idempotent and re-running it writes nothing.
 
 Every one of them reaches a real, in-scope bug-bounty target, and live fire against a real
 target is refused by the real-time classifier from inside the agent — the recorded convention

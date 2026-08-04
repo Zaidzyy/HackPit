@@ -112,18 +112,35 @@ print("\n[pre] the engagement record must not forbid what this is about to do")
 code, eng = call("GET", "/cockpit/engagement")
 active = (eng or {}).get("active") or []
 need(code == 200, f"GET /cockpit/engagement -> {code}")
-need(len(active) == 1, f"exactly one active engagement (got {len(active)})")
-if not active:
-    print("\nVERDICT=FAIL (no active engagement)"); sys.exit(1)
-rec = active[0]
-auth = rec.get("authorization", "")
-eid = rec.get("engagement_id")
-print(f"       engagement={eid} target={rec.get('target')}")
-if not need("PASSIVE RECON ONLY" not in auth.upper().replace("  ", " "),
-            "the authorization text no longer forbids active scanning"):
-    print("\n  Run build #17 item 1 first (item1_fix_engagement.sh). Refusing to scan under a")
-    print("  record that forbids it.")
+
+# *** THE PROPERTY IS PER-TARGET, AND ASSERTING IT GLOBALLY WAS WRONG. *** An earlier version
+# required "exactly one active engagement" and would have refused to run: there are ~21, twenty
+# of them old lab records against RFC1918 addresses, still active because engagement expiry
+# (D4) was reviewed and DECLINED. They have nothing to do with a scan of this host, and exiting
+# them to satisfy a check would be a destructive tidy-up nobody asked for. What matters is
+# narrower: the record this scan is ATTRIBUTED TO must permit it, and no other active record
+# for the same host may contradict it.
+HOST = "www.crateandbarrel.me"
+mine = [e for e in active if e.get("target") == HOST]
+print(f"       {len(active)} active engagement(s), {len(mine)} naming {HOST}")
+if not need(len(mine) >= 1, f"an active engagement names {HOST}"):
+    print("\n  Run build #17 item 1 first.")
+    print("\nVERDICT=FAIL (no engagement for the target)"); sys.exit(1)
+
+forbidding = [e.get("engagement_id") for e in mine
+              if "PASSIVE RECON ONLY" in (e.get("authorization") or "").upper()]
+if not need(not forbidding,
+            f"no active record for {HOST} forbids active scanning"
+            + (f" -- these do: {forbidding}" if forbidding else "")):
+    print("\n  Run build #17 item 1 first (build17_item1_fix_engagement.py). Refusing to scan")
+    print("  while a live record for this host says not to.")
     print("\nVERDICT=FAIL (item 1 not done)"); sys.exit(1)
+
+# Newest wins: item 1 exits the stale record and enters a corrected one, so the most recently
+# entered record for this host is the one whose text describes what is about to happen.
+rec = sorted(mine, key=lambda e: e.get("entered_at") or "")[-1]
+eid = rec.get("engagement_id")
+print(f"       attributing to {eid} (entered {rec.get('entered_at')})")
 
 # --- PRECONDITION: the endpoint is read-only and already captured -----------------------
 print("\n[pre] the endpoint")
@@ -135,6 +152,34 @@ print(f"       {TARGET_URL}")
 
 code, hist = call("GET", "/cockpit/proxy/history", container=ZAP_CONTAINER, port=PORT, count=1)
 need(code == 200, f"the recording proxy answers ({code})")
+
+# *** THE BACKEND MUST BE ABLE TO DRIVE THE DAEMON, AND IT SILENTLY CANNOT IF IT DID NOT START
+# IT. *** proxy.py holds API keys in an IN-PROCESS dict (`_keys`), so a backend restart loses
+# the key for a daemon that is still running. `_api_get` then sends no header, ZAP answers with
+# an EMPTY BODY, and `history()` turns that into `[]`. Measured 2026-08-04: ZAP holds 1076
+# messages while GET /cockpit/proxy returns [] and the history route returns zero exchanges.
+#
+# This check exists because of what the runbook says about exactly this: "a broken proxy is a
+# bug in this build, and a refused browser is a finding about the target. Do not report one as
+# the other." Without it, a scan that sent nothing would print REFUSED and be written down as
+# "Akamai blocks the scanner" — the single most consequential wrong conclusion available here.
+code_p, proxies = call("GET", "/cockpit/proxy")
+live = [p for p in (proxies or [])
+        if p.get("container") == ZAP_CONTAINER and p.get("status") != "down"]
+if not need(bool(live) or bool(hist),
+            "the backend can SEE the running daemon (key held, history readable)"):
+    print("""
+  The daemon is alive but this backend process did not start it, so it holds no API key for
+  it and every read comes back empty. Do NOT run the scan in this state — a zero result would
+  be indistinguishable from the target refusing us.
+
+  Two ways forward, and it is a decision, not a detail:
+    (a) fix the key recovery in cockpit/proxy.py so a daemon can be adopted, keeping the
+        ~1000 already-captured messages; or
+    (b) stop the daemon and start it through POST /cockpit/proxy, then re-browse the target
+        in Firefox to repopulate ZAP's Sites tree (the scan can only aim at captured URLs).
+""")
+    print("VERDICT=FAIL (backend cannot drive the daemon)"); sys.exit(1)
 
 # --- BASELINE: session health BEFORE, so the after-reading has something to mean ---------
 code, health0 = call("GET", "/cockpit/proxy/session-health",

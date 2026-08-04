@@ -3107,7 +3107,48 @@ to notice, because that is the case where you go looking.
 `start` is now an offset back from the newest; order within the window stays chronological.
 After the fix, `session_health` samples 195 recent exchanges instead of the first 200 ever.
 
-### What is prepared and NOT yet run — stated plainly, because last time it was not
+### The one place this build said "you may not" — removed
+
+The live-fire script hard-blocked a list of path tokens (`cart`, `checkout`, `account`,
+`newsletter`, …) and refused to run under an engagement record whose prose forbade active
+scanning. Zaid stripped both, 2026-08-04, and he was right that they did not belong.
+
+**HackPit's entire design is that the operator is the bound and every control informs rather
+than forbids.** The danger gate demands a second confirm and then proceeds. The scope lock is
+documented, in its own docstring, as a handrail rather than the wall. This very build *declined*
+to make the authorization field enforceable. A proof script inventing a prohibition the product
+does not have was the single place in build #17 that said "you may not" — and the record check
+was worse than that: it enforced the declined `passive_only` gate by the back door.
+
+Both now print and continue. What survives is the reasoning, because a recorded decision is
+worth more than a blocked path: injection payloads at a checkout parameter on a live storefront
+can create real orders or empty a basket. That is a fact about the target; the operator weighs it.
+
+**A third one went with them, and it was the worst of the three because it was invisible.** The
+script required the URL to contain the engagement's *named target* — which would have refused the
+other **ten in-scope hosts**, since the scope is eleven and the named target is one. `scope.py`
+already models wildcards, CIDRs and exclusions and has been measured against this exact program,
+and `executor.validate_request` runs it before ZAP is contacted. One scope model, and it is not
+the harness's.
+
+### Verification of item 3, live — and the runbook is now actually finished
+
+`docker/proof/browser_intercept_proof.sh`: **25 passed, 0 failed** on a freshly built image
+(container image id compared against the built one first, per "the container is not the image").
+Three of those are new: the drop-in exports a display, the drop-in suppresses background
+networking, and a virtual display is observed up by process name.
+
+**Option A works.** `ZAP reports browser id chrome (read BACK, not assumed from the OK)`, a real
+browser process was observed during the crawl, and the crawl captured **2 → 42 messages and found
+20 URLs** with a headed browser under Xvfb. The safety half is unmoved: an unauthenticated view
+refused, an unauthenticated action refused, a wrong key refused, the right key answering, the
+lab sandbox still publishing nothing.
+
+**Runbook §5 teardown is done** — the daemon stopped, `docker/listener-profile.yml` removed, the
+container recreated, and `NetworkSettings.Ports` now reads `{}`. Nothing listening on either side.
+That closes the last open step of build #15, which is what this build was for.
+
+### What was prepared and has now run
 
 Build #15's section had to be amended after the fact because the runbook was described as
 finished when it was not. Not repeating that: as of this commit, **items 1, 2 and 4 have all
@@ -3150,10 +3191,18 @@ with that bug and both were fixed before anything ran, with the fix proved in bo
 
 Hermetic safety suite **78 test files, every one exited 0** — and the two touched files re-run
 with `docker` removed from `PATH`, both 0, **with the strip checked to bite first** (`docker`
-not found, `git` still found, since the KB ingester's recovery path needs it). Four new locks:
+not found, `git` still found, since the KB ingester's recovery path needs it). Six new locks:
 a recovered key is bound to the port it was read from, the daemon probe cannot match its own
-command line, the API reader survives bytes the local codec cannot decode, and an orphaned
-daemon is refused with ZAP's real reason. `tsc --noEmit` exits 0,
+command line, the API reader survives bytes the local codec cannot decode, history returns the
+newest window and pages backwards from it, a headed crawl with no display is refused naming both
+Xvfb and setcap, and an orphaned daemon is refused with ZAP's real reason.
+`docker/proof/browser_intercept_proof.sh` **25 passed, 0 failed** on the rebuilt image.
+
+One flake worth recording so the next person does not chase it: `test_redirector.py` failed once
+with *"no bindable port for kind=1 outside the self-mapping range"* and passed on re-run. That is
+Windows' UDP excluded-port ranges moving under it (Hyper-V/WSL reserve blocks), not a code fault
+— but it means a single red run of that file is not evidence until it is repeated.
+`tsc --noEmit` exits 0,
 `next build` exits 0, eslint sits at the accepted baseline of **11 errors + 1 warning**
 (unchanged — this build touches no frontend file). `data/kb/entries.jsonl` still **2743**
 entries. `docker/proof/browser_intercept_proof.sh` gains one check, so it becomes **23** on a

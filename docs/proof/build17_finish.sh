@@ -21,6 +21,12 @@ export MSYS_NO_PATHCONV=1
 
 COMPOSE="docker/docker-compose.yml"
 PROFILE="docker/listener-profile.yml"
+# THE SERVICE AND THE CONTAINER ARE DIFFERENT NAMES, and the first run of this script conflated
+# them: `docker compose up engage-sandbox` takes the SERVICE, everything else takes the
+# CONTAINER. It failed with "no such service: hackpit-engage-sandbox" — cheap, because the step
+# was gated on a captured exit code and stopped instead of running the proof against a container
+# that had never been recreated.
+SERVICE=engage-sandbox
 ENGAGE=hackpit-engage-sandbox
 PORT=8090
 
@@ -32,7 +38,7 @@ if [ ! -f "$PROFILE" ]; then
   echo "       (POST /cockpit/exposure/profile + /apply, or the zap-proxy preset on :exposure)."
   exit 2
 fi
-docker compose -f "$COMPOSE" -f "$PROFILE" up -d --force-recreate "$ENGAGE" > /tmp/b17_recreate.log 2>&1
+docker compose -f "$COMPOSE" -f "$PROFILE" up -d --force-recreate "$SERVICE" > /tmp/b17_recreate.log 2>&1
 RC=$?
 echo "RECREATE_EXIT=$RC"
 [ "$RC" -eq 0 ] || { tail -20 /tmp/b17_recreate.log; exit 1; }
@@ -64,7 +70,7 @@ fi
 step "3. runbook 5 — teardown"
 docker exec "$ENGAGE" sh -c "pkill -f \"[z]aproxy.*-daemon.*-port $PORT\" 2>/dev/null; sleep 2" >/dev/null 2>&1
 rm -f "$PROFILE"
-docker compose -f "$COMPOSE" up -d --force-recreate "$ENGAGE" > /tmp/b17_teardown.log 2>&1
+docker compose -f "$COMPOSE" up -d --force-recreate "$SERVICE" > /tmp/b17_teardown.log 2>&1
 RC=$?
 echo "TEARDOWN_RECREATE_EXIT=$RC"
 [ "$RC" -eq 0 ] || { tail -20 /tmp/b17_teardown.log; exit 1; }

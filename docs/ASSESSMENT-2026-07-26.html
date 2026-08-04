@@ -350,7 +350,9 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#item-4-run-the-attack-half-is-blocked-and-the-first-verdict-said-the-opposite">Item 4, RUN — the attack half IS blocked, and the first verdict said the opposite</a></li>
 <li><a href="#item-3-option-a-built-on-the-measurement-rather-than-on-the-suspicion">Item 3 — option A, built on the measurement rather than on the suspicion</a></li>
 <li><a href="#the-defect-that-hid-item-4s-own-evidence-recent-traffic-was-the-oldest-traffic">The defect that hid item 4's own evidence: "recent" traffic was the oldest traffic</a></li>
-<li><a href="#what-is-prepared-and-not-yet-run-stated-plainly-because-last-time-it-was-not">What is prepared and NOT yet run — stated plainly, because last time it was not</a></li>
+<li><a href="#the-one-place-this-build-said-you-may-not-removed">The one place this build said "you may not" — removed</a></li>
+<li><a href="#verification-of-item-3-live-and-the-runbook-is-now-actually-finished">Verification of item 3, live — and the runbook is now actually finished</a></li>
+<li><a href="#what-was-prepared-and-has-now-run">What was prepared and has now run</a></li>
 <li><a href="#verification_6">Verification</a></li>
 </ul>
 </li>
@@ -3349,7 +3351,39 @@ silent wrong answer, silently unable to fire — and it took a scan whose traffi
 to notice, because that is the case where you go looking.</p>
 <p><code>start</code> is now an offset back from the newest; order within the window stays chronological.
 After the fix, <code>session_health</code> samples 195 recent exchanges instead of the first 200 ever.</p>
-<h3 id="what-is-prepared-and-not-yet-run-stated-plainly-because-last-time-it-was-not">What is prepared and NOT yet run — stated plainly, because last time it was not</h3>
+<h3 id="the-one-place-this-build-said-you-may-not-removed">The one place this build said "you may not" — removed</h3>
+<p>The live-fire script hard-blocked a list of path tokens (<code>cart</code>, <code>checkout</code>, <code>account</code>,
+<code>newsletter</code>, …) and refused to run under an engagement record whose prose forbade active
+scanning. Zaid stripped both, 2026-08-04, and he was right that they did not belong.</p>
+<p><strong>HackPit's entire design is that the operator is the bound and every control informs rather
+than forbids.</strong> The danger gate demands a second confirm and then proceeds. The scope lock is
+documented, in its own docstring, as a handrail rather than the wall. This very build <em>declined</em>
+to make the authorization field enforceable. A proof script inventing a prohibition the product
+does not have was the single place in build #17 that said "you may not" — and the record check
+was worse than that: it enforced the declined <code>passive_only</code> gate by the back door.</p>
+<p>Both now print and continue. What survives is the reasoning, because a recorded decision is
+worth more than a blocked path: injection payloads at a checkout parameter on a live storefront
+can create real orders or empty a basket. That is a fact about the target; the operator weighs it.</p>
+<p><strong>A third one went with them, and it was the worst of the three because it was invisible.</strong> The
+script required the URL to contain the engagement's <em>named target</em> — which would have refused the
+other <strong>ten in-scope hosts</strong>, since the scope is eleven and the named target is one. <code>scope.py</code>
+already models wildcards, CIDRs and exclusions and has been measured against this exact program,
+and <code>executor.validate_request</code> runs it before ZAP is contacted. One scope model, and it is not
+the harness's.</p>
+<h3 id="verification-of-item-3-live-and-the-runbook-is-now-actually-finished">Verification of item 3, live — and the runbook is now actually finished</h3>
+<p><code>docker/proof/browser_intercept_proof.sh</code>: <strong>25 passed, 0 failed</strong> on a freshly built image
+(container image id compared against the built one first, per "the container is not the image").
+Three of those are new: the drop-in exports a display, the drop-in suppresses background
+networking, and a virtual display is observed up by process name.</p>
+<p><strong>Option A works.</strong> <code>ZAP reports browser id chrome (read BACK, not assumed from the OK)</code>, a real
+browser process was observed during the crawl, and the crawl captured <strong>2 → 42 messages and found
+20 URLs</strong> with a headed browser under Xvfb. The safety half is unmoved: an unauthenticated view
+refused, an unauthenticated action refused, a wrong key refused, the right key answering, the
+lab sandbox still publishing nothing.</p>
+<p><strong>Runbook §5 teardown is done</strong> — the daemon stopped, <code>docker/listener-profile.yml</code> removed, the
+container recreated, and <code>NetworkSettings.Ports</code> now reads <code>{}</code>. Nothing listening on either side.
+That closes the last open step of build #15, which is what this build was for.</p>
+<h3 id="what-was-prepared-and-has-now-run">What was prepared and has now run</h3>
 <p>Build #15's section had to be amended after the fact because the runbook was described as
 finished when it was not. Not repeating that: as of this commit, <strong>items 1, 2 and 4 have all
 run</strong>, and what remains is option A itself, the image rebuild, the proof re-run and teardown.</p>
@@ -3385,10 +3419,17 @@ with that bug and both were fixed before anything ran, with the fix proved in bo
 <h3 id="verification_6">Verification</h3>
 <p>Hermetic safety suite <strong>78 test files, every one exited 0</strong> — and the two touched files re-run
 with <code>docker</code> removed from <code>PATH</code>, both 0, <strong>with the strip checked to bite first</strong> (<code>docker</code>
-not found, <code>git</code> still found, since the KB ingester's recovery path needs it). Four new locks:
+not found, <code>git</code> still found, since the KB ingester's recovery path needs it). Six new locks:
 a recovered key is bound to the port it was read from, the daemon probe cannot match its own
-command line, the API reader survives bytes the local codec cannot decode, and an orphaned
-daemon is refused with ZAP's real reason. <code>tsc --noEmit</code> exits 0,
+command line, the API reader survives bytes the local codec cannot decode, history returns the
+newest window and pages backwards from it, a headed crawl with no display is refused naming both
+Xvfb and setcap, and an orphaned daemon is refused with ZAP's real reason.
+<code>docker/proof/browser_intercept_proof.sh</code> <strong>25 passed, 0 failed</strong> on the rebuilt image.</p>
+<p>One flake worth recording so the next person does not chase it: <code>test_redirector.py</code> failed once
+with <em>"no bindable port for kind=1 outside the self-mapping range"</em> and passed on re-run. That is
+Windows' UDP excluded-port ranges moving under it (Hyper-V/WSL reserve blocks), not a code fault
+— but it means a single red run of that file is not evidence until it is repeated.
+<code>tsc --noEmit</code> exits 0,
 <code>next build</code> exits 0, eslint sits at the accepted baseline of <strong>11 errors + 1 warning</strong>
 (unchanged — this build touches no frontend file). <code>data/kb/entries.jsonl</code> still <strong>2743</strong>
 entries. <code>docker/proof/browser_intercept_proof.sh</code> gains one check, so it becomes <strong>23</strong> on a

@@ -59,10 +59,19 @@ TARGET_URL = (
     "?allCategories=kids-bedroom-furniture%3Astudy-play-furnitur&_rsc=EPkJxyJVtrNNrxAH"
 )
 
-# A constant can be edited carelessly. These are the paths the plan forbids by name, checked
-# against whatever TARGET_URL actually says at run time rather than trusting the comment above.
-FORBIDDEN = ("cart", "checkout", "account", "newsletter", "login", "register",
-             "order", "registry", "payment", "wishlist")
+# *** NOTHING HERE REFUSES ANYTHING. *** An earlier version of this script hard-blocked a list
+# of path tokens (cart, checkout, account, …) and refused to run under an engagement record whose
+# prose forbade active scanning. Zaid stripped both, 2026-08-04, and he is right that they did
+# not belong: HackPit's whole design is that the operator is the bound and every control informs
+# rather than forbids — the danger gate demands a second confirm and then proceeds, the scope
+# lock is documented as a handrail, and this build *declined* to make the authorization field
+# enforceable. A proof script inventing a prohibition the product does not have was the one
+# place in build #17 that said "you may not".
+#
+# What survives is the REASONING, because a recorded decision is worth more than a blocked path:
+# injection payloads at a checkout parameter on a live storefront can create real orders or empty
+# a basket. That is a fact about the target, and the operator weighs it.
+WORTH_KNOWING = ("cart", "checkout", "account", "newsletter", "order", "payment", "registry")
 
 # The only rate control on this path. 376 requests was the single-endpoint measurement; this
 # leaves room for a normal scan to finish and stops a runaway well short of real load.
@@ -129,12 +138,16 @@ if not need(len(mine) >= 1, f"an active engagement names {HOST}"):
 
 forbidding = [e.get("engagement_id") for e in mine
               if "PASSIVE RECON ONLY" in (e.get("authorization") or "").upper()]
-if not need(not forbidding,
-            f"no active record for {HOST} forbids active scanning"
-            + (f" -- these do: {forbidding}" if forbidding else "")):
-    print("\n  Run build #17 item 1 first (build17_item1_fix_engagement.py). Refusing to scan")
-    print("  while a live record for this host says not to.")
-    print("\nVERDICT=FAIL (item 1 not done)"); sys.exit(1)
+if forbidding:
+    # INFORMS, DOES NOT REFUSE. The authorization field is free prose that no gate reads — this
+    # build reviewed that and accepted it. A script that turned it into a blocker would be
+    # enforcing, by the back door, exactly the `passive_only` gate that was declined.
+    print(f"  NOTE  {len(forbidding)} active record(s) for {HOST} still say PASSIVE RECON ONLY:")
+    print(f"        {forbidding}")
+    print("        The scan will run. Consider build17_item1_fix_engagement.py first, so the")
+    print("        audit trail does not contradict the action.")
+else:
+    print(f"  ok   no active record for {HOST} contradicts active scanning")
 
 # Newest wins: item 1 exits the stale record and enters a corrected one, so the most recently
 # entered record for this host is the one whose text describes what is about to happen.
@@ -145,10 +158,23 @@ print(f"       attributing to {eid} (entered {rec.get('entered_at')})")
 # --- PRECONDITION: the endpoint is read-only and already captured -----------------------
 print("\n[pre] the endpoint")
 path_l = urllib.parse.urlsplit(TARGET_URL).path.lower()
-hit = [w for w in FORBIDDEN if w in path_l]
-need(not hit, f"no forbidden path token in {path_l!r}" + (f" -- FOUND {hit}" if hit else ""))
-need(rec.get("target", "") in TARGET_URL, "the URL is on the engagement's named target")
+hit = [w for w in WORTH_KNOWING if w in path_l]
+if hit:
+    print(f"  NOTE  this path contains {hit} — on a live storefront, injection payloads at a")
+    print("        parameter like that can create real orders or empty a basket. Not blocked;")
+    print("        said once so the choice is made with it in view.")
+# NO SCOPE CHECK HERE, DELIBERATELY. An earlier version required the URL to contain the
+# engagement's NAMED target — which would have refused the other ten in-scope hosts, since the
+# scope is eleven and the named target is one. That is the harness inventing a bound narrower
+# than the product's. `cockpit/scope.py` is the authority (wildcards, CIDR, exclusions, measured
+# against this very program) and `executor.validate_request` runs it before ZAP is contacted, so
+# an out-of-scope URL earns a 403 naming the target gate a few lines below. One scope model, and
+# it is not this file's.
+url_host = urllib.parse.urlsplit(TARGET_URL).hostname or ""
+in_declared = url_host in (rec.get("scope_include") or [])
 print(f"       {TARGET_URL}")
+print(f"       host={url_host} — {'in' if in_declared else 'NOT in'} the engagement's declared "
+      f"scope list; the target gate decides, not this script")
 
 code, hist = call("GET", "/cockpit/proxy/history", container=ZAP_CONTAINER, port=PORT, count=1)
 need(code == 200, f"the recording proxy answers ({code})")

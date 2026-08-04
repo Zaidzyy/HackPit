@@ -100,12 +100,56 @@ session the human established by hand.
 
 ### 4.1 What changes
 
-- `docker/docker-compose.yml`: the **engage** sandbox publishes `127.0.0.1:8090:8090`.
+- **The port is PUBLISHED THROUGH `cockpit/exposure.py`, not hardcoded in
+  `docker/docker-compose.yml`.** See §4.2 — this is the single most important design decision in
+  part 1 and it replaces an earlier draft that baked `127.0.0.1:8090:8090` into compose.
 - `cockpit/proxy.py::server_argv_for` stops passing `api.disablekey=true` and instead passes
   `api.disablekey=false` plus `api.key=<per-start random>`.
-- The operator points Firefox/Chrome at `127.0.0.1:8090` and browses. ZAP records it exactly as
+- The operator points Firefox/Chrome at the bound address and browses. ZAP records it exactly as
   it records a tool run today; the history panel, the endpoint ingest and part 3's scanner all
   work unchanged, because nothing downstream cares how a request arrived.
+
+### 4.2 *** USE THE EXPOSURE MACHINERY. DO NOT HARDCODE A BIND ADDRESS. ***
+
+HackPit already has a designed, tested answer for "publish a port on the engage sandbox", built
+across build #10 and #13, and this build must use it rather than inventing a second path:
+
+- `cockpit/exposure.py` **generates** `docker/listener-profile.yml` from a `ListenerProfile`.
+  That file is **gitignored** — it can name a client's internal address and this repository is
+  public.
+- A `ListenerProfile` already carries everything needed: `ip` (bind address), `container`
+  (`engage-sandbox`), `extra` (explicit `(port, proto)` pairs), `engagement`, and the two
+  acknowledgement flags. **The ZAP proxy port is `extra=[(8090, "tcp")]`. No new model, no new
+  field, no new file format.**
+- **A wildcard or publicly-routable bind is a RED-CONFIRM, not a refusal** — matching the danger
+  gate's own rule that it *"never blocks outright; requires the confirm"*. The acknowledgement is
+  written INTO the generated file as a machine-readable marker naming that exact address:
+
+      # hackpit-ack: wildcard bind=0.0.0.0 engagement=<id>
+
+  and `backend/test_exposure_safety.py` statically enforces that the marker exists. It is a text
+  scan on purpose: it depends on nothing but the standard library, and *"a scanner that imports
+  the code it polices can be disarmed by editing that code."*
+
+**What this buys, and why it is FREER than hardcoding loopback.** The operator can bind anything —
+including every interface, which is what a phone or a second machine needs — with one confirm, and
+the acknowledgement is recorded against the engagement so a report can state honestly that the
+proxy was open on all interfaces during that window. A hardcoded `127.0.0.1` would have been a
+constant the operator had to edit compose to escape; this is a switch they hold.
+
+**What binding wide actually means, stated so the confirm is informed.** The API stays
+key-protected, so a wildcard bind does not expose scan control. What it exposes is an **open HTTP
+proxy**, and the engage sandbox has full egress (Wall A down) — so anyone who can reach the port
+can route traffic to the internet attributed to this machine's IP. On a home LAN that is
+negligible. On café, hotel, coworking or conference wifi it is the classic open-proxy problem and
+gets found by scanners quickly. This is precisely the case `test_exposure_safety.py` exists for:
+*"the check that keeps 'my DC can reach the listener' from silently meaning 'so can the
+coffee-shop network'."*
+
+`classify_ip` already gets the hard part right and must not be re-implemented: it keys off
+`is_global`, **not** `is_private`, because CGNAT addresses (Tailscale, mobile hotspots) are
+neither — measured, and keying off `is_private` would have demanded an acknowledgement for every
+Tailscale address.
 
 ### 4.2 The safety argument, restated — because part 2's no longer applies
 
@@ -113,20 +157,23 @@ Part 2's argument was *"no port is published, so the API is unreachable, so the 
 `docker exec`, which the gates classify."* **Half of that is now deliberately false.** The
 replacement is not weaker, but it is different and it must be stated in full:
 
-1. **Bound to host loopback, not `0.0.0.0`.** `127.0.0.1:8090:8090` — reachable from processes on
-   Zaid's machine, never from the LAN. The compose file must not use the short `8090:8090` form,
-   which binds all interfaces.
+1. **The bind address is chosen per profile, narrow by default, and widening is acknowledged**
+   (§4.2). Loopback needs no confirm; a wildcard or public address needs one, recorded in the
+   generated file and against the engagement.
 2. **The API requires a key, and the key is enforced** (§2 — measured on views *and* actions).
    What is published unauthenticated is an HTTP **proxy**, which is the entire point; the control
    channel behind the same listener refuses everything without a secret HackPit alone holds.
+   **This is what makes a wide bind an acceptable choice rather than an unacceptable one** — the
+   exposure is a proxy, not scan control.
 3. **Engagement sandbox only.** The lab's `internal: true` isolation and
    `docker/proof/isolation_proof.sh` are untouched.
 4. The key is **random per start**, so it does not persist between sessions and there is no
    long-lived secret to leak.
 
-**Residual risk, accepted and written down:** any local process on the machine can use the proxy
-(it cannot scan — that needs the key). Impact is that traffic gets recorded that the operator did
-not intend. That is a privacy annoyance on a single-user machine, not a control failure.
+**Residual risk, accepted and written down:** anything that can reach the bound address can use
+the proxy (it cannot scan — that needs the key). On loopback that is a privacy annoyance on a
+single-user machine. On a wildcard bind it is an open proxy with full egress, which is why that
+case carries a confirm rather than being forbidden or being free.
 
 ### 4.3 *** THE KEY MUST NOT REACH A RUN RECORD ***
 
@@ -222,7 +269,10 @@ has stopped describing what runs.
 
 1. **The lab sandbox publishes nothing** and stays `internal: true`. `isolation_proof.sh`'s lab
    half is untouched.
-2. **The published port binds host loopback only.** Never the short `8090:8090` form.
+2. **The proxy port goes through `exposure.py`, and a broad bind carries an ack naming that exact
+   address.** This is the EXISTING invariant (`test_exposure_safety.py`), not a new one — the new
+   port simply flows through the same path. It must not acquire private rules, and the scanner
+   must not be widened to exempt it.
 3. **The API key is enforced** (`api.disablekey=false`) and **random per start**.
 4. **The key never reaches a run record, a report or a prompt** — via `secretargs`, asserted.
 5. **Every crawl passes `executor.validate_request`** with the real target in the surface, and
@@ -237,8 +287,10 @@ has stopped describing what runs.
 
 Hermetic:
 
-- the compose file publishes **loopback-only**, asserted on the file, with a control that the
-  short form would fail the check
+- the proxy port is expressible as a `ListenerProfile` and renders through `exposure.render`
+  unchanged — no new file format, no second publish path
+- a **wildcard bind without an ack fails** `test_exposure_safety.py`; **with** the ack it passes,
+  and the ack must name that exact address (a marker for a different IP must not satisfy it)
 - the daemon argv carries `api.disablekey=false` and a key, and **the recorded argv is redacted**
   — with a positive control proving the redaction check can fail
 - the key is different on two consecutive starts
@@ -250,6 +302,7 @@ Hermetic:
 
 Proof (`docker/proof/browser_intercept_proof.sh`), for what no hermetic test can assert:
 
+- the default profile binds narrow, and the port is **not** reachable from another interface
 - the engage sandbox's port **is** reachable from the host
 - **an API call from the host without the key is REFUSED**; with the key it answers — the check
   the whole build rests on

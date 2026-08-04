@@ -328,6 +328,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#authenticated-scan-session-expiry-a-silent-wrong-answer-made-loud">Authenticated-scan session expiry — a silent wrong answer made loud</a></li>
 <li><a href="#the-phantom-class-and-what-the-type-checker-cannot-see">The phantom class, and what the type-checker cannot see</a></li>
 <li><a href="#d9-the-two-surfaces-that-read-as-a-different-product">D9 — the two surfaces that read as a different product</a></li>
+<li><a href="#the-browser-pass-found-two-things-nothing-else-could">The browser pass found two things nothing else could</a></li>
 <li><a href="#what-was-not-done">What was not done</a></li>
 </ul>
 </li>
@@ -2960,6 +2961,21 @@ equivalent. The real gap was the page: a bare <code>&lt;main&gt;</code> with its
 which are ordinary cards now. <strong>The graph canvas itself is untouched</strong> — replacing those
 primitives would be a rewrite of something that works, and D9 is explicitly cosmetic.</p>
 <p>Both are behaviour-identical: no gates, no endpoints, no handlers changed.</p>
+<h3 id="the-browser-pass-found-two-things-nothing-else-could">The browser pass found two things nothing else could</h3>
+<p>Every gate was green — suite, docker-stripped suite, <code>tsc</code>, <code>next build</code>, lint baseline, and the
+new CSS-vocabulary check — before anyone looked at a screen. Then looking found two defects.</p>
+<p><strong>All three buttons in the new action row rendered identically grey.</strong> <code>.hp-tn-actions button</code>
+and <code>button.hp-tn-start</code> have the <em>same</em> specificity (0,1,1), and the base rule was written
+second, so it won. The classes existed, they were applied, the check that asserts they exist
+passed — and the row that was built specifically to make three ranks distinguishable showed
+three identical buttons. This is what <em>"a class can exist and still be wrong"</em> means in
+practice, and it is the reason that sentence is in the guard's own docstring rather than a
+claim that the guard is sufficient.</p>
+<p><strong><code>15 of 16commands won't run as written</code>.</strong> JSX drops the space between an expression and the
+text following it when a line break falls between them. A missing space in the one banner
+whose entire job is to be read.</p>
+<p>Neither is subtle once seen, and neither was visible to any tool. The rule stands: <strong>a
+frontend change is not verified until it has been looked at.</strong></p>
 <h3 id="what-was-not-done">What was not done</h3>
 <ul>
 <li><strong>No UI for the VRT / known-issues fields yet.</strong> <code>PUT /sessions/{id}/submission</code> and

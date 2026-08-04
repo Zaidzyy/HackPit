@@ -8058,36 +8058,6 @@ a.hp-card {
  *   .hp-tn-stop     muted    — a minor undo (clear / forget). Reversible, so quiet.
  */
 /*
- * Written as `button.hp-tn-*` (specificity 0,1,1) rather than `.hp-tn-*` (0,1,0) so these
- * tie with `.hp-tn-form button` above and win on source order. That matters because these
- * buttons appear in three different places — inside `.hp-tn-form`, inside `.hp-tn-actions`,
- * and LOOSE as a card's only control (`:oob`'s "run the checks" and "poll now"). A
- * descendant selector scoped to the two containers would have silently skipped the loose
- * ones, which is the same class of miss as the phantom class itself.
- */
-button.hp-tn-start {
-  font-family: var(--font-jetbrains-mono), monospace; font-size: 12.5px;
-  border-radius: 6px; padding: 8px 12px; cursor: pointer;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-line);
-}
-button.hp-tn-start:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-}
-button.hp-tn-destroy {
-  font-family: var(--font-jetbrains-mono), monospace; font-size: 12.5px;
-  border-radius: 6px; padding: 8px 12px; cursor: pointer;
-  color: #f0776a;
-  background: color-mix(in srgb, #f0776a 10%, transparent);
-  border: 1px solid rgba(240, 119, 106, 0.45);
-}
-button.hp-tn-destroy:hover:not(:disabled) {
-  background: color-mix(in srgb, #f0776a 22%, transparent);
-}
-button.hp-tn-start:disabled, button.hp-tn-destroy:disabled { opacity: 0.45; cursor: default; }
-
-/*
  * THE ACTION ROW. Configuring a profile and ACTING on it were one undifferentiated
  * `.hp-tn-form` flex row: text inputs (stretched by `flex: 1 1 200px`), a checkbox, then
  * three buttons wrapping to wherever they landed. There was no break between describing
@@ -8098,6 +8068,15 @@ button.hp-tn-start:disabled, button.hp-tn-destroy:disabled { opacity: 0.45; curs
  * reads as a distinct step rather than as more of the form. It lives here rather than in
  * any one screen: the last time a shared `.hp-tn-form` rule was patched per-screen, the
  * fix shipped for `:proxy` alone and left checkboxes broken on six others.
+ *
+ * ORDER MATTERS AND IT BIT. This base rule sits BEFORE the three ranked rules below, not
+ * after. `.hp-tn-actions button` and `button.hp-tn-start` have the SAME specificity (0,1,1),
+ * so whichever is written second wins — and with the base rule last, every button in an
+ * action row rendered the same grey no matter which rank it carried. The screenshot showed
+ * three identical buttons where the whole point was three distinguishable ones. tsc, the
+ * build and the CSS-vocabulary check all passed on it: the classes existed and were applied,
+ * they were just being overridden. *A class can exist and still be wrong* — this is what
+ * that sentence means, and only looking at the screen found it.
  */
 .hp-tn-actions {
   display: flex;
@@ -8124,6 +8103,38 @@ button.hp-tn-start:disabled, button.hp-tn-destroy:disabled { opacity: 0.45; curs
   font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim);
   margin-right: 2px;
 }
+
+/*
+ * Written as `button.hp-tn-*` (specificity 0,1,1) rather than `.hp-tn-*` (0,1,0) so these
+ * tie with `.hp-tn-form button` and `.hp-tn-actions button` and win on source order — which
+ * is why they are LAST in this block. These buttons appear in three different places:
+ * inside `.hp-tn-form`, inside `.hp-tn-actions`, and LOOSE as a card's only control
+ * (`:oob`'s "run the checks" and "poll now"). A descendant selector scoped to the two
+ * containers would have silently skipped the loose ones, which is the same class of miss as
+ * the phantom class itself.
+ */
+button.hp-tn-start {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12.5px;
+  border-radius: 6px; padding: 8px 12px; cursor: pointer;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+}
+button.hp-tn-start:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+button.hp-tn-destroy {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12.5px;
+  border-radius: 6px; padding: 8px 12px; cursor: pointer;
+  color: #f0776a;
+  background: color-mix(in srgb, #f0776a 10%, transparent);
+  border: 1px solid rgba(240, 119, 106, 0.45);
+}
+button.hp-tn-destroy:hover:not(:disabled) {
+  background: color-mix(in srgb, #f0776a 22%, transparent);
+}
+button.hp-tn-start:disabled, button.hp-tn-destroy:disabled { opacity: 0.45; cursor: default; }
+
 .hp-tn-oneliner { margin-top: 10px; }
 .hp-tn-olhint { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); margin-bottom: 5px; }
 .hp-tn-note { font-size: 12px; color: var(--dim); line-height: 1.55; margin: 8px 0; }

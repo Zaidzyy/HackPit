@@ -2705,6 +2705,26 @@ primitives would be a rewrite of something that works, and D9 is explicitly cosm
 
 Both are behaviour-identical: no gates, no endpoints, no handlers changed.
 
+### The browser pass found two things nothing else could
+
+Every gate was green — suite, docker-stripped suite, `tsc`, `next build`, lint baseline, and the
+new CSS-vocabulary check — before anyone looked at a screen. Then looking found two defects.
+
+**All three buttons in the new action row rendered identically grey.** `.hp-tn-actions button`
+and `button.hp-tn-start` have the *same* specificity (0,1,1), and the base rule was written
+second, so it won. The classes existed, they were applied, the check that asserts they exist
+passed — and the row that was built specifically to make three ranks distinguishable showed
+three identical buttons. This is what *"a class can exist and still be wrong"* means in
+practice, and it is the reason that sentence is in the guard's own docstring rather than a
+claim that the guard is sufficient.
+
+**`15 of 16commands won't run as written`.** JSX drops the space between an expression and the
+text following it when a line break falls between them. A missing space in the one banner
+whose entire job is to be read.
+
+Neither is subtle once seen, and neither was visible to any tool. The rule stands: **a
+frontend change is not verified until it has been looked at.**
+
 ### What was not done
 
 * **No UI for the VRT / known-issues fields yet.** `PUT /sessions/{id}/submission` and

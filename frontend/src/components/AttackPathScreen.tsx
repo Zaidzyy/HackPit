@@ -400,9 +400,12 @@ export function AttackPathScreen() {
                 </p>
               ) : (result.commands_unrunnable ?? 0) > 0 ? (
                 <p className="hp-ap-runnable hp-ap-runnable-warn">
+                  {/* {" "} explicitly: JSX drops the space between an expression and the
+                      text after it when the two are split across a line break, and it
+                      rendered as "16commands" in the browser. */}
                   <span className="hp-ap-runnable-lead">
-                    {result.commands_unrunnable} of {result.commands_total} commands
-                    won&rsquo;t run as written
+                    {result.commands_unrunnable} of {result.commands_total}
+                    {" commands won’t run as written"}
                   </span>
                   they point outside your scope, or name no target at all. Each one says
                   which, below. The rest name a host in scope.

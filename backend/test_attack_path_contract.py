@@ -53,6 +53,7 @@ def _payload() -> dict[str, Any]:
         "scope_checked": True,
         "commands_total": 3,
         "commands_unrunnable": 1,
+        "commands_repointed": 1,
         "phases": [
             {
                 "phase": "recon",
@@ -70,6 +71,8 @@ def _payload() -> dict[str, Any]:
                                 "copyable": True,
                                 "unverified": False,
                                 "truncated": False,
+                                "original_cmd": "curl -s https://tesla.com/",
+                                "repointed_from": ["tesla.com"],
                             },
                             {
                                 "lang": "bash",
@@ -79,6 +82,8 @@ def _payload() -> dict[str, Any]:
                                 "truncated": True,
                                 "runnable": False,
                                 "unrunnable_reason": "points at 10.10.11.5 — not in scope",
+                                "suggested_cmd": "nmap -sV www.example-shop.test",
+                                "suggested_from": ["10.10.11.5"],
                             },
                         ],
                         "unrunnable_commands": 1,
@@ -170,7 +175,8 @@ def test_the_scope_check_fields_specifically_reach_the_browser() -> None:
     """The generic check above would still pass if the D8 fields were never sent. Name
     them once, at the level they live at, so a regression says which feature broke."""
     got = main.AttackPathOut.model_validate(_payload()).model_dump()
-    for field in ("target_source", "scope_checked", "commands_total", "commands_unrunnable"):
+    for field in ("target_source", "scope_checked", "commands_total", "commands_unrunnable",
+                  "commands_repointed"):
         assert field in got, f"path-level {field} was stripped"
     step = got["phases"][0]["steps"][0]
     assert step["unrunnable_commands"] == 1
@@ -179,6 +185,14 @@ def test_the_scope_check_fields_specifically_reach_the_browser() -> None:
     assert "not in scope" in (flagged["unrunnable_reason"] or ""), flagged
     # the pre-existing silent loss this model was introduced to repair
     assert flagged["unverified"] is True and flagged["truncated"] is True, flagged
+    # the SUGGESTION must reach the browser — a rewrite offered beside the original is
+    # useless if the response model drops the thing being offered
+    assert flagged["suggested_cmd"] == "nmap -sV www.example-shop.test", flagged
+    assert flagged["suggested_from"] == ["10.10.11.5"], flagged
+    # ...and so must the record of what WAS rewritten automatically
+    repointed = step["commands"][0]
+    assert repointed["original_cmd"] == "curl -s https://tesla.com/", repointed
+    assert repointed["repointed_from"] == ["tesla.com"], repointed
     print("  D8 scope-check fields + the repaired unverified/truncated: PASS")
 
 
@@ -204,8 +218,53 @@ def test_an_unknown_request_field_is_refused_not_ignored() -> None:
     print("  /attack-path accepts `target` and REFUSES an unknown field (422): PASS")
 
 
+def test_no_route_uses_a_method_cors_forbids() -> None:
+    """*** A ROUTE THE BROWSER CANNOT CALL IS NOT A ROUTE. ***
+
+    `PATCH /sessions/{id}/submission` shipped as PUT for about an hour. Every backend test
+    passed — TestClient talks to the ASGI app directly and never performs a CORS preflight —
+    and the browser refused it on sight, because the allow-list names GET/POST/PATCH/DELETE.
+    The failure surfaced as "cannot reach the API", which reads like the server is down.
+
+    So: every method the app registers must be one the CORS policy permits. This is the same
+    shape as the response_model check above — a contract between the backend and the browser
+    that no backend-only test can see — and the fix when it fires is to change the VERB, not
+    to widen the policy.
+    """
+    allowed: set[str] = set()
+    for mw in main.app.user_middleware:
+        opts = getattr(mw, "kwargs", None) or getattr(mw, "options", {})
+        methods = opts.get("allow_methods") if isinstance(opts, dict) else None
+        if methods:
+            allowed = {m.upper() for m in methods}
+            break
+    assert allowed, "could not read allow_methods off the CORS middleware — repoint this check"
+
+    # HEAD and OPTIONS are added by the framework/preflight, never declared by a route author.
+    implicit = {"HEAD", "OPTIONS"}
+    offenders: list[str] = []
+    for route in main.app.routes:
+        for method in (getattr(route, "methods", None) or set()):
+            if method in implicit or method in allowed:
+                continue
+            offenders.append(f"{method} {getattr(route, 'path', route)}")
+    assert not offenders, (
+        "these routes use an HTTP method the CORS policy forbids, so the browser cannot call "
+        "them at all — the preflight fails and it looks like the server is down: "
+        + ", ".join(sorted(offenders))
+        + f". Allowed: {sorted(allowed)}. Change the route's METHOD; do not widen the policy."
+    )
+    # POSITIVE CONTROL — the check must be able to fail.
+    assert "PUT" not in allowed, (
+        "PUT is now allowed, so this check would no longer have caught the original defect; "
+        "either that was deliberate (update this control) or the policy was widened by mistake"
+    )
+    print(f"  every route's method is CORS-permitted ({sorted(allowed)}): PASS")
+
+
 if __name__ == "__main__":
     test_no_composer_field_is_dropped_by_the_response_model()
     test_the_scope_check_fields_specifically_reach_the_browser()
     test_an_unknown_request_field_is_refused_not_ignored()
+    test_no_route_uses_a_method_cors_forbids()
     print("ALL /attack-path response-contract tests pass")

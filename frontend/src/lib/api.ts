@@ -177,6 +177,22 @@ export type PlannedCode = Code & {
   runnable?: boolean | null;
   /** Why it cannot run: an out-of-scope host, or no host at all. */
   unrunnable_reason?: string | null;
+  /**
+   * The command as the KB stored it — present ONLY when HackPit repointed it at your target,
+   * so a rewrite is visible rather than silent.
+   */
+  original_cmd?: string | null;
+  /** The out-of-scope host(s) replaced to produce `cmd`. Target-directed tools only. */
+  repointed_from?: string[] | null;
+  /**
+   * What this command would look like pointed at your target — offered for a FLAGGED command
+   * the automatic pass declined to rewrite (curl, wget, nc, ssh…, where the host may be a
+   * tool download or your own listener). NEVER applied: the UI shows it BESIDE the original,
+   * because the reason the automatic pass declined is that only a human can tell which.
+   */
+  suggested_cmd?: string | null;
+  /** The host(s) `suggested_cmd` would replace. */
+  suggested_from?: string[] | null;
 };
 
 /** One grounded step of a composed attack path. */
@@ -316,6 +332,11 @@ export type AttackPath = {
   /** How many commands this path returned, across every step. */
   commands_total?: number;
   /**
+   * How many were automatically repointed at your target — an out-of-scope host replaced in
+   * a TARGET-DIRECTED tool's argument. Fetch-capable tools are never repointed automatically.
+   */
+  commands_repointed?: number;
+  /**
    * THE HONESTY NUMBER — how many of them cannot run as written: they point at a host
    * outside the scope, or name no host at all. A plan built from the KB's own example
    * commands used to be indistinguishable from one adapted to the target. Always 0 when
@@ -439,7 +460,7 @@ async function postJSON<T>(
 }
 
 async function sendJSON<T>(
-  method: "PATCH" | "DELETE",
+  method: "PATCH" | "PUT" | "DELETE",
   path: string,
   body?: unknown,
   signal?: AbortSignal
@@ -665,6 +686,21 @@ export type Session = {
   /** The model that actually generated the persisted report; null for reports
    *  saved before model attribution was persisted (UI falls back to config). */
   report_model: string | null;
+  /**
+   * SUBMISSION FIELDS — what the bug-bounty report renders alongside the finding. Set them
+   * on the engagement screen; the report screen echoes what it will use.
+   */
+  /** CVSS 3.1 vector. The SCORE is computed from it at report time, never asserted. */
+  cvss_vector: string | null;
+  /** Bugcrowd VRT category key (see getVRTCategories) — maps to P1–P5 by LOOKUP. */
+  vrt_category: string | null;
+  /**
+   * The program's published known-issues list, pasted verbatim from the brief. At report
+   * time each finding is compared against it and possible matches are FLAGGED — never
+   * auto-suppressed, because a false match that silently dropped a real finding would cost
+   * far more than a warning you dismiss.
+   */
+  known_issues: string | null;
   /** The engagement assistant's persisted conversation. */
   chat_history: ChatTurn[];
 };
@@ -743,6 +779,53 @@ export const renameSession = (
 
 export const deleteSession = (id: string, signal?: AbortSignal) =>
   sendJSON<null>("DELETE", `/sessions/${encodeURIComponent(id)}`, undefined, signal);
+
+// ---- submission fields (bug-bounty report) -------------------------------- //
+
+/** One Bugcrowd VRT category HackPit can map to a P1–P5 priority (GET /vrt-categories). */
+export type VRTCategory = {
+  /** The key stored on the engagement, e.g. "xss-stored". */
+  key: string;
+  /** P1 | P2 | P3 | P4 | P5 */
+  priority: string;
+  /** The VRT path, e.g. "Cross-Site Scripting (XSS) > Stored > Non-Self". */
+  category: string;
+  /** What the priority means to a triager, in one clause. */
+  meaning: string;
+};
+
+/**
+ * The VRT categories, for a picker. A CURATED SUBSET of the taxonomy at its default
+ * priorities — not the full VRT, and a program's own brief overrides it. The priority is a
+ * LOOKUP on the category and is never derived from the CVSS score: the two genuinely
+ * disagree, and a triager acts on the VRT one.
+ */
+export const getVRTCategories = (signal?: AbortSignal) =>
+  getJSON<{ categories: VRTCategory[] }>("/vrt-categories", signal);
+
+/**
+ * Set the CVSS vector, VRT category and/or known-issues list for an engagement.
+ *
+ * Only the fields you pass are written, so one can be updated without clearing the others;
+ * an EMPTY STRING clears a field. Values are stored verbatim and unvalidated on purpose — an
+ * unparseable vector and an unrecognised VRT key are both reported IN THE REPORT, where you
+ * will see them, rather than rejected here where what you typed would be lost.
+ */
+export const setSubmission = (
+  id: string,
+  fields: {
+    cvss_vector?: string | null;
+    vrt_category?: string | null;
+    known_issues?: string | null;
+  },
+  signal?: AbortSignal
+) =>
+  sendJSON<Session>(
+    "PATCH",
+    `/sessions/${encodeURIComponent(id)}/submission`,
+    fields,
+    signal
+  ) as Promise<Session>;
 
 /** The exam/format template for a generated report. */
 export type ReportTemplate = "standard" | "oscp" | "cpts" | "bugbounty";

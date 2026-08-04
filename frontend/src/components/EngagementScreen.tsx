@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PageShell } from "./PageShell";
 import { CopyButton } from "./CopyButton";
 import { EngagementAssistant } from "./EngagementAssistant";
+import { SubmissionPanel } from "./SubmissionPanel";
 import {
   getSession,
   renameSession,
@@ -41,6 +42,10 @@ export function EngagementScreen({ id }: { id: string }) {
   // guard fires exactly once per new session object, so no loop and no
   // effect-cascade. fetched.data is referentially stable between fetches.
   const [seededFrom, setSeededFrom] = useState<Session | null>(null);
+  /** The session as last written by the submission panel. `fetched.data` is a snapshot from
+   *  mount and does not re-fetch on save, so without this the collapsed summary ("VRT
+   *  xss-stored · known issues pasted") would keep describing the state before the save. */
+  const [saved, setSaved] = useState<Session | null>(null);
   if (fetched.data && fetched.data !== seededFrom) {
     const map: Record<string, StepState> = {};
     for (const ph of fetched.data.path.phases) {
@@ -117,7 +122,7 @@ export function EngagementScreen({ id }: { id: string }) {
     );
   }
 
-  const session: Session = fetched.data;
+  const session: Session = saved ?? fetched.data;
   const total = session.total;
   const checked = Object.values(state).filter((s) => s.checked).length;
   const pct = total > 0 ? Math.round((checked / total) * 100) : 0;
@@ -179,6 +184,12 @@ export function EngagementScreen({ id }: { id: string }) {
             </span>
           </div>
         </header>
+
+        {/* SUBMISSION DETAILS — engagement facts (CVSS vector, VRT category, the program's
+            known-issues list), so they are set once here and merely echoed on the report
+            screen. Collapsed by default: optional, and eight dropdowns open by default would
+            push the actual engagement below the fold. */}
+        <SubmissionPanel session={session} onSaved={setSaved} />
 
         <ol className="hp-ap-phases hp-eng-phases">
           {session.path.phases.map((ph, pi) => (

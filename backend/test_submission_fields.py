@@ -238,6 +238,35 @@ def test_the_submission_fields_round_trip_through_the_store() -> None:
     print("  submission fields round-trip; partial writes preserve the rest: PASS")
 
 
+def test_the_bounty_blocks_only_appear_on_the_bounty_template() -> None:
+    """A Bugcrowd VRT priority on an OSCP submission is jargon the grader did not ask for.
+
+    Caught by LOOKING at a generated report, not by a test: with the fields set, both the VRT
+    line and the known-issue check were landing on a `standard` pentest report. They are
+    bounty concepts and are gated to that template now.
+
+    CVSS is deliberately NOT gated — a base score is meaningful on every template, and it has
+    been spliced unconditionally since the block existed.
+    """
+    import inspect
+
+    src = inspect.getsource(R.compose_report)
+    assert 'bounty = template == "bugbounty"' in src, (
+        "compose_report no longer decides bounty-only blocks by template"
+    )
+    for call, name in (
+        ("build_known_issues_block(session) if bounty else", "known-issue check"),
+        ("build_vrt_block(session) if bounty else", "VRT priority"),
+    ):
+        assert call in src, f"the {name} block is not gated to the bugbounty template"
+    # ...and the CVSS block is NOT gated, on purpose.
+    assert "cvss = build_cvss_block(session)\n" in src, (
+        "the CVSS block became template-gated — that is a behaviour change, not a fix: it has "
+        "always been spliced on every template and a base score is meaningful on all of them"
+    )
+    print("  VRT + known-issue check are bounty-only; CVSS stays on every template: PASS")
+
+
 if __name__ == "__main__":
     test_vrt_priority_is_a_lookup_on_the_category()
     test_the_priority_is_never_derived_from_the_cvss_score()
@@ -249,4 +278,5 @@ if __name__ == "__main__":
     test_a_check_that_found_nothing_still_reports_that_it_ran()
     test_a_pipe_in_a_finding_cannot_break_the_table()
     test_the_submission_fields_round_trip_through_the_store()
+    test_the_bounty_blocks_only_appear_on_the_bounty_template()
     print("ALL submission-field tests pass")

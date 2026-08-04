@@ -2190,6 +2190,74 @@ a.hp-card {
   background: color-mix(in srgb, #ff7a59 8%, transparent);
   border-top: 1px solid color-mix(in srgb, #ff7a59 22%, transparent);
 }
+/* A rewrite HackPit DID make — stated in the accent, not the warning colour, because it is
+   a thing that worked rather than a thing that needs attention. */
+.hp-code-why-ok {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-top-color: var(--accent-line);
+}
+.hp-code-why code {
+  font-family: var(--font-jetbrains-mono), "JetBrains Mono", monospace;
+  font-size: 11.5px;
+  color: var(--white);
+  word-break: break-all;
+}
+.hp-code-repointed {
+  margin-right: auto;
+  padding-left: 10px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* THE SUGGESTED REWRITE, shown BESIDE the original and never in place of it.
+ *
+ * Visually subordinate on purpose — indented, inside the same block, under the reason that
+ * prompted it. It is an offer, not the answer: HackPit declined to apply it because for a
+ * fetch-capable tool the host may be a download source or the operator's own listener, and
+ * only a person can tell. Rendering it as an equal alternative would undo that reasoning. */
+.hp-code-suggest {
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.hp-code-suggest:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.hp-code-alt {
+  margin: 0 10px 10px;
+  border: 1px dashed var(--accent-line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.hp-code-alt-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 12px;
+  border-bottom: 1px solid var(--accent-line);
+}
+.hp-code-alt-lead {
+  margin-right: auto;
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.hp-code-alt .hp-code-why {
+  background: transparent;
+  border-top-color: var(--accent-line);
+}
 
 /* Static branch hints under a step: green "if it works →", amber "if blocked →".
  * Pre-execution decision-tree cues — small, quiet sub-lines. */
@@ -8134,6 +8202,67 @@ button.hp-tn-destroy:hover:not(:disabled) {
   background: color-mix(in srgb, #f0776a 22%, transparent);
 }
 button.hp-tn-start:disabled, button.hp-tn-destroy:disabled { opacity: 0.45; cursor: default; }
+
+/* --- SUBMISSION PANEL (CVSS / VRT / known issues) --------------------------------- */
+/* Collapsed by default: these are optional fields on a screen whose main job is something
+   else, and an always-open eight-dropdown block would push the engagement out of view. */
+.hp-sub-toggle {
+  display: flex; align-items: baseline; gap: 12px; width: 100%;
+  background: none; border: 0; padding: 0; cursor: pointer; text-align: left;
+}
+.hp-sub-summary { margin-right: auto; font-size: 12px; color: var(--dim); }
+.hp-sub-chev {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 15px; color: var(--dim);
+}
+.hp-sub-group { margin-top: 16px; }
+.hp-sub-group + .hp-sub-group { padding-top: 14px; border-top: 1px solid var(--border); }
+/* Eight metrics, wrapping — a fixed 4x2 grid breaks badly at narrow widths and these are
+   short enough that flow layout reads fine. */
+.hp-sub-metrics {
+  display: flex; flex-wrap: wrap; gap: 8px 10px; margin: 10px 0 4px;
+}
+.hp-sub-metric { display: flex; flex-direction: column; gap: 3px; min-width: 150px; flex: 1 1 150px; }
+/* One line, always. A wrapped metric label pushes its own select down and the row stops
+   reading as a row — see the note on the short labels in SubmissionPanel.tsx. */
+.hp-sub-metric > .hp-tn-olhint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hp-sub-metric select {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12.5px;
+  background: rgba(0,0,0,0.35); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--white); padding: 7px 9px; outline: none;
+}
+.hp-sub-metric select:focus { border-color: var(--accent-line); }
+/* The live score. Preview only — the report uses the BACKEND's verified calculator, and
+   this never feeds it. */
+.hp-sub-score { margin: 10px 0 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.hp-sub-score.is-set b { font-size: 15px; color: var(--accent); }
+.hp-sub-score code {
+  font-family: var(--font-jetbrains-mono), "JetBrains Mono", monospace;
+  font-size: 11.5px; color: var(--dim); word-break: break-all;
+}
+.hp-sub-known {
+  width: 100%; margin-top: 8px; padding: 9px 11px; resize: vertical;
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12.5px; line-height: 1.5;
+  color: var(--white); background: #0a0b0b;
+  border: 1px solid var(--border-2); border-radius: 7px; outline: none;
+}
+.hp-sub-known:focus { border-color: var(--accent-line); }
+.hp-sub-ok { font-size: 11px; letter-spacing: 0.6px; text-transform: uppercase; color: var(--accent); }
+
+/* The report screen's read-only echo of the same fields — what the NEXT report will carry. */
+.hp-sub-echo {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px;
+  margin: 0 0 14px; padding: 9px 12px; font-size: 12px; color: var(--dim);
+  background: color-mix(in srgb, var(--white) 4%, transparent);
+  border-left: 2px solid var(--border-2); border-radius: 0 4px 4px 0;
+}
+.hp-sub-echo-lead {
+  font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim);
+}
+.hp-sub-echo b { color: var(--accent); font-weight: 600; }
+.hp-sub-echo code {
+  font-family: var(--font-jetbrains-mono), "JetBrains Mono", monospace;
+  font-size: 11px; color: var(--white); word-break: break-all;
+}
 
 .hp-tn-oneliner { margin-top: 10px; }
 .hp-tn-olhint { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); margin-bottom: 5px; }

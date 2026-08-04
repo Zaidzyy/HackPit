@@ -184,6 +184,36 @@ export function ReportScreen({ id }: { id: string }) {
           </Link>
         </header>
 
+        {/* WHAT THE NEXT REPORT WILL CARRY. Read-only on purpose: these are engagement
+            facts, set on the engagement screen, and echoed here so "generate" is not a
+            surprise. Absent entirely when nothing is set — an empty row of labels would
+            imply the fields exist and are blank, when the truthful reading is that this
+            report simply has no CVSS block, no VRT line and no known-issue check. */}
+        {(session.cvss_vector || session.vrt_category || session.known_issues) && (
+          <p className="hp-sub-echo">
+            <span className="hp-sub-echo-lead">this report will carry</span>
+            {session.cvss_vector && (
+              <span>
+                CVSS <code>{session.cvss_vector}</code>
+              </span>
+            )}
+            {session.vrt_category && (
+              <span>
+                VRT <b>{session.vrt_category}</b>
+              </span>
+            )}
+            {session.known_issues && (
+              <span>
+                {session.known_issues.split("\n").filter((l) => l.trim().length > 3).length}{" "}
+                known issue(s) to check findings against
+              </span>
+            )}
+            <Link href={`/engagement/${id}`} className="hp-ap-linklike">
+              edit ↗
+            </Link>
+          </p>
+        )}
+
         {thin && !report && !generating && (
           <div className="hp-rep-thin">
             No steps are checked off yet. You can still generate a report, but

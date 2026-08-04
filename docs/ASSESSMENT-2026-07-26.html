@@ -330,6 +330,8 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#d9-the-two-surfaces-that-read-as-a-different-product">D9 — the two surfaces that read as a different product</a></li>
 <li><a href="#the-browser-pass-found-two-things-nothing-else-could">The browser pass found two things nothing else could</a></li>
 <li><a href="#what-was-not-done">What was not done</a></li>
+<li><a href="#the-three-things-the-punch-list-left-open-closed">The three things the punch list left open, closed</a></li>
+<li><a href="#two-defects-only-the-browser-found-again">Two defects only the browser found, again</a></li>
 </ul>
 </li>
 </ul>
@@ -3000,5 +3002,46 @@ change moves layout, and it was not part of what this build touched.</p>
 <li><strong>A real foreign host is still not substituted</strong> in a planned command, only flagged — see
   the D8 section for why rewriting one would point a tool download at the client.</li>
 </ul>
+<h3 id="the-three-things-the-punch-list-left-open-closed">The three things the punch list left open, closed</h3>
+<p><strong>Foreign-host substitution now has a seam, and it is what the TOOL DOES.</strong> <code>_HOST_TOOL</code> was
+one list; it is two. TARGET-DIRECTED tools (<code>nmap</code>, <code>ffuf</code>, <code>nuclei</code>, <code>sqlmap</code>, <code>sublist3r</code>…)
+have a host argument that IS the thing being assessed, so an out-of-scope host there is the KB
+author's target left in by accident and is rewritten automatically. FETCH-CAPABLE tools
+(<code>curl</code>, <code>wget</code>, <code>nc</code>, <code>ssh</code>, <code>scp</code>…) are never rewritten: the host may be a tool download or
+your own listener, and nothing in the argv distinguishes it from a target. The seam is
+deliberately not a blocklist of infrastructure hostnames — a blocklist has to be complete to
+be safe, and the first host nobody thought of is the one that points a download at the client.</p>
+<p>What the automatic pass declines, the operator can still do — by <strong>looking first</strong>. A flagged
+command carries a <code>suggested_cmd</code>, shown BESIDE the original and never in place of it, with
+its own copy button and a line saying it was not applied.</p>
+<p><strong>That design was validated by the first real plan it rendered.</strong> The suggestion for a SOAP
+XXE payload rewrote the XML <em>namespace URIs</em> — <code>xmlns:soap="http://schemas.xmlsoap.org/…"</code>
+became <code>xmlns:soap="http://www.crateandbarrel.me/…"</code>. Obviously wrong on sight, and silently
+corrupting if it had been applied for you. One second of human attention is the whole
+mechanism, and it only works because both versions are on screen.</p>
+<p>A rewrite that IS made is stated rather than hidden: the command keeps its <code>original_cmd</code>, and
+the block says "repointed from tesla.com — the entry said …". Changing what a KB entry said
+without saying so is its own kind of dishonesty.</p>
+<p><strong>The submission fields are reachable.</strong> A collapsed panel on the engagement screen carries
+the CVSS vector (eight dropdowns AND a paste box that populates them, with the score computed
+live), the VRT category, and the known-issues list; the report screen echoes what the next
+report will carry, with an edit link. Measured end to end in the browser: pasting
+<code>CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N</code> populated all eight metrics, read <strong>6.5
+Medium</strong>, saved, and came back out of the generated report as an authoritative CVSS block —
+the first time that calculator has appeared in a real report at all.</p>
+<h3 id="two-defects-only-the-browser-found-again">Two defects only the browser found, again</h3>
+<p><strong><code>PUT</code> is not in the CORS allow-list.</strong> The submission endpoint shipped as <code>PUT</code> and every
+backend test passed — TestClient talks to the ASGI app directly and never performs a preflight
+— while the browser refused it outright. The failure surfaced as <em>"cannot reach the API"</em>,
+which reads like the server is down. The fix was the VERB, not the policy: this is a partial
+update, so <code>PATCH</code> was correct all along, and widening the allow-list would have been the easy
+wrong answer. <code>test_attack_path_contract.py</code> now asserts that <strong>every route's method is one
+CORS permits</strong> — a backend/browser contract of exactly the same shape as the response_model
+check beside it, and equally invisible to backend-only tests.</p>
+<p><strong>The bounty blocks were landing on every template.</strong> With the fields set, a <code>standard</code>
+pentest report carried a Bugcrowd VRT priority and a known-issue check — jargon a client or an
+OSCP grader did not ask for. Both are gated to the bug-bounty template now. CVSS is
+deliberately not gated: a base score is meaningful everywhere, and it has been spliced
+unconditionally since the block existed. Verified against a running backend on both templates.</p>
 </body>
 </html>

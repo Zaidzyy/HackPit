@@ -742,6 +742,30 @@ class PlannedCode(Code):
         "outside the engagement scope, or it names no host at all. Null when runnable is "
         "not False.",
     )
+    original_cmd: str | None = Field(
+        default=None,
+        description="The command as the KB stored it, present ONLY when HackPit repointed it "
+        "at your target. Kept so a rewrite is visible rather than silent — you can see that "
+        "the entry said tesla.com and this now says your host.",
+    )
+    repointed_from: list[str] | None = Field(
+        default=None,
+        description="The out-of-scope host(s) replaced to produce `cmd`. Done automatically "
+        "only for TARGET-DIRECTED tools (nmap, ffuf, nuclei, sqlmap…), where the host "
+        "argument is by definition the thing being assessed.",
+    )
+    suggested_cmd: str | None = Field(
+        default=None,
+        description="What this command would look like pointed at your target — offered for "
+        "a FLAGGED command that the automatic pass declined to rewrite. NEVER applied: it is "
+        "shown beside the original, never in place of it. The automatic pass declines for "
+        "fetch-capable tools (curl, wget, nc, ssh…) because a host in their argument may be a "
+        "tool download or your own listener, and only a human can tell which. Null when "
+        "there is no host to swap.",
+    )
+    suggested_from: list[str] | None = Field(
+        default=None, description="The host(s) `suggested_cmd` would replace."
+    )
 
 
 class AttackStep(BaseModel):
@@ -886,6 +910,12 @@ class AttackPathOut(BaseModel):
     )
     commands_total: int = Field(
         default=0, description="How many commands this path returned, across every step."
+    )
+    commands_repointed: int = Field(
+        default=0,
+        description="How many commands were automatically repointed at your target — an "
+        "out-of-scope host replaced in a TARGET-DIRECTED tool's argument. Fetch-capable "
+        "tools are never repointed automatically; those get a `suggested_cmd` instead.",
     )
     commands_unrunnable: int = Field(
         default=0,
@@ -1663,9 +1693,15 @@ def list_vrt_categories() -> dict[str, Any]:
     return {"categories": report_gen.vrt_categories()}
 
 
-@app.put("/sessions/{session_id}/submission", response_model=SessionDetail)
+@app.patch("/sessions/{session_id}/submission", response_model=SessionDetail)
 def set_submission(session_id: str, req: SubmissionIn = Body(...)) -> dict[str, Any]:
     """Set the CVSS vector, VRT category and/or known-issues list for an engagement.
+
+    PATCH, not PUT, and the distinction is load-bearing: only the fields you send are
+    written, so this is a partial update rather than a replacement. It shipped as PUT for
+    about an hour and the browser refused it — the CORS allow-list names GET/POST/PATCH/
+    DELETE, so the preflight failed. Widening that list would have been the easy fix and the
+    wrong one: the verb was what did not fit, not the policy.
 
     Stored verbatim and unvalidated on purpose: an unparseable vector and an unrecognised VRT
     key are both reported IN THE REPORT, where the operator sees them, rather than rejected

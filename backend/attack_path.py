@@ -418,11 +418,30 @@ _EX_HOST = (
 ) + _PORT
 
 # recon / http tools whose bare argument is a target host
-_HOST_TOOL = (
-    r"nmap|masscan|rustscan|nikto|whatweb|wpscan|curl|wget|httpx|httprobe|"
+#
+# TWO KINDS OF TOOL, AND THE DIFFERENCE DECIDES WHETHER WE MAY REWRITE A HOST.
+#
+# Both lists name tools whose argument is a host, so both are HOST POSITIONS for the purpose
+# of reading a command. They part company on one question: *if this host is not the
+# engagement's, is it safe to replace it with the engagement's?*
+#
+#   TARGET-DIRECTED — the host argument IS the thing being assessed. `nmap tesla.com` in a
+#   plan for crateandbarrel.me is the KB author's target left in by accident, and pointing it
+#   at the real one is exactly what the operator would do by hand.
+#
+#   FETCH-CAPABLE — the host may be somewhere you are *getting something from* or *calling
+#   back to*, not something you are attacking. `curl https://raw.githubusercontent.com/…/
+#   linpeas.sh -o linpeas.sh` downloads a tool; `nc attacker.vps 4444` is your own listener.
+#   Rewriting either would point it at the client's production host. Nothing in the argv
+#   distinguishes a download from an attack, so these are NEVER rewritten — only flagged.
+#
+# The seam is what the TOOL DOES, deliberately, rather than a blocklist of infrastructure
+# hostnames: a blocklist has to be complete to be safe, and the first host nobody thought of
+# is the one that redirects a download at the client.
+#
+_TARGET_TOOL = (
+    r"nmap|masscan|rustscan|nikto|whatweb|wpscan|httpx-toolkit|httprobe|"
     r"ffuf|feroxbuster|gobuster|dirb|dirsearch|katana|hakrawler|gau|waybackurls|"
-    r"dig|host|nslookup|ping|fping|nc|ncat|socat|telnet|ssh|scp|sftp|"
-    r"smbclient|smbmap|crackmapexec|netexec|nxc|enum4linux|snmpwalk|rpcclient|"
     r"nuclei|sqlmap|dalfox|amass|subfinder|dnsx|wfuzz|"
     # subdomain/OSINT tools that take the target as a -d/-u argument. sublist3r earned its
     # place by measurement: `sublist3r -d tesla.com -t 100` came back from a real plan with
@@ -431,6 +450,19 @@ _HOST_TOOL = (
     r"sublist3r|assetfinder|theharvester|dnsrecon|fierce|wafw00f|sslscan|"
     r"arjun|paramspider|gowitness|naabu"
 )
+#: Never auto-rewritten. Downloads, transfers, callbacks and interactive sessions.
+#: `httpx` is here and `httpx-toolkit` is above on purpose — in this image /usr/bin/httpx is
+#: the python one-request CLI, not ProjectDiscovery's scanner (measured; see executor.py).
+#: `dig`/`host`/`nslookup` are here for a different reason: `dig @1.1.1.1 example.com` names
+#: a RESOLVER as well as a target, and the two are not distinguishable by position.
+_FETCH_TOOL = (
+    r"curl|wget|httpx|nc|ncat|socat|telnet|ssh|scp|sftp|"
+    r"dig|host|nslookup|ping|fping|"
+    r"smbclient|smbmap|crackmapexec|netexec|nxc|enum4linux|snmpwalk|rpcclient"
+)
+#: Every tool whose argument is a host — the union, used by the host-position patterns, which
+#: only care about READING a command rather than rewriting it.
+_HOST_TOOL = _TARGET_TOOL + r"|" + _FETCH_TOOL
 
 # An example host is substituted ONLY in a real HOST POSITION — never as a bare
 # domain-looking substring — so filenames (.env.example) and tokens inside a
@@ -478,6 +510,16 @@ def _host_positions(host_rx: str) -> tuple[re.Pattern[str], ...]:
 # check to answer "what is this command actually pointed at?".
 _ANY_HOST = r"(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}" + _PORT
 _ANY_HOST_POSITIONS = _host_positions("(?:" + _ANY_HOST + r"|" + _IPV4 + _PORT + r")")
+# Named individually as well, because REWRITING picks a subset that READING does not: the
+# `@` form is userinfo (`user@host`) or a resolver (`dig @1.1.1.1`), so it counts as a host
+# when we are asking "what does this command name?" and must not be touched when we are
+# asking "what may we replace?".
+(
+    _HOST_AFTER_SCHEME_RE_ANY,
+    _HOST_AFTER_AT_RE_ANY,
+    _HOST_IN_HEADER_RE_ANY,
+    _HOST_AS_TOOL_ARG_RE_ANY,
+) = _ANY_HOST_POSITIONS
 
 
 # An example/lab NETWORK RANGE baked into a note (10.0.0.0/24, 192.168.1.0/24,
@@ -842,6 +884,67 @@ def command_hosts(cmd: str) -> list[str]:
     return out
 
 
+_PROGRAM_RE = re.compile(r"^\s*(?:sudo\s+|proxychains4?\s+(?:-q\s+)?)*([^\s|;&]+)")
+_TARGET_PROGRAM_RE = re.compile(r"^(?:" + _TARGET_TOOL + r")$", re.I)
+
+
+def _program_of(cmd: str) -> str:
+    """The command's own program name, minus any path and a sudo/proxychains prefix."""
+    m = _PROGRAM_RE.match(cmd or "")
+    if not m:
+        return ""
+    return m.group(1).rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
+
+
+def repoint_command(
+    cmd: str, target: str | None, resolved: scope_model.ResolvedScope | None
+) -> tuple[str, list[str]]:
+    """Rewrite every OUT-OF-SCOPE host in ``cmd`` to ``target``. Returns ``(cmd, replaced)``.
+
+    PURE, and it does NOT decide whether it should be called — :func:`auto_repoint` does that.
+    Split so the same rewrite serves two callers with opposite risk profiles: the automatic
+    pass, which is allowed only for target-directed tools, and the SUGGESTION offered beside a
+    flagged command, which the operator reads before using and so may be offered for anything.
+    """
+    if not cmd or not target:
+        return cmd, []
+    host = _target_host(target)
+    replaced: list[str] = []
+
+    def _swap(m: re.Match[str]) -> str:
+        found = m.group("h")
+        if resolved is not None and resolved.in_scope(found):
+            return m.group(0)  # already ours
+        if not scope_model.extract_hosts(found):
+            return m.group(0)  # a filename or a version string, not a host
+        tail = re.search(r":\d{1,5}$", found)
+        if found not in replaced:
+            replaced.append(found)
+        return m.group("pre") + host + (tail.group(0) if tail else "")
+
+    out = cmd
+    # The `@` position is deliberately NOT rewritten: it is userinfo (`user@host`) or a
+    # resolver (`dig @1.1.1.1`), and neither is reliably the command's target.
+    for rx in (_HOST_AFTER_SCHEME_RE_ANY, _HOST_IN_HEADER_RE_ANY, _HOST_AS_TOOL_ARG_RE_ANY):
+        out = rx.sub(_swap, out)
+    return out, replaced
+
+
+def auto_repoint(
+    cmd: str, target: str | None, resolved: scope_model.ResolvedScope | None
+) -> tuple[str, list[str]]:
+    """The rewrite that is applied WITHOUT asking. Returns ``(cmd, replaced)``.
+
+    Gated on the command's own program being TARGET-DIRECTED (see :data:`_TARGET_TOOL`). For
+    a fetch-capable program the command comes back untouched and stays flagged, because a
+    host in `curl`'s argument may be a tool download rather than a target and pointing that
+    at the client's production host is a worse outcome than any amount of retyping.
+    """
+    if not _TARGET_PROGRAM_RE.match(_program_of(cmd)):
+        return cmd, []
+    return repoint_command(cmd, target, resolved)
+
+
 def check_command_scope(
     cmd: str, resolved: scope_model.ResolvedScope | None
 ) -> tuple[bool | None, str | None]:
@@ -875,15 +978,49 @@ def check_command_scope(
     )
 
 
+def repoint_commands(
+    phases: list[dict[str, Any]], target: str | None, resolved: scope_model.ResolvedScope | None
+) -> int:
+    """Auto-repoint every target-directed command at the engagement. Returns how many changed.
+
+    Runs BEFORE :func:`check_commands`, so the verdict describes the command as it will
+    actually be pasted. The ORIGINAL is kept on the command rather than discarded: silently
+    changing what a KB entry said is its own kind of dishonesty, and the operator should be
+    able to see that ``tesla.com`` was there and is now their own host.
+    """
+    changed = 0
+    for phase in phases or []:
+        for step in phase.get("steps") or []:
+            for c in step.get("commands") or []:
+                before = c.get("cmd") or ""
+                after, replaced = auto_repoint(before, target, resolved)
+                if not replaced or after == before:
+                    continue
+                c["cmd"] = after
+                c["original_cmd"] = before
+                c["repointed_from"] = replaced[:4]
+                changed += 1
+    return changed
+
+
 def check_commands(
-    phases: list[dict[str, Any]], resolved: scope_model.ResolvedScope | None
+    phases: list[dict[str, Any]],
+    resolved: scope_model.ResolvedScope | None,
+    target: str | None = None,
 ) -> tuple[int, int]:
     """Mark every command in every step with its scope verdict. Returns ``(total, unrunnable)``.
 
     Additive: a runnable command is left exactly as it was, so ``runnable`` absent means
     "checked and fine" or "no scope to check against" — the frontend only ever reacts to an
-    explicit ``False``. Runs AFTER substitution, so what it reports is what the operator
-    would actually paste; running it first would flag commands the substituter then fixed.
+    explicit ``False``. Runs AFTER substitution and auto-repointing, so what it reports is
+    what the operator would actually paste; running it first would flag commands the earlier
+    passes then fixed.
+
+    For a command that IS flagged, a ``suggested_cmd`` is attached when one can be built —
+    the same rewrite the automatic pass was not allowed to make. It is a SUGGESTION and
+    nothing more: it is never written into ``cmd``, and the UI shows it beside the original
+    rather than in place of it, because the whole reason the automatic pass declined is that
+    only a human can tell a download from a target.
     """
     total = unrunnable = 0
     for phase in phases or []:
@@ -897,6 +1034,13 @@ def check_commands(
                     c["unrunnable_reason"] = reason
                     unrunnable += 1
                     step_bad += 1
+                    suggested, replaced = repoint_command(c.get("cmd") or "", target, resolved)
+                    # Only when it actually swapped a host. The "names no host" case has
+                    # nothing to swap, and offering the command back unchanged as a
+                    # "suggestion" would be a button that does nothing.
+                    if replaced and suggested != c.get("cmd"):
+                        c["suggested_cmd"] = suggested
+                        c["suggested_from"] = replaced[:4]
             if step_bad:
                 step["unrunnable_commands"] = step_bad
     return total, unrunnable
@@ -2096,9 +2240,10 @@ def compose(
             # HONESTY MARKER: a foreign host/AD domain we could not confidently rewrite
             # is reported on the step rather than guessed at or left silent.
             phases = flag_foreign_refs(phases, target, scope)
-            # THE SCOPE CHECK, last: every command has had its substitution by now, so a
-            # verdict here is a verdict on what the operator would actually paste.
-            cmd_total, cmd_unrunnable = check_commands(phases, resolved)
+            # AUTO-REPOINT then CHECK, in that order: the verdict has to describe the command
+            # as it will actually be pasted, not as the KB stored it.
+            cmd_repointed = repoint_commands(phases, target, resolved)
+            cmd_total, cmd_unrunnable = check_commands(phases, resolved, target)
             damaged = bool((wu.get("meta") or {}).get("source_damaged"))
             return {
                 "goal": goal,
@@ -2108,6 +2253,7 @@ def compose(
                 "scope_checked": resolved is not None,
                 "commands_total": cmd_total,
                 "commands_unrunnable": cmd_unrunnable,
+                "commands_repointed": cmd_repointed,
                 "phases": phases,
                 "profile": profile,
                 "scoped": scoped,
@@ -2178,8 +2324,9 @@ def compose(
     # and no grounded/ai_suggested label, and it is not a claim that the step is verified.
     arsenal_planner.tag_steps(_arsenal(), phases)
     phases = flag_foreign_refs(phases, target, scope)
-    # THE SCOPE CHECK, last — see the note on the writeup-first return above.
-    cmd_total, cmd_unrunnable = check_commands(phases, resolved)
+    # AUTO-REPOINT then CHECK — see the note on the writeup-first return above.
+    cmd_repointed = repoint_commands(phases, target, resolved)
+    cmd_total, cmd_unrunnable = check_commands(phases, resolved, target)
 
     return {
         "goal": goal,
@@ -2189,6 +2336,7 @@ def compose(
         "scope_checked": resolved is not None,
         "commands_total": cmd_total,
         "commands_unrunnable": cmd_unrunnable,
+        "commands_repointed": cmd_repointed,
         "phases": phases,
         "profile": profile,
         "scoped": scoped,

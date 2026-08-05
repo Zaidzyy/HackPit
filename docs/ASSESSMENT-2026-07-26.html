@@ -4726,6 +4726,14 @@ control is now <strong>eight planted violations</strong> plus four innocents tha
 <ul>
 <li><strong>The ZAP GraphQL add-on was not upgraded in the image.</strong> See the caveat above; it is the top
   follow-up, and the product is tolerant of the difference rather than wrong about it.</li>
+<li>*** THE RUNNING CONTAINER WAS NOT RECREATED, SO THE FOUR TOOLS ARE IN THE IMAGE AND NOT YET IN
+  THE CONTAINER. *** They are verified present and working in <code>hackpit/kali-sandbox:m1</code>; a
+  <code>docker compose up -d engage-sandbox</code> is what puts them in reach of a run. That was left for a
+  deliberate moment rather than done here, because recreating <strong>destroys the running ZAP daemon
+  and its capture</strong> — and in this particular case it would also drop the container's runtime
+  <code>graphql-alpha-0.33.0</code> back to the image's 0.29.0, which is the exact surface every measurement
+  in item 1 was taken against. Trading a measured state for an unmeasured one at the end of the
+  build that measured it would have been the wrong order.</li>
 <li><strong>No field-suggestion / clairvoyance enumeration in the product.</strong> Recorded as a gap, with the
   arsenal tool named at the exact moment the operator needs it.</li>
 <li><strong>No new gate, confirm, blocklist or allow-list narrowing</strong> — the build's own requirement.</li>

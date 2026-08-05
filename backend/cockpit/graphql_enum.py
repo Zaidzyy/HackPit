@@ -32,6 +32,8 @@ nothing gets shipped green.
                      + .../utils/message_suggestions.ex
     async-graphql  src/validation/rules/fields_on_correct_type.rs + src/validation/suggestion.rs
     hotchocolate   Core/src/Validation/Properties/Resources.resx + Rules/FieldSelectionsRule.cs
+    graphql-dotnet Validation/Errors/FieldsOnCorrectTypeError.cs + Utilities/StringUtils.cs
+                     + Validation/Errors/KnownArgumentNamesError.cs
 
 *** THE THREE READ LAST WENT THREE DIFFERENT WAYS, WHICH IS THE ARGUMENT FOR READING THEM. ***
 They were added together, from one plan, on one assumption -- that each would need its own parser.
@@ -48,6 +50,18 @@ comma where every other core in this file writes `or`. HotChocolate never sugges
 so the honest answer there is `suggestions_unsupported` -- do not spend three thousand requests.
 
 Guessing would have got all three wrong in a different direction each time.
+
+*** AND .NET TURNED OUT TO BE TWO IMPLEMENTATIONS THAT AGREE ON NOTHING. ***
+`graphql-dotnet` is not a variant of HotChocolate; they share no wording at all. It reproduces
+graphql-core's grammar to the character -- single quotes, bare ``or`` at two, an Oxford comma from
+three, the same cap of five -- from a C# codebase, so a .NET server can fingerprint as either
+`hotchocolate` (suggests nothing) or `graphql-core` (suggests everything). Reading only one of them
+and calling .NET done would have left half the platform unenumerable and looked complete.
+
+It also contradicts itself, and the contradiction was worth a fix: its FIELD clause ends in ``?``
+and its ARGUMENT clause does not (`KnownArgumentNamesError.cs` omits it where
+`FieldsOnCorrectTypeError.cs` appends it). A clause pattern demanding a literal question mark
+recovered its fields and silently dropped every argument name it volunteered.
 
 *** AND THE MEASUREMENT OVERTURNED THE OBVIOUS GUESS. ***
 graphql-core is NOT byte-identical to graphql-js. The grammar is identical and the quote character
@@ -109,10 +123,19 @@ DIALECTS: dict[str, dict[str, str]] = {
         # MEASURED by running graphql-core 3.2.11:
         #   Cannot query field 'usr' on type 'Query'. Did you mean 'user' or 'users'?
         # IDENTICAL GRAMMAR, DIFFERENT QUOTE. See the module docstring.
+        # *** THE TRAILING `?` IS OPTIONAL HERE AND THAT IS MEASURED, NOT DEFENSIVE. ***
+        # graphql-dotnet shares this dialect byte for byte on the FIELD sentence and then
+        # contradicts itself on the argument one: FieldsOnCorrectTypeError.cs appends
+        # `...QuotedOrList(names)}?"` and KnownArgumentNamesError.cs:45 appends the same clause
+        # WITHOUT the question mark. A clause pattern that demanded `\?` recovered graphql-dotnet's
+        # field names and silently dropped every argument name it offered -- and an argument is
+        # what report #61 actually needed. The body must still open and close on a quote, so an
+        # optional terminator cannot match an empty one.
         "unknown_field": r"Cannot query field '(?P<name>[^']+)' on type '(?P<type>[^']+)'",
-        "suggestion_clause": r"Did you mean (?P<body>'[^?]*?)\?",
+        "suggestion_clause": r"Did you mean (?P<body>'[^?]*')\??",
         "quote": "'",
-        "provenance": "RUN: graphql-core 3.2.11 via python",
+        "provenance": ("RUN: graphql-core 3.2.11 via python; and read in graphql-dotnet "
+                       "Validation/Errors/FieldsOnCorrectTypeError.cs + Utilities/StringUtils.cs"),
     },
     "graphql-ruby": {
         # SOURCE: fields_are_defined_on_type.rb
@@ -197,6 +220,15 @@ CORE_DIALECT: dict[str, str] = {
     "gqlparser": "graphql-js",
     "absinthe": "graphql-js",
     "graphql-core": "graphql-core",
+    # graphql-dotnet's StringUtils.QuotedOrList is graphql-core's grammar to the character: single
+    # quotes, bare ` or ` at two, an Oxford comma from three, and the same cap of five. A C#
+    # implementation and a Python one that agree byte for byte.
+    #
+    # *** IT IS THEREFORE INDISTINGUISHABLE FROM graphql-core BY THE FIELD SENTENCE. ***
+    # A .NET server running graphql-dotnet fingerprints as core `graphql-core`, exactly the way a
+    # graphql-php server fingerprints as `graphql-js`. The DIALECT is right, which is what the
+    # parser needs; the brand is not recoverable from this probe and is not guessed.
+    "graphql-dotnet": "graphql-core",
     "graphql-ruby": "graphql-ruby",
     "async-graphql": "async-graphql",
 }
@@ -227,6 +259,11 @@ ENGINE_CORE: dict[str, str] = {
     "absinthe-graphql": "absinthe",
     "absinthe": "absinthe",
     "hotchocolate": "hotchocolate",
+    # .NET IS TWO IMPLEMENTATIONS, and they share nothing: HotChocolate never suggests and writes
+    # backticks, graphql-dotnet suggests in graphql-core's exact grammar. graphw00f carries them as
+    # two engines and so does this table -- collapsing them to "dotnet" is the brand-vs-core
+    # mistake this module was written to avoid.
+    "graphql-dotnet": "graphql-dotnet",
     # *** graphw00f HAS NO ID FOR async-graphql. *** Its only Rust engine is `juniper`, so this
     # one brand cannot be compared across the two tools and there is nothing to align to. Named
     # for the crate. Note also that graphw00f carries `graphql-dotnet` as an engine SEPARATE from

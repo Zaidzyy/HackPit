@@ -87,6 +87,19 @@ ASYNC_NONE = 'Unknown field "zzzzzzz" on type "Query".'
 ASYNC_ARG = ('Unknown argument "identifer" on field "user" of type "Query". '
              'Did you mean "identifier"?')
 
+# graphql-dotnet: the OTHER .NET implementation, sharing nothing with HotChocolate. Its
+# StringUtils.QuotedOrList is graphql-core's grammar to the character -- and its argument clause
+# ends without the `?` its own field clause appends.
+DOTNET_TWO = "Cannot query field 'usr' on type 'Query'. Did you mean 'user' or 'users'?"
+DOTNET_THREE = ("Cannot query field 'usr' on type 'Query'. Did you mean 'user', 'users', "
+                "or 'userById'?")
+DOTNET_NONE = "Cannot query field 'zzzzzzz' on type 'Query'."
+DOTNET_ARG = ("Unknown argument 'identifer' on field 'user' of type 'Query'. "
+              "Did you mean 'identifier'")
+# ScalarLeafsError.cs, for contrast with HotChocolate: unquoted and with no `Did you mean` at all,
+# so graphql-dotnet does NOT carry the message that was fabricating fields.
+DOTNET_LEAF = "Field usr of type User must have a sub selection"
+
 # HotChocolate: backticks, and no name suggestion anywhere in the validation resources.
 HOTCHOCOLATE_NONE = "The field `usr` does not exist on the type `Query`."
 # *** THE TRAP FIXTURE. *** The ONE `Did you mean` in HotChocolate's Resources.resx, from the
@@ -183,6 +196,45 @@ def test_absinthe_rides_graphql_js_for_FIELDS_and_yields_NOTHING_for_arguments()
     print("  absinthe arguments yield nothing (correctly); async-graphql arguments parse: PASS")
 
 
+def test_dotnet_is_TWO_engines_and_the_argument_clause_has_no_question_mark() -> None:
+    """*** .NET IS NOT ONE IMPLEMENTATION, AND THE TWO SHARE NO WORDING AT ALL. ***
+
+    HotChocolate writes backticks and never suggests. graphql-dotnet reproduces graphql-core's
+    grammar to the character from a C# codebase. Reading one and calling .NET done would leave
+    half the platform unenumerable while looking complete.
+
+    *** AND graphql-dotnet CONTRADICTS ITSELF BETWEEN TWO ADJACENT FILES. ***
+    FieldsOnCorrectTypeError.cs appends the clause WITH a trailing `?`; KnownArgumentNamesError.cs
+    appends the same clause WITHOUT one. A pattern that demanded `\\?` recovered its field names
+    and silently dropped every argument name it volunteered -- and the argument form is the one
+    report #61 needed. This is the test that keeps the terminator optional.
+    """
+    assert [s.name for s in ge.parse_suggestions(DOTNET_TWO, "graphql-core")] == ["user", "users"]
+    assert [s.name for s in ge.parse_suggestions(DOTNET_THREE, "graphql-core")] == [
+        "user", "users", "userById"]
+    assert ge.CORE_DIALECT["graphql-dotnet"] == "graphql-core"
+    assert ge.ENGINE_CORE["graphql-dotnet"] != ge.ENGINE_CORE["hotchocolate"], (
+        "the two .NET engines must not collapse to one core -- they share no wording")
+
+    # The argument clause, with no `?` anywhere in it.
+    assert not DOTNET_ARG.endswith("?"), "the fixture must lack it or this proves nothing"
+    args = ge.parse_argument_suggestions(DOTNET_ARG, "graphql-core")
+    assert [s.name for s in args] == ["identifier"]
+    assert all(s.kind == "argument" for s in args)
+
+    # An optional terminator must not start matching an EMPTY clause.
+    assert ge.parse_suggestions(DOTNET_NONE, "graphql-core") == []
+    assert ge.classify_message(DOTNET_NONE, "graphql-core") == "no_suggestion"
+    assert ge.parse_suggestions("Cannot query field 'x' on type 'Q'. Did you mean ",
+                                "graphql-core") == []
+    # graphql-dotnet's leaf message carries no quotes and no `Did you mean`, so unlike
+    # HotChocolate's it could never have fabricated a field in the first place.
+    assert "Did you mean" not in DOTNET_LEAF
+    for dialect in ge.DIALECTS:
+        assert ge.parse_suggestions(DOTNET_LEAF, dialect) == [], dialect
+    print("  graphql-dotnet parses fields AND its `?`-less argument clause: PASS")
+
+
 def test_EVERY_dialect_is_REACHABLE_from_classify_fingerprint() -> None:
     """*** THE STRUCTURAL ONE. THIS IS THE TEST THAT WOULD HAVE CAUGHT THE LAST BUG. ***
 
@@ -226,6 +278,7 @@ def test_each_fixture_classifies_to_its_OWN_core_and_not_a_NEIGHBOURS() -> None:
         (PHP_TWO, "graphql-js"),
         (GQLPARSER_TWO, "graphql-js"),
         (CORE_TWO, "graphql-core"),
+        (DOTNET_TWO, "graphql-core"),     # byte-identical, so this IS the right answer
         (RUBY_ONE, "graphql-ruby"),
         (ASYNC_TWO, "async-graphql"),
         (ABSINTHE_TWO, "graphql-js"),     # byte-identical, so this IS the right answer
@@ -551,6 +604,7 @@ if __name__ == "__main__":
     test_async_graphql_has_NO_or_AT_ALL_and_the_quoted_run_parser_absorbs_it()
     test_hotchocolate_NEVER_suggests_and_its_ONE_did_you_mean_is_not_a_field()
     test_absinthe_rides_graphql_js_for_FIELDS_and_yields_NOTHING_for_arguments()
+    test_dotnet_is_TWO_engines_and_the_argument_clause_has_no_question_mark()
     test_EVERY_dialect_is_REACHABLE_from_classify_fingerprint()
     test_each_fixture_classifies_to_its_OWN_core_and_not_a_NEIGHBOURS()
     test_the_separator_differs_and_a_split_parser_would_be_wrong()

@@ -4796,6 +4796,32 @@ Guessing would have got all three wrong, in a different direction each time.
 > (`[_A-Za-z][_0-9A-Za-z]*`) rather than a blocklist of wordings we happen to have seen — the next
 > core to copy that message is not a change here.
 
+#### .NET is two implementations, and they agree on nothing
+
+`graphql-dotnet` was read straight after, because graphw00f carries it as an engine **separate
+from** `hotchocolate` and reading one of them would have left half the platform unenumerable while
+looking complete. The two share no wording at all:
+
+    hotchocolate    The field `usr` does not exist on the type `Query`.        (never suggests)
+    graphql-dotnet  Cannot query field 'usr' on type 'Query'. Did you mean 'user' or 'users'?
+
+`graphql-dotnet` reproduces **graphql-core's grammar to the character** — single quotes, bare `or`
+at two, an Oxford comma from three, the same cap of five — from a C# codebase. So it rides the
+graphql-core dialect, and, exactly as with graphql-php on graphql-js, **a .NET server running it
+fingerprints as core `graphql-core`**: the dialect is right, which is what the parser needs, and
+the brand is not recoverable from that probe and is not guessed.
+
+> **It also contradicts itself between two adjacent files, and that was worth a fix.**
+> `FieldsOnCorrectTypeError.cs` appends the suggestion clause **with** a trailing `?`;
+> `KnownArgumentNamesError.cs:45` appends the same clause **without** one. A clause pattern
+> demanding a literal question mark recovered graphql-dotnet's field names and **silently dropped
+> every argument name it volunteered** — and the argument form is the one report #61 actually
+> needed. The terminator is now optional, with the body still required to open and close on a
+> quote so an empty clause cannot match.
+
+Its `ScalarLeafs` message is `Field usr of type User must have a sub selection` — unquoted, no
+`Did you mean` — so unlike HotChocolate's it could never have fabricated a field.
+
 Two structural tests were added with them, because the *shape* of adding a core is what breaks:
 `classify_fingerprint` carried a **literal tuple** of the three dialects that existed when it was
 written, so a fourth `DIALECTS` entry would have been never tried, read as `unknown`, and left the
@@ -4908,7 +4934,7 @@ file this build does not touch, and it is recorded rather than waved away.
 * ~~**HotChocolate, Absinthe and Juniper have no suggestion parser.**~~ **Closed 2026-08-05** —
   see *Three more cores* below. HotChocolate and Absinthe were read; **async-graphql was read in
   place of Juniper**, which is the Rust library people name rather than the one they deploy.
-  `graphql-dotnet` remains unread and is the one .NET implementation still resolving to `unknown`.
+  `graphql-dotnet` was read in the same session — see *.NET is two implementations* below.
 * **No OOB canary provisioning** — a separate parked decision.
 * **No new gate, confirm, blocklist or allow-list narrowing** — the build's own requirement, and
   the one change to reachability removes a restriction rather than adding one.

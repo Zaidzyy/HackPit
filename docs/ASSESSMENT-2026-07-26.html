@@ -432,6 +432,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#item-2-engine-fingerprinting-and-the-unit-is-the-core">Item 2 — engine fingerprinting, and the unit is the CORE</a></li>
 <li><a href="#item-3-field-suggestion-enumeration-and-the-measurement-that-shaped-it">Item 3 — field-suggestion enumeration, and the measurement that shaped it</a><ul>
 <li><a href="#three-more-cores-2026-08-05-and-they-went-three-different-ways">Three more cores, 2026-08-05 — and they went three different ways</a></li>
+<li><a href="#net-is-two-implementations-and-they-agree-on-nothing">.NET is two implementations, and they agree on nothing</a></li>
 <li><a href="#five-outcomes-and-four-of-them-are-an-empty-list-from-a-naive-implementation">FIVE outcomes, and four of them are an empty list from a naive implementation</a></li>
 </ul>
 </li>
@@ -4928,6 +4929,29 @@ HotChocolate copied that message from graphql-js and a fixture went looking for 
 (<code>[_A-Za-z][_0-9A-Za-z]*</code>) rather than a blocklist of wordings we happen to have seen — the next
 core to copy that message is not a change here.</p>
 </blockquote>
+<h4 id="net-is-two-implementations-and-they-agree-on-nothing">.NET is two implementations, and they agree on nothing</h4>
+<p><code>graphql-dotnet</code> was read straight after, because graphw00f carries it as an engine <strong>separate
+from</strong> <code>hotchocolate</code> and reading one of them would have left half the platform unenumerable while
+looking complete. The two share no wording at all:</p>
+<pre><code>hotchocolate    The field `usr` does not exist on the type `Query`.        (never suggests)
+graphql-dotnet  Cannot query field 'usr' on type 'Query'. Did you mean 'user' or 'users'?
+</code></pre>
+<p><code>graphql-dotnet</code> reproduces <strong>graphql-core's grammar to the character</strong> — single quotes, bare <code>or</code>
+at two, an Oxford comma from three, the same cap of five — from a C# codebase. So it rides the
+graphql-core dialect, and, exactly as with graphql-php on graphql-js, <strong>a .NET server running it
+fingerprints as core <code>graphql-core</code></strong>: the dialect is right, which is what the parser needs, and
+the brand is not recoverable from that probe and is not guessed.</p>
+<blockquote>
+<p><strong>It also contradicts itself between two adjacent files, and that was worth a fix.</strong>
+<code>FieldsOnCorrectTypeError.cs</code> appends the suggestion clause <strong>with</strong> a trailing <code>?</code>;
+<code>KnownArgumentNamesError.cs:45</code> appends the same clause <strong>without</strong> one. A clause pattern
+demanding a literal question mark recovered graphql-dotnet's field names and <strong>silently dropped
+every argument name it volunteered</strong> — and the argument form is the one report #61 actually
+needed. The terminator is now optional, with the body still required to open and close on a
+quote so an empty clause cannot match.</p>
+</blockquote>
+<p>Its <code>ScalarLeafs</code> message is <code>Field usr of type User must have a sub selection</code> — unquoted, no
+<code>Did you mean</code> — so unlike HotChocolate's it could never have fabricated a field.</p>
 <p>Two structural tests were added with them, because the <em>shape</em> of adding a core is what breaks:
 <code>classify_fingerprint</code> carried a <strong>literal tuple</strong> of the three dialects that existed when it was
 written, so a fourth <code>DIALECTS</code> entry would have been never tried, read as <code>unknown</code>, and left the
@@ -5028,7 +5052,7 @@ file this build does not touch, and it is recorded rather than waved away.</p>
 <li>~~<strong>HotChocolate, Absinthe and Juniper have no suggestion parser.</strong>~~ <strong>Closed 2026-08-05</strong> —
   see <em>Three more cores</em> below. HotChocolate and Absinthe were read; <strong>async-graphql was read in
   place of Juniper</strong>, which is the Rust library people name rather than the one they deploy.
-  <code>graphql-dotnet</code> remains unread and is the one .NET implementation still resolving to <code>unknown</code>.</li>
+  <code>graphql-dotnet</code> was read in the same session — see <em>.NET is two implementations</em> below.</li>
 <li><strong>No OOB canary provisioning</strong> — a separate parked decision.</li>
 <li><strong>No new gate, confirm, blocklist or allow-list narrowing</strong> — the build's own requirement, and
   the one change to reachability removes a restriction rather than adding one.</li>

@@ -6,6 +6,8 @@ HackPit started as a way to make a career's worth of scattered pentest notes rec
 
 It runs **local-first** on your own machine. Every answer cites a real technique from your own library, and every command is one you explicitly approved.
 
+> **This public repo ships code only.** The knowledge sources and raw technique material the KB is built from — course notes, write-ups, cloned repos, PDFs, cheat sheets — are kept **local and git-ignored** and never committed. What *is* committed is the pipeline that builds the KB, plus per-batch **source manifests** (`sources/*-manifest.md`) recording each source's URL, date, commit SHA, and verdict, so provenance stays traceable without redistributing anyone's content. The KB data itself (`/data/`) is generated locally.
+
 <p align="center">
   <img src="assets/screenshots/02-home.png" alt="HackPit home — category grid and live knowledge-base counters" width="100%">
 </p>

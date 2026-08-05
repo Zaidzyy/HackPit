@@ -398,6 +398,13 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#build-19-ci-main-was-already-red-and-then-this-build-broke-it-a-different-way">Build #19, CI — main was already red, and then this build broke it a different way</a></li>
 </ul>
 </li>
+<li><a href="#source-evaluated-sourcesinsane-ctf-writeups-and-vulnerabilitxt-2026-08-05">Source evaluated: sources/insane ctf writeups and vulnerabili.txt (2026-08-05)</a><ul>
+<li><a href="#kb-3-authored-entries-2744-2747">KB — 3 authored entries (2744 → 2747)</a></li>
+<li><a href="#cveexploit-index-2-curated-rows-5-7">CVE→exploit index — 2 curated rows (5 → 7)</a></li>
+<li><a href="#verified-not-assumed">Verified, not assumed</a></li>
+<li><a href="#a-finding-that-evaporated-when-the-tree-stopped-moving">A finding that evaporated when the tree stopped moving</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -4334,5 +4341,81 @@ for a different dependency, and it argues for <code>sh -n</code> on that script 
 <code>test_scan_session_health</code>'s <code>`unknown`</code> and <code>`ok`</code> (build #16) have been executing as
 commands and blanking themselves out of the printed guard text ever since, non-fatal only by
 luck of which words were chosen. Both are fixed; no <code>run_test</code> line carries a backtick now.</p>
+<h2 id="source-evaluated-sourcesinsane-ctf-writeups-and-vulnerabilitxt-2026-08-05">Source evaluated: <code>sources/insane ctf writeups and vulnerabili.txt</code> (2026-08-05)</h2>
+<p>2,168,551 chars / 28,105 lines, segmented programmatically into 198 sections that
+reconcile to the byte (4,556 preamble + 2,163,996 sections = 2,168,552 = len+1, the
++1 being the single trailing-newline overcount). Full ledger, one row per section
+with a verdict and a reason:
+<code>docs/source-eval-insane-ctf-writeups-2026-08-05.md</code>.</p>
+<p><strong>The file's advertised shape was wrong in a way that mattered.</strong> It reads as a CTF
+writeup dump, and the 191 "markdown headings" are almost all <code>#</code> comment lines inside
+pasted code. The real structure is 97 numbered documents, and documents <strong>#50–#67 are
+not CTF writeups at all</strong> — they are disclosed vulnerability reports (Monero,
+Liberapay, Rails, Trix, SingleStore, aws-cdk-lib, Taskcluster, Burp, HackerOne,
+Shopify, Khan Academy, DuckDuckGo, curl ×2, Snowflake). That region is where the
+entire yield came from; the ~2.0 MB of pwn/crypto/rev writeup prose around it
+produced nothing, exactly as the saturation probe predicted.</p>
+<p><strong>Ten of those eighteen reports overlap <code>sources/some vul.md</code></strong>, already evaluated on
+2026-08-05 — three of them are already curated rows (<code>hp-c-0001</code> curl SSH reuse,
+<code>hp-c-0004</code> Trix, <code>hp-c-0005</code> aws-cdk-lib). The overlap was measured, not assumed, by
+probing distinctive strings of each report against that file.</p>
+<h3 id="kb-3-authored-entries-2744-2747">KB — 3 authored entries (2744 → 2747)</h3>
+<ul>
+<li><code>authored-bcrypt-72-byte-truncation</code> (web/authentication). The KB already held the
+  <em>primitive</em> — <code>PHP Tricks</code> states <code>PASSWORD_BCRYPT</code> truncates at 72 bytes and shows
+  the 71-vs-72 <code>password_verify</code> demo. It did not hold the <em>exploitation pattern</em>:
+  that the bug appears when the app hashes a <strong>structured</strong> string, so the secret sits
+  at an offset and the attacker picks the account whose prefix is longest to push it
+  out of the window. Recorded as a delta over an existing entry, not a virgin gap.</li>
+<li><code>authored-elasticsearch-script-sort-injection</code> (web/injection). Genuine zero:
+  <code>painless</code> 0, <code>script_score</code> 0, <code>_seq_no</code> 0, <code>sort injection</code> 0 across all 2,744
+  entries. Carries the differential method (compile-fail/compile-success 500-vs-200,
+  then constant-vs-per-document ordering) that proves execution without a payload.</li>
+<li><code>authored-sql-compile-vs-runtime-error-oracle</code> (web/injection). The KB has 90+ SQLi
+  entries and zero on cloud data warehouses (<code>snowflake</code> = 1 hit, unrelated context)
+  and zero on the compile-time/runtime error asymmetry that makes a "closed" error
+  channel readable again.</li>
+</ul>
+<h3 id="cveexploit-index-2-curated-rows-5-7">CVE→exploit index — 2 curated rows (5 → 7)</h3>
+<ul>
+<li><code>hp-c-0006</code> <strong>Ruby on Rails ≥ 7.0</strong>, <code>gte</code>, CVE-2025-24293. The published fix added
+  <code>validate_transformation()</code> to the <strong>ImageMagick</strong> transformer only; <code>vips.rb</code> never
+  overrode it, and <code>load_defaults "7.0"</code> makes vips the <strong>default</strong> processor. So the
+  public verdict "patched for CVE-2025-24293" is wrong for a default-configured Rails
+  7.0+ app — precisely the failure this overlay exists to prevent. <code>gte</code> because no
+  release closes the Vips path.</li>
+<li><code>hp-c-0007</code> <strong>curl 8.20.0</strong>, <code>exact</code>, no CVE. <code>http_rw_headers()</code> splits response
+  headers on a bare <code>memchr(buf,'\n')</code> with no quoted-string awareness, so a malicious
+  server injects <code>Set-Cookie:</code> into the jar or a <code>Location:</code> that replays a 307's POST
+  body and <code>Authorization</code> header. Here the public verdict is <strong>absent</strong> rather than
+  wrong — the other half of the overlay's remit. <code>exact</code> because 8.20.0 is the only
+  build the PoCs were run against; no lower bound was measured and guessing one is the
+  exact error the file forbids.</li>
+</ul>
+<p>Two more were <strong>considered and explicitly not indexed</strong>, recorded in
+<code>considered_and_NOT_indexed</code>: monero-wallet-rpc <code>relay_tx</code> (real and unfixed, but keyed
+only to a branch + commit — no release to compare against) and Burp Suite Pro 2026.3.3
+(expressible, but the index answers "what runs on the <em>target</em>", and Burp is operator
+tooling).</p>
+<h3 id="verified-not-assumed">Verified, not assumed</h3>
+<p>The overlay was checked through the live index rather than trusted: <code>rails 7.1.0</code> and
+<code>rails 8.0.1</code> return <code>hp-c-0006</code> at rank 1 while <code>rails 6.0.0</code> correctly demotes it to
+last; <code>curl 8.20.0</code> returns <code>hp-c-0007</code> at rank 1 and <code>curl 8.19.0</code> demotes it to rank
+7. <code>test_exploits.py</code> passes 17/17 including "the curated overlay merges (7 rows)" and
+"<code>gte</code> reports 'no fixed release' and never implies a patch".</p>
+<h3 id="a-finding-that-evaporated-when-the-tree-stopped-moving">A finding that evaporated when the tree stopped moving</h3>
+<p>The evaluating session reported the safety suite RED at <code>test_kali.py</code>, with <code>mcp_tools.py</code>
+flagged for <code>run_kali</code> — diagnosed as the fourth instance of this repo's shared-predicate
+defect, a containment scanner catching the module that enforces the rule.</p>
+<p><strong>It does not reproduce.</strong> Against the committed tree <code>test_kali.py</code> passes: 103 backend
+modules scanned, planted-violation control included. <code>run_kali</code> appears in <code>mcp_tools.py</code>
+exactly once, inside a module docstring, and <code>scan_source_tree</code> already strips prose before
+the substring pass — the refinement that was made the first time this class was hit.</p>
+<p>What actually happened is worth more than the finding would have been: <strong>two sessions shared
+one working tree, and the evaluator scanned <code>mcp_tools.py</code> while build #19 was still writing
+it.</strong> The state it judged was real when read and never got committed. A second session in a
+live tree is reading a moving target, and a defect it reports against uncommitted work has to
+be re-checked against HEAD before it is believed. That is the same discipline as re-running a
+flaky test before treating one red run as evidence.</p>
 </body>
 </html>

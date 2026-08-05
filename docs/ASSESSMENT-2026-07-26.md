@@ -4181,3 +4181,90 @@ And it was not new: **one pre-existing description had the same defect** —
 `test_scan_session_health`'s `` `unknown` `` and `` `ok` `` (build #16) have been executing as
 commands and blanking themselves out of the printed guard text ever since, non-fatal only by
 luck of which words were chosen. Both are fixed; no `run_test` line carries a backtick now.
+
+## Source evaluated: `sources/insane ctf writeups and vulnerabili.txt` (2026-08-05)
+
+2,168,551 chars / 28,105 lines, segmented programmatically into 198 sections that
+reconcile to the byte (4,556 preamble + 2,163,996 sections = 2,168,552 = len+1, the
++1 being the single trailing-newline overcount). Full ledger, one row per section
+with a verdict and a reason:
+`docs/source-eval-insane-ctf-writeups-2026-08-05.md`.
+
+**The file's advertised shape was wrong in a way that mattered.** It reads as a CTF
+writeup dump, and the 191 "markdown headings" are almost all `#` comment lines inside
+pasted code. The real structure is 97 numbered documents, and documents **#50–#67 are
+not CTF writeups at all** — they are disclosed vulnerability reports (Monero,
+Liberapay, Rails, Trix, SingleStore, aws-cdk-lib, Taskcluster, Burp, HackerOne,
+Shopify, Khan Academy, DuckDuckGo, curl ×2, Snowflake). That region is where the
+entire yield came from; the ~2.0 MB of pwn/crypto/rev writeup prose around it
+produced nothing, exactly as the saturation probe predicted.
+
+**Ten of those eighteen reports overlap `sources/some vul.md`**, already evaluated on
+2026-08-05 — three of them are already curated rows (`hp-c-0001` curl SSH reuse,
+`hp-c-0004` Trix, `hp-c-0005` aws-cdk-lib). The overlap was measured, not assumed, by
+probing distinctive strings of each report against that file.
+
+### KB — 3 authored entries (2744 → 2747)
+
+* `authored-bcrypt-72-byte-truncation` (web/authentication). The KB already held the
+  *primitive* — `PHP Tricks` states `PASSWORD_BCRYPT` truncates at 72 bytes and shows
+  the 71-vs-72 `password_verify` demo. It did not hold the *exploitation pattern*:
+  that the bug appears when the app hashes a **structured** string, so the secret sits
+  at an offset and the attacker picks the account whose prefix is longest to push it
+  out of the window. Recorded as a delta over an existing entry, not a virgin gap.
+* `authored-elasticsearch-script-sort-injection` (web/injection). Genuine zero:
+  `painless` 0, `script_score` 0, `_seq_no` 0, `sort injection` 0 across all 2,744
+  entries. Carries the differential method (compile-fail/compile-success 500-vs-200,
+  then constant-vs-per-document ordering) that proves execution without a payload.
+* `authored-sql-compile-vs-runtime-error-oracle` (web/injection). The KB has 90+ SQLi
+  entries and zero on cloud data warehouses (`snowflake` = 1 hit, unrelated context)
+  and zero on the compile-time/runtime error asymmetry that makes a "closed" error
+  channel readable again.
+
+### CVE→exploit index — 2 curated rows (5 → 7)
+
+* `hp-c-0006` **Ruby on Rails ≥ 7.0**, `gte`, CVE-2025-24293. The published fix added
+  `validate_transformation()` to the **ImageMagick** transformer only; `vips.rb` never
+  overrode it, and `load_defaults "7.0"` makes vips the **default** processor. So the
+  public verdict "patched for CVE-2025-24293" is wrong for a default-configured Rails
+  7.0+ app — precisely the failure this overlay exists to prevent. `gte` because no
+  release closes the Vips path.
+* `hp-c-0007` **curl 8.20.0**, `exact`, no CVE. `http_rw_headers()` splits response
+  headers on a bare `memchr(buf,'\n')` with no quoted-string awareness, so a malicious
+  server injects `Set-Cookie:` into the jar or a `Location:` that replays a 307's POST
+  body and `Authorization` header. Here the public verdict is **absent** rather than
+  wrong — the other half of the overlay's remit. `exact` because 8.20.0 is the only
+  build the PoCs were run against; no lower bound was measured and guessing one is the
+  exact error the file forbids.
+
+Two more were **considered and explicitly not indexed**, recorded in
+`considered_and_NOT_indexed`: monero-wallet-rpc `relay_tx` (real and unfixed, but keyed
+only to a branch + commit — no release to compare against) and Burp Suite Pro 2026.3.3
+(expressible, but the index answers "what runs on the *target*", and Burp is operator
+tooling).
+
+### Verified, not assumed
+
+The overlay was checked through the live index rather than trusted: `rails 7.1.0` and
+`rails 8.0.1` return `hp-c-0006` at rank 1 while `rails 6.0.0` correctly demotes it to
+last; `curl 8.20.0` returns `hp-c-0007` at rank 1 and `curl 8.19.0` demotes it to rank
+7. `test_exploits.py` passes 17/17 including "the curated overlay merges (7 rows)" and
+"`gte` reports 'no fixed release' and never implies a patch".
+
+### A finding that evaporated when the tree stopped moving
+
+The evaluating session reported the safety suite RED at `test_kali.py`, with `mcp_tools.py`
+flagged for `run_kali` — diagnosed as the fourth instance of this repo's shared-predicate
+defect, a containment scanner catching the module that enforces the rule.
+
+**It does not reproduce.** Against the committed tree `test_kali.py` passes: 103 backend
+modules scanned, planted-violation control included. `run_kali` appears in `mcp_tools.py`
+exactly once, inside a module docstring, and `scan_source_tree` already strips prose before
+the substring pass — the refinement that was made the first time this class was hit.
+
+What actually happened is worth more than the finding would have been: **two sessions shared
+one working tree, and the evaluator scanned `mcp_tools.py` while build #19 was still writing
+it.** The state it judged was real when read and never got committed. A second session in a
+live tree is reading a moving target, and a defect it reports against uncommitted work has to
+be re-checked against HEAD before it is believed. That is the same discipline as re-running a
+flaky test before treating one red run as evidence.

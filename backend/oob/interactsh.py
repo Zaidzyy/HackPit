@@ -430,3 +430,62 @@ def deregister() -> bool:
         pass  # the server may already have expired the session; forgetting locally is the point
     _forget()
     return True
+
+
+# --------------------------------------------------------------------------- #
+# payload generation + correlation — the part that turns a hit into evidence
+# --------------------------------------------------------------------------- #
+# What a suffix must look like coming back off the wire. Anyone on the internet can query
+# anything under interact.sh's zone, so every candidate reaches this before the database.
+_SUFFIX_RE = re.compile(r"^[a-z0-9]{13}$")
+
+
+def generate(engagement_id: str, step_id: str | None = None, note: str = "") -> dict[str, Any]:
+    """Mint a payload host under the session and record what it is for.
+
+    Returns ``{host, suffix, correlation_id}``. The host is
+    ``<correlation-id><suffix>.<server>``; the suffix is the per-mint marker that a returning
+    callback carries, so storing ``suffix -> (engagement, step, note)`` is what later lets a hit
+    resolve back to the test that caused it — the correlation is the product, not the hit.
+    """
+    cid = correlation_id()
+    if not cid:
+        raise InteractshError("no interact.sh session — register one first")
+    suffix = new_suffix()
+    host = f"{cid}{suffix}.{server()}"
+    with _write_lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO oob_interactsh_map (suffix, engagement_id, step_id, note, at) "
+            "VALUES (?,?,?,?,?)",
+            (suffix, engagement_id, step_id, note, _now()),
+        )
+        conn.execute(
+            "UPDATE oob_interactsh SET generated = generated + 1 WHERE row_id = ?", (ROW_ID,)
+        )
+    return {"host": host, "suffix": suffix, "correlation_id": cid}
+
+
+def correlate_suffix(suffix: str) -> dict[str, Any] | None:
+    """Resolve a per-mint suffix seen on the wire back to the step that minted it.
+
+    Called with attacker-influenced input (the suffix is extracted from a queried name), so it
+    folds case, rejects anything outside the 13-char label grammar, and returns None rather than
+    raising for all of it.
+    """
+    if not isinstance(suffix, str):
+        return None
+    candidate = suffix.strip().lower()
+    if not _SUFFIX_RE.match(candidate):
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT engagement_id, step_id, note, at FROM oob_interactsh_map WHERE suffix = ?",
+            (candidate,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def clear(engagement_id: str) -> None:
+    """Drop one engagement's suffix mappings. Used when an engagement is deleted, and by tests."""
+    with _write_lock, _connect() as conn:
+        conn.execute("DELETE FROM oob_interactsh_map WHERE engagement_id = ?", (engagement_id,))

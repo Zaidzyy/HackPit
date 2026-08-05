@@ -132,3 +132,40 @@ def test_deregister_forgets(tmp_path, monkeypatch):
     assert ish.deregister() is True
     assert ish.is_registered() is False
     assert ish.deregister() is False  # nothing to do the second time
+
+
+# --------------------------------------------------------------------------- #
+# Task 3 — generate + correlation map
+# --------------------------------------------------------------------------- #
+def test_generate_and_correlate(tmp_path, monkeypatch):
+    monkeypatch.setattr(ish, "DB_PATH", tmp_path / "s.db")
+    monkeypatch.setattr(ish, "_http_post", lambda path, body: {"message": "ok"})
+    ish.init_db()
+    ish.register(server_host="oast.fun")
+    g = ish.generate("eng-1", "step-7", "blind ssrf on avatar url")
+    assert g["host"].endswith(".oast.fun")
+    assert g["host"].startswith(ish.correlation_id())
+    assert len(g["suffix"]) == 13
+    rec = ish.correlate_suffix(g["suffix"])
+    assert rec["engagement_id"] == "eng-1" and rec["step_id"] == "step-7"
+    assert rec["note"] == "blind ssrf on avatar url"
+    assert ish.correlate_suffix("nope") is None
+    assert ish.correlate_suffix(g["suffix"].upper()) is not None  # case-folded
+    assert ish.session_public()["generated"] == 1
+
+
+def test_generate_requires_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(ish, "DB_PATH", tmp_path / "s.db")
+    ish.init_db()
+    with pytest.raises(ish.InteractshError):
+        ish.generate("eng-1")
+
+
+def test_clear_drops_engagement_map(tmp_path, monkeypatch):
+    monkeypatch.setattr(ish, "DB_PATH", tmp_path / "s.db")
+    monkeypatch.setattr(ish, "_http_post", lambda path, body: {"message": "ok"})
+    ish.init_db()
+    ish.register()
+    g = ish.generate("eng-1", "step-1")
+    ish.clear("eng-1")
+    assert ish.correlate_suffix(g["suffix"]) is None

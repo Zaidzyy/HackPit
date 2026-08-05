@@ -68,6 +68,33 @@ RUBY_NONE = "Field 'zzzzzzz' doesn't exist on type 'Query'"
 JAVA_NONE = ("Validation error (FieldUndefined@[usr]) : Field 'usr' in type 'Query' is undefined")
 HASURA_NONE = "field \"usr\" not found in type: 'query_root'"
 
+# Absinthe: an independent Elixir implementation that arrived at graphql-js byte for byte.
+# fields_on_correct_type.ex builds `Cannot query field "x" on type "Y".` and message_suggestions.ex
+# joins `"a" or "b"` at two and `"a", "b", or "c"` beyond -- the Oxford comma included, and @suggest
+# capped at 5, both the same as graphql-js. Kept separate so the identity is ASSERTED.
+ABSINTHE_TWO = 'Cannot query field "usr" on type "RootQueryType". Did you mean "user" or "users"?'
+ABSINTHE_THREE = ('Cannot query field "usr" on type "RootQueryType". Did you mean "user", '
+                  '"users", or "userById"?')
+ABSINTHE_NONE = 'Cannot query field "zzzzzzz" on type "RootQueryType".'
+# known_argument_names.ex: a DIFFERENT sentence from graphql-js and NO suggestion clause at all.
+ABSINTHE_ARG = 'Unknown argument "identifer" on field "user" of type "RootQueryType".'
+
+# async-graphql: neither half matches graphql-js. `Unknown field` for the verb, and suggestion.rs
+# joins on a bare ", " with no `or` anywhere -- not at the end, not at all.
+ASYNC_TWO = 'Unknown field "usr" on type "Query". Did you mean "user", "users"?'
+ASYNC_ONE = 'Unknown field "usr" on type "Query". Did you mean "user"?'
+ASYNC_NONE = 'Unknown field "zzzzzzz" on type "Query".'
+ASYNC_ARG = ('Unknown argument "identifer" on field "user" of type "Query". '
+             'Did you mean "identifier"?')
+
+# HotChocolate: backticks, and no name suggestion anywhere in the validation resources.
+HOTCHOCOLATE_NONE = "The field `usr` does not exist on the type `Query`."
+# *** THE TRAP FIXTURE. *** The ONE `Did you mean` in HotChocolate's Resources.resx, from the
+# leaf-selection rule. It is quoted and it is not a name, so a core given a suggestion_clause
+# would harvest `usr { ... }` as a field the server volunteered.
+HOTCHOCOLATE_LEAF = ('Field "usr" of type "Query" must have a selection of subfields. '
+                     'Did you mean "usr { ... }"?')
+
 
 def _fp(core: str, dialect: str, suggests: bool = True) -> ge.EngineFingerprint:
     return ge.EngineFingerprint(core=core, dialect=dialect, suggests=suggests,
@@ -85,7 +112,134 @@ def test_each_core_has_its_own_parser_and_its_own_fixture() -> None:
     assert [s.name for s in ge.parse_suggestions(GQLPARSER_TWO, "graphql-js")] == ["user", "users"]
     assert ge.CORE_DIALECT["graphql-php"] == "graphql-js"
     assert ge.CORE_DIALECT["gqlparser"] == "graphql-js"
-    print("  graphql-js / graphql-core / graphql-ruby / graphql-php / gqlparser: PASS")
+    # absinthe joins the same list, and for the same reason: READ, not assumed similar.
+    assert [s.name for s in ge.parse_suggestions(ABSINTHE_TWO, "graphql-js")] == ["user", "users"]
+    assert [s.name for s in ge.parse_suggestions(ABSINTHE_THREE, "graphql-js")] == [
+        "user", "users", "userById"]
+    assert ge.CORE_DIALECT["absinthe"] == "graphql-js"
+    # async-graphql is the one of the three that needed a parser of its own.
+    assert [s.name for s in ge.parse_suggestions(ASYNC_TWO, "async-graphql")] == ["user", "users"]
+    assert ge.CORE_DIALECT["async-graphql"] == "async-graphql"
+    print("  graphql-js / graphql-core / graphql-ruby / graphql-php / gqlparser / absinthe / "
+          "async-graphql: PASS")
+
+
+def test_async_graphql_has_NO_or_AT_ALL_and_the_quoted_run_parser_absorbs_it() -> None:
+    """*** A THIRD SEPARATOR, AND IT IS THE ABSENCE OF ONE. ***
+
+    graphql-js writes ``"a", "b", or "c"``. graphql-ruby writes ``a`, `b` or `c``. async-graphql's
+    suggestion.rs writes each name after a bare ``", "`` and never emits `or` anywhere -- there is
+    no branch in that loop for the final element. Three cores, three separators.
+
+    Pulling quoted runs is what makes that cost nothing: the parser needed no new code for a
+    joiner nobody anticipated. This test is the evidence for that claim rather than the hope.
+    """
+    assert " or " not in ASYNC_TWO, "the fixture must have no `or` or this proves nothing"
+    assert ", " in ASYNC_TWO
+    assert [s.name for s in ge.parse_suggestions(ASYNC_TWO, "async-graphql")] == ["user", "users"]
+    assert [s.name for s in ge.parse_suggestions(ASYNC_ONE, "async-graphql")] == ["user"]
+    for s in ge.parse_suggestions(ASYNC_TWO, "async-graphql"):
+        assert "," not in s.name and " " not in s.name, s.name
+    print("  async-graphql's comma-only joiner parses without a special case: PASS")
+
+
+def test_hotchocolate_NEVER_suggests_and_its_ONE_did_you_mean_is_not_a_field() -> None:
+    """*** THE NEAR-MISS THAT WOULD HAVE INVENTED A SCHEMA FIELD. ***
+
+    HotChocolate's validation resources carry exactly one ``Did you mean``, and it belongs to the
+    leaf-selection rule: ``Did you mean "usr { ... }"?``. It is quoted, so a suggestion_clause
+    regex aimed at this core would have recovered ``usr { ... }`` and reported it to the operator
+    as a field the server volunteered -- a fabricated schema entry, from a core that suggests
+    nothing. The core is non-suggesting and carries NO clause pattern, and this is what says so.
+    """
+    fp = ge.classify_fingerprint({"bad_field": HOTCHOCOLATE_NONE})
+    assert fp.core == "hotchocolate" and fp.suggests is False and fp.confidence == "high"
+    assert fp.dialect == "", "a non-suggesting core must not be handed a dialect to parse with"
+    assert "nothing to enable" in fp.note
+    # The leaf hint must not become a field through ANY dialect we ship.
+    for dialect in ge.DIALECTS:
+        assert ge.parse_suggestions(HOTCHOCOLATE_LEAF, dialect) == [], dialect
+    print("  hotchocolate: unsupported, and its leaf hint yields no fabricated field: PASS")
+
+
+def test_absinthe_rides_graphql_js_for_FIELDS_and_yields_NOTHING_for_arguments() -> None:
+    """*** BYTE-IDENTICAL ON ONE SENTENCE IS NOT BYTE-IDENTICAL ON THE NEXT. ***
+
+    Absinthe matches graphql-js exactly on the field error and diverges on the argument one:
+    ``on field "user" of type "RootQueryType"`` where graphql-js writes a dotted ``"Query.user"``
+    -- and Absinthe attaches no suggestion clause there at all.
+
+    The graphql-js argument pattern still matches Absinthe's prefix, finds no clause, and returns
+    nothing. That empty list is CORRECT and it is the reason this test exists: it looks like a gap,
+    and "fixing" it by loosening the pattern would invent argument names Absinthe never offered.
+    """
+    assert [s.name for s in ge.parse_suggestions(ABSINTHE_TWO, "graphql-js")] == ["user", "users"]
+    assert "Did you mean" not in ABSINTHE_ARG
+    assert ge.parse_argument_suggestions(ABSINTHE_ARG, "graphql-js") == []
+    # async-graphql DOES suggest on arguments, through its own pattern.
+    args = ge.parse_argument_suggestions(ASYNC_ARG, "async-graphql")
+    assert [s.name for s in args] == ["identifier"]
+    assert all(s.kind == "argument" for s in args)
+    print("  absinthe arguments yield nothing (correctly); async-graphql arguments parse: PASS")
+
+
+def test_EVERY_dialect_is_REACHABLE_from_classify_fingerprint() -> None:
+    """*** THE STRUCTURAL ONE. THIS IS THE TEST THAT WOULD HAVE CAUGHT THE LAST BUG. ***
+
+    `classify_fingerprint` used to carry a literal tuple of the three dialects that existed when
+    it was written. Adding a fourth to DIALECTS did nothing at all: the pattern was never tried,
+    every server speaking it read as `unknown`, and the suite stayed green -- because the
+    per-dialect tests call `parse_suggestions` directly and never come through the classifier.
+
+    Asserting each new dialect by hand would not have helped; the next person adds a dialect and
+    not a test. So this iterates DIALECTS itself. A dialect the classifier cannot reach fails here
+    the moment it is added, whoever adds it.
+    """
+    reachable = {
+        "graphql-js": JS_TWO,
+        "graphql-core": CORE_TWO,
+        "graphql-ruby": RUBY_ONE,
+        "async-graphql": ASYNC_TWO,
+    }
+    assert set(reachable) == set(ge.DIALECTS), (
+        "a dialect was added to DIALECTS without a fixture here -- add one and prove the "
+        "classifier can reach it, because nothing else in this suite will notice")
+    for dialect, fixture in reachable.items():
+        fp = ge.classify_fingerprint({"bad_field": fixture})
+        assert fp.dialect == dialect, f"{dialect} is unreachable from classify_fingerprint: {fp}"
+        assert fp.suggests is True and fp.confidence == "high"
+    print(f"  all {len(ge.DIALECTS)} dialects reachable from one probe: PASS")
+
+
+def test_each_fixture_classifies_to_its_OWN_core_and_not_a_NEIGHBOURS() -> None:
+    """*** THE LOOP IS FIRST-MATCH-WINS, SO A LOOSE NEW PATTERN CAN SHADOW A WORKING ONE. ***
+
+    Adding a core is the moment an existing core silently breaks: a pattern written broadly enough
+    to catch the newcomer can also catch a message that already had a home, and because the answer
+    is still confident and still non-empty, nothing else in this suite would notice.
+    """
+    # A LIST OF PAIRS, NOT A DICT. Keyed by message, `PHP_TWO` and `JS_TWO` are the same string --
+    # that is the measured claim -- so a dict silently collapses them and the count lies about how
+    # much was checked. Small, and exactly the shape of the bug this file keeps finding.
+    owners = (
+        (JS_TWO, "graphql-js"),
+        (PHP_TWO, "graphql-js"),
+        (GQLPARSER_TWO, "graphql-js"),
+        (CORE_TWO, "graphql-core"),
+        (RUBY_ONE, "graphql-ruby"),
+        (ASYNC_TWO, "async-graphql"),
+        (ABSINTHE_TWO, "graphql-js"),     # byte-identical, so this IS the right answer
+        (JAVA_NONE, "graphql-java"),
+        (HASURA_NONE, "hasura"),
+        (HOTCHOCOLATE_NONE, "hotchocolate"),
+    )
+    for message, core in owners:
+        fp = ge.classify_fingerprint({"bad_field": message})
+        assert fp.core == core, f"{message!r} classified as {fp.core}, expected {core}"
+    # And the no-suggestion forms must land on the same core as their suggesting siblings.
+    for message, core in ((ABSINTHE_NONE, "graphql-js"), (ASYNC_NONE, "async-graphql")):
+        assert ge.classify_fingerprint({"bad_field": message}).core == core
+    print(f"  {len(owners)} fixtures, each to its own core, no shadowing: PASS")
 
 
 def test_the_separator_differs_and_a_split_parser_would_be_wrong() -> None:
@@ -394,6 +548,11 @@ def test_the_module_is_PURE_checked_by_AST_not_by_substring() -> None:
 
 if __name__ == "__main__":
     test_each_core_has_its_own_parser_and_its_own_fixture()
+    test_async_graphql_has_NO_or_AT_ALL_and_the_quoted_run_parser_absorbs_it()
+    test_hotchocolate_NEVER_suggests_and_its_ONE_did_you_mean_is_not_a_field()
+    test_absinthe_rides_graphql_js_for_FIELDS_and_yields_NOTHING_for_arguments()
+    test_EVERY_dialect_is_REACHABLE_from_classify_fingerprint()
+    test_each_fixture_classifies_to_its_OWN_core_and_not_a_NEIGHBOURS()
     test_the_separator_differs_and_a_split_parser_would_be_wrong()
     test_the_wrong_parser_finds_NOTHING_and_says_so()
     test_suggestions_OFF_is_a_different_answer_from_a_wrong_parser()

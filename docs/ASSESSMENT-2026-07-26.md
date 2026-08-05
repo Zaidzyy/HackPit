@@ -4754,6 +4754,56 @@ a parser that finds nothing gets shipped green: graphql-js and graphql-core were
 (graphql 16.x via node; graphql-core 3.2.11 via python); graphql-php, gqlparser, graphql-ruby and
 graphql-java were read from the line of source that formats the message.
 
+#### Three more cores, 2026-08-05 — and they went three different ways
+
+The three engines build #21 left unmeasured were read from source: **Absinthe** (Elixir),
+**async-graphql** (Rust, substituted for Juniper) and **HotChocolate** (.NET). They were added
+together, from one plan, on one assumption — that each would need its own parser. One did, one
+needed none, and one was already covered:
+
+    absinthe       Cannot query field "usr" on type "Query". Did you mean "user" or "users"?
+    async-graphql  Unknown field "usr" on type "Query". Did you mean "user", "users"?
+    hotchocolate   The field `usr` does not exist on the type `Query`.
+
+**Absinthe is byte-identical to graphql-js** — sentence, joiner, Oxford comma and the cap of five,
+all four read and all four matching, from an implementation in another language sharing no code
+with it. It rides the graphql-js dialect and still gets its own fixture and test.
+
+**async-graphql shares neither half.** A different verb, and a separator that is a **bare comma
+with no `or` anywhere** — its `suggestion.rs` has no branch for the final element. That is a third
+separator across three cores, and it needed no new parser code: pulling quoted runs absorbed a
+joiner nobody anticipated, which is the payoff for a decision made two builds earlier.
+
+**HotChocolate never suggests a name at all** — one `FieldDoesNotExist` resource string, in
+backticks, no clause. `suggestions_unsupported`, and not one wordlist request is spent.
+
+Guessing would have got all three wrong, in a different direction each time.
+
+> ⚠ **A SHIPPING DEFECT, FOUND BY THE NEW TESTS AND FIXED IN THE SAME COMMIT.**
+> `parse_suggestions` harvested the quoted runs out of a `Did you mean` clause **without requiring
+> the unknown-field sentence to have matched** — it could not require it, because the argument path
+> reuses the same function on a different sentence. graphql-js has another quoted `Did you mean`:
+>
+>     Field "user" of type "User" must have a selection of subfields. Did you mean "user { ... }"?
+>
+> That is graphql-js's own `ScalarLeafs` rule, and it fires **whenever a probe stem names a real
+> composite field** — `user`, `account`, `order`, which is most of the wordlist against most
+> schemas. The enumerator recovered `user { ... }` and reported it as a field the server had
+> volunteered: a fabricated schema entry, from a real server, on the common path. Found because
+> HotChocolate copied that message from graphql-js and a fixture went looking for it.
+>
+> Fixed by filtering recovered names through the GraphQL spec's own `Name` production
+> (`[_A-Za-z][_0-9A-Za-z]*`) rather than a blocklist of wordings we happen to have seen — the next
+> core to copy that message is not a change here.
+
+Two structural tests were added with them, because the *shape* of adding a core is what breaks:
+`classify_fingerprint` carried a **literal tuple** of the three dialects that existed when it was
+written, so a fourth `DIALECTS` entry would have been never tried, read as `unknown`, and left the
+suite green — the per-dialect tests call `parse_suggestions` directly and never reach the
+classifier. The loop is now driven off `DIALECTS`, one test asserts **every** dialect is reachable
+from it, and another asserts each fixture classifies to **its own** core, since first-match-wins
+means a loosely-written newcomer can shadow a core that already worked.
+
 #### FIVE outcomes, and four of them are an empty list from a naive implementation
 
 `productive` / `suggestions_disabled` (a **working defence** — stop) / `suggestions_unsupported`
@@ -4855,9 +4905,10 @@ file this build does not touch, and it is recorded rather than waved away.
 
 * **Route auth, scanner pacing, a scanner-wide request cap, mobile scope, Caido** — standing
   permanent skips, not re-proposed.
-* **HotChocolate, Absinthe and Juniper have no suggestion parser.** They are in the brand table
-  but their wording was not measured, and writing a parser from memory is the exact failure this
-  build exists to prevent. They resolve to `unknown`, which spends nothing and says so.
+* ~~**HotChocolate, Absinthe and Juniper have no suggestion parser.**~~ **Closed 2026-08-05** —
+  see *Three more cores* below. HotChocolate and Absinthe were read; **async-graphql was read in
+  place of Juniper**, which is the Rust library people name rather than the one they deploy.
+  `graphql-dotnet` remains unread and is the one .NET implementation still resolving to `unknown`.
 * **No OOB canary provisioning** — a separate parked decision.
 * **No new gate, confirm, blocklist or allow-list narrowing** — the build's own requirement, and
   the one change to reachability removes a restriction rather than adding one.

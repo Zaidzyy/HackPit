@@ -28,6 +28,26 @@ nothing gets shipped green.
     gqlparser      validator/rules/fields_on_correct_type.go (gqlgen's parser)
     graphql-ruby   static_validation/rules/fields_are_defined_on_type.rb + validation_context.rb
     graphql-java   src/main/resources/i18n/Validation.properties
+    absinthe       phase/document/validation/fields_on_correct_type.ex
+                     + .../utils/message_suggestions.ex
+    async-graphql  src/validation/rules/fields_on_correct_type.rs + src/validation/suggestion.rs
+    hotchocolate   Core/src/Validation/Properties/Resources.resx + Rules/FieldSelectionsRule.cs
+
+*** THE THREE READ LAST WENT THREE DIFFERENT WAYS, WHICH IS THE ARGUMENT FOR READING THEM. ***
+They were added together, from one plan, on one assumption -- that each would need its own parser.
+One did, one needed none, and one turned out to already be covered::
+
+    absinthe       Cannot query field "usr" on type "Query". Did you mean "user" or "users"?
+    async-graphql  Unknown field "usr" on type "Query". Did you mean "user", "users"?
+    hotchocolate   The field `usr` does not exist on the type `Query`.
+
+Absinthe is BYTE-IDENTICAL to graphql-js -- sentence, joiner, Oxford comma and the cap of five,
+all four read and all four matching, from an implementation in a different language that shares no
+code with it. async-graphql shares neither half: a different verb, and a separator that is a bare
+comma where every other core in this file writes `or`. HotChocolate never suggests a name at all,
+so the honest answer there is `suggestions_unsupported` -- do not spend three thousand requests.
+
+Guessing would have got all three wrong in a different direction each time.
 
 *** AND THE MEASUREMENT OVERTURNED THE OBVIOUS GUESS. ***
 graphql-core is NOT byte-identical to graphql-js. The grammar is identical and the quote character
@@ -106,6 +126,30 @@ DIALECTS: dict[str, dict[str, str]] = {
         "quote": "`",
         "provenance": "SOURCE: graphql-ruby fields_are_defined_on_type.rb + validation_context.rb",
     },
+    "async-graphql": {
+        # SOURCE: src/validation/rules/fields_on_correct_type.rs
+        #     format!("Unknown field \"{}\" on type \"{}\".{}", ...)
+        #   src/validation/suggestion.rs -- make_suggestion(" Did you mean", ...)
+        #     pushes the prefix, then a space, then each name as "name" JOINED WITH ", ",
+        #     then '?'. There is no branch for the last element.
+        #
+        # *** NEITHER HALF MATCHES graphql-js, AND THE JOINER HAS NO `or` AT ALL. ***
+        #     graphql-js     Cannot query field "usr" on type "Query". Did you mean "user" or "users"?
+        #     async-graphql  Unknown field "usr" on type "Query". Did you mean "user", "users"?
+        # Two independent differences -- the verb, and a separator that is a bare comma where
+        # every other core reaches for `or`. The quoted-run extraction in `parse_suggestions`
+        # absorbs the missing `or` without a change, which is the whole reason it pulls quoted
+        # runs instead of splitting on a separator.
+        #
+        # Suggestions are behind `registry.enable_suggestions`, so this core CAN be switched off
+        # and `no_suggestion` is a real observation against it -- unlike graphql-java or
+        # HotChocolate, where there is nothing to switch.
+        "unknown_field": r'Unknown field "(?P<name>[^"]+)" on type "(?P<type>[^"]+)"',
+        "suggestion_clause": r'Did you mean (?P<body>"[^?]*?)\?',
+        "quote": '"',
+        "provenance": ("SOURCE: async-graphql src/validation/rules/fields_on_correct_type.rs "
+                       "+ src/validation/suggestion.rs"),
+    },
 }
 
 #: Cores that FORMAT AN UNKNOWN FIELD BUT NEVER SUGGEST. Not a dialect -- an absence, and the
@@ -120,6 +164,21 @@ NON_SUGGESTING_CORES: dict[str, str] = {
         r"is undefined"
     ),
     "hasura": r"field \"?(?P<name>[^\"']+)\"? not found in type: '?(?P<type>[^\"']+)'?",
+    "hotchocolate": (
+        # SOURCE: src/HotChocolate/Core/src/Validation/Properties/Resources.resx
+        #   ErrorHelper_FieldDoesNotExist=The field `{0}` does not exist on the type `{1}`.
+        # raised from Rules/FieldSelectionsRule.cs -> ErrorHelper.FieldDoesNotExist, which
+        # attaches extensions.type and extensions.field and NO suggestion of any kind.
+        #
+        # *** BACKTICKS -- AND THE ONE `Did you mean` IN THAT FILE BELONGS TO ANOTHER RULE. ***
+        # The validation resources contain exactly one `Did you mean`, on the leaf-selection rule:
+        #   Field "{0}" of type "{1}" must have a selection of subfields. Did you mean "{0} {{...}}"?
+        # It suggests a SHAPE, never a name. A suggestion_clause regex pointed at this core would
+        # harvest `usr { ... }` and report it as a schema field the server had volunteered. So
+        # this core deliberately has no clause pattern, and a test asserts that message parses to
+        # nothing rather than to a fake field.
+        r"The field `(?P<name>[^`]+)` does not exist on the type `(?P<type>[^`]+)`"
+    ),
 }
 
 #: Which dialect each core speaks. A core with no entry here cannot be enumerated by suggestion.
@@ -127,12 +186,19 @@ NON_SUGGESTING_CORES: dict[str, str] = {
 #: graphql-php and gqlparser point at `graphql-js` because their message construction was READ
 #: and found identical, not because they looked similar. Each still carries its own fixture and
 #: its own test, so a future divergence fails a test rather than quietly returning nothing.
+#: `absinthe` points at `graphql-js` on the same terms, and it is the strongest case of the three
+#: read in this round: Absinthe's sentence, its joiner AND its five-suggestion cap were all read
+#: and all match. It is an independent Elixir implementation that arrived at a byte-identical
+#: field error, so it gets its own core id, its own fixture and its own test -- and the day it
+#: diverges, that test fails instead of the enumerator quietly returning nothing.
 CORE_DIALECT: dict[str, str] = {
     "graphql-js": "graphql-js",
     "graphql-php": "graphql-js",
     "gqlparser": "graphql-js",
+    "absinthe": "graphql-js",
     "graphql-core": "graphql-core",
     "graphql-ruby": "graphql-ruby",
+    "async-graphql": "async-graphql",
 }
 
 #: Brand -> core. The brands are graphw00f's own engine ids where they overlap, so the two tools
@@ -156,6 +222,16 @@ ENGINE_CORE: dict[str, str] = {
     "hasura": "hasura",
     "gqlgen": "gqlparser",
     "graphqlgo": "gqlparser",
+    # graphw00f spells it `absinthe-graphql`; the bare name is carried too because that is what
+    # an operator types.
+    "absinthe-graphql": "absinthe",
+    "absinthe": "absinthe",
+    "hotchocolate": "hotchocolate",
+    # *** graphw00f HAS NO ID FOR async-graphql. *** Its only Rust engine is `juniper`, so this
+    # one brand cannot be compared across the two tools and there is nothing to align to. Named
+    # for the crate. Note also that graphw00f carries `graphql-dotnet` as an engine SEPARATE from
+    # `hotchocolate`: .NET is two implementations and only one of them is read here.
+    "async-graphql": "async-graphql",
 }
 
 #: Suggestion cap. BOTH measured implementations stop at five however many are close, so a
@@ -163,6 +239,27 @@ ENGINE_CORE: dict[str, str] = {
 #: that treated five as "all of them" would stop early and report a schema it had not finished
 #: reading. Reported, never silently assumed.
 SUGGESTION_CAP = 5
+
+#: A GraphQL name, from the spec's own Name production: ``[_A-Za-z][_0-9A-Za-z]*``.
+#:
+#: *** THIS IS A FIX, NOT A TIDY-UP, AND IT WAS SHIPPING. ***
+#: `parse_suggestions` harvests the quoted runs out of a `Did you mean` clause, and it did not
+#: require the unknown-field SENTENCE to have matched first -- it could not, because
+#: `parse_argument_suggestions` reuses it on a message that has a different sentence entirely.
+#: So any message carrying a quoted `Did you mean` contributed "suggestions". graphql-js has one::
+#:
+#:     Field "user" of type "User" must have a selection of subfields. Did you mean "user { ... }"?
+#:
+#: That is graphql-js's own ScalarLeafs rule, and it fires whenever a probe stem NAMES A REAL
+#: COMPOSITE FIELD -- `user`, `account`, `order`, which is most of the wordlist against most
+#: schemas. The enumerator recovered `user { ... }` and reported it to the operator as a field the
+#: server had volunteered. A fabricated schema entry, from a real server, on a common path.
+#:
+#: A name the server volunteered is a name the server could accept. `user { ... }` is not a name
+#: in any GraphQL grammar, so the filter is the spec's own production rather than a blocklist of
+#: the wordings we happen to have seen -- HotChocolate copied that message from graphql-js, and
+#: the next core to copy it is not a change here.
+GRAPHQL_NAME = re.compile(r"[_A-Za-z][_0-9A-Za-z]*")
 
 
 #: The default candidate list. NAMED AND SIZED, and it is part of what the operator approves --
@@ -227,7 +324,9 @@ def parse_suggestions(message: str, dialect: str) -> list[Suggestion]:
     out: list[Suggestion] = []
     for name in names:
         cleaned = name.strip()
-        if cleaned and cleaned not in {s.name for s in out}:
+        if not GRAPHQL_NAME.fullmatch(cleaned):
+            continue
+        if cleaned not in {s.name for s in out}:
             out.append(Suggestion(name=cleaned, on_type=on_type, from_probe=probe))
     return out
 
@@ -236,10 +335,25 @@ def parse_suggestions(message: str, dialect: str) -> list[Suggestion]:
 #: needed: the injection point was an argument, not a field. Measured alongside the field form::
 #:     graphql-js    Unknown argument "identifer" on field "Query.user". Did you mean "identifier"?
 #:     graphql-core  Unknown argument 'identifer' on field 'Query.user'. Did you mean 'identifier'?
+#:     async-graphql Unknown argument "identifer" on field "user" of type "Query". Did you mean ...
+#:
+#: *** THE ARGUMENT SENTENCE IS WHERE ABSINTHE STOPS BEING graphql-js. ***
+#: Absinthe matches graphql-js byte for byte on the FIELD error and does not on this one:
+#:     graphql-js    Unknown argument "identifer" on field "Query.user". Did you mean "identifier"?
+#:     absinthe      Unknown argument "identifer" on field "user" of type "Query".
+#: A dotted `Query.user` in one token versus a field and a type in two -- and, decisively, ABSINTHE
+#: ATTACHES NO SUGGESTION HERE AT ALL (known_argument_names.ex builds the sentence and stops).
+#: Absinthe therefore rides the graphql-js entry, matches its prefix, finds no clause and yields
+#: nothing, which is the correct answer. Recorded because it looks like an oversight and is not:
+#: "fixing" it by loosening the pattern would invent argument names Absinthe never offered.
 _ARG_PATTERNS: dict[str, str] = {
     "graphql-js": r'Unknown argument "(?P<name>[^"]+)" on field "(?P<field>[^"]+)"',
     "graphql-core": r"Unknown argument '(?P<name>[^']+)' on field '(?P<field>[^']+)'",
     "graphql-ruby": r"Field '(?P<field>[^']+)' doesn't accept argument '(?P<name>[^']+)'",
+    # SOURCE: async-graphql src/validation/rules/known_argument_names.rs -- same
+    # make_suggestion(" Did you mean", ...) helper as the field rule, so the clause parses the same.
+    "async-graphql": (r'Unknown argument "(?P<name>[^"]+)" on field "(?P<field>[^"]+)" '
+                      r'of type "(?P<type>[^"]+)"'),
 }
 
 
@@ -370,10 +484,19 @@ def classify_fingerprint(responses: dict[str, str]) -> EngineFingerprint:
     bad = "\n".join(error_messages(responses.get("bad_field", "") or ""))
 
     # 1. THE DIALECT, from the unknown-field sentence. This is the answer the parser needs.
-    for core, dialect in (("graphql-js", "graphql-js"), ("graphql-core", "graphql-core"),
-                          ("graphql-ruby", "graphql-ruby")):
-        if re.search(DIALECTS[dialect]["unknown_field"], bad):
-            out.core, out.dialect, out.suggests = core, dialect, True
+    #
+    # *** DRIVEN OFF `DIALECTS`, AND THAT IS LOAD-BEARING. *** This loop used to carry a literal
+    # tuple of the three dialects that existed when it was written. Adding a fourth entry to
+    # `DIALECTS` did NOTHING: the new dialect was never tried, every server speaking it
+    # fingerprinted as `unknown`, and the whole suite stayed green -- because the per-dialect
+    # parser tests call `parse_suggestions` directly and never come through here. Silent, green
+    # and useless, which is this codebase's most expensive recurring shape. Two tests now hold it
+    # shut: every DIALECTS key must be reachable from this function, and each core's fixture must
+    # classify to its OWN core rather than a neighbour's, because this is first-match-wins and a
+    # loosely-written new pattern could shadow one that already worked.
+    for dialect, spec in DIALECTS.items():
+        if re.search(spec["unknown_field"], bad):
+            out.core, out.dialect, out.suggests = dialect, dialect, True
             out.confidence = "high"
             out.evidence.append(f"bad_field: matched the {dialect} unknown-field wording")
             break
@@ -396,6 +519,14 @@ def classify_fingerprint(responses: dict[str, str]) -> EngineFingerprint:
     elif "can't be applied to queries" in skip or "missing required arguments: if" in skip:
         out.engine = "ruby"
         out.evidence.append("skip_directive: graphql-ruby's directive-location wording")
+    if '"RootQueryType"' in typename or "'RootQueryType'" in typename:
+        # SOURCE: absinthe lib/absinthe/schema.ex -- `@default_query_name "RootQueryType"`, the
+        # default for the `query do ... end` macro. BRAND ONLY, and it must stay that way: the
+        # dialect was matched directly from Absinthe's own sentence, whereas this is an inference
+        # from a name a schema is free to override with `query name: "..."`. It refines who is
+        # answering; it never decides how to parse them.
+        out.engine = "absinthe"
+        out.evidence.append("typename: root type is RootQueryType, Absinthe's default")
     if '"query_root"' in typename or "'query_root'" in typename:
         # Hasura names its root type `query_root`. Strong enough to SET the core, because Hasura
         # is not a library somebody wrapped -- if the root type is query_root it is Hasura.

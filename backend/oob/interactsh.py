@@ -489,3 +489,106 @@ def clear(engagement_id: str) -> None:
     """Drop one engagement's suffix mappings. Used when an engagement is deleted, and by tests."""
     with _write_lock, _connect() as conn:
         conn.execute("DELETE FROM oob_interactsh_map WHERE engagement_id = ?", (engagement_id,))
+
+
+# --------------------------------------------------------------------------- #
+# poll — fetch, decrypt, normalize, correlate. Produces the SAME hit dict poll.py files.
+# --------------------------------------------------------------------------- #
+# Capped excerpt of a raw request stored as a finding's body — enough to prove what arrived,
+# never a copy of the target's traffic. Matches poll.MAX_EVIDENCE in spirit.
+MAX_BODY = 1200
+
+
+def _suffix_of(uid: str) -> str:
+    """The per-mint suffix inside an interact.sh id: chars [20:33] of ``<cid><suffix>``."""
+    return uid[CORRELATION_LEN : CORRELATION_LEN + SUFFIX_LEN]
+
+
+def _http_request_line(raw: str) -> tuple[str, str]:
+    """(method, path) parsed from the first line of a raw HTTP request, or ('', '')."""
+    first = (raw or "").split("\n", 1)[0].strip()
+    parts = first.split(" ")
+    if len(parts) >= 2 and parts[0].isalpha():
+        return parts[0].upper(), parts[1]
+    return "", ""
+
+
+def _normalize(interaction: dict[str, Any]) -> dict[str, Any]:
+    """Map one interact.sh interaction to the hit dict ``poll.findings_for`` consumes."""
+    protocol = str(interaction.get("protocol") or "").lower()
+    uid = str(interaction.get("unique-id") or interaction.get("full-id") or "")
+    suffix = _suffix_of(uid)
+    host = f"{uid}.{server()}" if uid else ""
+    raw = str(interaction.get("raw-request") or "")
+    hit: dict[str, Any] = {
+        "kind": "dns" if protocol == "dns" else "http",
+        "source_ip": str(interaction.get("remote-address") or "").split(":")[0] or "?",
+        "at": str(interaction.get("timestamp") or ""),
+        "body": raw[:MAX_BODY],
+        "token": suffix,
+        "backend": "interactsh",
+    }
+    if protocol == "dns":
+        hit["qname"] = host
+        hit["qtype"] = str(interaction.get("q-type") or "A")
+    else:
+        method, path = _http_request_line(raw)
+        hit["host"] = host
+        hit["method"] = method
+        hit["path"] = path
+    return hit, suffix, uid
+
+
+def poll_correlated() -> list[dict[str, Any]]:
+    """Fetch new interactions, decrypt, correlate each to the step that minted it.
+
+    Returns correlated hit dicts (the shape ``poll.findings_for`` files). Returns ``[]`` when
+    no session exists. Dedup is by ``<uid>|<timestamp>`` in the seen table, so an exact
+    re-delivery is dropped while two genuine callbacks to the same token (different times) are
+    both kept — and a re-poll after a restart never replays a burst as new findings.
+
+    An uncorrelated interaction is KEPT and flagged ``correlated: False`` (same rule as the
+    self-hosted correlate): a stray hit means the zone is being crawled, or a payload landed at
+    the wrong name, and silently dropping it would make that look identical to silence.
+    """
+    if not is_registered():
+        return []
+    cid, sk = correlation_id(), _secret_key()
+    payload = _http_get("/poll", f"?id={cid}&secret={sk}")
+    data = payload.get("data")
+    aes_key_b64 = payload.get("aes_key")
+    out: list[dict[str, Any]] = []
+    if isinstance(data, list) and data and aes_key_b64:
+        aes_key = decrypt_aes_key(_private_key(), str(aes_key_b64))
+        with _connect() as conn:
+            seen = {r[0] for r in conn.execute("SELECT uid FROM oob_interactsh_seen").fetchall()}
+        fresh: list[str] = []
+        for item in data:
+            try:
+                interaction = decrypt_interaction(aes_key, str(item))
+            except InteractshError:
+                continue  # one bad blob does not sink the whole poll
+            hit, suffix, uid = _normalize(interaction)
+            dedup_key = f"{uid}|{hit['at']}"
+            if not uid or dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            fresh.append(dedup_key)
+            record = correlate_suffix(suffix)
+            out.append({
+                **hit,
+                "correlated": record is not None,
+                "engagement_id": record["engagement_id"] if record else None,
+                "step_id": record["step_id"] if record else None,
+                "note": record["note"] if record else "",
+                "minted_at": record["at"] if record else None,
+            })
+        if fresh:
+            with _write_lock, _connect() as conn:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO oob_interactsh_seen (uid, at) VALUES (?, ?)",
+                    [(k, _now()) for k in fresh],
+                )
+    with _write_lock, _connect() as conn:
+        conn.execute("UPDATE oob_interactsh SET last_poll = ? WHERE row_id = ?", (_now(), ROW_ID))
+    return out

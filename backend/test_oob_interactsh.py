@@ -169,3 +169,81 @@ def test_clear_drops_engagement_map(tmp_path, monkeypatch):
     g = ish.generate("eng-1", "step-1")
     ish.clear("eng-1")
     assert ish.correlate_suffix(g["suffix"]) is None
+
+
+# --------------------------------------------------------------------------- #
+# Task 4 — poll -> decrypt -> normalize -> correlate
+# --------------------------------------------------------------------------- #
+def test_poll_correlated_decrypts_and_correlates(tmp_path, monkeypatch):
+    monkeypatch.setattr(ish, "DB_PATH", tmp_path / "s.db")
+    monkeypatch.setattr(ish, "_http_post", lambda path, body: {"message": "ok"})
+    ish.init_db()
+    ish.register(server_host="oast.fun")
+    g = ish.generate("eng-1", "step-7", "blind ssrf")
+    uid = ish.correlation_id() + g["suffix"]
+    interaction = {
+        "protocol": "dns", "unique-id": uid, "q-type": "A",
+        "remote-address": "10.1.2.3", "timestamp": "2026-08-06T00:00:00Z",
+    }
+    pub_b64 = _public_key_b64_from_db(ish.DB_PATH)
+    aes_key_b64, data_b64 = _server_encrypt(pub_b64, interaction)
+    monkeypatch.setattr(
+        ish, "_http_get", lambda path, query: {"data": [data_b64], "aes_key": aes_key_b64}
+    )
+    hits = ish.poll_correlated()
+    assert len(hits) == 1
+    h = hits[0]
+    assert h["kind"] == "dns" and h["source_ip"] == "10.1.2.3"
+    assert h["qname"] == f"{uid}.oast.fun"
+    assert h["correlated"] is True
+    assert h["engagement_id"] == "eng-1" and h["step_id"] == "step-7" and h["note"] == "blind ssrf"
+    # dedup: an identical poll answer yields nothing new
+    assert ish.poll_correlated() == []
+
+
+def test_poll_keeps_uncorrelated_hit(tmp_path, monkeypatch):
+    monkeypatch.setattr(ish, "DB_PATH", tmp_path / "s.db")
+    monkeypatch.setattr(ish, "_http_post", lambda path, body: {"message": "ok"})
+    ish.init_db()
+    ish.register(server_host="oast.fun")
+    # a hit for a suffix we never minted (someone crawling the zone)
+    uid = ish.correlation_id() + "zzzzzzzzzzzzz"
+    interaction = {"protocol": "http", "unique-id": uid, "raw-request": "GET /probe HTTP/1.1\r\nHost: x\r\n",
+                   "remote-address": "8.8.8.8", "timestamp": "2026-08-06T01:00:00Z"}
+    pub_b64 = _public_key_b64_from_db(ish.DB_PATH)
+    aes_key_b64, data_b64 = _server_encrypt(pub_b64, interaction)
+    monkeypatch.setattr(ish, "_http_get", lambda path, query: {"data": [data_b64], "aes_key": aes_key_b64})
+    hits = ish.poll_correlated()
+    assert len(hits) == 1
+    assert hits[0]["correlated"] is False
+    assert hits[0]["method"] == "GET" and hits[0]["path"] == "/probe"
+
+
+def test_poll_empty_when_no_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(ish, "DB_PATH", tmp_path / "s.db")
+    ish.init_db()
+    assert ish.poll_correlated() == []
+
+
+# --------------------------------------------------------------------------- #
+# Task 5 — containment + secret masking
+# --------------------------------------------------------------------------- #
+def test_opener_follows_no_redirect_and_no_proxy():
+    op = ish._opener()
+    names = {type(h).__name__ for h in op.handlers}
+    # the redirect-refusing handler is present...
+    assert "_NoRedirect" in names
+    # ...and there is NO ProxyHandler at all, so no ambient http_proxy is ever consulted. An
+    # empty ProxyHandler({}) registers no *_open methods, so build_opener drops it — which is the
+    # intended "honour no ambient proxy" behaviour, identical to poll.py._opener().
+    assert "ProxyHandler" not in names
+
+
+def test_session_public_never_returns_secrets(tmp_path, monkeypatch):
+    monkeypatch.setattr(ish, "DB_PATH", tmp_path / "s.db")
+    monkeypatch.setattr(ish, "_http_post", lambda p, b: {"message": "ok"})
+    ish.init_db()
+    ish.register(auth_token="supersecrettoken0000")
+    pub = ish.session_public()
+    assert "supersecrettoken0000" not in repr(pub)
+    assert "secret_key" not in pub and "private_key" not in pub and "auth_token" not in pub

@@ -3475,10 +3475,10 @@ and the KB fixture regenerated. Three separate guards fired, each naming its own
 ### What was NOT built, and why
 
 * **Route auth and scanner pacing** — Zaid's call, skipped for this build.
-* ~~**No frontend.**~~ **SUPERSEDED — the frontend was built and looked at; see the RUN section below.**
+* <del>**No frontend.**</del> **SUPERSEDED — the frontend was built and looked at; see the RUN section below.**
 
-* ~~**The parse-drop count** from item 8.~~ **SUPERSEDED — closed; see the RUN section.**
-* ~~**The image is NOT rebuilt in this commit.**~~ **SUPERSEDED — rebuilt, recreated and every proof run; see the RUN section.** The original note read: Layer 9g is written and asserted at build time, but
+* <del>**The parse-drop count** from item 8.</del> **SUPERSEDED — closed; see the RUN section.**
+* <del>**The image is NOT rebuilt in this commit.**</del> **SUPERSEDED — rebuilt, recreated and every proof run; see the RUN section.** The original note read: Layer 9g is written and asserted at build time, but
   a rebuild is about 45 minutes and recreating the engage sandbox destroys the ZAP daemon and its
   capture. It is bundled as ONE rebuild, deliberately last, and `docs/proof/build18_run.sh` prints
   the exact sequence — `docker compose ... build engage-sandbox` (the SERVICE) then

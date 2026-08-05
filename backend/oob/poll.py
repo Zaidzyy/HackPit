@@ -41,7 +41,7 @@ from typing import Any, Iterable
 from state.models import Finding
 from state import store as state_store
 
-from . import config, tokens
+from . import config, interactsh, tokens
 
 # The read API's two routes. Constants, so "which URL does the poll client fetch" has one
 # answer that is visible in the source.
@@ -330,3 +330,52 @@ def poll(sessions: dict[str, str] | None = None, after: int | None = None) -> di
         "filed": result["filed"],
         "unfiled": result["unfiled"],
     }
+
+
+def poll_all(sessions: dict[str, str] | None = None, after: int | None = None) -> dict[str, Any]:
+    """Sweep BOTH backends, merge, and file once.
+
+    Each backend is polled independently: a failure in one is recorded in ``errors`` and does
+    NOT stop the other or advance the failed one's position. The self-hosted cursor advances
+    only on its own successful fetch (unchanged from :func:`poll`); interact.sh dedup lives in
+    its own ``seen`` set. ``ingest`` is called once on the merged list, so a hit that correlates
+    on either backend becomes a finding the same way.
+
+    ``after`` is honoured for the self-hosted backend only (it is the cursor's meaning); the
+    interact.sh backend has no integer cursor to seek. Auto-poll and the /oob/poll route both
+    call this with ``after=None``.
+    """
+    correlated: list[dict[str, Any]] = []
+    out: dict[str, Any] = {
+        "self_hosted": None, "interactsh": None, "hits": [], "filed": 0, "unfiled": [], "errors": [],
+    }
+    advance_to: int | None = None
+
+    if config.is_configured():
+        try:
+            page = fetch(after=after)
+            sh = correlate(page["hits"])
+            correlated.extend(sh)
+            out["self_hosted"] = {"hits": len(sh), "cursor": page["cursor"], "after": page["after"]}
+            if after is None and page["cursor"]:
+                advance_to = page["cursor"]
+        except PollError as exc:
+            out["errors"].append({"backend": "self_hosted", "reason": str(exc)})
+
+    if interactsh.is_registered():
+        try:
+            ish_hits = interactsh.poll_correlated()
+            correlated.extend(ish_hits)
+            out["interactsh"] = {"hits": len(ish_hits)}
+        except interactsh.InteractshError as exc:
+            out["errors"].append({"backend": "interactsh", "reason": str(exc)})
+
+    filed = ingest(correlated, sessions)
+    out["hits"] = correlated
+    out["filed"] = filed["filed"]
+    out["unfiled"] = filed["unfiled"]
+    # Advance the self-hosted cursor only AFTER a successful ingest, matching poll()'s rule that
+    # a failure anywhere above leaves the position untouched so the same hits are re-read.
+    if advance_to:
+        config.set_cursor(advance_to)
+    return out

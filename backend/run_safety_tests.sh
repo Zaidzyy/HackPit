@@ -204,7 +204,8 @@ run_test test_oob_tokens.py "OOB canary tokens (DNS-label-safe / CSPRNG / correl
 
 run_test test_oob_server.py "OOB canary server (answers not NXDOMAIN / authenticated append-only reads / no execution, no forwarding)"
 
-run_test test_oob_poll.py "OOB poll client + state ingest (correlation kept / nothing dropped / cursor monotonic / no redirect followed)"
+run_test test_oob_poll.py "OOB poll client + state ingest (correlation kept / nothing dropped / cursor monotonic / no redirect followed / poll_all sweeps both backends and isolates a backend failure)"
+run_test test_oob_interactsh.py "OOB interact.sh backend (real RSA-OAEP+AES-CFB round-trip / secrets write-only / no redirect + no ambient proxy / suffix correlation / dedup by uid+timestamp / uncorrelated hit kept)"
 
 run_test test_oob_templates.py "OOB payload templates (token left of the zone per the server's own parser / renders and stops)"
 

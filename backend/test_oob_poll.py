@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from oob import config as oob_config  # noqa: E402
-from oob import poll, tokens  # noqa: E402
+from oob import interactsh, poll, tokens  # noqa: E402
 
 BACKEND = Path(__file__).resolve().parent
 POLL_PATH = BACKEND / "oob" / "poll.py"
@@ -395,6 +395,73 @@ def test_the_poll_client_executes_nothing() -> None:
     print("  the poll client imports no shell and makes no execution call (3 controls): PASS")
 
 
+# --------------------------------------------------------------------------- #
+# poll_all — sweep BOTH backends, merge, file once (interact.sh second backend)
+# --------------------------------------------------------------------------- #
+class _Patch:
+    """Save/restore module attributes for a standalone test — no pytest fixtures here."""
+
+    def __init__(self, **targets):
+        self._targets = targets  # {"poll.fetch": fn, ...}
+        self._saved = {}
+
+    def __enter__(self):
+        for dotted, value in self._targets.items():
+            modname, attr = dotted.rsplit(".", 1)
+            mod = {"poll": poll, "config": oob_config, "interactsh": interactsh}[modname]
+            self._saved[dotted] = getattr(mod, attr)
+            setattr(mod, attr, value)
+        return self
+
+    def __exit__(self, *exc):
+        for dotted, value in self._saved.items():
+            modname, attr = dotted.rsplit(".", 1)
+            mod = {"poll": poll, "config": oob_config, "interactsh": interactsh}[modname]
+            setattr(mod, attr, value)
+
+
+def test_poll_all_merges_both_backends() -> None:
+    """A hit from either backend lands in the merged list and is filed once."""
+    sh_hit = {"token": "aaaa", "kind": "dns"}
+    ish_hit = {"kind": "http", "correlated": True, "engagement_id": "e1", "step_id": "s1",
+               "note": "x", "host": "h", "source_ip": "1.1.1.1", "at": "t"}
+    with _Patch(**{
+        "config.is_configured": lambda: True,
+        "poll.fetch": lambda after=None: {"hits": [sh_hit], "cursor": 5, "after": 0},
+        "poll.correlate": lambda hits: [{**h, "correlated": False, "engagement_id": None,
+                                         "step_id": None, "note": "", "minted_at": None} for h in hits],
+        "config.set_cursor": lambda v: None,
+        "poll.ingest": lambda correlated, sessions: {"filed": len(list(correlated)), "unfiled": []},
+        "interactsh.is_registered": lambda: True,
+        "interactsh.poll_correlated": lambda: [ish_hit],
+    }):
+        out = poll.poll_all(sessions={"e1": "sess-1"})
+    assert len(out["hits"]) == 2
+    assert out["self_hosted"] is not None and out["interactsh"] is not None
+    assert out["filed"] == 2
+    print("  poll_all merges both backends: OK")
+
+
+def test_poll_all_one_backend_error_does_not_stop_the_other() -> None:
+    """A self-hosted failure is recorded but the interact.sh hit is still filed."""
+    def boom(after=None):
+        raise poll.PollError("down")
+
+    ish_hit = {"kind": "dns", "correlated": True, "engagement_id": "e1", "step_id": None,
+               "note": "", "source_ip": "2.2.2.2", "at": "t"}
+    with _Patch(**{
+        "config.is_configured": lambda: True,
+        "poll.fetch": boom,
+        "poll.ingest": lambda correlated, sessions: {"filed": len(list(correlated)), "unfiled": []},
+        "interactsh.is_registered": lambda: True,
+        "interactsh.poll_correlated": lambda: [ish_hit],
+    }):
+        out = poll.poll_all(sessions={"e1": "sess-1"})
+    assert any("down" in e["reason"] for e in out["errors"]), out["errors"]
+    assert out["filed"] == 1  # interact.sh hit still filed despite the self-hosted failure
+    print("  poll_all isolates a backend failure: OK")
+
+
 if __name__ == "__main__":
     print("== OOB canary poll client + state ingest (spec §3.3) ==")
     test_a_hit_is_joined_back_to_the_step_that_minted_it()
@@ -409,4 +476,6 @@ if __name__ == "__main__":
     test_the_bearer_secret_is_sent_and_never_returned()
     test_probe_takes_a_minted_token_and_nothing_else()
     test_the_poll_client_executes_nothing()
+    test_poll_all_merges_both_backends()
+    test_poll_all_one_backend_error_does_not_stop_the_other()
     print("ALL OOB poll client tests pass")

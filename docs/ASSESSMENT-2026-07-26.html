@@ -433,6 +433,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#item-3-field-suggestion-enumeration-and-the-measurement-that-shaped-it">Item 3 — field-suggestion enumeration, and the measurement that shaped it</a><ul>
 <li><a href="#three-more-cores-2026-08-05-and-they-went-three-different-ways">Three more cores, 2026-08-05 — and they went three different ways</a></li>
 <li><a href="#net-is-two-implementations-and-they-agree-on-nothing">.NET is two implementations, and they agree on nothing</a></li>
+<li><a href="#the-long-tail-triaged-one-question-each-no-parsers-written">The long tail, triaged — one question each, no parsers written</a></li>
 <li><a href="#five-outcomes-and-four-of-them-are-an-empty-list-from-a-naive-implementation">FIVE outcomes, and four of them are an empty list from a naive implementation</a></li>
 </ul>
 </li>
@@ -4761,6 +4762,15 @@ control is now <strong>eight planted violations</strong> plus four innocents tha
 <h2 id="build-21-pin-the-engine-then-read-a-schema-nobody-will-give-you-2026-08-05">Build #21 — pin the engine, then read a schema nobody will give you (2026-08-05)</h2>
 <p>Build #20 closed with three leftovers that were <strong>one chain</strong>, because all three were blocked on
 the same rebuild, plus the follow-on it named: field-suggestion enumeration. All four landed.</p>
+<blockquote>
+<p><strong>CLOSED 2026-08-05.</strong> The build's own leftover — three engines named but unmeasured — was read
+in the same session, and the long tail behind it was triaged rather than left as an open
+question. Nine engines were resolved in total: <strong>four read from source</strong> (Absinthe,
+async-graphql, HotChocolate, graphql-dotnet), <strong>five measured as never suggesting</strong>, one found to
+be <strong>already covered</strong> by an existing core, and <strong>one left open and named</strong> (sangria). Two
+shipping defects were found and fixed on the way — a fabricated schema field, and a dropped
+argument-suggestion clause. Nothing is outstanding that is not written down below.</p>
+</blockquote>
 <p><strong>The build adds no gate, no confirm, no blocklist and no allow-list narrowing</strong> — not in the
 product and not in a proof script. The one place it changes what an operator can reach, it
 <strong>removes</strong> a restriction (see item 5). The enumeration bounds are a declared parameter, not a
@@ -4952,6 +4962,84 @@ quote so an empty clause cannot match.</p>
 </blockquote>
 <p>Its <code>ScalarLeafs</code> message is <code>Field usr of type User must have a sub selection</code> — unquoted, no
 <code>Did you mean</code> — so unlike HotChocolate's it could never have fabricated a field.</p>
+<h4 id="the-long-tail-triaged-one-question-each-no-parsers-written">The long tail, triaged — one question each, no parsers written</h4>
+<p>The seven engines still resolving to <code>unknown</code> were put to a single question — <strong>does it emit a name
+suggestion at all?</strong> — answered by grepping each repository, not by reading its message format. That
+is a cheap question with an expensive answer: a core that never suggests is a two-line entry and a
+<code>suggestions_unsupported</code> verdict, and needs no parser at any point.</p>
+<table>
+<thead>
+<tr>
+<th>Engine</th>
+<th>Lang</th>
+<th>Suggests?</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>dgraph</strong></td>
+<td>Go</td>
+<td><strong>already covered</strong></td>
+<td><code>go.mod</code> pins <code>dgraph-io/gqlparser/v2</code>; its <code>fields_on_correct_type.go</code> appends <code>" Did you mean " + QuotedOrList(...) + "?"</code> — the <strong><code>gqlparser</code> core this project already parses</strong></td>
+</tr>
+<tr>
+<td><strong>sangria</strong></td>
+<td>Scala</td>
+<td><strong>yes — open</strong></td>
+<td><code>Violation.scala:257</code> <code>Cannot query field '$f' on type '$t'.</code> + <code>didYouMean(suggestedFieldNames)</code>. Single quotes confirmed; <strong><code>StringUtil.orList</code> not yet read</strong>, so the joiner and cap are unmeasured</td>
+</tr>
+<tr>
+<td>lacinia</td>
+<td>Clojure</td>
+<td>no</td>
+<td><code>parser.clj:1160</code> <code>Cannot query field %s on type %s.</code>; zero <code>Did you mean</code>/<code>suggest</code> in the repo</td>
+</tr>
+<tr>
+<td>caliban</td>
+<td>Scala</td>
+<td>no</td>
+<td><code>Validator.scala:582</code> <code>Field '$f' does not exist on type '$t'.</code>; zero <code>Did you mean</code></td>
+</tr>
+<tr>
+<td>agoo</td>
+<td>C</td>
+<td>no</td>
+<td>zero <code>Did you mean</code> in the entire repository; its only field-related error strings are allocation failures</td>
+</tr>
+<tr>
+<td>morpheus-graphql</td>
+<td>Haskell</td>
+<td>no</td>
+<td>its <strong>only</strong> <code>Did you mean</code> is a comment quoting the ScalarLeafs message</td>
+</tr>
+<tr>
+<td>pg_graphql</td>
+<td>Rust</td>
+<td>no</td>
+<td><code>builder.rs:1739</code> <code>Unknown field "{}" selected on type "{}"</code>; zero <code>Did you mean</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Five of seven never suggest. One is already covered. One is genuinely open, and it is one line.</strong>
+The tail was worth measuring precisely because measuring it was cheap and it turned out to be almost
+entirely empty.</p>
+<p>Three things fell out that matter more than the tally:</p>
+<ul>
+<li><strong>morpheus-graphql carries the ScalarLeafs message too</strong> — a third independent implementation
+  (after graphql-js and HotChocolate) shipping <code>Did you mean "hobby { ... }"?</code>. It parses to nothing
+  in all four dialects. The fabricated-field fix was general, and this is the evidence rather than
+  the hope.</li>
+<li><strong>No shadowing.</strong> caliban's <code>does not exist</code> (against graphql-ruby's <code>doesn't exist</code>),
+  pg_graphql's <code>selected on type</code> (against async-graphql's <code>on type</code>) and lacinia's unquoted form
+  all classify as <code>unknown</code> — near misses that stay misses.</li>
+<li>⚠ <strong>morpheus is the first core known to share graphql-js's unknown-field sentence and never
+  suggest.</strong> It fingerprints as <code>graphql-js</code>, <code>suggests: True</code>, high confidence — and only learns
+  otherwise <em>after</em> spending a wordlist run to earn <code>suggestions_disabled</code> where the truth is
+  <code>suggestions_unsupported</code>. No name is ever fabricated and the operator still stops, so this is a
+  wasted run and a slightly wrong label, not a wrong answer. <strong>Open, and not fixed here:</strong> it needs
+  a brand probe, which is exactly the parser work this pass excluded.</li>
+</ul>
 <p>Two structural tests were added with them, because the <em>shape</em> of adding a core is what breaks:
 <code>classify_fingerprint</code> carried a <strong>literal tuple</strong> of the three dialects that existed when it was
 written, so a fourth <code>DIALECTS</code> entry would have been never tried, read as <code>unknown</code>, and left the
@@ -5049,7 +5137,7 @@ file this build does not touch, and it is recorded rather than waved away.</p>
 <ul>
 <li><strong>Route auth, scanner pacing, a scanner-wide request cap, mobile scope, Caido</strong> — standing
   permanent skips, not re-proposed.</li>
-<li>~~<strong>HotChocolate, Absinthe and Juniper have no suggestion parser.</strong>~~ <strong>Closed 2026-08-05</strong> —
+<li><del><strong>HotChocolate, Absinthe and Juniper have no suggestion parser.</strong></del> <strong>Closed 2026-08-05</strong> —
   see <em>Three more cores</em> below. HotChocolate and Absinthe were read; <strong>async-graphql was read in
   place of Juniper</strong>, which is the Rust library people name rather than the one they deploy.
   <code>graphql-dotnet</code> was read in the same session — see <em>.NET is two implementations</em> below.</li>

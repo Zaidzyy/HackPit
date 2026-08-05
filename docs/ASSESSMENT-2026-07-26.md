@@ -4607,6 +4607,14 @@ control is now **eight planted violations** plus four innocents that must NOT fi
 Build #20 closed with three leftovers that were **one chain**, because all three were blocked on
 the same rebuild, plus the follow-on it named: field-suggestion enumeration. All four landed.
 
+> **CLOSED 2026-08-05.** The build's own leftover — three engines named but unmeasured — was read
+> in the same session, and the long tail behind it was triaged rather than left as an open
+> question. Nine engines were resolved in total: **four read from source** (Absinthe,
+> async-graphql, HotChocolate, graphql-dotnet), **five measured as never suggesting**, one found to
+> be **already covered** by an existing core, and **one left open and named** (sangria). Two
+> shipping defects were found and fixed on the way — a fabricated schema field, and a dropped
+> argument-suggestion clause. Nothing is outstanding that is not written down below.
+
 **The build adds no gate, no confirm, no blocklist and no allow-list narrowing** — not in the
 product and not in a proof script. The one place it changes what an operator can reach, it
 **removes** a restriction (see item 5). The enumeration bounds are a declared parameter, not a
@@ -4822,6 +4830,43 @@ the brand is not recoverable from that probe and is not guessed.
 Its `ScalarLeafs` message is `Field usr of type User must have a sub selection` — unquoted, no
 `Did you mean` — so unlike HotChocolate's it could never have fabricated a field.
 
+#### The long tail, triaged — one question each, no parsers written
+
+The seven engines still resolving to `unknown` were put to a single question — **does it emit a name
+suggestion at all?** — answered by grepping each repository, not by reading its message format. That
+is a cheap question with an expensive answer: a core that never suggests is a two-line entry and a
+`suggestions_unsupported` verdict, and needs no parser at any point.
+
+| Engine | Lang | Suggests? | Evidence |
+|---|---|---|---|
+| **dgraph** | Go | **already covered** | `go.mod` pins `dgraph-io/gqlparser/v2`; its `fields_on_correct_type.go` appends `" Did you mean " + QuotedOrList(...) + "?"` — the **`gqlparser` core this project already parses** |
+| **sangria** | Scala | **yes — open** | `Violation.scala:257` `Cannot query field '$f' on type '$t'.` + `didYouMean(suggestedFieldNames)`. Single quotes confirmed; **`StringUtil.orList` not yet read**, so the joiner and cap are unmeasured |
+| lacinia | Clojure | no | `parser.clj:1160` `Cannot query field %s on type %s.`; zero `Did you mean`/`suggest` in the repo |
+| caliban | Scala | no | `Validator.scala:582` `Field '$f' does not exist on type '$t'.`; zero `Did you mean` |
+| agoo | C | no | zero `Did you mean` in the entire repository; its only field-related error strings are allocation failures |
+| morpheus-graphql | Haskell | no | its **only** `Did you mean` is a comment quoting the ScalarLeafs message |
+| pg_graphql | Rust | no | `builder.rs:1739` `Unknown field "{}" selected on type "{}"`; zero `Did you mean` |
+
+**Five of seven never suggest. One is already covered. One is genuinely open, and it is one line.**
+The tail was worth measuring precisely because measuring it was cheap and it turned out to be almost
+entirely empty.
+
+Three things fell out that matter more than the tally:
+
+* **morpheus-graphql carries the ScalarLeafs message too** — a third independent implementation
+  (after graphql-js and HotChocolate) shipping `Did you mean "hobby { ... }"?`. It parses to nothing
+  in all four dialects. The fabricated-field fix was general, and this is the evidence rather than
+  the hope.
+* **No shadowing.** caliban's `does not exist` (against graphql-ruby's `doesn't exist`),
+  pg_graphql's `selected on type` (against async-graphql's `on type`) and lacinia's unquoted form
+  all classify as `unknown` — near misses that stay misses.
+* ⚠ **morpheus is the first core known to share graphql-js's unknown-field sentence and never
+  suggest.** It fingerprints as `graphql-js`, `suggests: True`, high confidence — and only learns
+  otherwise *after* spending a wordlist run to earn `suggestions_disabled` where the truth is
+  `suggestions_unsupported`. No name is ever fabricated and the operator still stops, so this is a
+  wasted run and a slightly wrong label, not a wrong answer. **Open, and not fixed here:** it needs
+  a brand probe, which is exactly the parser work this pass excluded.
+
 Two structural tests were added with them, because the *shape* of adding a core is what breaks:
 `classify_fingerprint` carried a **literal tuple** of the three dialects that existed when it was
 written, so a fourth `DIALECTS` entry would have been never tried, read as `unknown`, and left the
@@ -4931,7 +4976,7 @@ file this build does not touch, and it is recorded rather than waved away.
 
 * **Route auth, scanner pacing, a scanner-wide request cap, mobile scope, Caido** — standing
   permanent skips, not re-proposed.
-* ~~**HotChocolate, Absinthe and Juniper have no suggestion parser.**~~ **Closed 2026-08-05** —
+* <del>**HotChocolate, Absinthe and Juniper have no suggestion parser.**</del> **Closed 2026-08-05** —
   see *Three more cores* below. HotChocolate and Absinthe were read; **async-graphql was read in
   place of Juniper**, which is the Rust library people name rather than the one they deploy.
   `graphql-dotnet` was read in the same session — see *.NET is two implementations* below.

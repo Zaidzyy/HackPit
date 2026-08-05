@@ -370,6 +370,13 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#the-parse-drop-count-closed">The parse-drop count, closed</a></li>
 </ul>
 </li>
+<li><a href="#the-curated-exploit-overlay-2026-08-05">The curated exploit overlay (2026-08-05)</a><ul>
+<li><a href="#the-overlay-is-source-the-mirror-is-data">The overlay is SOURCE; the mirror is DATA</a></li>
+<li><a href="#gte-the-index-could-not-say-there-is-no-fix">gte — the index could not say "there is no fix"</a></li>
+<li><a href="#what-was-not-indexed-and-why-that-is-the-discipline-working">What was NOT indexed, and why that is the discipline working</a></li>
+<li><a href="#an-existing-lock-broke-and-it-was-right-to">An existing lock broke, and it was right to</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -3849,5 +3856,66 @@ failed."</em> <code>alerts_page</code> does the same for alerts, and the ingest 
 <code>history()</code> keeps returning bare rows for the callers that only want shapes to judge.</p>
 <p>An empty window on a daemon that ANSWERED still reports <code>read_ok: true</code> — the trustworthy zero.
 That distinction is what makes <code>read_ok: false</code> mean anything.</p>
+<h2 id="the-curated-exploit-overlay-2026-08-05">The curated exploit overlay (2026-08-05)</h2>
+<p>A new source arrived — <code>sources/some vul.md</code>, 216 KB of disclosed vulnerability reports with
+working PoCs. The first question was whether it belonged in the KB. <strong>It did not</strong>, and the
+saturation check is the reason: request smuggling appears 449 times in the KB, <code>169.254.169.254</code>
+402 times, command injection 277, sanitisation 244, <code>pull_request_target</code> 28. The one candidate
+that looked novel — the <code>Connection: close\t</code> parser trick — returned zero for <code>obs-fold</code>,
+<code>token parser</code> and <code>parsing differential</code>, but the recorded rule is that a token diff only ever
+NOMINATES. Grepping the <em>concept</em> found <strong>44 entries already pairing smuggling with a
+parser/delimiter idea</strong>, including dedicated <code>Request Smuggling</code>, <code>Carriage Return Line Feed</code>,
+<code>SMTP Smuggling</code> and <code>Special HTTP headers</code> rows. Writing it up would have duplicated them.
+That is three sources running where the honest answer was few-or-zero — the saturation signal
+doing its job.</p>
+<p><strong>The verdict was then overruled, and correctly, for a reason better than the one first given.</strong>
+Zaid asked for it anyway; looking harder at what the reports actually assert:</p>
+<blockquote>
+<p>libcurl's SSH connection-reuse guard <code>ssh_config_matches()</code> — added for CVE-2022-27782 and
+reaffirmed by CVE-2023-27538 — <strong>is dead code in every release since 7.83.1.</strong></p>
+</blockquote>
+<p>This index's entire claim is that <strong>the version verdict outranks token similarity</strong>. Here the
+<em>public</em> version verdict is wrong: curl 8.14.0 reads as patched for CVE-2022-27782 and is not,
+and the Rocket.Chat report bypasses the published fix for CVE-2024-39713. An index that answers
+"patched" there is worse than one that says nothing. That is index-shaped, not KB-shaped — a
+keyed product+version lookup, which is exactly what <code>backend/exploits/</code> is for.</p>
+<h3 id="the-overlay-is-source-the-mirror-is-data">The overlay is SOURCE; the mirror is DATA</h3>
+<p><code>data/kb/exploitdb.json</code> is generated wholesale from the sandbox image's exploit-db catalogue,
+and <strong>the whole of <code>/data/</code> is gitignored</strong>. A hand-authored row placed there would never be
+committed and would be destroyed by the next ingest. So <code>backend/exploits/curated.json</code> lives
+beside the module that reads it, is tracked, and is merged at load — 47,108 + 5 = <strong>47,113</strong>.</p>
+<p><strong>The lookup keys are DERIVED at merge, never read from the file.</strong> A hand-authored JSON
+carrying its own <code>by_cve</code> / <code>by_token</code> offsets would be one edit away from pointing at the wrong
+row, and an index that answers <em>confidently with the wrong entry</em> is worse than one that answers
+nothing. The file states facts; the code computes the keys, and a test walks every key to assert
+it lands on an entry that really names it.</p>
+<h3 id="gte-the-index-could-not-say-there-is-no-fix"><code>gte</code> — the index could not say "there is no fix"</h3>
+<p>Every existing kind carries an upper bound, and <code>versions[-1]</code> means <strong>the first patched
+release</strong> (stated in <code>_version_verdict</code>'s own docstring, compared exclusively). An unfixed
+vulnerability has no such number. Forcing curl into <code>range</code> would have required naming an upper
+bound, and the index would then have <strong>announced a patch that has never shipped</strong> — precisely
+the failure it exists to prevent. <code>gte</code> reports <em>"at or above 7.83.1, no fixed release"</em>, and a
+test asserts the reason string can never contain "fixed in".</p>
+<p>Measured after the merge: <code>curl 8.14.0</code> → <code>in-range, at or above 7.83.1, no fixed release</code>;
+<code>curl 7.83.1</code> → the same (the lower bound is inclusive); <code>curl 7.80.0</code> → falls through, because
+it predates the introduction. <code>Rocket.Chat 7.13.2</code> and <code>Trix 2.1.16</code> → <code>exact</code>.</p>
+<h3 id="what-was-not-indexed-and-why-that-is-the-discipline-working">What was NOT indexed, and why that is the discipline working</h3>
+<p><strong>Monero's ZMQ RPC log injection is left out.</strong> Its advisory states <em>last affected</em> versions
+(<code>v0.12.0.0</code>–<code>v0.12.4.0</code>, <code>v0.13.0.2</code>–<code>v0.13.0.4</code>) and this index's <code>range</code>/<code>lte</code> upper bound is
+the <em>fix</em> version. Writing <code>0.12.4.0</code> there would read as "fixed in 0.12.4.0" and mark a
+genuinely vulnerable build safe — the same class of lie <code>gte</code> was added to avoid. Expressing it
+needs a per-entry boundary declaration, which is a change to comparison code two subsystems
+share with <strong>opposite conventions</strong>; recorded rather than forced. The 2026 credential-permissions
+CVEs are out too: the extracted text does not name a product precisely enough to key on, and a
+guessed product token is worse than an absent row.</p>
+<h3 id="an-existing-lock-broke-and-it-was-right-to">An existing lock broke, and it was right to</h3>
+<p><code>test_a_missing_index_degrades_quietly</code> loaded one nonexistent path and asserted <code>ready is
+False</code>. With the overlay merging at load, "nothing is built" became two files and the test
+failed. <strong>That is the lock working</strong> — it caught a behaviour change rather than quietly testing
+something narrower than its own name. It now names both absences explicitly, and the state it
+used to cover by accident got its own test: mirror absent, overlay present, which is a fresh
+clone before the ingester has ever run.</p>
+<p><code>data/kb/entries.jsonl</code> is <strong>unchanged at 2744</strong> — this was an index decision, not a KB one.
+Suite <strong>82 files, all green</strong>.</p>
 </body>
 </html>

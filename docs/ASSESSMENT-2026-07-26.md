@@ -3648,3 +3648,78 @@ failed."* `alerts_page` does the same for alerts, and the ingest response carrie
 
 An empty window on a daemon that ANSWERED still reports `read_ok: true` — the trustworthy zero.
 That distinction is what makes `read_ok: false` mean anything.
+
+## The curated exploit overlay (2026-08-05)
+
+A new source arrived — `sources/some vul.md`, 216 KB of disclosed vulnerability reports with
+working PoCs. The first question was whether it belonged in the KB. **It did not**, and the
+saturation check is the reason: request smuggling appears 449 times in the KB, `169.254.169.254`
+402 times, command injection 277, sanitisation 244, `pull_request_target` 28. The one candidate
+that looked novel — the `Connection: close\t` parser trick — returned zero for `obs-fold`,
+`token parser` and `parsing differential`, but the recorded rule is that a token diff only ever
+NOMINATES. Grepping the *concept* found **44 entries already pairing smuggling with a
+parser/delimiter idea**, including dedicated `Request Smuggling`, `Carriage Return Line Feed`,
+`SMTP Smuggling` and `Special HTTP headers` rows. Writing it up would have duplicated them.
+That is three sources running where the honest answer was few-or-zero — the saturation signal
+doing its job.
+
+**The verdict was then overruled, and correctly, for a reason better than the one first given.**
+Zaid asked for it anyway; looking harder at what the reports actually assert:
+
+> libcurl's SSH connection-reuse guard `ssh_config_matches()` — added for CVE-2022-27782 and
+> reaffirmed by CVE-2023-27538 — **is dead code in every release since 7.83.1.**
+
+This index's entire claim is that **the version verdict outranks token similarity**. Here the
+*public* version verdict is wrong: curl 8.14.0 reads as patched for CVE-2022-27782 and is not,
+and the Rocket.Chat report bypasses the published fix for CVE-2024-39713. An index that answers
+"patched" there is worse than one that says nothing. That is index-shaped, not KB-shaped — a
+keyed product+version lookup, which is exactly what `backend/exploits/` is for.
+
+### The overlay is SOURCE; the mirror is DATA
+
+`data/kb/exploitdb.json` is generated wholesale from the sandbox image's exploit-db catalogue,
+and **the whole of `/data/` is gitignored**. A hand-authored row placed there would never be
+committed and would be destroyed by the next ingest. So `backend/exploits/curated.json` lives
+beside the module that reads it, is tracked, and is merged at load — 47,108 + 5 = **47,113**.
+
+**The lookup keys are DERIVED at merge, never read from the file.** A hand-authored JSON
+carrying its own `by_cve` / `by_token` offsets would be one edit away from pointing at the wrong
+row, and an index that answers *confidently with the wrong entry* is worse than one that answers
+nothing. The file states facts; the code computes the keys, and a test walks every key to assert
+it lands on an entry that really names it.
+
+### `gte` — the index could not say "there is no fix"
+
+Every existing kind carries an upper bound, and `versions[-1]` means **the first patched
+release** (stated in `_version_verdict`'s own docstring, compared exclusively). An unfixed
+vulnerability has no such number. Forcing curl into `range` would have required naming an upper
+bound, and the index would then have **announced a patch that has never shipped** — precisely
+the failure it exists to prevent. `gte` reports *"at or above 7.83.1, no fixed release"*, and a
+test asserts the reason string can never contain "fixed in".
+
+Measured after the merge: `curl 8.14.0` → `in-range, at or above 7.83.1, no fixed release`;
+`curl 7.83.1` → the same (the lower bound is inclusive); `curl 7.80.0` → falls through, because
+it predates the introduction. `Rocket.Chat 7.13.2` and `Trix 2.1.16` → `exact`.
+
+### What was NOT indexed, and why that is the discipline working
+
+**Monero's ZMQ RPC log injection is left out.** Its advisory states *last affected* versions
+(`v0.12.0.0`–`v0.12.4.0`, `v0.13.0.2`–`v0.13.0.4`) and this index's `range`/`lte` upper bound is
+the *fix* version. Writing `0.12.4.0` there would read as "fixed in 0.12.4.0" and mark a
+genuinely vulnerable build safe — the same class of lie `gte` was added to avoid. Expressing it
+needs a per-entry boundary declaration, which is a change to comparison code two subsystems
+share with **opposite conventions**; recorded rather than forced. The 2026 credential-permissions
+CVEs are out too: the extracted text does not name a product precisely enough to key on, and a
+guessed product token is worse than an absent row.
+
+### An existing lock broke, and it was right to
+
+`test_a_missing_index_degrades_quietly` loaded one nonexistent path and asserted `ready is
+False`. With the overlay merging at load, "nothing is built" became two files and the test
+failed. **That is the lock working** — it caught a behaviour change rather than quietly testing
+something narrower than its own name. It now names both absences explicitly, and the state it
+used to cover by accident got its own test: mirror absent, overlay present, which is a fresh
+clone before the ingester has ever run.
+
+`data/kb/entries.jsonl` is **unchanged at 2744** — this was an index decision, not a KB one.
+Suite **82 files, all green**.

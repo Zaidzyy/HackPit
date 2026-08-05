@@ -52,6 +52,19 @@ class Callback:
     token: str
     zone: str
 
+    @classmethod
+    def for_host(cls, host: str) -> "Callback":
+        """A callback whose fqdn IS an already-complete host — the interact.sh case.
+
+        interact.sh assigns the whole name (``<cid><suffix>.<server>``), so there is no
+        token+zone to compose. Split at the FIRST dot only, so ``fqdn`` reproduces the host
+        exactly and every payload shape (url, unc, prefixed) is built the same way as for the
+        self-hosted canary.
+        """
+        cleaned = (host or "").strip().rstrip(".").lower()
+        label, _, rest = cleaned.partition(".")
+        return cls(token=label, zone=rest)
+
     @property
     def fqdn(self) -> str:
         """``<token>.<zone>`` — what a DNS-only sink resolves."""
@@ -300,13 +313,20 @@ BY_ID = {t.id: t for t in TEMPLATES}
 VULN_CLASSES = tuple(dict.fromkeys(t.vuln_class for t in TEMPLATES))
 
 
-def callback_for(token: str, zone: str | None = None) -> Callback:
-    """The callback a token names, against the CONFIGURED zone by default.
+def callback_for(
+    token: str | None = None, zone: str | None = None, *, host: str | None = None
+) -> Callback:
+    """The callback to render against — the self-hosted ``token``+``zone`` OR an interact.sh ``host``.
 
-    Refuses rather than rendering ``<token>.`` with an empty zone: a payload built against no
-    zone is one that can never produce a hit, and it would be pasted into a real target before
-    anyone noticed.
+    Refuses rather than rendering a payload that can never call back: an empty zone (self-hosted),
+    a missing token (self-hosted), or a ``host`` that is not a full domain (interact.sh). Any of
+    those would be pasted into a real target before anyone noticed the silence was structural.
     """
+    if host is not None:
+        cleaned = host.strip().rstrip(".").lower()
+        if not cleaned or "." not in cleaned:
+            raise ValueError("an interact.sh callback host must be a full domain")
+        return Callback.for_host(cleaned)
     resolved = (zone if zone is not None else config.zone()).strip().rstrip(".").lower()
     if not resolved:
         raise ValueError(
@@ -317,15 +337,23 @@ def callback_for(token: str, zone: str | None = None) -> Callback:
     return Callback(token=token, zone=resolved)
 
 
-def render(template_id: str, token: str, zone: str | None = None) -> dict[str, Any]:
+def render(
+    template_id: str, token: str | None = None, zone: str | None = None, *, host: str | None = None
+) -> dict[str, Any]:
     """One rendered template. Raises KeyError for an unknown id."""
     template = BY_ID[template_id]
-    return template.describe(callback_for(token, zone))
+    return template.describe(callback_for(token, zone, host=host))
 
 
-def render_all(token: str, zone: str | None = None, vuln_class: str | None = None) -> list[dict[str, Any]]:
-    """Every template, or every template for one class, rendered against one token."""
-    callback = callback_for(token, zone)
+def render_all(
+    token: str | None = None, zone: str | None = None, vuln_class: str | None = None,
+    *, host: str | None = None,
+) -> list[dict[str, Any]]:
+    """Every template (or every template for one class), rendered against one callback.
+
+    Pass ``token`` (+ optional ``zone``) for the self-hosted canary, or ``host`` for interact.sh.
+    """
+    callback = callback_for(token, zone, host=host)
     return [
         t.describe(callback) for t in TEMPLATES
         if vuln_class is None or t.vuln_class == vuln_class

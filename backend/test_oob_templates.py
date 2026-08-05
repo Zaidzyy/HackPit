@@ -258,6 +258,28 @@ def test_the_template_module_has_no_transport() -> None:
     print("  the template module imports no client and makes no delivery call (3 controls): PASS")
 
 
+def test_render_all_for_an_interactsh_host() -> None:
+    """interact.sh assigns the whole host; every payload carries it, no <token> placeholder."""
+    host = "abc123def456ghij7890klmn.oast.fun"  # <20-char cid><13-char suffix>.<server>
+    payloads = templates.render_all(host=host)
+    assert payloads, "expected a catalog rendered for the interact.sh host"
+    joined = " ".join(p["payload"] for p in payloads)
+    assert host in joined
+    assert "<token>" not in joined
+    # the exfil template still puts data to the LEFT of the whole host
+    exfil = templates.render("rce-exfil-unix", host=host)
+    assert f".{host}" in exfil["payload"]
+
+
+def test_interactsh_host_must_be_a_full_domain() -> None:
+    for bad in ("", "nodot", "trailingdot."):
+        try:
+            templates.render_all(host=bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for host={bad!r}")
+
+
 if __name__ == "__main__":
     print("== OOB canary payload templates (spec §3.4) ==")
     test_every_template_renders_a_payload_carrying_the_token_and_zone()
@@ -268,4 +290,6 @@ if __name__ == "__main__":
     test_the_catalog_carries_no_payload()
     test_placeholders_are_visibly_placeholders()
     test_the_template_module_has_no_transport()
+    test_render_all_for_an_interactsh_host()
+    test_interactsh_host_must_be_a_full_domain()
     print("ALL OOB payload template tests pass")

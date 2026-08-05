@@ -55,7 +55,9 @@
     "<tunnel-zone>": "A DNS zone the OPERATOR controls and has delegated to their own name server — the suffix a DNS tunnel encodes its traffic under. Deliberately not named <domain>: that spelling the composer's target substitution rewrites, and the tunnel's zone is yours, not the target's (same reason as <listener>).",
     "<tunnel-net>": "The point-to-point address (optionally with a netmask) the OPERATOR assigns to a tunnel interface, e.g. an unused private /27. Not spelled with ip/host for the same reason as <listener>: the tunnel's own network is never the target's.",
     "<local-port>": "A port on THIS box, bound locally by a forward or relay.",
-    "<socks-port>": "The local SOCKS5 port a pivot exposes on this box (chisel's default is 1080)."
+    "<socks-port>": "The local SOCKS5 port a pivot exposes on this box (chisel's default is 1080).",
+    "<schema-file>": "Path to a GraphQL schema document (SDL, or an introspection JSON).",
+    "<endpoint>": "A GraphQL endpoint URL including the path, e.g. https://host/graphql - GraphQL is mounted anywhere, so the path is part of the target and never assumed."
   },
   "tools": [
     {
@@ -4516,6 +4518,241 @@
           "what": "use a specific config file instead of the default"
         }
       ]
-    }
+    },
+    {
+        "name": "graphw00f",
+        "category": "web",
+        "purpose": "Fingerprint WHICH GraphQL engine is behind an endpoint (Apollo, Graphene, Hasura, graphql-java, Ariadne and around two dozen more) by the way each one mangles deliberately malformed queries. The engine decides which of the known GraphQL weaknesses even apply.",
+        "phases": [
+          "recon",
+          "enumeration"
+        ],
+        "techniques": [
+          "GraphQL engine fingerprinting",
+          "GraphQL endpoint discovery",
+          "error-message oracle"
+        ],
+        "docs": "https://github.com/dolevf/graphw00f",
+        "templates": [
+          {
+            "label": "Detect and fingerprint one endpoint",
+            "template": "graphw00f -f -d -t <endpoint>",
+            "note": "-d detects that GraphQL is there, -f fingerprints the engine. Run it first: it is the cheapest request you will send."
+          },
+          {
+            "label": "Find the endpoint first, then fingerprint",
+            "template": "graphw00f -d -t <url>",
+            "note": "Walks a wordlist of conventional GraphQL paths. Worth it because /graphql is a convention, not a rule."
+          },
+          {
+            "label": "Do not follow redirects",
+            "template": "graphw00f -r -f -d -t <endpoint>",
+            "note": "A 3xx to a login page otherwise fingerprints the LOGIN app rather than the API."
+          }
+        ],
+        "flags": [
+          {
+            "flag": "-t",
+            "what": "target URL"
+          },
+          {
+            "flag": "-d",
+            "what": "detect whether the URL is GraphQL at all"
+          },
+          {
+            "flag": "-f",
+            "what": "fingerprint the engine"
+          },
+          {
+            "flag": "-r",
+            "what": "do not follow redirects"
+          },
+          {
+            "flag": "-o",
+            "what": "write the result to a file"
+          }
+        ],
+        "notes": "INSTALLED FROM GITHUB, NOT PyPI. The PyPI name `graphw00f` is a defensive placeholder package that does nothing (0.0.1, one release, summary: \"NOT the real tool\") - `pip install graphw00f` gets you a stub that runs and finds nothing. ZAP's own GraphQL add-on already sends fingerprinting probes on every schema import, so for an endpoint you have imported you may have this answer already."
+      },
+      {
+        "name": "graphql-cop",
+        "category": "web",
+        "purpose": "Audit a GraphQL endpoint against the standard misconfiguration set - introspection left on, alias overloading, query batching, field duplication, deep recursion, GET-based mutations, debug modes, trace headers - and print a curl line that reproduces each finding.",
+        "phases": [
+          "enumeration",
+          "exploitation"
+        ],
+        "techniques": [
+          "GraphQL misconfiguration audit",
+          "alias overloading",
+          "query batching",
+          "introspection detection",
+          "denial-of-service surface"
+        ],
+        "docs": "https://github.com/dolevf/graphql-cop",
+        "templates": [
+          {
+            "label": "Audit an endpoint",
+            "template": "graphql-cop -t <endpoint>",
+            "note": "Every finding carries a curl_verify line - reproduce before you report."
+          },
+          {
+            "label": "Machine-readable output",
+            "template": "graphql-cop -t <endpoint> -o json",
+            "note": "One JSON object per check, with severity and impact."
+          },
+          {
+            "label": "Authenticated audit",
+            "template": "graphql-cop -t <endpoint> -H '<name>: <token>'",
+            "note": "Plenty of APIs allow introspection to authenticated callers only, so the anonymous run under-reports."
+          }
+        ],
+        "flags": [
+          {
+            "flag": "-t",
+            "what": "target URL including the GraphQL path"
+          },
+          {
+            "flag": "-o",
+            "what": "output format (json)"
+          },
+          {
+            "flag": "-H",
+            "what": "an extra header, repeatable"
+          },
+          {
+            "flag": "-p",
+            "what": "route through a proxy"
+          },
+          {
+            "flag": "-d",
+            "what": "debug mode"
+          }
+        ],
+        "notes": "INSTALLED FROM GITHUB, NOT PyPI - the PyPI name is a reserved placeholder with no functionality. It EXITS EARLY on a server whose `{__typename}` does not answer with a root type name (Query/QueryRoot/query_root/Root): it raises a bare KeyError rather than saying so, which reads as a broken tool and is not. Several of its checks are denial-of-service SURFACE checks (alias overloading, batching, recursion) - it measures whether the server permits them, and permitting is what it reports."
+      },
+      {
+        "name": "inql",
+        "category": "web",
+        "purpose": "Pull a GraphQL schema by introspection and generate a ready-to-send query or mutation TEMPLATE for every field in it, arguments already in place - the fastest route from 'there is an endpoint' to 'here are forty requests I can edit'.",
+        "phases": [
+          "enumeration",
+          "exploitation"
+        ],
+        "techniques": [
+          "GraphQL introspection",
+          "query/mutation template generation",
+          "schema-to-request expansion",
+          "type cycle detection"
+        ],
+        "docs": "https://github.com/doyensec/inql",
+        "templates": [
+          {
+            "label": "Introspect and generate everything",
+            "template": "inql -t <endpoint> -o <output>",
+            "note": "Writes the schema plus one file per query and per mutation. Those go straight into the repeater's GraphQL mode."
+          },
+          {
+            "label": "From a schema you already have",
+            "template": "inql -f <schema-file> -o <output>",
+            "note": "For an endpoint with introspection off, where the schema came from somewhere else - docs, a JS bundle, or clairvoyance."
+          },
+          {
+            "label": "Authenticated",
+            "template": "inql -t <endpoint> --header Authorization '<token>' -o <output>",
+            "note": "--header takes NAME and VALUE as two separate arguments, not one 'Name: value' string."
+          },
+          {
+            "label": "Through the recording proxy",
+            "template": "inql -t <endpoint> -p http://127.0.0.1:8090 -o <output>",
+            "note": "This is the one worth knowing: routing it through HackPit's ZAP proxy puts every generated operation in the CAPTURE, and the capture is what the active scanner can aim at."
+          }
+        ],
+        "flags": [
+          {
+            "flag": "-t",
+            "what": "target endpoint"
+          },
+          {
+            "flag": "-f",
+            "what": "read a schema JSON file instead of introspecting"
+          },
+          {
+            "flag": "--header",
+            "what": "header NAME and VALUE, as two arguments"
+          },
+          {
+            "flag": "-p",
+            "what": "send through an HTTP proxy"
+          },
+          {
+            "flag": "-o",
+            "what": "output directory"
+          },
+          {
+            "flag": "--generate-cycles",
+            "what": "find type reference cycles (recursion depth)"
+          }
+        ],
+        "notes": "Generation is ON by default: the flags are --no-generate-schema / --no-generate-queries / --no-generate-html, and there is NO --generate-schema (passing it is an error). The -p route matters because ZAP's own schema import sends its generated operations at the endpoint WITHOUT filing them in the Sites tree - measured - so those cannot be scanned, while anything that goes through the proxy can."
+      },
+      {
+        "name": "clairvoyance",
+        "category": "web",
+        "purpose": "Recover a GraphQL schema from an endpoint WITH INTROSPECTION DISABLED, by abusing the 'Did you mean ...' field suggestions in the server's own validation errors. The answer to the most common GraphQL dead end.",
+        "phases": [
+          "enumeration"
+        ],
+        "techniques": [
+          "GraphQL field suggestion enumeration",
+          "schema recovery without introspection",
+          "error-message oracle"
+        ],
+        "docs": "https://github.com/nikitastupin/clairvoyance",
+        "templates": [
+          {
+            "label": "Recover a schema with a wordlist",
+            "template": "clairvoyance -o <output> -w <wordlist> <endpoint>",
+            "note": "The wordlist is the whole game - it can only find names it guesses. Start with the project's own list, then add words from the app's own JS."
+          },
+          {
+            "label": "Authenticated",
+            "template": "clairvoyance -o <output> -H 'Authorization: <token>' -w <wordlist> <endpoint>",
+            "note": "Suggestions are often richer for an authenticated caller."
+          },
+          {
+            "label": "Slower, for a server that rate-limits",
+            "template": "clairvoyance -o <output> -w <wordlist> -c 1 -p slow <endpoint>",
+            "note": "-c is concurrency. This is a LOT of requests by design: one candidate field name costs one or more."
+          }
+        ],
+        "flags": [
+          {
+            "flag": "-o",
+            "what": "write the recovered schema JSON here"
+          },
+          {
+            "flag": "-w",
+            "what": "wordlist of candidate field names"
+          },
+          {
+            "flag": "-H",
+            "what": "an extra header, repeatable"
+          },
+          {
+            "flag": "-c",
+            "what": "concurrent requests"
+          },
+          {
+            "flag": "-d",
+            "what": "the document/query to start from"
+          },
+          {
+            "flag": "-k",
+            "what": "do not verify TLS"
+          }
+        ],
+        "notes": "IT ONLY WORKS WHERE FIELD SUGGESTIONS ARE ON. A server with introspection off AND suggestions off (Apollo's didYouMean disabled) gives it nothing, and it reports an EMPTY SCHEMA rather than an error - read that as 'this defence is complete', not 'there is no schema'. HackPit's own schema probe deliberately does not do this: when the probe answers `disabled`, this is the tool to reach for, as a separate gated command."
+      }
   ]
 }

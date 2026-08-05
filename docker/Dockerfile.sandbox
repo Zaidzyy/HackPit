@@ -442,6 +442,44 @@ RUN set -eu; \
     chmod -R a+rX /opt/regulator /opt/SSTImap /opt/dorks_hunter /opt/cloud_enum /opt/dnsvalidator /opt/msftrecon; \
     for b in regulator SSTImap dorks_hunter cloud_enum dnsvalidator msftrecon; do command -v "$b" >/dev/null; done
 
+# --- 9e-bis. GraphQL tooling (build #20 item 6) ---
+#
+# *** TWO OF THESE FOUR MUST NOT COME FROM PyPI, AND THAT IS A SUPPLY-CHAIN FINDING. ***
+# `pip install graphw00f` installs a package whose own summary reads "Inert defensive-hold
+# placeholder for an unclaimed PyPI name referenced by a public agent skill. NOT the real tool"
+# (Metano Labs, 0.0.1, one release). `pip install graphql-cop` installs "Reserved name
+# placeholder. No functionality." (0.0.1, one release). Both real projects are dolevf/* on GitHub
+# and neither publishes to PyPI. Somebody has parked those names precisely BECAUSE tooling
+# guides name them and an agent will reach for pip — so the obvious install line is the wrong
+# one, quietly, with a package that runs and finds nothing. Verified 2026-08-05 by reading the
+# PyPI metadata for all four before installing any of them.
+#
+# The other two ARE genuine on PyPI and are taken from there: `inql` 4.0.5 (Andrea Brancaleoni,
+# Doyensec, 12 releases) and `clairvoyance` 2.5.5 (Nikita Stupin, the project's own repo in its
+# metadata).
+#
+# All four were run against a live GraphQL endpoint inside this container before being written
+# down; none is catalogued on the strength of a `--help` alone. `graphw00f` has no
+# requirements.txt and needs `requests`, which is why it is not built with `mkvenv`.
+RUN set -eu; \
+    wrap() { printf '#!/bin/sh\nexec %s "$@"\n' "$2" > "/usr/local/bin/$1"; chmod 0755 "/usr/local/bin/$1"; }; \
+    git clone --depth 1 https://github.com/dolevf/graphw00f /opt/graphw00f; \
+        python3 -m venv /opt/graphw00f/venv; \
+        /opt/graphw00f/venv/bin/pip install --no-cache-dir -q requests; \
+        wrap graphw00f "/opt/graphw00f/venv/bin/python /opt/graphw00f/main.py"; \
+    git clone --depth 1 https://github.com/dolevf/graphql-cop /opt/graphql-cop; \
+        python3 -m venv /opt/graphql-cop/venv; \
+        /opt/graphql-cop/venv/bin/pip install --no-cache-dir -q -r /opt/graphql-cop/requirements.txt; \
+        wrap graphql-cop "/opt/graphql-cop/venv/bin/python /opt/graphql-cop/graphql-cop.py"; \
+    python3 -m venv /opt/inql-venv; \
+        /opt/inql-venv/bin/pip install --no-cache-dir -q inql; \
+        wrap inql "/opt/inql-venv/bin/inql"; \
+    python3 -m venv /opt/clairvoyance-venv; \
+        /opt/clairvoyance-venv/bin/pip install --no-cache-dir -q clairvoyance; \
+        wrap clairvoyance "/opt/clairvoyance-venv/bin/python -m clairvoyance"; \
+    chmod -R a+rX /opt/graphw00f /opt/graphql-cop /opt/inql-venv /opt/clairvoyance-venv; \
+    for b in graphw00f graphql-cop inql clairvoyance; do command -v "$b" >/dev/null; done
+
 # --- 9f. gf pattern packs + a static resolver list (baked — no runtime egress) ---
 # gf is inert without pattern packs; the lab has no egress so they must be present in the
 # image. Merge 1ndianl33t/Gf-Patterns with tomnomnom/gf's own examples into a shared dir and

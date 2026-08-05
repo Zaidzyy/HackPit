@@ -1329,19 +1329,39 @@ def parse_message(obj: Any, container: str):
 
 
 def endpoints_from(exchanges, session_id: str, run_id: str | None = None):
-    """Captured requests -> Endpoint records. Existing model, no schema change."""
+    """Captured requests -> Endpoint records. Existing model, no schema change.
+
+    *** A GRAPHQL ENDPOINT IS FLAGGED, AND ITS ARGUMENTS BECOME PARAMETERS. ***
+    ``tech`` gets ``graphql`` and ``params`` gains the ``field.argument`` names alongside any
+    query-string keys — because an endpoint record whose `params` is empty reads as "nothing to
+    attack here", which for a GraphQL POST is exactly wrong and is why the surface has been
+    blind to it. The names are the spelling ZAP uses in its alerts (measured:
+    ``docs/proof/build20_graphql_api.py``), so the record and the finding line up.
+
+    NAMES ONLY. `params` has never held values and does not start now — see cockpit/graphql.py
+    on why a GraphQL argument is assumed to be a credential.
+    """
     from urllib.parse import parse_qs, urlparse
 
     from state.models import Endpoint
+
+    from . import graphql as graphql_mod
 
     out = []
     for ex in exchanges:
         if ex is None or not ex.request.url.startswith("http"):
             continue
+        params = sorted(parse_qs(urlparse(ex.request.url).query).keys())
+        found = graphql_mod.detect_exchange(ex)
+        if found.is_graphql:
+            for name in found.argument_names:
+                if name not in params:
+                    params.append(name)
         out.append(Endpoint(
             session_id=session_id, url=ex.request.url, method=ex.request.method,
             status=ex.response.status,
-            params=sorted(parse_qs(urlparse(ex.request.url).query).keys()),
+            params=params,
+            tech="graphql" if found.is_graphql else "",
             source_run_id=run_id,
         ))
     return out
@@ -1518,6 +1538,13 @@ class HistoryFilter(BaseModel):
         "engagement's program scope. THE SCOPE IS NOT RE-DERIVED HERE — it comes from "
         "engagement.resolved_scope(), the same matcher the executor and the repeater refuse on.",
     )
+    is_graphql: bool | None = Field(
+        None,
+        description="True = only GraphQL operations. False = only everything else. None = both. "
+        "DECIDED BY BODY SHAPE, not by path — see cockpit/graphql.py. A path filter would both "
+        "miss endpoints not called /graphql and invent ones that only look like it, so "
+        "`url_contains='/graphql'` remains available and means something different.",
+    )
 
 
 class FilteredHistory(BaseModel):
@@ -1548,6 +1575,21 @@ class FilteredHistory(BaseModel):
     scope_note: str = Field(
         "", description="How `in_scope_of` was resolved — or why it could not be, in which case "
         "it was IGNORED and everything was kept rather than everything being refused."
+    )
+    graphql_seen: int = Field(
+        0,
+        description="GraphQL operations among the `scanned` rows — reported WHETHER OR NOT the "
+        "graphql filter was used, and counted over the same rows `scanned` counts. It is an "
+        "honest denominator or it is nothing: `graphql_seen=0` next to `scanned=1200` means we "
+        "looked at 1,200 messages and none of them were GraphQL, while `graphql_seen=0` next to "
+        "`truncated=true` means we stopped before we could say. Build #18's `dropped`/`read_ok` "
+        "reasoning, applied to the thing this build is about.",
+    )
+    graphql_argument_names: list[str] = Field(
+        default_factory=list,
+        description="Every `field.argument` seen across the RETURNED rows, deduplicated — the "
+        "names ZAP will use in its alerts. NAMES ONLY, never values: a GraphQL argument is "
+        "routinely a token.",
     )
 
 
@@ -1600,6 +1642,11 @@ def exchange_matches(ex: "CapturedExchange", filt: HistoryFilter,
         return False
     if filt.has_param is not None and _exchange_has_param(ex) is not filt.has_param:
         return False
+    if filt.is_graphql is not None:
+        from . import graphql as graphql_mod
+
+        if graphql_mod.detect_exchange(ex).is_graphql is not filt.is_graphql:
+            return False
 
     # Imported here, like every other cross-module reference in this file, so proxy.py stays
     # importable on its own — `engagement` reaches back into this module's siblings.
@@ -1635,6 +1682,7 @@ def filter_history(container: str, port: int, filt: HistoryFilter,
     own capture because an engagement ended would be a prohibition invented by the tooling.
     """
     from . import engagement
+    from . import graphql as graphql_mod
 
     out = FilteredHistory(total=captured_count(container, port))
     scope_matcher = None
@@ -1663,10 +1711,18 @@ def filter_history(container: str, port: int, filt: HistoryFilter,
         consumed = page.returned + page.dropped
         out.scanned += page.returned
         for ex in reversed(page.exchanges):          # newest first within the window
+            # Counted over every SCANNED row, not just the matching ones, so `graphql_seen` is a
+            # statement about the capture rather than about the filter that was typed.
+            found = graphql_mod.detect_exchange(ex)
+            if found.is_graphql:
+                out.graphql_seen += 1
             if exchange_matches(ex, filt, scope_matcher):
                 out.matched += 1
                 if len(out.exchanges) < limit:
                     out.exchanges.append(ex)
+                    for name in found.argument_names:
+                        if name not in out.graphql_argument_names:
+                            out.graphql_argument_names.append(name)
         if consumed <= 0:
             break                                    # nothing came back; do not spin
         offset += consumed

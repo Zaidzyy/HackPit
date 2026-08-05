@@ -1912,6 +1912,13 @@ export type HistoryFilter = {
   has_param?: boolean | null;
   content_type?: string;
   in_scope_of?: string;
+  /**
+   * THREE-STATE, and it has to be. `true` = only GraphQL, `false` = only everything else,
+   * `null`/absent = both. A two-state checkbox would have made "show me everything" unsayable.
+   * Decided by BODY SHAPE, never by path — `url_contains: "/graphql"` still exists and means
+   * something different.
+   */
+  is_graphql?: boolean | null;
 };
 
 export type FilteredHistory = {
@@ -1928,6 +1935,15 @@ export type FilteredHistory = {
   /** Older messages exist that were never examined — a match may be missing. */
   truncated: boolean;
   scope_note: string;
+  /**
+   * GraphQL operations among the SCANNED rows — reported whether or not the GraphQL filter was
+   * used. It is an honest denominator or it is nothing: `graphql_seen: 0` beside
+   * `scanned: 1200` means we looked at 1,200 and none were GraphQL, while `graphql_seen: 0`
+   * beside `truncated: true` means we stopped before we could say.
+   */
+  graphql_seen: number;
+  /** `field.argument` names across the returned rows — the spelling ZAP uses in its alerts. */
+  graphql_argument_names: string[];
 };
 
 export const filterProxyHistory = (
@@ -1942,6 +1958,198 @@ export const filterProxyHistory = (
     filter,
     signal
   );
+
+/* -------------------------------------------------------------------------- */
+/* GRAPHQL (build #20)                                                         */
+/*                                                                             */
+/* Recognised by BODY SHAPE, never by path. Every one of these is a read or a  */
+/* pure transform except `importGraphQLSchema`, which calls ZAP — and none of  */
+/* them adds a gate. The GraphQL SCAN is the ordinary active scanner: you get  */
+/* a plan here and hand its `target_url` to `startProxyScan` with              */
+/* `recurse: true`, behind the same four gates as every other scan.            */
+/* -------------------------------------------------------------------------- */
+export type GraphQLArgument = {
+  /** `field.argument` — the spelling ZAP puts in its alerts. NO VALUE FIELD, ever. */
+  name: string;
+  field_name: string;
+  argument: string;
+  /** The value comes from a $variable rather than being written inline. */
+  from_variable: boolean;
+};
+
+export type GraphQLOperation = {
+  operation_type: string;
+  operation_name: string;
+  root_fields: string[];
+  arguments: GraphQLArgument[];
+  variable_names: string[];
+};
+
+export type GraphQLDetection = {
+  is_graphql: boolean;
+  /** json_body | json_batch | query_param | raw_document */
+  where: string;
+  /** The path looks conventional. REPORTED, never tested on. */
+  path_hint: boolean;
+  batched: boolean;
+  operations: GraphQLOperation[];
+  introspection: boolean;
+  /** Why a document that looked like GraphQL would not parse. Still GraphQL. */
+  note: string;
+};
+
+export type GraphQLEditorState = {
+  parsed: boolean;
+  query: string;
+  variables: string;
+  operation_name: string;
+  /** Always populated — what was captured, byte for byte. */
+  raw_body: string;
+  note: string;
+};
+
+export type SchemaArgument = { name: string; type: string; required: boolean };
+export type SchemaField = {
+  name: string;
+  type: string;
+  description: string;
+  args: SchemaArgument[];
+};
+
+export type SchemaProbe = {
+  /** ok | disabled | empty | http_error | unparseable | unreachable — SIX, and four of them
+   *  would be an empty list from a naive implementation. ZAP itself cannot tell two of them
+   *  apart, which is why this exists. */
+  status: string;
+  url: string;
+  http_status: number | null;
+  query_type: string;
+  mutation_type: string;
+  subscription_type: string;
+  type_count: number;
+  queries: SchemaField[];
+  mutations: SchemaField[];
+  subscriptions: SchemaField[];
+  server_errors: string[];
+  note: string;
+  /** A WARNING, not a refusal — the probe was sent. */
+  scope_note: string;
+};
+
+export type GraphQLBounds = {
+  max_query_depth?: number | null;
+  max_args_depth?: number | null;
+  max_additional_query_depth?: number | null;
+  max_cycle_detection_alerts?: number | null;
+  lenient_max_query_depth?: boolean | null;
+  optional_args?: boolean | null;
+  query_gen_enabled?: boolean | null;
+  args_type?: string | null;
+  query_split_type?: string | null;
+  request_method?: string | null;
+};
+
+export type AppliedBound = {
+  field_name: string;
+  requested: string;
+  observed: string;
+  applied: boolean;
+  warning: string;
+};
+
+export type SchemaImport = {
+  ok: boolean;
+  endpoint_url: string;
+  source: string;
+  zap_code: string;
+  bounds: { bounds: AppliedBound[]; warnings: string[]; read_ok: boolean } | null;
+  note: string;
+  /** ALWAYS FALSE. ZAP's generated operations never enter the Sites tree — measured. */
+  scannable: boolean;
+  scope_note: string;
+};
+
+export type GraphQLScanPlan = {
+  ok: boolean;
+  target_url: string;
+  /** ALWAYS TRUE and not a preference: the operations live under a synthetic `/query` node. */
+  recurse_required: boolean;
+  argument_names: string[];
+  operation_names: string[];
+  note: string;
+};
+
+export const splitGraphQLBody = (body: string, signal?: AbortSignal) =>
+  postJSON<GraphQLEditorState>("/cockpit/graphql/split", { body }, signal);
+
+export const composeGraphQLBody = (
+  query: string,
+  variables: string,
+  operation_name: string,
+  signal?: AbortSignal
+) =>
+  postJSON<{ body: string; error: string; ok: boolean }>(
+    "/cockpit/graphql/compose",
+    { query, variables, operation_name },
+    signal
+  );
+
+/**
+ * EVERY FIELD OPTIONAL — and the URL especially. An operator pastes a captured body in before
+ * they have typed a URL, and that is exactly when the badge earns its place. This is why the
+ * route does NOT take a `RepeaterRequest`, whose `url` is required because a SEND needs one.
+ */
+export type GraphQLDetectRequest = {
+  method?: string;
+  url?: string;
+  headers?: RepeaterHeader[];
+  body?: string;
+};
+
+export const detectGraphQL = (req: GraphQLDetectRequest, signal?: AbortSignal) =>
+  postJSON<GraphQLDetection>("/cockpit/graphql/detect", req, signal);
+
+export const probeGraphQLSchema = (
+  container: string,
+  url: string,
+  headers: { name: string; value: string }[] = [],
+  engagement_id?: string | null,
+  signal?: AbortSignal
+) =>
+  postJSON<SchemaProbe>(
+    "/cockpit/proxy/graphql/probe",
+    { container, url, headers, engagement_id: engagement_id ?? null },
+    signal
+  );
+
+export const getGraphQLBounds = (container: string, port: number, signal?: AbortSignal) =>
+  getJSON<{
+    container: string;
+    port: number;
+    observed: Record<string, string>;
+    args_types: string[];
+    query_split_types: string[];
+    request_methods: string[];
+  }>(
+    `/cockpit/proxy/graphql/bounds?container=${encodeURIComponent(container)}&port=${port}`,
+    signal
+  );
+
+export const importGraphQLSchema = (
+  body: {
+    container: string;
+    port: number;
+    endpoint_url: string;
+    schema_url?: string;
+    sdl_text?: string;
+    bounds?: GraphQLBounds | null;
+    engagement_id?: string | null;
+  },
+  signal?: AbortSignal
+) => postJSON<SchemaImport>("/cockpit/proxy/graphql/import", body, signal);
+
+export const graphQLScanPlan = (req: RepeaterRequest, signal?: AbortSignal) =>
+  postJSON<GraphQLScanPlan>("/cockpit/proxy/graphql/scan-plan", req, signal);
 
 /* -------------------------------------------------------------------------- */
 /* INTERCEPTION (build #19 item 4)                                             */

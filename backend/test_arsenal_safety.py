@@ -227,6 +227,20 @@ _MUST_NOT_FIRE = frozenset({
     "wafw00f", "testssl", "testssl.sh", "jwt_tool", "jwt-tool", "jwt_tool.py", "wfuzz",
     "hakrawler", "sslscan", "nomore403", "crlfuzz", "getjs", "jsluice", "subjs",
     "gf", "qsreplace", "unfurl",
+    # GraphQL tooling (build #20 item 6). All four SEND HTTP AND READ WHAT COMES BACK. None
+    # generates or delivers a payload, opens a shell, tunnels traffic or runs code on a remote
+    # host, which is the test this bucket is judged by.
+    #   graphw00f    - malformed queries to fingerprint the engine; the response IS the finding
+    #   graphql-cop  - a misconfiguration audit; its DoS checks measure whether the server
+    #                  PERMITS alias overloading / batching / recursion, and permitting is what
+    #                  it reports
+    #   inql         - one introspection query, then it writes request templates to disk
+    #   clairvoyance - a wordlist walk over field-name suggestions; the same shape as ffuf,
+    #                  which sits four lines up
+    # `sqlmap` and `dalfox` are already clean here and both fire real injection payloads at
+    # parameters. Marking a GraphQL fingerprinter dangerous while those two are not would be a
+    # red-confirm that fires on reading a page — the argument this file makes twice already.
+    "graphw00f", "graphql-cop", "inql", "clairvoyance",
     # pipeline heads the templates use — shell builtins, not tools
     "cat", "echo",
     # curl-impersonate (build #18 item 5) — A FETCH IS A FETCH. It sends the TLS handshake and

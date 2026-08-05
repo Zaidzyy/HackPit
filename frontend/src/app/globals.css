@@ -8063,6 +8063,19 @@ a.hp-card {
   font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); margin-bottom: 10px;
 }
 .hp-tn-cardsub { font-size: 12px; color: var(--dim); margin: -4px 0 10px; }
+/* *** THE -4px ABOVE IS RIGHT UNDER A CARDHEAD AND WRONG AFTER ANYTHING ELSE. ***
+   It exists to tuck the sub-line up against its heading. When a cardsub instead follows a form,
+   a list or a row of results it pulls the paragraph INTO the element above and the text sits on
+   the box edge — measured on :proxy in a real browser, where the GraphQL panel's explanation ran
+   straight into the schema it was explaining.
+   FIXED AS A SHARED RULE RATHER THAN PER SCREEN, which is build #5's lesson and the note left in
+   the frontend-class-vocabulary memory: when a shared rule over-matches, fix the rule, not the
+   one component that noticed. This shape occurs 21 times across 7 components, so a local
+   workaround would have left the other 20 cramped. It can only ADD space where there is
+   currently none, so it cannot break a layout that was already correct. */
+.hp-tn-form + .hp-tn-cardsub,
+.hp-tn-list + .hp-tn-cardsub,
+.hp-gql-fields + .hp-tn-cardsub { margin-top: 12px; }
 .hp-tn-form, .hp-tn-routeform { display: flex; flex-wrap: wrap; gap: 8px; }
 .hp-tn-form select, .hp-tn-form input, .hp-tn-routeform input,
 .hp-tn-form textarea, .hp-tn textarea,
@@ -8659,3 +8672,64 @@ button.hp-tn-start:disabled, button.hp-tn-destroy:disabled { opacity: 0.45; curs
 .hp-tn-check { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
 .hp-tn-check label { align-items: center; cursor: pointer; }
 .hp-tn-check input[type="checkbox"] { flex: 0 0 auto; width: auto; min-width: 0; margin: 0; }
+
+/* ---------------------------------------------------------------------------
+   GRAPHQL (build #20)
+
+   The structured editor on :repeater and the schema panel on :proxy. New classes
+   rather than reused ones because `test_css_vocabulary.py` checks that every
+   `hp-*` a screen names EXISTS — a class that does not is invisible to tsc,
+   `next build` and eslint alike, which is how `:proxy` shipped entirely
+   unrendered for two builds.
+
+   `hp-gql-arg` deliberately reads as a NAME chip and never carries a value: a
+   GraphQL argument is routinely a token, so there is nothing here that could
+   render one.
+   --------------------------------------------------------------------------- */
+.hp-gql {
+  margin-top: 12px; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: rgba(0,0,0,0.22);
+}
+.hp-gql-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 6px; }
+/* *** THE BUTTON NEEDED A RULE AND `tsc`/`next build`/`eslint` ALL PASSED WITHOUT ONE. ***
+   An unclassed <button> inside this row inherited the page's heading scale and rendered as
+   large plain text — a control that did not look like a control, sitting above the thing it
+   acts on. Found by looking at the screen in a real browser, which is the only thing that
+   could have found it. Same shape as `.hp-tn-start` not existing while nine primary buttons
+   used it: the visual hierarchy was exactly backwards and nothing mechanical noticed. */
+.hp-gql-head button {
+  background: transparent; border: 1px solid var(--border); border-radius: 5px;
+  color: var(--dim); cursor: pointer; font-size: 11px; padding: 4px 8px;
+  font-family: var(--font-jetbrains-mono), monospace; line-height: 1.4;
+}
+.hp-gql-head button:hover { color: var(--accent); border-color: var(--accent-line); }
+.hp-gql-badge {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 11px; letter-spacing: 0.04em;
+  text-transform: uppercase; padding: 2px 8px; border-radius: 999px;
+  color: var(--accent); border: 1px solid var(--accent-line); background: var(--accent-soft);
+}
+.hp-gql-args { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+.hp-gql-arg {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 11.5px;
+  padding: 2px 7px; border-radius: 5px; color: var(--white);
+  border: 1px solid var(--border); background: rgba(0,0,0,0.35);
+}
+.hp-gql-status {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 11px; letter-spacing: 0.04em;
+  text-transform: uppercase; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--dim); background: rgba(0,0,0,0.3);
+}
+/* The five answers that are NOT `ok` must not all look the same: `disabled` means reach for
+   clairvoyance, `unreachable` means fix the network, `empty` means stop looking. */
+.hp-gql-status.is-ok { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+.hp-gql-status.is-disabled { color: #ffcc66; border-color: rgba(255,204,102,0.45); background: rgba(255,204,102,0.12); }
+.hp-gql-status.is-bad { color: #ff8080; border-color: rgba(255,128,128,0.45); background: rgba(255,128,128,0.12); }
+.hp-gql-fields { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.hp-gql-field {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline;
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12px;
+  padding: 6px 8px; border-radius: 6px; background: rgba(0,0,0,0.28);
+  border: 1px solid var(--border);
+}
+.hp-gql-fieldname { color: var(--white); }
+.hp-gql-fieldtype { color: var(--dim); }

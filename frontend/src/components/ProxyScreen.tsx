@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { PageShell } from "./PageShell";
 import { CopyButton } from "./CopyButton";
+import { GraphQLPanel } from "./GraphQLPanel";
 import {
   ApiError,
   clearAuthContexts,
@@ -142,6 +143,10 @@ export function ProxyScreen() {
   const [fType, setFType] = useState("");
   const [fParams, setFParams] = useState(false);
   const [fScope, setFScope] = useState(false);
+  // THREE-STATE (build #20 item 2): "" = both, "yes" = only GraphQL, "no" = only everything
+  // else. A checkbox would have made "show me everything" unsayable, which is how a filter
+  // silently becomes a narrowing.
+  const [fGql, setFGql] = useState<"" | "yes" | "no">("");
   const [filtering, setFiltering] = useState(false);
 
   // the authenticated context (build #18 items 6 and 7)
@@ -315,6 +320,8 @@ export function ProxyScreen() {
           // parameters"). An unchecked box must not silently become a filter.
           has_param: fParams ? true : null,
           in_scope_of: fScope ? live.engagement_id ?? "" : "",
+          // Same three-state rule, one field over: "" leaves it unset and matches BOTH.
+          is_graphql: fGql === "" ? null : fGql === "yes",
         })
       );
     } catch (e) {
@@ -323,7 +330,7 @@ export function ProxyScreen() {
     } finally {
       setFiltering(false);
     }
-  }, [live, filtering, fHost, fMethod, fStatus, fUrl, fType, fParams, fScope]);
+  }, [live, filtering, fHost, fMethod, fStatus, fUrl, fType, fParams, fScope, fGql]);
 
   const saveBypassHeader = useCallback(async () => {
     const engagement = live?.engagement_id ?? engagementId.trim();
@@ -828,11 +835,18 @@ export function ProxyScreen() {
 
               <p className="hp-tn-note">
                 Only ZAP&rsquo;s <code>http-all</code> break type actually holds anything.{" "}
-                <code>http-request</code> answers <code>{"{\"Result\":\"OK\"}"}</code> and lets the
-                request straight through — measured against the origin&rsquo;s own access log —
-                so HackPit does not offer it as a choice. <code>break_on_request</code> is a{" "}
-                <em>setting</em> and reads true with nothing held, which is why the
-                &ldquo;HELD&rdquo; pill above is driven by the message itself.
+                {/* THE {" "} AT THESE TWO LINE ENDS IS LOAD-BEARING, and both were missing until
+                    build #20 looked at this screen in a real browser. A text node that begins
+                    with a space and then WRAPS to the next line loses that leading space, so the
+                    DOM read back `{"{\"Result\":\"OK\"}"}and lets` and `settingand reads`. The
+                    surrounding copy already used this convention; these two spots had a bare
+                    inline space instead. `tsc`, `next build` and `eslint` all pass either way. */}
+                <code>http-request</code> answers <code>{"{\"Result\":\"OK\"}"}</code>{" "}
+                and lets the request straight through — measured against the origin&rsquo;s own
+                access log — so HackPit does not offer it as a choice.{" "}
+                <code>break_on_request</code> is a <em>setting</em>{" "}
+                and reads true with nothing held, which is why the &ldquo;HELD&rdquo; pill above
+                is driven by the message itself.
               </p>
 
               {intercept?.held ? (
@@ -886,6 +900,17 @@ export function ProxyScreen() {
             </>
           )}
         </section>
+
+        {/* ---- GRAPHQL (build #20 items 4 and 5) -------------------------------
+            Placed directly above the capture search on purpose: the schema tells you what the
+            API exposes, and the CAPTURE is what the scanner can actually be aimed at. The panel
+            says so itself, because an import that answers OK looks exactly like one that gave
+            the scanner new targets, and it did not. */}
+        <GraphQLPanel
+          container={live?.container ?? null}
+          port={live?.port ?? 8090}
+          engagementId={live?.engagement_id}
+        />
 
         {/* ---- HISTORY FILTERING (build #19 item 3) --------------------------- */}
         <section className="hp-tn-card">
@@ -944,6 +969,15 @@ export function ProxyScreen() {
               />{" "}
               in engagement scope
             </label>
+            {/* GRAPHQL (build #20 item 2) — a SELECT, not a checkbox, because there are three
+                answers and "both" has to be one of them. Decided by BODY SHAPE: this finds an
+                operation POSTed to /api and does not fire on plain JSON POSTed to /graphql.
+                The URL box above still does the path thing, and means something different. */}
+            <select value={fGql} onChange={(e) => setFGql(e.target.value as "" | "yes" | "no")}>
+              <option value="">GraphQL: both</option>
+              <option value="yes">GraphQL only</option>
+              <option value="no">everything except GraphQL</option>
+            </select>
             <button type="button" onClick={runFilter} disabled={!live || filtering}>
               {filtering ? "searching…" : "search"}
             </button>
@@ -957,7 +991,22 @@ export function ProxyScreen() {
                 </strong>{" "}
                 · scanned {filtered.scanned} of {filtered.total} held · showing {filtered.returned}
                 {filtered.dropped > 0 ? ` · ${filtered.dropped} unparseable and never tested` : ""}
+                {" · "}
+                <strong>{filtered.graphql_seen} GraphQL</strong> among the scanned
               </div>
+              {/* An honest denominator or nothing. `0 GraphQL` next to `scanned 1200` means we
+                  looked at 1,200 messages and none were; `0 GraphQL` next to a truncated scan
+                  means we stopped before we could say. The truncation banner below carries that
+                  half, which is why this count is deliberately printed beside `scanned`. */}
+              {filtered.graphql_argument_names.length > 0 ? (
+                <div className="hp-gql-args">
+                  {filtered.graphql_argument_names.map((n) => (
+                    <span key={`fa-${n}`} className="hp-gql-arg">
+                      {n}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               {filtered.truncated ? (
                 <p className="hp-tn-error">
                   The scan stopped before the end of the capture, so{" "}

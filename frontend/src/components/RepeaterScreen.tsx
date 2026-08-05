@@ -6,11 +6,15 @@ import { CopyButton } from "./CopyButton";
 import {
   ApiError,
   clearRepeaterCookies,
+  composeGraphQLBody,
+  detectGraphQL,
   getRepeaterStatus,
   repeaterCookies,
   getRepeaterShapes,
   repeaterPreview,
   repeaterSend,
+  splitGraphQLBody,
+  type GraphQLDetection,
   type RepeaterExchange,
   type ShapeVocabulary,
   type RepeaterHeader,
@@ -55,6 +59,23 @@ export function RepeaterScreen() {
   // have not looked" is a different thing from "the jar is empty", and the button says so.
   const [useJar, setUseJar] = useState(true);
   const [jarCount, setJarCount] = useState<number | null>(null);
+
+  // ---- GraphQL mode (build #20 item 3) ------------------------------------------------
+  // THE MEASURED PAIN: report #61's injection point is a GraphQL argument, and reaching it
+  // through this screen meant hand-writing quadruple-escaped JSON-in-JSON.
+  //
+  // *** THE OPERATOR'S RAW BODY WINS. *** `composedRef` remembers the last body the composer
+  // produced. The moment the raw textarea holds something else — because a human typed in it —
+  // the structured editor CLOSES rather than overwriting what they wrote. Same rule build #19
+  // gave the cookie jar, for the same reason: state that silently rewrites a request is a trap.
+  const [gql, setGql] = useState<GraphQLDetection | null>(null);
+  const [gqlOpen, setGqlOpen] = useState(false);
+  const [gqlQuery, setGqlQuery] = useState("");
+  const [gqlVars, setGqlVars] = useState("{}");
+  const [gqlOp, setGqlOp] = useState("");
+  const [gqlNote, setGqlNote] = useState("");
+  const [gqlError, setGqlError] = useState("");
+  const composedRef = useRef<string>("");
 
   const [history, setHistory] = useState<RepeaterExchange[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -188,6 +209,108 @@ export function RepeaterScreen() {
       cur.includes(name) ? cur.filter((s) => s !== name) : [...cur, name]
     );
 
+  // ---- GraphQL: detect, split, compose -------------------------------------------------
+  // Detection runs on the BACKEND so there is ONE derivation of "is this GraphQL", shared with
+  // the history filter and the scan plan — not a second implementation in TypeScript that could
+  // disagree with the one the scanner uses. Debounced, because it runs on every keystroke.
+  //
+  // The "there is nothing to detect" reset lives INSIDE the timeout rather than as an early
+  // return in the effect body. Both would clear the badge; only one of them keeps the lint
+  // baseline at 11 errors, because `react-hooks/set-state-in-effect` is exactly what those 11
+  // are and a synchronous `setGql(null)` here would have made it 12.
+  useEffect(() => {
+    const ac = new AbortController();
+    const t = setTimeout(() => {
+      if (!body.trim() && !url.includes("query=")) {
+        setGql(null);
+        return;
+      }
+      detectGraphQL(
+        {
+          method,
+          url,
+          headers: headers.filter((h) => h.name.trim()).map((h) => ({ name: h.name, value: h.value })),
+          body,
+        },
+        ac.signal
+      )
+        .then(setGql)
+        .catch(() => {
+          /* a detector that broke the screen would be worse than no badge */
+        });
+    }, 250);
+    return () => {
+      clearTimeout(t);
+      ac.abort();
+    };
+  }, [method, url, headers, body]);
+
+  /**
+   * *** RAW BODY WINS. ***
+   * The one handler the raw textarea uses. If the structured editor is open and the operator
+   * types in the raw box, the editor STEPS ASIDE rather than overwriting them on the next
+   * keystroke. Same rule build #19 gave the cookie jar — a typed value beats stored state —
+   * and for the same reason: state that silently rewrites a request is a trap.
+   *
+   * This lives in the change handler and NOT in an effect, deliberately: the frontend AGENTS.md
+   * baseline is 11 lint errors + 1 warning, `react-hooks/set-state-in-effect` is what those
+   * errors are, and new setState is required to go through callbacks. It also reads better —
+   * "the human typed here" is an event, not a derived condition.
+   */
+  const onRawBodyChange = useCallback(
+    (next: string) => {
+      setBody(next);
+      if (gqlOpen && next !== composedRef.current) {
+        setGqlOpen(false);
+        setGqlNote(
+          "You edited the raw body, so the structured editor stepped aside — what you typed is " +
+            "what will be sent. Press “edit as GraphQL” to split it again."
+        );
+      }
+    },
+    [gqlOpen]
+  );
+
+  /** Split the captured body into query + variables. A body that will not split stays RAW. */
+  const openGraphQL = useCallback(async () => {
+    setGqlError("");
+    try {
+      const state = await splitGraphQLBody(body);
+      setGqlNote(state.note);
+      if (!state.parsed) {
+        setGqlOpen(false);
+        return;
+      }
+      setGqlQuery(state.query);
+      setGqlVars(state.variables);
+      setGqlOp(state.operation_name);
+      composedRef.current = body;
+      setGqlOpen(true);
+    } catch (e) {
+      setGqlError(e instanceof ApiError ? e.message : String(e));
+    }
+  }, [body]);
+
+  /** Re-serialise. If the variables will not parse, the body is LEFT ALONE and the error shown:
+   *  a composer that quietly repaired a body would put a request on the wire nobody wrote. */
+  const recompose = useCallback(
+    async (query: string, variables: string, opName: string) => {
+      try {
+        const out = await composeGraphQLBody(query, variables, opName);
+        if (!out.ok) {
+          setGqlError(out.error);
+          return;
+        }
+        setGqlError("");
+        composedRef.current = out.body;
+        setBody(out.body);
+      } catch (e) {
+        setGqlError(e instanceof ApiError ? e.message : String(e));
+      }
+    },
+    []
+  );
+
   /** Load a past exchange's request back into the editor to tweak-and-resend. */
   const loadForEdit = useCallback((ex: RepeaterExchange) => {
     setMethod(ex.request.method);
@@ -304,11 +427,123 @@ export function RepeaterScreen() {
               <textarea
                 className="hp-rp-body"
                 value={body}
-                onChange={(e) => setBody(e.target.value)}
+                onChange={(e) => onRawBodyChange(e.target.value)}
                 placeholder="request body (sent on stdin — any content is safe)"
                 rows={5}
               />
             </div>
+
+            {/* ---- GRAPHQL MODE (build #20 item 3) -------------------------------------
+                Detected by BODY SHAPE, not by path: this fires on a GraphQL operation posted
+                to /api just as readily as one posted to /graphql, and does NOT fire on plain
+                JSON that happens to be posted to /graphql. */}
+            {gql?.is_graphql ? (
+              <div className="hp-gql">
+                <div className="hp-gql-head">
+                  <span className="hp-gql-badge">GraphQL</span>
+                  <span className="hp-rp-sub">
+                    {gql.where.replace("_", " ")}
+                    {gql.batched ? " · batched" : ""}
+                    {gql.introspection ? " · introspection" : ""}
+                    {gql.path_hint ? " · conventional path" : " · non-conventional path"}
+                  </span>
+                  {!gqlOpen ? (
+                    <button type="button" onClick={openGraphQL}>
+                      edit as GraphQL
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGqlOpen(false);
+                        setGqlNote("Closed — the raw body is unchanged.");
+                      }}
+                    >
+                      back to raw
+                    </button>
+                  )}
+                </div>
+
+                {gql.operations.length > 0 ? (
+                  <div className="hp-rp-sub">
+                    {gql.operations
+                      .map(
+                        (op) =>
+                          `${op.operation_type} ${op.operation_name || "(anonymous)"} → ${
+                            op.root_fields.join(", ") || "—"
+                          }`
+                      )
+                      .join(" · ")}
+                  </div>
+                ) : null}
+
+                {/* NAMES, NEVER VALUES. A GraphQL argument is routinely a token — report #61's
+                    is literally called `token` — so this line lists what ZAP will call them in
+                    its alerts and nothing about what is in them. */}
+                {gql.operations.some((op) => op.arguments.length) ? (
+                  <div className="hp-gql-args">
+                    {gql.operations.flatMap((op) =>
+                      op.arguments.map((a) => (
+                        <span key={`${op.operation_name}-${a.name}`} className="hp-gql-arg">
+                          {a.name}
+                          {a.from_variable ? " $" : ""}
+                        </span>
+                      ))
+                    )}
+                  </div>
+                ) : null}
+
+                {gql.note ? (
+                  <p className="hp-rp-sub">
+                    This is still GraphQL — the envelope says so. It just would not parse:{" "}
+                    {gql.note}.
+                  </p>
+                ) : null}
+
+                {gqlOpen ? (
+                  <>
+                    <div className="hp-rp-subhead">query</div>
+                    <textarea
+                      className="hp-rp-body"
+                      value={gqlQuery}
+                      onChange={(e) => {
+                        setGqlQuery(e.target.value);
+                        void recompose(e.target.value, gqlVars, gqlOp);
+                      }}
+                      rows={6}
+                    />
+                    <div className="hp-rp-subhead">variables (JSON)</div>
+                    <textarea
+                      className="hp-rp-body"
+                      value={gqlVars}
+                      onChange={(e) => {
+                        setGqlVars(e.target.value);
+                        void recompose(gqlQuery, e.target.value, gqlOp);
+                      }}
+                      rows={5}
+                    />
+                    <div className="hp-tn-form">
+                      <input
+                        value={gqlOp}
+                        onChange={(e) => {
+                          setGqlOp(e.target.value);
+                          void recompose(gqlQuery, gqlVars, e.target.value);
+                        }}
+                        placeholder="operationName — omitted from the body when blank"
+                      />
+                    </div>
+                    {gqlError ? (
+                      <p className="hp-rp-error">
+                        {gqlError} — <strong>the body above was left exactly as it was.</strong>{" "}
+                        Nothing was guessed at or repaired.
+                      </p>
+                    ) : null}
+                  </>
+                ) : null}
+
+                {gqlNote ? <p className="hp-rp-sub">{gqlNote}</p> : null}
+              </div>
+            ) : null}
 
             <div className="hp-rp-opts">
               <label className="hp-rp-opt">

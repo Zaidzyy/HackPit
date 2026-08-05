@@ -25,6 +25,7 @@ Hermetic: no Docker, no LLM, no network. Run:  python test_detection_safety.py
 """
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 
@@ -94,6 +95,50 @@ def test_routes_are_read_only() -> None:
     print(f"  all {len(RT.router.routes)} detection routes are read-only annotation: PASS")
 
 
+def _detection_references(source: str, name: str) -> list[str]:
+    """Real references to the `detection` PACKAGE, found by AST.
+
+    *** THIS WAS A SUBSTRING SCAN FOR THE WORD "detection" AND IT WAS THE WRONG PREDICATE. ***
+    It fired on `cockpit/graphql.py`, whose subject is GraphQL DETECTION, and on
+    `max_cycle_detection_alerts`, which is ZAP's own option name — neither has anything to do
+    with this feature. The standing rule when a guard trips on innocent code is to FIX THE
+    PREDICATE, never to widen the file set: narrowing the glob would have left the guard weaker
+    against the thing it exists to catch, while the property it means to state was always "the
+    execution layer must not IMPORT OR CALL the detection package", not "must not contain nine
+    particular letters".
+
+    This is stricter about the real thing (it catches `import detection.catalog`,
+    `importlib.import_module("detection")` and `detection.resolve(...)` alike) and blind to
+    prose, which is what a source scan should be. AST, not substring — and note that a substring
+    scan of a shape like `sorted(a_dict)` fails SILENTLY when the shape changes, which is why
+    this repo keeps making that swap.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:                        # pragma: no cover - a broken module
+        return [f"{name}: will not parse ({exc})"]
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] == "detection":
+                    hits.append(f"{name}:{node.lineno}: import {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            if (node.module or "").split(".")[0] == "detection" and not node.level:
+                hits.append(f"{name}:{node.lineno}: from {node.module} import ...")
+        elif isinstance(node, ast.Attribute):
+            if isinstance(node.value, ast.Name) and node.value.id == "detection":
+                hits.append(f"{name}:{node.lineno}: detection.{node.attr}")
+        elif isinstance(node, ast.Call):
+            fn = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if fn in ("__import__", "import_module"):
+                for arg in node.args:
+                    if (isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+                            and arg.value.split(".")[0] == "detection"):
+                        hits.append(f"{name}:{node.lineno}: {fn}({arg.value!r})")
+    return hits
+
+
 def test_cockpit_package_is_untouched() -> None:
     """The execution layer must not know this feature exists — so it cannot be changed by it."""
     cockpit_dir = Path(__file__).resolve().parent / "cockpit"
@@ -104,26 +149,38 @@ def test_cockpit_package_is_untouched() -> None:
     assert len(modules) >= 20, f"only {len(modules)} cockpit modules — this scan has gone vacuous"
     offenders = []
     for py in modules:
-        src = py.read_text(encoding="utf-8")
-        if "detection" in src.replace("# ", "").lower():
-            for i, line in enumerate(src.splitlines(), 1):
-                low = line.lower()
-                if "detection" in low and not low.lstrip().startswith("#"):
-                    offenders.append(f"{py.name}:{i}: {line.strip()}")
+        offenders += _detection_references(py.read_text(encoding="utf-8"), py.name)
     assert not offenders, "the cockpit package must not reference detection:\n" + "\n".join(offenders)
 
-    # POSITIVE CONTROL: the same predicate, run over a module that DOES reference detection,
-    # must fire. Without it "no offenders" is indistinguishable from a predicate that matches
-    # nothing — which is exactly how three critical guards shipped green.
-    control = (Path(__file__).resolve().parent / "detection" / "resolver.py").read_text(
-        encoding="utf-8"
+    # POSITIVE CONTROL: the predicate must fire on PLANTED violations. Without it "no offenders"
+    # is indistinguishable from a predicate that matches nothing — which is exactly how three
+    # critical guards shipped green. Planted rather than "a real file that happens to match",
+    # because the real file (detection/resolver.py) reaches its siblings by RELATIVE import and
+    # would not exercise this at all.
+    plants = (
+        "import detection",
+        "import detection.catalog",
+        "from detection import resolver",
+        "from detection.catalog import SPECS",
+        "import detection as d",
+        "x = detection.resolve(cmd)",
+        "importlib.import_module('detection.attck')",
+        "__import__('detection')",
     )
-    assert any(
-        "detection" in line.lower() and not line.lstrip().startswith("#")
-        for line in control.splitlines()
-    ), "the predicate no longer fires even on detection/resolver.py — it is now vacuous"
+    for plant in plants:
+        assert _detection_references(plant, "planted.py"), \
+            f"the predicate does NOT catch {plant!r} — it is vacuous"
+    # ...and is blind to the prose and the unrelated identifiers that made it wrong before.
+    for innocent in (
+        '"""GraphQL - DETECTION, PARSING and the operator\'s round trip."""',
+        "max_cycle_detection_alerts = 100",
+        "class GraphQLDetection: pass",
+        "# detection lives in its own package",
+    ):
+        assert not _detection_references(innocent, "innocent.py"), \
+            f"the predicate still fires on prose: {innocent!r}"
     print(f"  all {len(modules)} cockpit modules are untouched by this feature "
-          "(+ positive control): PASS")
+          f"(+ {len(plants)} planted violations caught, 4 innocents ignored): PASS")
 
 
 # --------------------------------------------------------------------------- #

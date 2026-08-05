@@ -4268,3 +4268,328 @@ it.** The state it judged was real when read and never got committed. A second s
 live tree is reading a moving target, and a defect it reports against uncommitted work has to
 be re-checked against HEAD before it is believed. That is the same discipline as re-running a
 flaky test before treating one red run as evidence.
+
+---
+
+## Build #20 — GraphQL, end to end (2026-08-05)
+
+The source evaluation earlier the same day produced exactly one HackPit capability finding, and
+it was evidence-backed rather than speculative:
+
+> Report #61's injection point is a GraphQL argument, reachable only by composing a query with
+> variables. Attacking it through the repeater means hand-writing quadruple-escaped JSON-in-JSON.
+
+Measured against the tree: `graphql` appeared in the backend **once**, incidentally, in
+`attack_path.py`; in the frontend **zero** times; and the arsenal carried **no** GraphQL tooling
+at all. Meanwhile ZAP already shipped a GraphQL add-on, so most of this looked like a SURFACING
+job rather than an engine-building one — the same correction that made build #19's interception
+days instead of weeks.
+
+**The build adds no gate, no confirm, no blocklist and no allow-list narrowing** — not in the
+product and not in a proof script. Where something could refuse, it warns and continues. The two
+places that decline to do something are named below, and both are disclosure or correctness
+decisions rather than prohibitions.
+
+### Item 1 — the go/no-go, and *** IT CHANGED THE PLAN ***
+
+`docs/proof/build20_graphql_api.py`: **56 passed, 0 failed.** Nothing in items 4 or 5 was written
+before it answered, and what it answered was not what the plan assumed.
+
+The plan's chain was: import a schema → ZAP generates operations → **the operations land in the
+Sites tree** → `ascan` attacks them there. *** THE MIDDLE LINK IS NOT THERE. *** ZAP sends the
+generated operations at the endpoint for real — the proof's origin log counts them every time —
+and never files a single one. So item 5 scans **CAPTURED** operations instead, which is both
+ZAP's own path and a better fit for the finding that started this: an operator holding report
+#61's request has the request, not the schema.
+
+That took four measurements to believe, and the wrong turns are worth recording because each was
+plausible and each was killed by a measurement rather than an argument:
+
+| hypothesis | how it died |
+|---|---|
+| `core/action/newSession` broke the tree insert | a **fresh daemon** that had never had a session reset behaved identically |
+| the ops attach only to a node that already exists | a node **primed through the proxy** gained the node and still gained no operations |
+| the insert is merely late | polled out to **60 seconds**; the count never moved |
+| it works and the counter is wrong | the counter was rewritten to look for the operation BODIES in the tree; still zero |
+
+**The CONTROL is what makes it actionable.** One GraphQL request through the **proxy** creates
+both `<endpoint>` and a synthetic `<endpoint>/query` child node, with messages on it. Captured
+traffic is what feeds the scanner; an import is coverage traffic. `SchemaImport.scannable` is
+therefore a field that is **always false** rather than a silence, and the panel says so out loud,
+because an import that answers `OK` looks exactly like one that gave the scanner new targets.
+
+#### Seven more findings from the same script, each one measured
+
+**1. `/UI/<component>/` IS THE ENUMERATION SURFACE, AND BUILD #19 NEEDED IT.** It lists every
+view and action of a ZAP component with its parameters and which are required. Build #19
+established the break API by probing names one at a time and reading error codes, because
+`core/view/apiSummary` is `bad_view` in 2.17.0 and `/JSON/<component>/view/` answers with ZAP's
+**welcome page**. `/UI/graphql/` answered the whole surface in one request: 11 views, 13 actions.
+That is worth more than this build — it is how any future go/no-go against a ZAP component
+should start.
+
+**2. THERE IS NO VIEW THAT READS AN IMPORTED SCHEMA BACK.** All 11 views are `option*` getters.
+"Read back what was imported — an OK is not a result" was a sub-item of this build and it cannot
+be satisfied through `graphql/` at all. Naming the absence is the deliverable.
+
+**3. `importUrl` CANNOT TELL YOU WHY IT FAILED — AND THIS IS THE ONE THAT SHAPED ITEM 4.** An
+endpoint that refuses introspection the way production does and a host that is not listening
+answer with the **same code and the same message** (`illegal_parameter`). The brief required "disabled / error / empty are three facts and
+the operator needs to know which"; ZAP cannot supply that, so `graphql_zap.probe_schema` asks the
+endpoint itself and classifies into **six**: `ok`, `disabled`, `empty`, `http_error`,
+`unparseable`, `unreachable`. Four of the six would be an empty list from a naive implementation,
+in the one place where the difference decides what to do next — `disabled` means reach for
+`clairvoyance`, `unreachable` means fix the network, `empty` means stop looking.
+
+**4. `importFile` ANSWERS `OK` AGAINST AN ENDPOINT THAT IS NOT LISTENING.** The OK means "I
+parsed your schema", not "I did anything with it". Anything reporting success from that return
+value would tell an operator a scan had run against a host that does not exist.
+
+**5. ZAP VALIDATES ITS OWN BOUNDS NOT AT ALL.** `setOptionMaxQueryDepth?Integer=-1` answers OK
+and reads back `-1`. A non-numeric depth *is* refused, so the TYPE is checked and the RANGE is
+not. HackPit therefore **warns and sends anyway** — the bound is the operator's to set — and
+reports `observed`, read back field by field, never the value that was requested.
+
+**6. `cycleDetectionMode` HAS EXACTLY ONE USABLE VALUE.** `QUICK` applies; `OFF`, `THOROUGH`,
+`PRECISE`, `NONE` and `COMPLETE` are all refused. A choice with one option is not a choice, so
+HackPit does not offer it. A refused enum leaves the previous value intact — checked, because a
+setter that corrupted on refusal would be worse than one that refused loudly.
+
+**7. `argsType=VARIABLES` GIVES EVERY ARGUMENT ITS OWN KEY** in `variables`; `INLINE` writes them
+into the query text. Both are reachable.
+
+#### The measurement item 5 exists for
+
+A **captured** GraphQL operation, no schema imported, `ascan` with `recurse=true`:
+
+* **1,630 requests**, 1,427 carrying a variables object
+* **588 mutated EXACTLY ONE argument** — and **0 mutated more than one**
+* all three arguments reached individually: `id` 200, `locale` 194, `token` 194
+
+And on ZAP's own generated operations in an earlier run, a **High SQL Injection** with
+`param='search.limit'` — where the JSON variable key is `search_limit`. **A dot where the JSON
+has an underscore**, so the name came from the add-on's own variant walking the parsed operation,
+not from a JSON path and not from the body as a whole. HackPit uses that exact `field.argument`
+spelling everywhere, so the names an operator is shown **before** a scan are the names they read
+in the findings **after** it.
+
+`recurse` is **always true** and that is not a preference: the operations hang off the synthetic
+`/query` child node, and the first measurement of a scan aimed at the endpoint alone sent 114
+requests and touched zero arguments.
+
+### *** THE CONTAINER IS NOT THE IMAGE, AGAIN — AND THIS ONE IS A CAVEAT ON EVERYTHING ABOVE ***
+
+The image ships **`graphql-alpha-0.29.0`** at `/usr/share/zaproxy/plugin/`. The container the
+proof was measured in ALSO had **0.33.0** in `/root/.ZAP/plugin/` — a runtime upgrade living in
+one container's writable layer that a rebuild would drop. They are not the same surface: 0.29.0
+has no `optionMaxCycleDetectionAlerts` at all and answers `bad_view`.
+
+It was found by looking at the screen. The panel rendered `max_cycle_detection_alerts: bad_view`
+against `hackpit-kali-sandbox`, having rendered `100` against `hackpit-engage-sandbox` — and
+**that exposed a defect in HackPit's own read-back**: ZAP's error shape `{"code": …}` and a
+view's success shape `{"MaxQueryDepth": "5"}` are both one-key dicts, so "take the first value"
+printed the error CODE into the panel as though it were the daemon's configuration.
+`_get_option` now returns `unreadable (<code>)`, because "we could not read this" and "this is
+empty" is the distinction this whole build keeps insisting on.
+
+**The proof now prints which add-on versions are visible before it asserts anything**, and says
+so loudly when it finds more than one. Build #14 was written against `zap-baseline.py`, which
+does not exist in Kali; this is the same trap wearing the version number instead of the name.
+
+**NOT FIXED IN THIS BUILD, deliberately:** the image is not upgraded to 0.33.0. That is a change
+to the scanner's own engine, the rebuild is ~45 minutes, and item 1's whole point is that a
+surface is not assumed — re-measuring the full proof against a new add-on is its own piece of
+work. The product is now *tolerant* of the difference rather than silently wrong about it, which
+is the part that had to land today. **It is the top follow-up.**
+
+### Item 2 — detection, by BODY SHAPE and never by path
+
+`cockpit/graphql.py` is **pure** — no I/O, no subprocess, no socket, asserted by AST — which is
+what lets the hermetic suite cover every claim without a daemon.
+
+*** `/graphql` IS A CONVENTION, NOT A RULE. *** Shopify serves GraphQL from
+`/admin/api/2024-01/graphql.json`; plenty of APIs mount it at `/api`; and a site can serve JSON
+that is not GraphQL from a path called `/graphql`. A path test would both miss real endpoints and
+invent fake ones, so the test is the envelope: a JSON object (or a batched **array** of them)
+carrying a string `query`, `?query=` on a GET that opens like a document, or
+`Content-Type: application/graphql` where the body IS the document. `path_hint` records that the
+path looks conventional, is reported to the operator, and **decides nothing**. Tests assert both
+directions with controls.
+
+**A DOCUMENT THAT WILL NOT PARSE IS STILL GRAPHQL.** The envelope decides. A malformed operation
+is precisely the request worth looking at, and dropping it from a GraphQL filter would hide it —
+so it comes back `is_graphql: true` with a `note` saying why it would not parse.
+
+The filter is **three-state** (`true` / `false` / unset means both), because a checkbox would
+have made "show me everything" unsayable. `graphql_seen` is reported over the same rows `scanned`
+counts, whether or not the GraphQL filter was used — an honest denominator or nothing: `0`
+beside `scanned: 1200` means we looked at 1,200 and none were GraphQL; `0` beside
+`truncated: true` means we stopped before we could say.
+
+Endpoint records gain `tech: "graphql"` and the `field.argument` names in `params`, because an
+endpoint whose `params` is empty reads as "nothing to attack here", which for a GraphQL POST is
+exactly wrong and is why the surface has been blind to it.
+
+### Item 3 — the repeater's round trip, and the operator's raw body WINS
+
+Query and variables are edited separately and serialised into a correct JSON body. Verified in a
+real browser: a `' OR 1=1--` typed into the `token` **variable** landed in the raw body correctly
+escaped, with no hand-escaping anywhere — report #61's exact case.
+
+* **A BODY THAT WILL NOT SPLIT COMES BACK RAW AND SAYS SO.** `parsed: false`, `raw_body` intact,
+  `note` explaining. A **batched** request in particular stays raw, because one query box would
+  drop every operation but the first.
+* **IF THE VARIABLES WILL NOT PARSE, NOTHING IS BUILT.** No guessing, no repair, no plausible
+  fallback — the error is shown and the body is left exactly as it was. A composer that quietly
+  fixed a body would put a request on the wire that nobody wrote.
+* *** THE RAW BODY WINS. *** The composer remembers what it last produced; the moment the raw
+  textarea holds something else, the structured editor **steps aside** rather than overwriting.
+  Same rule build #19 gave the cookie jar and for the same reason. Verified by typing into the
+  raw box and watching the editor close with the typed text intact.
+* The repeater stays **HUMAN-ONLY**. Both new routes are pure transforms; neither module imports
+  the repeater or references `.send`, asserted by AST.
+
+### Items 4 and 5 — recon, and a scan behind the existing four gates
+
+Item 4 is **reconnaissance**: probe, classify, list types/queries/mutations and their arguments,
+and hand ZAP a schema with bounds the operator set. Item 5 is the **ordinary active scanner**
+aimed at a captured operation — `scan_plan_for` computes a target and starts nothing, and the
+same four gates run unchanged. A test walks a GraphQL scan through the **approval**, **danger**
+and **target** gates in turn, naming each, because the gates run target-first and an off-lab URL
+would have made "an unapproved scan is refused" pass vacuously for the wrong reason.
+
+One approval buying many requests is the established position — `ffuf`, `nuclei` and the scanner
+are each one approval buying thousands, and this one measured 1,630.
+
+**NAMES, NEVER VALUES.** `GraphQLArgument` and `SchemaArgument` have no value field at all, and a
+test plants a secret in both an inline argument and a variable and asserts neither reaches any
+model, endpoint record or API response. Build #19's cookie-jar rule applied to a third secret:
+never handing a value over cannot regress, while redacting it afterwards depends on a redactor
+being correct forever.
+
+**WHERE IT COULD REFUSE, IT WARNS.** A schema probe against a host outside the named engagement's
+scope is **sent**, with the warning in `scope_note`. A nonsense bound is **applied**, with the
+warning attached. A test asserts the warner cannot raise and that `apply_bounds` has no `raise`
+in it at all, because "warn and continue" is a requirement of this build and a later "tightening"
+would be the regression.
+
+**KNOWN GAP, RECORDED RATHER THAN HALF-BUILT:** field-suggestion / clairvoyance enumeration when
+introspection is off. When the probe answers `disabled` the panel names `clairvoyance` as the
+tool for that job; HackPit does not do it itself.
+
+### Item 6 — the arsenal, and *** A SUPPLY-CHAIN TRAP AIMED AT AGENTS ***
+
+Four tools added (117 → 121): `graphw00f`, `graphql-cop`, `inql`, `clairvoyance`. All four were
+run against a live GraphQL endpoint inside the container before being catalogued; none is written
+down on the strength of a `--help`.
+
+*** TWO OF THE FOUR MUST NOT COME FROM PyPI. ***
+`pip install graphw00f` installs a package whose own summary reads **"Inert defensive-hold
+placeholder for an unclaimed PyPI name referenced by a public agent skill. NOT the real tool"**
+(Metano Labs, 0.0.1, one release). `pip install graphql-cop` installs **"Reserved name
+placeholder. No functionality."** Both real projects are `dolevf/*` on GitHub and neither
+publishes to PyPI. Somebody has parked those names **precisely because tooling guides name them
+and an agent will reach for pip** — so the obvious install line is the wrong one, quietly, with a
+package that installs, runs and finds nothing.
+
+The other two are genuine and are taken from PyPI: `inql` 4.0.5 (Doyensec) and `clairvoyance`
+2.5.5 (Nikita Stupin, project repo in its metadata). The provenance of all four was read before
+any of them was installed.
+
+Each entry carries what the tool actually does when you run it, not what its README says:
+`graphql-cop` exits with a bare `KeyError` on a server whose `{__typename}` does not answer with
+a root type name; `inql` has no `--generate-schema` flag because generation is the default;
+`clairvoyance` reports an **empty schema** rather than an error when suggestions are off, which
+means "this defence is complete", not "there is no schema". All four are classified **clean** in
+`test_arsenal_safety.py` alongside `sqlmap` and `dalfox`, which fire real injection payloads —
+marking a GraphQL fingerprinter dangerous while those two are not would be a red-confirm that
+fires on reading a page.
+
+### Item 7 — the screens were LOOKED AT, and it found five things nothing else could
+
+`tsc --noEmit`, `next build` and `eslint` all passed before, during and after every one of these.
+
+1. **THE GRAPHQL BADGE NEVER APPEARED AT ALL.** Detection reused `RepeaterRequest`, whose `url`
+   is `min_length=1` because a SEND needs somewhere to go — so pasting a captured body before
+   typing a URL, which is exactly when the badge is useful, answered **422**. Detection now has
+   its own model where every field is optional.
+2. **"edit as GraphQL" RENDERED AS PLAIN HEADING-SIZED TEXT.** An unclassed `<button>` inherited
+   the page's heading scale: a control that did not look like a control, sitting above the thing
+   it acts on. Same shape as `.hp-tn-start` not existing while nine primary buttons used it.
+3. **A DROPPED SPACE, CONFIRMED IN THE DOM RATHER THAN GUESSED.** The rendered text read
+   `not at all— it accepts`. Reading `textContent` in the browser proved the space was genuinely
+   absent, not an italic-glyph artifact — and the same check on a suspicious-looking `//` in a URL
+   input proved *that* one WAS just kerning. A sweep of every prose element on the page then found
+   **two more, both pre-existing build #19 copy**: `{"Result":"OK"}and lets` and
+   `settingand reads`. The codebase already uses `{" "}` at line ends for exactly this; those
+   three spots used a bare inline space before a line wrap instead. All three fixed.
+4. **THE PANEL WAS INVISIBLE WITH NO PROXY RUNNING.** Rendering nothing reads as "HackPit does not
+   do GraphQL", which is the belief this build exists to correct. It now renders and says why it
+   cannot act, matching the intercept section three cards up.
+5. **A SHARED CSS RULE OVER-MATCHED, AND THE RULE WAS FIXED RATHER THAN THE SCREEN.**
+   `.hp-tn-cardsub` carries `margin-top: -4px` to tuck a sub-line under its heading; after a form
+   or a list it pulls the paragraph onto the box edge. That shape occurs **21 times across 7
+   components**, so a per-screen workaround would have left the other 20 cramped — build #5's
+   lesson and the note in the frontend-class-vocabulary memory. A sibling rule now adds space only
+   where there is currently none, so it cannot break a layout that was already right; `:intruder`
+   was looked at afterwards to confirm it improved rather than harmed.
+
+Plus the `bad_view` read-back defect recorded above, which the screen also surfaced.
+
+### One safety predicate FIXED rather than narrowed
+
+`test_detection_safety.py` asserted "the cockpit package must not reference detection" with a
+**substring scan for the word `detection`**. It fired on `cockpit/graphql.py`, whose subject is
+GraphQL DETECTION, and on `max_cycle_detection_alerts`, which is ZAP's own option name.
+
+The standing rule when a guard trips on innocent code is to **fix the predicate, never widen the
+file set** — narrowing the glob would have left the guard weaker against the thing it exists to
+catch. The property it always meant to state is "the execution layer must not IMPORT OR CALL the
+detection package", not "must not contain nine particular letters". It is now an AST pass that
+catches `import detection`, `import detection.catalog`, `from detection import …`,
+`detection.resolve(…)`, `importlib.import_module("detection")` and `__import__("detection")` —
+strictly stronger about the real thing and blind to prose. The old positive control was a real
+file that reaches its siblings by RELATIVE import and would no longer have exercised it, so the
+control is now **eight planted violations** plus four innocents that must NOT fire.
+
+### Verification
+
+* `sh backend/run_safety_tests.sh` — **88 test files, every one exited 0** (86 + `test_graphql.py`
+  + `test_graphql_safety.py`).
+* Green again with **`docker` stripped from `PATH`** for every file this build touched, and the
+  strip was verified to bite first: `docker` gone, `git` still present (the KB recovery path needs
+  it). Each control is phrased **"not refused at THIS gate"**, never a bare "not refused".
+* `docs/proof/build20_graphql_api.py` — **56 passed, 0 failed**.
+* `docker/proof/browser_intercept_proof.sh` — still **25 passed, 0 failed**.
+* `npx tsc --noEmit` 0 · `npm run build` 0 · `npm run lint` unchanged at the accepted baseline of
+  **11 errors + 1 warning**.
+* `data/kb/entries.jsonl` still **2,747** — nothing was ingested — and
+  `backend/test_support/kb_fixture.jsonl` matches it.
+* Arsenal **117 → 121** tools, CRLF preserved (the reconFTW trap), inserted textually rather than
+  re-serialised: a `json.dumps` round trip re-expanded compact inline arrays elsewhere in the file
+  and turned a four-entry addition into a 281-line deletion.
+* Every screen this build touched — `:repeater`, `:proxy`, `:intruder` — driven in the **real
+  Chrome**, with what was found written up above.
+* **The image was rebuilt once, at the end** (`docker compose build engage-sandbox`, exit 0), and
+  all four tools are present AND run inside it: `graphw00f`, `graphql-cop`, `inql` and
+  `clairvoyance` each resolve under `/usr/local/bin` and each exits 0 on `--help`. The rebuild
+  also **confirms the caveat above from the other direction**: the fresh image carries
+  `graphql-alpha-0.29.0` and nothing in `/root/.ZAP/plugin/`, so the 0.33.0 the proof measured
+  really was a runtime artefact of one long-lived container and really would not survive a
+  recreate.
+* **A line-ending trap, caught before the commit.** Python's `write_text` translates `\n` to
+  `os.linesep` on Windows, so editing an LF file through it rewrote every line: `api.ts` alone
+  showed **8,672 changed lines** for a 208-line addition. The repo has `core.autocrlf=false` and
+  no `.gitattributes`, so each file's endings were restored to whatever HEAD holds and the new
+  files were matched to their neighbours. The staged diff went from 11,147 insertions to
+  **4,690 insertions / 27 deletions**, and the suite was re-run green afterwards. Same class as
+  the reconFTW `tools.json` CRLF note, in the opposite direction.
+
+### What was NOT done, and why
+
+* **The ZAP GraphQL add-on was not upgraded in the image.** See the caveat above; it is the top
+  follow-up, and the product is tolerant of the difference rather than wrong about it.
+* **No field-suggestion / clairvoyance enumeration in the product.** Recorded as a gap, with the
+  arsenal tool named at the exact moment the operator needs it.
+* **No new gate, confirm, blocklist or allow-list narrowing** — the build's own requirement.
+* **No GraphQL query generator.** ZAP already has one, and the brief said not to write a second.

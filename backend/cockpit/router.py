@@ -47,6 +47,8 @@ from pydantic import BaseModel, Field
 from . import allowlist, config, engagement, executor, jobs, loot, runstore
 from . import cookiejar as cookiejar_mod
 from . import exposure as exposure_mod
+from . import graphql as graphql_mod
+from . import graphql_zap as graphql_zap_mod
 from . import intercept as intercept_mod
 from . import intruder as intruder_mod
 from . import proposals as proposals_mod
@@ -671,6 +673,78 @@ def repeater_preview(req: repeater_mod.RepeaterRequest) -> dict[str, Any]:
     return {"url": url, "body": body, "shapes_applied": applied, "warnings": warnings}
 
 
+# --- GraphQL: the repeater's round trip (build #20 item 3) -------------------------- #
+# THE STRUCTURED EDITOR NEVER SENDS ANYTHING. Both routes are pure transforms over a body, and
+# neither reaches `repeater_mod.send` — the repeater stays HUMAN-ONLY and `test_repeater.py`'s
+# lock is untouched by this build.
+class GraphQLSplitRequest(BaseModel):
+    body: str = Field("", description="The captured request body, exactly as captured.")
+
+
+class GraphQLComposeRequest(BaseModel):
+    query: str = Field("", description="The operation text.")
+    variables: str = Field("{}", description="The variables object, as JSON text.")
+    operation_name: str = Field("", description="Omitted from the body entirely when blank.")
+
+
+@router.post("/graphql/split", response_model=graphql_mod.GraphQLEditorState)
+def graphql_split(req: GraphQLSplitRequest) -> graphql_mod.GraphQLEditorState:
+    """A captured GraphQL body -> query + variables + operationName, for editing.
+
+    *** THE MEASURED PAIN THIS CLOSES. *** The source evaluation on 2026-08-05 found report #61's
+    injection point is a GraphQL argument, reachable through the repeater only by hand-writing
+    quadruple-escaped JSON-in-JSON. This is the half that unpacks it.
+
+    *** A BODY THAT WILL NOT SPLIT COMES BACK RAW AND SAYS SO. *** `parsed: false` with
+    `raw_body` intact and `note` explaining. Nothing the operator captured is ever discarded and
+    nothing is silently rewritten — a batched request in particular stays raw, because one query
+    box would drop every operation but the first.
+    """
+    return graphql_mod.split_body(req.body)
+
+
+@router.post("/graphql/compose")
+def graphql_compose(req: GraphQLComposeRequest) -> dict[str, Any]:
+    """query + variables -> one correct JSON body. Composes; sends nothing.
+
+    *** IF THE VARIABLES WILL NOT PARSE, `body` IS EMPTY AND `error` SAYS WHY. *** It does not
+    guess, does not "repair" and does not fall back to something plausible: the caller must then
+    send what the operator typed. A composer that quietly fixed a body would put a request on the
+    wire that nobody wrote, which is the exact trap the raw-body-wins rule exists to prevent.
+    """
+    body, error = graphql_mod.build_body(req.query, req.variables, req.operation_name)
+    return {"body": body, "error": error, "ok": not error}
+
+
+class GraphQLDetectRequest(BaseModel):
+    """*** EVERY FIELD IS OPTIONAL, AND THE URL ESPECIALLY. ***
+
+    This deliberately does NOT reuse `RepeaterRequest`, whose `url` is `min_length=1` because a
+    SEND needs somewhere to go. Detection does not: an operator pastes a captured body into the
+    box before they have typed a URL, and that is exactly the moment the badge is useful. Reusing
+    the send model made the route answer 422 and the badge never appeared at all — found by
+    looking at the screen in a real browser, which is the only thing that could have found it,
+    because `tsc`, `next build` and `eslint` all passed.
+    """
+
+    method: str = Field("POST", description="Only `GET` changes anything: it enables ?query=.")
+    url: str = Field("", description="Optional. Used for `?query=` and for the path HINT.")
+    headers: list[repeater_mod.RepeaterHeader] = Field(default_factory=list)
+    body: str = ""
+
+
+@router.post("/graphql/detect", response_model=graphql_mod.GraphQLDetection)
+def graphql_detect(req: GraphQLDetectRequest) -> graphql_mod.GraphQLDetection:
+    """Is this request GraphQL, and what is in it? BY BODY SHAPE, never by path.
+
+    Takes a whole request rather than a bare body because the answer depends on the method, the
+    Content-Type and the URL together. `path_hint` reports that the path looks conventional and
+    decides nothing — see cockpit/graphql.py on why a path test both misses real endpoints and
+    invents fake ones.
+    """
+    return graphql_mod.detect(req.method, req.url, req.headers, req.body)
+
+
 @router.get("/repeater/cookies", response_model=list[cookiejar_mod.CookieAttachment])
 def repeater_cookies(
     session_id: str | None = Query(None, description="Whose jar to describe."),
@@ -1011,6 +1085,121 @@ def proxy_history_filter(
     before reaching the rows that would have matched. `truncated` is never silently true.
     """
     return proxy_mod.filter_history(container, port, filt, limit=limit, max_scan=max_scan)
+
+
+# --- GraphQL against a real endpoint (build #20 items 4 and 5) ---------------------- #
+class GraphQLProbeRequest(BaseModel):
+    container: str = Field(..., description="Sandbox container the request goes out from.")
+    url: str = Field(..., description="The GraphQL endpoint to ask.")
+    headers: list[repeater_mod.RepeaterHeader] = Field(
+        default_factory=list,
+        description="Sent as given — an Authorization header here is often the difference "
+        "between `disabled` and `ok`, because plenty of APIs allow introspection to staff only.",
+    )
+    engagement_id: str | None = None
+
+
+class GraphQLImportRequest(BaseModel):
+    container: str
+    port: int = proxy_mod.DEFAULT_PROXY_PORT
+    endpoint_url: str = Field(..., description="Where ZAP will send the operations it generates.")
+    schema_url: str = Field("", description="Fetch the SDL from here instead of introspecting.")
+    sdl_text: str = Field("", description="An SDL document, written into the sandbox for ZAP.")
+    bounds: graphql_zap_mod.GraphQLBounds | None = None
+    engagement_id: str | None = None
+
+
+@router.post("/proxy/graphql/probe", response_model=graphql_zap_mod.SchemaProbe)
+def graphql_probe(req: GraphQLProbeRequest) -> graphql_zap_mod.SchemaProbe:
+    """Ask an endpoint for its schema, and say WHICH KIND of answer came back.
+
+    *** `disabled`, `empty`, `unreachable`, `http_error` AND `unparseable` ARE FIVE DIFFERENT
+    FACTS AND FOUR OF THEM LOOK LIKE AN EMPTY LIST. *** Production commonly turns introspection
+    off, and "this API describes nothing" is a completely different instruction to an operator
+    than "this API will not describe itself" or "nothing is listening". Returning `[]` for all of
+    them is this repo's recurring silent empty in the one place where the difference decides what
+    to do next.
+
+    *** THIS EXISTS BECAUSE ZAP CANNOT ANSWER IT. *** `graphql/action/importUrl` returns
+    `illegal_parameter`, with an identical message, for introspection-disabled AND for a host
+    that is not listening — measured, `docs/proof/build20_graphql_api.py`.
+
+    UNGATED, in the repeater's position: one request to a URL a human typed and pressed. Where a
+    scope check could refuse it WARNS instead, in `scope_note`, and sends.
+
+    KNOWN GAP: when this answers `disabled` there is no field-suggestion / clairvoyance fallback
+    here. That is deliberate and recorded rather than half-built — the arsenal carries
+    `clairvoyance` for the job, as a gated command.
+    """
+    return graphql_zap_mod.probe_schema(
+        req.container, req.url, req.headers, engagement_id=req.engagement_id)
+
+
+@router.get("/proxy/graphql/bounds")
+def graphql_bounds(
+    container: str = Query(..., description="Sandbox container the proxy runs in."),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+) -> dict[str, Any]:
+    """What ZAP's query generator is set to RIGHT NOW. READ-ONLY, UNGATED, and necessary.
+
+    *** ZAP PERSISTS THESE OPTIONS ACROSS RESTARTS AND ACROSS SESSIONS. *** They are
+    configuration rather than session state, so last engagement's depth is this engagement's
+    depth unless somebody looks. This project has been bitten by exactly that twice —
+    `api.disablekey` persisting into `$HOME/.ZAP`, and the scan policy — so the panel reads the
+    daemon rather than showing a default it hopes is true.
+    """
+    return {
+        "container": container, "port": port,
+        "observed": graphql_zap_mod.observed_bounds(container, port),
+        "args_types": list(graphql_zap_mod.ARGS_TYPES),
+        "query_split_types": list(graphql_zap_mod.QUERY_SPLIT_TYPES),
+        "request_methods": list(graphql_zap_mod.REQUEST_METHODS),
+    }
+
+
+@router.post("/proxy/graphql/import", response_model=graphql_zap_mod.SchemaImport)
+def graphql_import(req: GraphQLImportRequest) -> graphql_zap_mod.SchemaImport:
+    """Hand ZAP a schema and let it exercise the endpoint with the operator's bounds.
+
+    *** WHAT THIS DOES NOT DO IS GIVE THE ACTIVE SCANNER TARGETS, AND THE RESPONSE SAYS SO. ***
+    `scannable` is always false. ZAP sends every operation it generates at the endpoint for real
+    — that is worth doing, it is coverage and the passive rules see every response — and it never
+    files them in the Sites tree, so nothing can be aimed at them afterwards. Measured four ways
+    in `docs/proof/build20_graphql_api.py`: fresh daemon, primed node, unprimed node, and out to
+    60 seconds in case the insert was late. To SCAN GraphQL, capture an operation through the
+    proxy and use `/proxy/graphql/scan-plan`.
+
+    NO NEW GATE. The bounds are read back field by field because ZAP answers OK for values it
+    then discards, and it accepts `maxQueryDepth=-1` without a word — so a nonsense bound gets a
+    warning and is sent anyway, and `observed` is what actually holds.
+    """
+    return graphql_zap_mod.import_schema(
+        req.container, req.port, req.endpoint_url,
+        schema_url=req.schema_url, sdl_text=req.sdl_text,
+        bounds=req.bounds, engagement_id=req.engagement_id)
+
+
+@router.post("/proxy/graphql/scan-plan", response_model=graphql_zap_mod.GraphQLScanPlan)
+def graphql_scan_plan(req: repeater_mod.RepeaterRequest) -> graphql_zap_mod.GraphQLScanPlan:
+    """What a scan of this captured operation would attack. PLANS ONLY — it starts nothing.
+
+    The operator sees the `field.argument` names BEFORE approving, and those are the names ZAP
+    puts in the alerts afterwards (measured: a High SQL Injection on `search.limit`, where the
+    JSON variable key was `search_limit` — a dot where the JSON has an underscore, so the name
+    comes from ZAP's own GraphQL variant walking the operation).
+
+    *** `recurse` MUST BE TRUE AND THAT IS NOT A PREFERENCE. *** ZAP files captured GraphQL under
+    a SYNTHETIC `<endpoint>/query` child node. A scan of the endpoint alone runs the path-based
+    rules and touches no argument at all — the first measurement of this sent 114 requests and
+    reached nothing.
+
+    To run it: hand `target_url` to `POST /cockpit/proxy/scan` with `recurse: true`. That is the
+    ORDINARY active scanner behind the EXISTING four gates. This build adds no gate: one approval
+    buying many requests is the established position (ffuf, nuclei and the scanner are each one
+    approval buying thousands; the proof measured 1,630 from this one).
+    """
+    return graphql_zap_mod.scan_plan_for(
+        type("E", (), {"request": req})())
 
 
 @router.get("/proxy/session-health")

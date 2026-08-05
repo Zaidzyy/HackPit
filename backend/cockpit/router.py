@@ -48,6 +48,7 @@ from . import allowlist, config, engagement, executor, jobs, loot, runstore
 from . import cookiejar as cookiejar_mod
 from . import exposure as exposure_mod
 from . import graphql as graphql_mod
+from . import graphql_enum as graphql_enum_mod
 from . import graphql_zap as graphql_zap_mod
 from . import intercept as intercept_mod
 from . import intruder as intruder_mod
@@ -1127,12 +1128,132 @@ def graphql_probe(req: GraphQLProbeRequest) -> graphql_zap_mod.SchemaProbe:
     UNGATED, in the repeater's position: one request to a URL a human typed and pressed. Where a
     scope check could refuse it WARNS instead, in `scope_note`, and sends.
 
-    KNOWN GAP: when this answers `disabled` there is no field-suggestion / clairvoyance fallback
-    here. That is deliberate and recorded rather than half-built — the arsenal carries
-    `clairvoyance` for the job, as a gated command.
+    WHEN THIS ANSWERS `disabled`, THAT IS NO LONGER THE END OF THE ROAD (build #21). Post the
+    same URL to `/proxy/graphql/enumerate` and the schema is mined out of the server's own
+    "Did you mean …?" errors. `clairvoyance` remains in the arsenal as the operator's independent
+    cross-check.
     """
     return graphql_zap_mod.probe_schema(
-        req.container, req.url, req.headers, engagement_id=req.engagement_id)
+        _recon_container(req.container), req.url, req.headers,
+        engagement_id=req.engagement_id)
+
+
+def _recon_container(container: str) -> str:
+    """The sandbox a GraphQL RECON request runs from, defaulting when none was named.
+
+    *** A RESTRICTION REMOVED, NOT ADDED. *** The panel takes its container from the RUNNING
+    PROXY, so before build #21 the schema probe was unreachable until a ZAP daemon existed --
+    even though a probe is one `docker exec ... curl` and needs no daemon at all. The moment it
+    is most useful is BEFORE you have set anything up. Enumeration inherits the same shape, and
+    the panel's own advice ("introspection is off -> enumerate it below") would have pointed at
+    a disabled button.
+
+    So a blank container means the engage sandbox rather than an error. Naming one still wins.
+    """
+    return container.strip() or (config.ENGAGE_SANDBOX_CONTAINER + "")  # MARKER_B21
+
+
+class GraphQLFingerprintRequest(BaseModel):
+    container: str
+    url: str
+    headers: list[repeater_mod.RepeaterHeader] = Field(default_factory=list)
+    engagement_id: str | None = None
+
+
+class GraphQLEnumerateRequest(BaseModel):
+    container: str
+    url: str
+    headers: list[repeater_mod.RepeaterHeader] = Field(default_factory=list)
+    engagement_id: str | None = None
+    wordlist: list[str] = Field(
+        default_factory=list,
+        description="Candidate names. Empty uses DEFAULT_WORDLIST, whose name and size are "
+                    "reported back so the run records WHICH list produced the schema.")
+    wordlist_name: str = ""
+    max_requests: int = Field(0, description="0 = the wordlist decides. NOT A GATE: when it is "
+                                             "reached the run stops, says so, and returns what "
+                                             "it found.")
+    max_seconds: int = 0
+    batch_size: int = Field(20, description="Candidate names per request.")
+
+
+@router.post("/proxy/graphql/fingerprint",
+             response_model=graphql_enum_mod.EngineFingerprint)
+def graphql_fingerprint(req: GraphQLFingerprintRequest) -> graphql_enum_mod.EngineFingerprint:
+    """WHICH GraphQL CORE is answering. Four requests, then a pure classification.
+
+    *** THE UNIT IS THE ERROR-PRODUCING CORE, NOT THE SERVER BRAND, *** because suggestion
+    wording is a property of the core: Apollo IS graphql-js, and Graphene sits on graphql-core.
+    Keying the parser lookup on brands would need every new brand added in two places forever.
+
+    *** `unknown` IS A REAL ANSWER. *** An engine that cannot be identified is NOT quietly
+    treated as Apollo — measured, graphql-js's parser against a graphql-core server returns zero
+    suggestions and reads exactly like a hardened endpoint. A confident wrong answer is worse
+    than an honest empty one here, because both end with "stop looking" and only one is true.
+
+    UNGATED, in the repeater's position. A scope miss WARNS and the probes are sent.
+    """
+    return graphql_zap_mod.fingerprint_engine(
+        _recon_container(req.container), req.url, req.headers,
+        engagement_id=req.engagement_id)
+
+
+@router.post("/proxy/graphql/enumerate",
+             response_model=graphql_enum_mod.EnumerationResult)
+def graphql_enumerate(req: GraphQLEnumerateRequest) -> graphql_enum_mod.EnumerationResult:
+    """Mine a schema out of "Did you mean …?" when introspection is off.
+
+    *** FIVE OUTCOMES, AND FOUR OF THEM WOULD BE AN EMPTY LIST FROM A NAIVE IMPLEMENTATION. ***
+    `productive` / `suggestions_disabled` (a working defence — stop) / `suggestions_unsupported`
+    (the core has no such feature at all, so there is nothing to switch on) / `engine_unknown`
+    (no parser was chosen, deliberately) / `failed`. Build #20 found ZAP answering the same code
+    for introspection-disabled and a dead host and classified around it; handing back `[]` for
+    all five here would be that same defect in a new place.
+
+    *** THE BOUNDS ARE DECLARED PARAMETERS, NOT A GATE. *** Enumeration is inherently hundreds to
+    thousands of requests, so the run states its size before it starts and reports it back. When
+    a bound is reached the run STOPS, names the bound that stopped it, and RETURNS WHAT IT FOUND
+    — a partial schema is a result, and discarding it would punish an operator for setting a
+    bound. This is not the scanner-wide request cap that was declined; it is one feature
+    describing itself. Nothing is refused and stop stays ungated.
+
+    UNGATED, one approval buying many requests — the established position for `ffuf`, `nuclei`
+    and the active scanner alike.
+    """
+    bounds = graphql_enum_mod.EnumerationBounds(
+        wordlist_name=req.wordlist_name or ("custom" if req.wordlist else "hackpit-default"),
+        wordlist_size=len(req.wordlist) or len(graphql_enum_mod.DEFAULT_WORDLIST),
+        max_requests=req.max_requests,
+        max_seconds=req.max_seconds,
+        batch_size=req.batch_size,
+    )
+    return graphql_zap_mod.enumerate_schema(
+        _recon_container(req.container), req.url,
+        list(req.wordlist) or list(graphql_enum_mod.DEFAULT_WORDLIST),
+        bounds=bounds, headers=req.headers, engagement_id=req.engagement_id)
+
+
+class GraphQLComposeRecoveredRequest(BaseModel):
+    result: graphql_enum_mod.EnumerationResult
+    field_name: str
+
+
+@router.post("/proxy/graphql/compose-recovered",
+             response_model=graphql_enum_mod.ComposedOperation)
+def graphql_compose_recovered(
+    req: GraphQLComposeRecoveredRequest,
+) -> graphql_enum_mod.ComposedOperation:
+    """A recovered field -> an operation the repeater can send. PURE, sends nothing.
+
+    Recovered arguments become VARIABLES, one key each, because build #20 measured that this is
+    what lets the active scanner reach one argument at a time — the chain report #61 needed.
+    Argument VALUES are left blank: nothing here knows what they should be, and inventing one
+    would put a request on the wire nobody wrote.
+
+    `scannable` is ALWAYS false and says why: ZAP files nothing it generates into the Sites tree,
+    so a composed operation becomes scannable by being SENT THROUGH THE PROXY and captured.
+    """
+    return graphql_enum_mod.compose_from_recovered(req.result, req.field_name)
 
 
 @router.get("/proxy/graphql/bounds")

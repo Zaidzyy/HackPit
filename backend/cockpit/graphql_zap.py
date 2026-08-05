@@ -52,9 +52,12 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+from . import graphql_enum
 
 #: The introspection document. Deliberately the ONE ZAP itself sends (measured on the wire in
 #: docs/proof/build20_graphql_api.py: `query IntrospectionQuery { __schema { ... } }`), trimmed to
@@ -704,3 +707,151 @@ def scan_plan_for(exchange: Any) -> GraphQLScanPlan:
         out.note += (f"{len(out.argument_names)} argument(s) reachable individually; ZAP will "
                      "name them exactly as listed.")
     return out
+
+
+# =============================================================================================
+# BUILD #21 -- FIELD-SUGGESTION ENUMERATION. The runner; the parsing is graphql_enum.py (pure).
+# =============================================================================================
+#
+# WHY THE RUNNER IS HERE AND NOT IN ITS OWN MODULE: it reuses :func:`_curl_json` unchanged. The
+# brief said reuse build #19's plumbing rather than growing a second HTTP path, and a second path
+# is not just duplicated code -- it is a second place for the "body over stdin, never an argv"
+# rule to be forgotten, and a GraphQL request routinely carries an Authorization header.
+#
+# *** UNGATED, LIKE THE PROBE, AND FOR THE SAME REASON. *** These are requests to a URL a human
+# typed and pressed. Where a scope check could refuse it WARNS and sends. The BOUNDS below are
+# not a gate: they are the run describing its own size, the way crawl depth and scan policy do.
+# When a bound is reached the run STOPS and says which bound stopped it, and everything found so
+# far is returned -- discarding a partial schema would punish an operator for setting a bound.
+
+
+def fingerprint_engine(container: str, url: str, headers: Any = (),
+                       engagement_id: str | None = None,
+                       timeout: int = 25) -> graphql_enum.EngineFingerprint:
+    """Which core formats this endpoint's errors. Four requests, then a PURE classification.
+
+    Native rather than driving ``graphw00f``, and the choice is deliberate:
+
+    * the enumerator and the fingerprint must travel the SAME HTTP path, or the thing that
+      chooses the parser and the thing that uses it can disagree about proxying, headers and
+      TLS. ``graphw00f`` is a subprocess with its own client.
+    * ``graphw00f`` answers with a BRAND (`apollo`, `mercurius`, `graphql_yoga`); the parser
+      lookup needs a CORE. Driving the tool would not remove the brand->core table, it would add
+      a subprocess to it.
+    * fingerprinting is recon in the repeater's position -- one request to a named URL, no gate.
+      ``graphw00f`` is a gated arsenal command, and routing an ungated feature through a gated
+      tool would either add friction or route around the gate.
+
+    ``graphw00f`` stays in the arsenal as the operator's INDEPENDENT cross-check, which is worth
+    more than a shared implementation: two implementations that agree is evidence, and
+    ``docs/proof/build21_graphql_enum.py`` runs it against the same endpoints for exactly that.
+    """
+    pairs = _header_pairs(headers)
+    responses: dict[str, str] = {}
+    for name, document in graphql_enum.FINGERPRINT_PROBES:
+        _status, text, transport = _curl_json(
+            container, url, json.dumps({"query": document}), pairs, timeout)
+        responses[name] = "" if transport else text
+    out = graphql_enum.classify_fingerprint(responses)
+    scope = _scope_warning(url, engagement_id)
+    if scope:
+        # WARN AND CONTINUE. The probes were already sent; saying so afterwards is honest, and
+        # refusing to look at an endpoint the operator named would be a prohibition the tooling
+        # invented. Same position as `probe_schema`.
+        out.note = f"{out.note} [{scope}]"
+    return out
+
+
+def _header_pairs(headers: Any) -> list[tuple[str, str]]:
+    """The `(name, value)` list `_curl_json` wants, from whatever shape the caller had."""
+    pairs: list[tuple[str, str]] = []
+    for h in headers or ():
+        name = getattr(h, "name", None)
+        value = getattr(h, "value", None)
+        if name is None and isinstance(h, (tuple, list)) and len(h) == 2:
+            name, value = h
+        if str(name or "").strip():
+            pairs.append((str(name).strip(), str(value or "")))
+    return pairs
+
+
+def enumerate_schema(container: str, url: str, wordlist: list[str],
+                     bounds: graphql_enum.EnumerationBounds | None = None,
+                     headers: Any = (), engagement_id: str | None = None,
+                     fingerprint: graphql_enum.EngineFingerprint | None = None,
+                     timeout: int = 25) -> graphql_enum.EnumerationResult:
+    """Mine a schema out of the server's own error messages.
+
+    *** IT REFUSES TO GUESS THE PARSER, AND THAT IS NOT A GATE. *** When the core is unknown the
+    run does not send a wordlist, because running graphql-js's parser against graphql-core
+    returns zero suggestions and is INDISTINGUISHABLE from a hardened server. The operator gets
+    `engine_unknown` and the reason, which is a true answer; three thousand requests producing a
+    confident empty schema is a false one. Nothing is forbidden -- the operator may name the
+    engine and run again.
+    """
+    bounds = bounds or graphql_enum.EnumerationBounds()
+    out = graphql_enum.EnumerationResult(url=url, bounds=bounds)
+    out.scope_note = _scope_warning(url, engagement_id)
+
+    out.fingerprint = fingerprint or fingerprint_engine(
+        container, url, headers, engagement_id, timeout)
+    dialect = out.fingerprint.dialect
+    if not out.fingerprint.suggests or not dialect:
+        out.status, out.note = graphql_enum.status_for(out.fingerprint, 0, 0, 0)
+        return out
+
+    pairs = _header_pairs(headers)
+    names = [n for n in wordlist if n]
+    bounds.wordlist_size = bounds.wordlist_size or len(names)
+    batch = max(1, int(bounds.batch_size or 1))
+    started = time.monotonic()
+
+    for start in range(0, len(names), batch):
+        if bounds.max_requests and out.requests_sent >= bounds.max_requests:
+            out.stopped_early = True
+            out.stop_reason = f"max_requests={bounds.max_requests} reached"
+            break
+        if bounds.max_seconds and (time.monotonic() - started) >= bounds.max_seconds:
+            out.stopped_early = True
+            out.stop_reason = f"max_seconds={bounds.max_seconds} reached"
+            break
+
+        document = graphql_enum.build_probe_document(names[start:start + batch])
+        if not document:
+            continue
+        _status, text, transport = _curl_json(
+            container, url, json.dumps({"query": document}), pairs, timeout)
+        out.requests_sent += 1
+        if transport:
+            continue
+
+        for message in graphql_enum.error_messages(text):
+            kind = graphql_enum.classify_message(message, dialect)
+            if kind == "not_this_error":
+                # Could still be an ARGUMENT error, which is a different sentence and the one
+                # report #61 actually needed -- the injection point there was an argument.
+                graphql_enum.merge_suggestions(
+                    out.arguments, graphql_enum.parse_argument_suggestions(message, dialect))
+                continue
+            out.unknown_field_errors += 1
+            found = graphql_enum.parse_suggestions(message, dialect)
+            if len(found) == graphql_enum.SUGGESTION_CAP:
+                # The server's own cap, not the end of the list. Counted rather than assumed
+                # complete: an enumerator that read five as "all of them" would stop early and
+                # report a schema it had not finished reading.
+                out.truncated_suggestion_lists += 1
+            graphql_enum.merge_suggestions(out.fields, found)
+
+    out.seconds_elapsed = round(time.monotonic() - started, 2)
+    out.status, out.note = graphql_enum.status_for(
+        out.fingerprint, out.unknown_field_errors, len(out.fields), out.requests_sent)
+    if out.stopped_early:
+        out.note = f"{out.note}; STOPPED EARLY: {out.stop_reason}"
+    return out
+
+
+# The response-body parser lives in `graphql_enum.error_messages` -- PURE, shared by the
+# fingerprint and the enumeration loop. One implementation on purpose: an earlier draft had the
+# fingerprint matching RAW body text while the loop matched parsed messages, and because JSON
+# escapes double quotes and leaves single quotes alone, that read every graphql-js server as
+# `unknown` while every graphql-core server worked. Two parsers is how that divergence lived.

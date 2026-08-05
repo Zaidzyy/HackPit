@@ -423,6 +423,23 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#one-safety-predicate-fixed-rather-than-narrowed">One safety predicate FIXED rather than narrowed</a></li>
 <li><a href="#verification_9">Verification</a></li>
 <li><a href="#what-was-not-done-and-why_1">What was NOT done, and why</a></li>
+<li><a href="#build-21-pin-the-engine-then-read-a-schema-nobody-will-give-you-2026-08-05">Build #21 — pin the engine, then read a schema nobody will give you (2026-08-05)</a><ul>
+<li><a href="#item-1-the-pin-and-the-assertion-caught-a-broken-pin-on-its-first-run">Item 1 — the pin, and *** THE ASSERTION CAUGHT A BROKEN PIN ON ITS FIRST RUN ***</a><ul>
+<li><a href="#the-runtime-half-measured-in-both-directions">The runtime half, measured in both directions</a></li>
+<li><a href="#the-re-measurement-the-560-baseline-reproduced-exactly">The re-measurement — *** THE 56/0 BASELINE REPRODUCED EXACTLY ***</a></li>
+</ul>
+</li>
+<li><a href="#item-2-engine-fingerprinting-and-the-unit-is-the-core">Item 2 — engine fingerprinting, and the unit is the CORE</a></li>
+<li><a href="#item-3-field-suggestion-enumeration-and-the-measurement-that-shaped-it">Item 3 — field-suggestion enumeration, and the measurement that shaped it</a><ul>
+<li><a href="#five-outcomes-and-four-of-them-are-an-empty-list-from-a-naive-implementation">FIVE outcomes, and four of them are an empty list from a naive implementation</a></li>
+</ul>
+</li>
+<li><a href="#item-4-what-the-recovered-schema-is-for">Item 4 — what the recovered schema is FOR</a></li>
+<li><a href="#item-5-the-screens-and-looking-at-them-found-two-things-nothing-else-could">Item 5 — the screens, and looking at them found two things nothing else could</a></li>
+<li><a href="#verification_10">Verification</a></li>
+<li><a href="#what-was-not-done-and-why_2">What was NOT done, and why</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -4738,6 +4755,239 @@ control is now <strong>eight planted violations</strong> plus four innocents tha
   arsenal tool named at the exact moment the operator needs it.</li>
 <li><strong>No new gate, confirm, blocklist or allow-list narrowing</strong> — the build's own requirement.</li>
 <li><strong>No GraphQL query generator.</strong> ZAP already has one, and the brief said not to write a second.</li>
+</ul>
+<h2 id="build-21-pin-the-engine-then-read-a-schema-nobody-will-give-you-2026-08-05">Build #21 — pin the engine, then read a schema nobody will give you (2026-08-05)</h2>
+<p>Build #20 closed with three leftovers that were <strong>one chain</strong>, because all three were blocked on
+the same rebuild, plus the follow-on it named: field-suggestion enumeration. All four landed.</p>
+<p><strong>The build adds no gate, no confirm, no blocklist and no allow-list narrowing</strong> — not in the
+product and not in a proof script. The one place it changes what an operator can reach, it
+<strong>removes</strong> a restriction (see item 5). The enumeration bounds are a declared parameter, not a
+gate: reaching one stops the run, names itself, and hands back everything found.</p>
+<h3 id="item-1-the-pin-and-the-assertion-caught-a-broken-pin-on-its-first-run">Item 1 — the pin, and *** THE ASSERTION CAUGHT A BROKEN PIN ON ITS FIRST RUN ***</h3>
+<p>The sequence was load-bearing and was not reordered: pin → assert at build time which file ZAP
+loads → rebuild → recreate → re-run build #20's proof.</p>
+<p>*** AN ADD-ON VERSION IS A DEPENDENCY CLOSURE, NOT A FILE. *** Dropping
+<code>graphql-alpha-0.33.0.zap</code> into the system plugin directory and deleting 0.29.0 produced a ZAP
+with <strong>no GraphQL add-on loaded at all</strong> — not an error, not a warning, not a line in the log:
+simply absent from <code>installedAddons</code>. 0.33.0's manifest requires <code>commonlib &gt;= 1.40.0 &amp; &lt; 2.0.0</code>
+and the image shipped <strong>1.39.0</strong>, so ZAP declined it in silence. The container's 0.33.0 had only
+ever worked because the same auto-update pass had also lifted commonlib to 1.43.0 — which is the
+concrete reason the drift is <strong>33 add-ons wide, not one</strong>. So the pin is a SET: graphql 0.33.0 +
+commonlib 1.43.0, the closure measured (commonlib 1.43.0 declares no dependencies of its own)
+rather than assumed. 1.43.0 specifically, because it is the version build #20's 56/0 was actually
+measured against — which is what makes re-running that proof a regression test rather than a fresh
+measurement.</p>
+<p><strong>An <code>ls</code>-based check would have shipped that image green, with a GraphQL scanner that had
+silently ceased to exist.</strong> The assertion is <code>autoupdate/view/installedAddons</code>, which reports the
+<code>file</code> ZAP <strong>resolved and loaded</strong> — the only question a shadowing directory cannot change.</p>
+<p>Two more traps paid for in the same layer:</p>
+<ul>
+<li>*** ZAP REPORTS <code>/usr/share/zaproxy/./plugin/graphql-alpha-0.33.0.zap</code>. *** With a <code>./</code> in the
+  middle, because the value is assembled from its install root plus a relative directory and never
+  normalised. A literal <code>==</code> against the install path fails on a <strong>perfectly correct pin</strong>.
+  Measured before it could be mistaken for a real failure; the checker compares paths, not strings.</li>
+<li><strong>Pinning one add-on can unload another.</strong> Bumping <code>commonlib</code> moves a version every other
+  add-on depends on. So the checker also asserts that <strong>every <code>.zap</code> present is loaded</strong> — an
+  invariant measured on the pre-change image (48 files, 48 loaded) rather than invented.</li>
+</ul>
+<p><code>docker/zap-addon-check.py</code> ships into the image as <code>zap-addon-check</code> and has a runtime mode, so
+an operator can ask a <strong>live</strong> daemon what it is really running instead of reading the Dockerfile
+and assuming.</p>
+<h4 id="the-runtime-half-measured-in-both-directions">The runtime half, measured in both directions</h4>
+<p>The image pin alone is not enough, and this was measured rather than argued:</p>
+<table>
+<thead>
+<tr>
+<th>daemon started</th>
+<th>result after ~60s</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>without</strong> <code>start.checkForUpdates=false</code></td>
+<td><strong>29 add-ons auto-downloaded</strong> into <code>/root/.ZAP/plugin/</code></td>
+</tr>
+<tr>
+<td><strong>with</strong> it, on a clean ZAP home</td>
+<td><strong>0 downloaded</strong>; all 48 loaded from the image</td>
+</tr>
+</tbody>
+</table>
+<p>So <code>server_argv_for</code> now states <code>-config start.checkForUpdates=false</code> on every start, for exactly
+the reason <code>api.disablekey=false</code> is stated: ZAP persists <code>-config</code> values, so an unstated key
+inherits whatever the last run wrote.</p>
+<p><strong>A precise refinement, because the first reading was too kind to the pin:</strong> in that 29-add-on
+sweep, graphql and commonlib were <em>not</em> replaced — because the pinned versions are the newest
+published, so there was nothing to fetch. <strong>The pin held today for a reason that expires the day
+0.34.0 ships.</strong> The image pin is what makes the version correct now; the flag is what keeps it
+correct later. Neither half is redundant.</p>
+<p><strong>What it costs, stated rather than glossed:</strong> add-on and scan-rule updates now arrive by
+rebuilding. Nothing is refused — <code>zaproxy -addoninstall</code>, ZAP's own UI and a daemon started
+without the flag all still update. The default simply stopped being "silently whatever is newest".
+This is the contract nuclei-templates already has in this image.</p>
+<h4 id="the-re-measurement-the-560-baseline-reproduced-exactly">The re-measurement — *** THE 56/0 BASELINE REPRODUCED EXACTLY ***</h4>
+<p><code>docs/proof/build20_graphql_api.py</code> re-run against the <strong>image-produced</strong> add-on: <strong>56 passed, 0
+failed</strong>, and this time the proof reports exactly one graphql add-on visible instead of warning
+that more than one is present. <strong>No divergence to report</strong> — the finding to record is the absence
+of one.</p>
+<p>Re-checked specifically, because the plan asked: <strong>ZAP still files none of its generated
+operations in the Sites tree</strong> (4 reached the origin, 0 in the tree). The scan path is unchanged
+and the captured-operation route stays. The scanner reached all three arguments individually —
+604 requests mutated exactly one argument, 0 mutated more than one, across 1,671 requests. Same
+shape, same conclusion; the small deltas from build #20's 1,630/588 are ordinary scanner variance.</p>
+<p><strong>Leftover #2 closed for free:</strong> the recreate put build #20's four GraphQL tools in the running
+container — <code>graphw00f</code>, <code>graphql-cop</code>, <code>inql</code> and <code>clairvoyance</code> all resolve and exit 0.</p>
+<h3 id="item-2-engine-fingerprinting-and-the-unit-is-the-core">Item 2 — engine fingerprinting, and the unit is the CORE</h3>
+<p>*** "APOLLO, graphql-js, HASURA, GRAPHENE" IS FOUR BRANDS THAT ARE NOT FOUR IMPLEMENTATIONS. ***
+Apollo <strong>is</strong> graphql-js; Graphene sits on graphql-core, the Python port of graphql-js. Grouping
+by brand produces parsers that duplicate each other in some places and miss entirely in others, so
+the lookup is keyed on the core that <strong>formats the error</strong>, and brands map onto cores.</p>
+<p><strong>DECIDED AND RECORDED: HackPit fingerprints NATIVELY rather than driving <code>graphw00f</code>.</strong> Three
+reasons, and the choice was not left implicit:</p>
+<ol>
+<li>the enumerator and the fingerprint must travel the <strong>same HTTP path</strong>, or the thing that picks
+   the parser and the thing that uses it can disagree about proxying, headers and TLS. <code>graphw00f</code>
+   is a subprocess with its own client, and the brief said not to grow a second HTTP path.</li>
+<li><code>graphw00f</code> answers with a <strong>brand</strong>; the parser lookup needs a <strong>core</strong>. Driving it would not
+   remove the brand-to-core table, it would add a subprocess to it.</li>
+<li>fingerprinting is recon in the repeater's position — ungated, one request to a named URL.
+   <code>graphw00f</code> is a gated arsenal command; routing an ungated feature through it would either add
+   friction or route around the gate.</li>
+</ol>
+<p><code>graphw00f</code> stays as the operator's <strong>independent cross-check</strong>, which is worth more than a shared
+implementation — two implementations agreeing is evidence — and the proof runs it against the same
+endpoints for exactly that. Its 36-engine list is the reference set the brand table is drawn from.</p>
+<p>*** <code>unknown</code> IS A REAL ANSWER AND IS NEVER QUIETLY UPGRADED TO APOLLO. *** An unidentified engine
+spends <strong>no wordlist at all</strong>, because the wrong parser returns zero and reads exactly like a
+hardened server. A confident wrong answer is worse than an honest empty one here: both end with
+"stop looking", and only one of them is true.</p>
+<h3 id="item-3-field-suggestion-enumeration-and-the-measurement-that-shaped-it">Item 3 — field-suggestion enumeration, and the measurement that shaped it</h3>
+<p>*** graphql-core IS NOT BYTE-IDENTICAL TO graphql-js. *** Measured by running both:</p>
+<pre><code>graphql-js    Cannot query field "usr" on type "Query". Did you mean "user" or "users"?
+graphql-core  Cannot query field 'usr' on type 'Query'. Did you mean 'user' or 'users'?
+</code></pre>
+<p>Identical grammar, <strong>different quote character</strong>. So the parser everybody writes first — the one
+every article quotes — returns <strong>zero</strong> against Graphene, Strawberry and Ariadne. Silently. It
+looks exactly like a server with suggestions switched off. That is the "one regex over all of
+them" trap this project has been burned by repeatedly, and it is why the dialect is chosen from a
+measured probe rather than assumed.</p>
+<p>The same measurement in the other direction stopped three parsers being written for nothing:
+<strong>graphql-php and gqlparser (gqlgen) ARE byte-identical to graphql-js</strong>, read from their own
+source. They share the parser and each still carries its own fixture and its own test, so a future
+divergence fails a test instead of quietly returning nothing.</p>
+<p>*** graphql-ruby IS THE HIGHEST-VALUE TARGET AND THE ONE LEAST LIKE THE REST. *** GitHub, Shopify
+and GitLab all run it, and it shares <strong>not one delimiter</strong> with graphql-js:</p>
+<pre><code>graphql-ruby  Field 'usr' doesn't exist on type 'Query' (Did you mean `user` or `users`?)
+</code></pre>
+<p>Backticks, inside parentheses, after a different sentence, with the field in single quotes — and
+<strong>no Oxford comma</strong> before <code>or</code> where graphql-js has one. Four independent differences. A parser
+that split the clause on a comma-space would yield a name with <code>or</code> glued to it on one of them and
+be right on the other; pulling <strong>quoted runs</strong> out instead cannot straddle a separator whichever
+separator it is.</p>
+<p>*** SOME CORES NEVER SUGGEST AT ALL, AND THAT IS NOT "SWITCHED OFF". *** graphql-java's
+<code>FieldsOnCorrectType.unknownField</code> has no suggestion clause in its source; neither does Hasura's.
+Telling an operator "suggestions are disabled" there implies a setting somebody could have left
+on. There is nothing to enable. So it is its own outcome, and <strong>not one wordlist request is spent</strong>.</p>
+<p>Provenance is recorded per dialect, because "I am fairly sure Ruby uses backticks" is exactly how
+a parser that finds nothing gets shipped green: graphql-js and graphql-core were <strong>RUN</strong>
+(graphql 16.x via node; graphql-core 3.2.11 via python); graphql-php, gqlparser, graphql-ruby and
+graphql-java were read from the line of source that formats the message.</p>
+<h4 id="five-outcomes-and-four-of-them-are-an-empty-list-from-a-naive-implementation">FIVE outcomes, and four of them are an empty list from a naive implementation</h4>
+<p><code>productive</code> / <code>suggestions_disabled</code> (a <strong>working defence</strong> — stop) / <code>suggestions_unsupported</code>
+(the core has no such feature) / <code>engine_unknown</code> (no parser chosen, deliberately) / <code>failed</code>.
+Build #20 found ZAP answering the same code for introspection-disabled and a dead host and
+classified around it; returning an empty list for all five here would be that defect in a new
+place — in the one place where <code>suggestions_disabled</code> means <em>their defence worked</em> and <code>failed</code>
+means <em>try again</em>.</p>
+<p><strong>The denominator is reported</strong> so a zero is readable: <code>fields: 0</code> beside
+<code>unknown_field_errors: 900</code> is a server that answered everything and helped with nothing;
+<code>fields: 0</code> beside <code>unknown_field_errors: 0</code> is a server that never understood us.</p>
+<p><strong>A five-suggestion response is recorded as CUT OFF, not complete.</strong> Both measured cores cap at
+five, so an enumerator treating five as "all of them" would stop early and report a schema it had
+not finished reading.</p>
+<p>*** A REAL BUG, CAUGHT BY A FIXTURE. *** The fingerprint reads raw response text, but on the wire
+the message arrives inside JSON, so graphql-js's quotes are <strong>escaped</strong> while graphql-core's
+single quotes are not. Matching raw text identified every Python server correctly and read every
+Apollo, Yoga and Mercurius server as <code>unknown</code> — asymmetric, silent, and pointing the <strong>wrong
+way</strong>: it would have looked like the graphql-js servers were the hardened ones. Fixed by parsing
+the envelope first, in <strong>one</strong> shared function, because two parsers is how that divergence lived.</p>
+<p><strong>The bounds are a declared parameter, not a gate</strong>, and that is asserted structurally: the pure
+module contains no <code>raise</code> at all, a zero bound means unbounded rather than refused, and a run
+stopped by a bound keeps its results — discarding a partial schema would punish an operator for
+setting a bound. This is <strong>not</strong> the scanner-wide request cap that was declined; it is one feature
+describing its own size, like crawl depth and scan policy.</p>
+<h3 id="item-4-what-the-recovered-schema-is-for">Item 4 — what the recovered schema is FOR</h3>
+<ul>
+<li><strong>The repeater.</strong> A recovered field composes into an operation with its recovered arguments as
+  <strong>variables, one key each</strong> — which is what lets the scanner reach one argument at a time, the
+  chain report #61 needed: no introspection, enumerate, aim at an argument. <strong>No values are
+  invented</strong>: placeholders are empty, because nothing here knows what they should be and inventing
+  one would put a request on the wire nobody wrote.</li>
+<li><strong>The scan path.</strong> <code>scannable</code> is <strong>always false</strong> and says why: ZAP files nothing it generates
+  into the Sites tree, so a composed operation becomes scannable by being <strong>sent through the
+  proxy</strong> and captured. Same shape as <code>SchemaImport.scannable</code>, and for the same measured reason.</li>
+<li><strong>Provenance, because a report that blurs it is dishonest.</strong> The engagement record says the
+  schema was <strong>MINED, not introspected</strong>, with the engine core, the wordlist and its size, the
+  request count, and the method's own limit stated where a reader would otherwise assume
+  completeness: <em>only names close enough to a wordlist entry can ever surface, so a field's
+  absence is not evidence it does not exist.</em> A truncated or early-stopped run says so too.</li>
+</ul>
+<p><strong>Names, never values</strong> — held for a third path. No model on it has a value field, and a test
+plants a secret and asserts it reaches no record, no composed body and no API response.</p>
+<h3 id="item-5-the-screens-and-looking-at-them-found-two-things-nothing-else-could">Item 5 — the screens, and looking at them found two things nothing else could</h3>
+<p><code>tsc --noEmit</code> 0, <code>next build</code> 0, <code>npm run lint</code> unchanged at <strong>11 errors + 1 warning</strong>, before
+and after every one of these.</p>
+<ol>
+<li>*** AN INVENTED CSS CLASS. *** Two new buttons carried <code>hp-gql-go</code>, which <strong>does not exist</strong>.
+   The established vocabulary trap, and <code>tsc</code>/<code>build</code>/<code>eslint</code> cannot see it. Fixed by matching
+   the existing bare button inside <code>hp-tn-form</code>, as the adjacent "probe schema" button does.
+   <code>test_css_vocabulary.py</code> — the guard built for exactly this — passes.</li>
+<li>*** A DROPPED SPACE, RENDERED AS <code>1response(s)</code>. *** The JSX had a space between the count and
+   the text and it still rendered without one. Fixed with the codebase's explicit space idiom
+   rather than relying on JSX whitespace rules, and re-verified in the DOM: <code>1 response(s)</code>.
+   Build #20 found three of these; this is the fourth.</li>
+<li>A doubled terminator in the new copy, spotted in the rendered text and removed.</li>
+</ol>
+<p><strong>A RESTRICTION REMOVED.</strong> The panel takes its container from the <strong>running proxy</strong>, so the schema
+probe was unreachable until a ZAP daemon existed — even though a probe is one <code>docker exec</code> plus
+<code>curl</code> and needs no daemon at all, and the moment it is most useful is <em>before</em> anything is set
+up. Enumeration inherited the same shape, and the panel's own advice ("introspection is off, so
+enumerate it below") would have pointed at a disabled button. A blank container now means the
+engage sandbox. Naming one still wins.</p>
+<p>Driven in the real Chrome end to end against a live multi-dialect origin: <code>productive</code> with 10
+names recovered — <code>adminPanel</code>, <code>sessionToken</code>, <code>auditLog</code> among them — the bounds line reading
+back what applied, and the <strong>positive control</strong> flipping the same panel to <code>suggestions_disabled</code>
+with an amber chip, zero fields, and copy that reads <em>"a working defence, not an empty schema"</em>.</p>
+<h3 id="verification_10">Verification</h3>
+<ul>
+<li><code>sh backend/run_safety_tests.sh</code> — <strong>89 test files, every one exited 0</strong> (88 plus
+  <code>test_graphql_enum.py</code>).</li>
+<li>Green again with <strong><code>docker</code> stripped from <code>PATH</code></strong> for all seven files this build touches, and
+  the strip verified to bite first: <code>docker</code> gone, <code>git</code> still present.</li>
+<li><code>docs/proof/build20_graphql_api.py</code> re-run against the pinned add-on — <strong>56 passed, 0 failed</strong>,
+  baseline reproduced, no divergence.</li>
+<li><code>docs/proof/build21_graphql_enum.py</code> — <strong>33 passed, 0 failed</strong>, including the positive control
+  and the deliberate wrong-parser run.</li>
+<li><code>docker/proof/browser_intercept_proof.sh</code> on the rebuilt image — <strong>25 passed, 0 failed</strong>.</li>
+<li><code>npx tsc --noEmit</code> 0 · <code>npm run build</code> 0 · <code>npm run lint</code> at the accepted <strong>11 + 1</strong>.</li>
+<li><code>data/kb/entries.jsonl</code> still <strong>2,747</strong>, matching <code>kb_fixture.jsonl</code> — nothing was ingested.</li>
+<li><strong>The image was rebuilt ONCE</strong>, with every image change of this build in it.</li>
+</ul>
+<p>*** A FLAKE CONFIRMED AS A FLAKE, NOT ASSUMED TO BE ONE. *** <code>test_redirector.py</code> failed three
+consecutive times mid-build with "no bindable port outside the self-mapping range", then passed in
+the next full run. <code>netsh interface ipv4 show excludedportrange protocol=udp</code> shows Windows
+holding a large and growing block of UDP ranges; the failure is that environment condition, in a
+file this build does not touch, and it is recorded rather than waved away.</p>
+<h3 id="what-was-not-done-and-why_2">What was NOT done, and why</h3>
+<ul>
+<li><strong>Route auth, scanner pacing, a scanner-wide request cap, mobile scope, Caido</strong> — standing
+  permanent skips, not re-proposed.</li>
+<li><strong>HotChocolate, Absinthe and Juniper have no suggestion parser.</strong> They are in the brand table
+  but their wording was not measured, and writing a parser from memory is the exact failure this
+  build exists to prevent. They resolve to <code>unknown</code>, which spends nothing and says so.</li>
+<li><strong>No OOB canary provisioning</strong> — a separate parked decision.</li>
+<li><strong>No new gate, confirm, blocklist or allow-list narrowing</strong> — the build's own requirement, and
+  the one change to reachability removes a restriction rather than adding one.</li>
 </ul>
 </body>
 </html>

@@ -572,6 +572,26 @@ def server_argv_for(req: ProxyStartRequest, *, api_key: str) -> list[str]:
         # wrote. The Dockerfile compares the driver's major version against the browser's, so a
         # future image whose packages drift apart fails the build instead of failing here.
         "-config", f"selenium.chromeDriver={SPIDER_DRIVER_PATH}",
+        # *** THE ADD-ONS ARE A BUILD INPUT, AND WITHOUT THIS THEY SILENTLY ARE NOT. ***
+        # Build #20's whole GraphQL go/no-go -- 56 checks, the measurement that decided how two
+        # items were built -- ran against `graphql-alpha-0.33.0` while the image shipped 0.29.0.
+        # The 0.33.0 came from ZAP's own add-on auto-update on a long-lived container, into
+        # `$HOME/.ZAP/plugin`, which ZAP PREFERS to its install tree. Measured afterwards: the
+        # update had replaced the ENTIRE installed set, 33 add-ons, not just the one under test.
+        #
+        # So a daemon left to its own devices swaps the scanner's engines out from under a
+        # written-down proof, hours later, with nothing on screen. The image now pins and
+        # ASSERTS the GraphQL add-on (Dockerfile layer 3b-bis); this is the runtime half of the
+        # same pin, and it is stated on EVERY start for the reason `api.disablekey=false` above
+        # is: ZAP persists `-config` values, so an unstated key inherits whatever the last run
+        # wrote. (ZAP files the add-on auto-update under `start.`; a drifted container's
+        # `<start><dayLastChecked>` is that subsystem's own marker.)
+        #
+        # NOT A PROHIBITION. Nothing is refused: `zaproxy -addoninstall`, ZAP's own UI and a
+        # daemon started without this flag all still update add-ons. What stops is the DEFAULT
+        # being "silently whatever the marketplace held the first time this container booted".
+        # The cost is stated in the Dockerfile: updates arrive by rebuilding.
+        "-config", "start.checkForUpdates=false",
     ]
     if req.publish:
         # Address filter, NOT authentication — the key above is the authentication. Without this

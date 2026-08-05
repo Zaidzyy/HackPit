@@ -85,7 +85,9 @@ def test_no_route_this_build_added_can_execute_anything() -> None:
 
     tree = ast.parse(Path(router_mod.__file__).read_text(encoding="utf-8"))
     wanted = {"graphql_split", "graphql_compose", "graphql_detect",
-              "graphql_probe", "graphql_bounds", "graphql_scan_plan"}
+              "graphql_probe", "graphql_bounds", "graphql_scan_plan",
+              # build #21
+              "graphql_fingerprint", "graphql_enumerate", "graphql_compose_recovered"}
     seen = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef) or node.name not in wanted:
@@ -276,6 +278,91 @@ def test_the_graphql_history_filter_refuses_nothing() -> None:
     print("  the GraphQL filter is three-state and defaults to matching everything: PASS")
 
 
+def test_enumeration_adds_NO_GATE_and_its_bounds_cannot_become_one() -> None:
+    """*** BUILD #21'S OWN REQUIREMENT, GUARDED IN THE DIRECTION IT WOULD BE BROKEN. ***
+
+    Enumeration is thousands of requests, which is precisely the shape somebody later "hardens"
+    by adding a confirm or a ceiling. The bounds are a DESCRIPTION the operator sets: when one is
+    reached the run stops, names the bound, and returns what it found. It never refuses to start,
+    never refuses a size, and `stop` stays ungated.
+
+    This is NOT the scanner-wide request cap that was declined -- that would be a limit the tool
+    imposes across every feature. This is one feature stating its own size.
+    """
+    from cockpit import graphql_enum
+
+    src = Path(inspect.getfile(graphql_enum)).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    assert not [n for n in ast.walk(tree) if isinstance(n, ast.Raise)], \
+        "graphql_enum raises -- it must warn and continue"
+
+    # The runner must not refuse either: no raise on the enumeration path.
+    zap_src = Path(inspect.getfile(graphql_zap)).read_text(encoding="utf-8")
+    for fn in ("enumerate_schema", "fingerprint_engine"):
+        node = next(n for n in ast.walk(ast.parse(zap_src))
+                    if isinstance(n, ast.FunctionDef) and n.name == fn)
+        assert not [x for x in ast.walk(node) if isinstance(x, ast.Raise)], f"{fn} raises"
+        called = {c.func.attr for c in ast.walk(node)
+                  if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)}
+        for bad in ("run_kali", "start_scan", "send", "validate_scan"):
+            assert bad not in called, f"{fn} reaches {bad}()"
+
+    # A bound of zero means UNBOUNDED, not "refuse" -- the default must not be a limit.
+    b = graphql_enum.EnumerationBounds()
+    assert b.max_requests == 0 and b.max_seconds == 0
+    assert "unbounded" in b.describe()
+
+    # A run stopped by a bound still RETURNS its results.
+    r = graphql_enum.EnumerationResult(
+        stopped_early=True, stop_reason="max_requests=10 reached", requests_sent=10,
+        fields=[graphql_enum.Suggestion(name="user")], status="productive")
+    assert r.fields, "a bounded run discarded what it found"
+    print("  enumeration refuses nothing; bounds describe and never gate: PASS")
+
+
+def test_an_out_of_scope_FINGERPRINT_warns_and_is_still_sent() -> None:
+    """Same position as the probe. Recorded here because a later 'tightening' is the regression.
+
+    The check is on the SOURCE rather than a live call: `fingerprint_engine` sends its probes
+    BEFORE it asks about scope, and then attaches the warning. An implementation that consulted
+    scope first would be one `if` away from refusing.
+    """
+    src = inspect.getsource(graphql_zap.fingerprint_engine)
+    assert "_scope_warning" in src, "the fingerprint does not warn about scope at all"
+    assert "raise" not in src, "the fingerprint refuses on scope"
+    probes_at = src.index("FINGERPRINT_PROBES")
+    scope_at = src.index("_scope_warning(")
+    assert probes_at < scope_at, "scope is consulted BEFORE the probes are sent -- one `if` away "\
+                                 "from a refusal this build is not allowed to add"
+    print("  an out-of-scope fingerprint WARNS after sending, and cannot refuse: PASS")
+
+
+def test_enumeration_records_carry_NAMES_and_never_VALUES() -> None:
+    """A recovered argument is routinely called `token`. Nothing may carry its value."""
+    from cockpit import graphql_enum
+
+    for model in (graphql_enum.Suggestion, graphql_enum.EnumerationResult,
+                  graphql_enum.ComposedOperation, graphql_enum.EngineFingerprint):
+        fields = set(model.model_fields)
+        assert "value" not in fields, f"{model.__name__} grew a value field"
+        assert "default" not in fields, f"{model.__name__} grew a default field"
+
+    result = graphql_enum.EnumerationResult(
+        url="https://api.example.com/graphql", status="productive",
+        fingerprint=graphql_enum.EngineFingerprint(core="graphql-js", dialect="graphql-js",
+                                                   suggests=True),
+        fields=[graphql_enum.Suggestion(name="userById")],
+        arguments=[graphql_enum.Suggestion(name="token", kind="argument",
+                                           on_type="Query.userById")])
+    rec = graphql_enum.recovered_state_records(result, "sess")
+    blob = json.dumps(rec) + graphql_enum.compose_from_recovered(result, "userById").variables
+    assert "SUPERSECRET" not in blob and "Bearer " not in blob
+    assert rec["endpoint"]["params"] == ["userById.token"]
+    # The composed variables are EMPTY placeholders -- there is nowhere a value could enter.
+    assert '"token": ""' in graphql_enum.compose_from_recovered(result, "userById").variables
+    print("  recovered records carry field.argument names and no values: PASS")
+
+
 if __name__ == "__main__":
     test_the_graphql_scan_is_the_ordinary_scanner_behind_the_same_four_gates()
     test_no_route_this_build_added_can_execute_anything()
@@ -287,4 +374,7 @@ if __name__ == "__main__":
     test_a_nonsense_BOUND_warns_and_is_still_applied()
     test_the_import_result_admits_it_is_not_scannable()
     test_the_graphql_history_filter_refuses_nothing()
+    test_enumeration_adds_NO_GATE_and_its_bounds_cannot_become_one()
+    test_an_out_of_scope_FINGERPRINT_warns_and_is_still_sent()
+    test_enumeration_records_carry_NAMES_and_never_VALUES()
     print("ALL GraphQL safety tests pass")

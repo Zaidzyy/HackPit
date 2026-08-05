@@ -3,9 +3,13 @@
 import { useCallback, useState } from "react";
 import {
   ApiError,
+  enumerateGraphQLSchema,
+  fingerprintGraphQLEngine,
   getGraphQLBounds,
   importGraphQLSchema,
   probeGraphQLSchema,
+  type EnumerationResult,
+  type EngineFingerprint,
   type GraphQLBounds,
   type SchemaImport,
   type SchemaProbe,
@@ -47,8 +51,9 @@ const STATUS_ADVICE: Record<string, string> = {
   ok: "The schema is readable. Every argument below is individually reachable by the scanner.",
   disabled:
     "Introspection is switched off — that is NOT an empty schema. The API is there and will " +
-    "not describe itself. This is what `clairvoyance` in the arsenal is for; HackPit does not " +
-    "do field-suggestion enumeration itself, and that gap is deliberate rather than hidden.",
+    "not describe itself. Enumerate it below: many servers still answer a wrong field name " +
+    "with “Did you mean …?”, and that leaks the schema one field at a time. " +
+    "`clairvoyance` in the arsenal is the independent cross-check.",
   empty:
     "Introspection ANSWERED and the schema exposes nothing. A real zero — stop looking here.",
   http_error: "The endpoint returned GraphQL errors that are not an introspection refusal.",
@@ -57,6 +62,54 @@ const STATUS_ADVICE: Record<string, string> = {
     "GraphQL endpoint at all — check the path.",
   unreachable: "Nothing answered. This is a network fact, not a schema fact.",
 };
+
+/**
+ * *** FIVE OUTCOMES, AND FOUR OF THEM ARE AN EMPTY LIST FROM A NAIVE IMPLEMENTATION. ***
+ * `suggestions_disabled` in particular is a WORKING DEFENCE, not a missing schema, and an
+ * operator who reads it as "nothing here" draws the opposite conclusion to the true one.
+ */
+const ENUM_STATUS_CLASS: Record<string, string> = {
+  productive: "is-ok",
+  suggestions_disabled: "is-disabled",
+  suggestions_unsupported: "is-disabled",
+  engine_unknown: "is-bad",
+  failed: "is-bad",
+};
+
+const ENUM_ADVICE: Record<string, string> = {
+  productive:
+    "The server is leaking its schema. Every recovered ARGUMENT is an injection point — " +
+    "compose one in the repeater, send it through the proxy, then aim the scanner at the " +
+    "captured operation.",
+  suggestions_disabled:
+    "The server answered every probe and offered no suggestions. That is a DEFENCE WORKING, " +
+    "not an empty schema — the API is there and will not spell itself out. Stop mining and " +
+    "look for names in the client bundle, mobile app or documentation instead.",
+  suggestions_unsupported:
+    "This core has no field-suggestion feature at all, so there is nothing here anybody could " +
+    "have switched on. Do not spend requests — this is not a hardening decision, it is an " +
+    "absent feature.",
+  engine_unknown:
+    "No probe identified the core, so no parser was chosen and NO wordlist was spent. Running " +
+    "one anyway would return zero and be indistinguishable from a hardened server. Name the " +
+    "engine yourself if you know it.",
+  failed:
+    "The requests completed but nothing came back that looks like an unknown-field error. The " +
+    "endpoint may need authentication, or may not be the GraphQL endpoint.",
+};
+
+/** The bounds that ACTUALLY APPLIED, read back rather than echoed from what was asked. */
+function describeBounds(r: EnumerationResult): string {
+  const b = r.bounds;
+  const parts = [
+    `wordlist ${b.wordlist_name || "unnamed"} (${b.wordlist_size} names)`,
+    `batch ${b.batch_size}`,
+    b.max_requests ? `max_requests ${b.max_requests}` : "max_requests unbounded",
+    b.max_seconds ? `max_seconds ${b.max_seconds}` : "max_seconds unbounded",
+  ];
+  if (r.stopped_early) parts.push(`STOPPED EARLY — ${r.stop_reason}`);
+  return parts.join(" · ");
+}
 
 export function GraphQLPanel({
   container,
@@ -82,6 +135,14 @@ export function GraphQLPanel({
   const [imported, setImported] = useState<SchemaImport | null>(null);
   const [importing, setImporting] = useState(false);
 
+  // build #21 — field-suggestion enumeration
+  const [enumWords, setEnumWords] = useState("");
+  const [maxRequests, setMaxRequests] = useState("");
+  const [batchSize, setBatchSize] = useState("20");
+  const [fingerprint, setFingerprint] = useState<EngineFingerprint | null>(null);
+  const [enumResult, setEnumResult] = useState<EnumerationResult | null>(null);
+  const [enumerating, setEnumerating] = useState(false);
+
   const runProbe = useCallback(async () => {
     if (!endpoint.trim() || probing) return;
     setProbing(true);
@@ -97,6 +158,60 @@ export function GraphQLPanel({
       setProbing(false);
     }
   }, [container, endpoint, engagementId, probing]);
+
+  /** The wordlist as the operator typed it. Blank means the built-in list, whose NAME and SIZE
+   *  come back in the result — a run that could not say which list produced a schema has not
+   *  described what it did. */
+  const words = useCallback(
+    () => enumWords.split(/[\s,]+/).filter(Boolean),
+    [enumWords]
+  );
+
+  const runFingerprint = useCallback(async () => {
+    if (!endpoint.trim() || enumerating) return;
+    setEnumerating(true);
+    setError(null);
+    setEnumResult(null);
+    try {
+      setFingerprint(
+        await fingerprintGraphQLEngine({
+          container: container ?? "",
+          url: endpoint.trim(),
+          engagement_id: engagementId ?? null,
+        })
+      );
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+      setFingerprint(null);
+    } finally {
+      setEnumerating(false);
+    }
+  }, [container, endpoint, engagementId, enumerating]);
+
+  const runEnumerate = useCallback(async () => {
+    if (!endpoint.trim() || enumerating) return;
+    setEnumerating(true);
+    setError(null);
+    try {
+      const custom = words();
+      const result = await enumerateGraphQLSchema({
+        container: container ?? "",
+        url: endpoint.trim(),
+        engagement_id: engagementId ?? null,
+        wordlist: custom,
+        wordlist_name: custom.length ? "operator" : "",
+        max_requests: Number(maxRequests) || 0,
+        batch_size: Number(batchSize) || 20,
+      });
+      setEnumResult(result);
+      setFingerprint(result.fingerprint);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+      setEnumResult(null);
+    } finally {
+      setEnumerating(false);
+    }
+  }, [batchSize, container, endpoint, engagementId, enumerating, maxRequests, words]);
 
   const readBounds = useCallback(async () => {
     setError(null);
@@ -170,7 +285,7 @@ export function GraphQLPanel({
           placeholder="https://host/graphql — the path is part of the target, never assumed"
           disabled={!container}
         />
-        <button type="button" onClick={runProbe} disabled={!container || !endpoint.trim() || probing}>
+        <button type="button" onClick={runProbe} disabled={!endpoint.trim() || probing}>
           {probing ? "asking…" : "probe schema"}
         </button>
         <button type="button" onClick={readBounds} disabled={!container}>
@@ -228,6 +343,150 @@ export function GraphQLPanel({
             ) : null
           )}
         </>
+      ) : null}
+
+      {/* ---- FIELD-SUGGESTION ENUMERATION (build #21) --------------------------------- */}
+      <div className="hp-tn-cardsub">
+        When introspection is off, the schema is often still readable: a wrong field name comes
+        back as <em>Did you mean “user”?</em> That is the only route to the argument report #61
+        needed.{" "}
+        <strong>The engine is fingerprinted first</strong> — suggestion wording is a property of
+        the error-producing <em>core</em>, not the brand, and graphql-js says{" "}
+        <code>&quot;user&quot;</code> where graphql-core says <code>&apos;user&apos;</code>.
+        Measured. A parser written for one recovers <em>nothing</em> from the other and looks
+        exactly like a hardened server.
+      </div>
+      <div className="hp-tn-form">
+        <input
+          value={enumWords}
+          onChange={(e) => setEnumWords(e.target.value)}
+          placeholder="wordlist (comma or space separated) — blank uses the built-in list"
+        />
+        <input
+          className="hp-tn-port"
+          value={maxRequests}
+          onChange={(e) => setMaxRequests(e.target.value)}
+          placeholder="max req"
+          title="0 or blank = the wordlist decides. This is a DECLARED BOUND, not a gate: when it is reached the run stops, says which bound stopped it, and returns everything it found."
+        />
+        <input
+          className="hp-tn-port"
+          value={batchSize}
+          onChange={(e) => setBatchSize(e.target.value)}
+          placeholder="batch"
+          title="Candidate names per request. Every core reports one error per unknown field, so a batch of 20 comes back with 20 suggestion clauses."
+        />
+        <button
+          type="button"
+          onClick={runFingerprint}
+          disabled={!endpoint.trim() || enumerating}
+        >
+          fingerprint engine
+        </button>
+        <button
+          type="button"
+          onClick={runEnumerate}
+          disabled={!endpoint.trim() || enumerating}
+        >
+          {enumerating ? "enumerating…" : "enumerate schema"}
+        </button>
+      </div>
+      <p className="hp-tn-note">
+        Enumeration is inherently hundreds to thousands of requests, so it states its size before
+        it runs and reports it back — the same rule as crawl depth and scan policy.{" "}
+        <strong>The bounds do not refuse anything</strong>: reaching one ends the run, names
+        itself and hands back the partial schema.
+      </p>
+
+      {fingerprint && !enumResult ? (
+        <div className="hp-gql-fields">
+          <div className="hp-tn-form">
+            <span
+              className={`hp-gql-status ${
+                fingerprint.core === "unknown" ? "is-bad" : fingerprint.suggests ? "is-ok" : "is-disabled"
+              }`}
+            >
+              {fingerprint.core}
+            </span>
+            <span className="hp-tn-olhint">
+              {fingerprint.engine !== "unknown" ? `brand ${fingerprint.engine} · ` : ""}
+              {fingerprint.dialect ? `dialect ${fingerprint.dialect}` : "no suggestion dialect"} ·{" "}
+              {fingerprint.confidence} confidence
+            </span>
+          </div>
+          <p className="hp-tn-note">{fingerprint.note}</p>
+          {fingerprint.evidence.map((e) => (
+            <p key={e} className="hp-tn-note">
+              {e}
+            </p>
+          ))}
+        </div>
+      ) : null}
+
+      {enumResult ? (
+        <div className="hp-gql-fields">
+          <div className="hp-tn-form">
+            <span className={`hp-gql-status ${ENUM_STATUS_CLASS[enumResult.status] ?? ""}`}>
+              {enumResult.status}
+            </span>
+            <span className="hp-tn-olhint">
+              core {enumResult.fingerprint.core} · {enumResult.requests_sent} requests in{" "}
+              {enumResult.seconds_elapsed}s · {enumResult.unknown_field_errors} unknown-field
+              errors
+            </span>
+          </div>
+          <p className="hp-tn-note">{enumResult.note}</p>
+          <p className="hp-tn-note">{ENUM_ADVICE[enumResult.status]}</p>
+          <p className="hp-tn-note">bounds applied: {describeBounds(enumResult)}</p>
+          {enumResult.scope_note ? (
+            <p className="hp-tn-note">{enumResult.scope_note}</p>
+          ) : null}
+          {enumResult.truncated_suggestion_lists ? (
+            <p className="hp-tn-note">
+              {enumResult.truncated_suggestion_lists}
+              {" "}
+              response(s) hit the server&apos;s own five-suggestion cap, so those lists were{" "}
+              <strong>cut off</strong>. What you see is a lower bound on the schema, not the whole
+              of it.
+            </p>
+          ) : null}
+
+          {enumResult.fields.length ? (
+            <>
+              <div className="hp-tn-cardsub">
+                recovered fields ({enumResult.fields.length})
+              </div>
+              <div className="hp-gql-args">
+                {enumResult.fields.map((f) => (
+                  <span key={f.name} className="hp-gql-arg">
+                    {f.name}
+                  </span>
+                ))}
+              </div>
+            </>
+          ) : null}
+          {enumResult.arguments.length ? (
+            <>
+              <div className="hp-tn-cardsub">
+                recovered arguments ({enumResult.arguments.length}) — these are the injection
+                points
+              </div>
+              <div className="hp-gql-args">
+                {enumResult.arguments.map((a) => (
+                  <span key={`${a.on_type}.${a.name}`} className="hp-gql-arg">
+                    {a.on_type ? `${a.on_type.split(".").pop()}.` : ""}
+                    {a.name}
+                  </span>
+                ))}
+              </div>
+            </>
+          ) : null}
+          <p className="hp-tn-note">
+            A schema recovered this way is <strong>mined, not introspected</strong>, and the
+            engagement record says so: only names close enough to a wordlist entry can ever
+            surface, so a field&apos;s absence here is not evidence it does not exist.
+          </p>
+        </div>
       ) : null}
 
       {/* ---- ZAP's generator, and its bounds ------------------------------------------- */}

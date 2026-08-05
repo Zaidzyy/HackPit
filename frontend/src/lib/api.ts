@@ -2152,6 +2152,121 @@ export const graphQLScanPlan = (req: RepeaterRequest, signal?: AbortSignal) =>
   postJSON<GraphQLScanPlan>("/cockpit/proxy/graphql/scan-plan", req, signal);
 
 /* -------------------------------------------------------------------------- */
+/* FIELD-SUGGESTION ENUMERATION (build #21)                                    */
+/*                                                                             */
+/* When introspection is OFF, many servers still answer a wrong field name     */
+/* with `Did you mean "user"?`. That suggestion leaks the schema one field at   */
+/* a time — and it is the only way to reach the argument report #61 needed.     */
+/*                                                                             */
+/* *** THE UNIT IS THE ERROR-PRODUCING CORE, NOT THE SERVER BRAND. *** Apollo   */
+/* IS graphql-js; Graphene sits on graphql-core. And they are NOT identical:    */
+/* graphql-js writes `Did you mean "user"?` while graphql-core writes           */
+/* `Did you mean 'user'?` — measured by running both. A parser written for one  */
+/* returns ZERO against the other, which looks exactly like a hardened server.  */
+/* -------------------------------------------------------------------------- */
+
+export interface EngineFingerprint {
+  /** graphql-js | graphql-core | graphql-ruby | graphql-php | graphql-java |
+   *  hasura | gqlparser | unknown.
+   *  *** `unknown` IS A REAL ANSWER *** and is never quietly upgraded to Apollo. */
+  core: string;
+  /** The brand, when a probe named one. Refinement only — it never moves the dialect. */
+  engine: string;
+  /** Suggestion dialect. Empty when the core never suggests at all. */
+  dialect: string;
+  /** Whether this core implements suggestions AT ALL. False means there is nothing to
+   *  switch on — NOT that somebody switched it off. */
+  suggests: boolean;
+  confidence: string;
+  evidence: string[];
+  note: string;
+}
+
+export interface GraphQLSuggestion {
+  /** A NAME. There is no value field anywhere on this path — a GraphQL argument is
+   *  routinely a token, and never handing a value over cannot regress. */
+  name: string;
+  kind: string;
+  on_type: string;
+  from_probe: string;
+}
+
+export interface EnumerationBounds {
+  wordlist_name: string;
+  wordlist_size: number;
+  /** 0 = the wordlist decides. NOT A GATE: reaching it stops the run and returns
+   *  what was found. */
+  max_requests: number;
+  max_seconds: number;
+  batch_size: number;
+}
+
+export interface EnumerationResult {
+  /** productive | suggestions_disabled | suggestions_unsupported | engine_unknown | failed.
+   *  FIVE outcomes, four of which a naive implementation returns as an empty list. */
+  status: string;
+  url: string;
+  fingerprint: EngineFingerprint;
+  bounds: EnumerationBounds;
+  requests_sent: number;
+  seconds_elapsed: number;
+  stopped_early: boolean;
+  stop_reason: string;
+  fields: GraphQLSuggestion[];
+  arguments: GraphQLSuggestion[];
+  types: GraphQLSuggestion[];
+  /** THE DENOMINATOR. `fields: 0` beside `unknown_field_errors: 900` is a server that
+   *  answered everything and suggested nothing — a working defence. `fields: 0` beside
+   *  `unknown_field_errors: 0` is a server that never understood us. Different facts. */
+  unknown_field_errors: number;
+  /** Responses that hit the server's own 5-suggestion cap and were therefore CUT OFF. */
+  truncated_suggestion_lists: number;
+  note: string;
+  scope_note: string;
+}
+
+export interface ComposedOperation {
+  query: string;
+  variables: string;
+  operation_name: string;
+  note: string;
+  /** ALWAYS false. ZAP files nothing it generates into the Sites tree — only the PROXY
+   *  puts a GraphQL operation where the scanner can reach it (measured, build #20). */
+  scannable: boolean;
+  next_step: string;
+}
+
+export const fingerprintGraphQLEngine = (
+  body: {
+    container: string;
+    url: string;
+    headers?: RepeaterHeader[];
+    engagement_id?: string | null;
+  },
+  signal?: AbortSignal
+) => postJSON<EngineFingerprint>("/cockpit/proxy/graphql/fingerprint", body, signal);
+
+export const enumerateGraphQLSchema = (
+  body: {
+    container: string;
+    url: string;
+    headers?: RepeaterHeader[];
+    engagement_id?: string | null;
+    wordlist?: string[];
+    wordlist_name?: string;
+    max_requests?: number;
+    max_seconds?: number;
+    batch_size?: number;
+  },
+  signal?: AbortSignal
+) => postJSON<EnumerationResult>("/cockpit/proxy/graphql/enumerate", body, signal);
+
+export const composeFromRecovered = (
+  body: { result: EnumerationResult; field_name: string },
+  signal?: AbortSignal
+) => postJSON<ComposedOperation>("/cockpit/proxy/graphql/compose-recovered", body, signal);
+
+/* -------------------------------------------------------------------------- */
 /* INTERCEPTION (build #19 item 4)                                             */
 /*                                                                             */
 /* UNGATED IN BOTH DIRECTIONS. A request is held, a HUMAN reads it, a HUMAN     */

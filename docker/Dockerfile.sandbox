@@ -90,6 +90,76 @@ RUN apt-get update \
     && command -v zaproxy \
     && zaproxy -cmd -version
 
+# --- 3b-bis. *** THE GraphQL ADD-ON IS A PINNED BUILD INPUT (build #21 item 1) *** ----
+#
+# WHY THIS LAYER EXISTS, AND IT IS NOT HOUSEKEEPING. Build #20's GraphQL go/no-go -- 56 checks,
+# the measurement that decided how two whole items were built -- ran against
+# `graphql-alpha-0.33.0`. This image shipped **0.29.0**. The 0.33.0 was a RUNTIME AUTO-UPDATE
+# living in one long-lived container's writable layer at `/root/.ZAP/plugin/`, and ZAP prefers
+# `$HOME/.ZAP/plugin` to its own install tree. So the proof measured an implementation the image
+# does not build, the two disagreed for a day, and NOTHING SAID SO. Recreating that container
+# would have reverted the scanner's GraphQL engine underneath a proof already written down as
+# passing.
+#
+# *** THE DRIFT WAS 33 ADD-ONS WIDE, NOT ONE. *** Measured before this layer was written: every
+# file in that container's `/root/.ZAP/plugin/` carried the same timestamp -- ZAP had updated
+# its ENTIRE installed set in one pass, of which `graphql` was simply the one under test. The
+# add-on version is therefore a build input here, exactly like the chromedriver and chromium
+# majors compared in the layer below, and exactly like nuclei-templates being baked rather than
+# `-update-templates`d: this image's standing position is that what the tools run is decided at
+# build time, not by whatever the marketplace held the first time a container happened to boot.
+#
+# WHAT THAT COSTS, STATED RATHER THAN GLOSSED: add-on and scan-rule updates now arrive by
+# REBUILDING, not by a daemon restart. Nothing is refused -- an operator can still
+# `zaproxy -addoninstall`, still update from ZAP's own UI, and still start a daemon without the
+# flag. The default simply stopped being "silently whatever is newest".
+#
+# *** THE ASSERTION IS `installedAddons`, NOT `ls`. *** A layer that installs a file proves
+# nothing about which file gets LOADED -- an `ls` of the system plugin dir would have passed
+# happily inside the very container where the drift lived, because the 0.29.0 file really was
+# there and ZAP was simply ignoring it. `zap-addon-check.py` starts a daemon and reads back the
+# `file` field ZAP reports for the add-on: the absolute path it resolved. That is the only
+# question whose answer a shadowing directory cannot change. It leaves no ZAP home behind, so
+# no API key, no `api.disablekey` and no `dayLastChecked` is baked into the image.
+#
+# *** AND THE ASSERTION CAUGHT A BROKEN PIN ON ITS VERY FIRST RUN: AN ADD-ON VERSION IS A
+#     DEPENDENCY CLOSURE, NOT A FILE. *** Installing `graphql-alpha-0.33.0.zap` here and
+# deleting 0.29.0 produced a ZAP with NO GraphQL add-on loaded at all -- not an error, not a
+# warning, not a line in the log, simply absent from `installedAddons`. 0.33.0's manifest
+# requires `commonlib >= 1.40.0 & < 2.0.0`; this image shipped **1.39.0**, so ZAP declined it in
+# silence. The drifted container's 0.33.0 had only ever worked because the same auto-update pass
+# had also lifted commonlib to 1.43.0 -- which is the concrete reason the drift is 33 add-ons
+# wide rather than one, and why COMMONLIB IS PINNED HERE TOO. `commonlib` 1.43.0 declares no
+# dependencies of its own, so the closure is exactly these two, measured rather than assumed.
+#
+# 1.43.0 specifically, not merely ">= 1.40.0": it is the version build #20's 56/0 proof was
+# actually measured against, so the image now REPRODUCES the surface that proof recorded. That
+# is what makes re-running it a regression test instead of a fresh measurement.
+#
+# An `ls`-based check would have shipped that image with a green build and a GraphQL scanner
+# that had silently ceased to exist.
+ARG ZAP_GRAPHQL_ADDON_VERSION=0.33.0
+ARG ZAP_COMMONLIB_ADDON_VERSION=1.43.0
+COPY zap-addon-check.py /usr/local/bin/zap-addon-check
+RUN set -eu; \
+    chmod 0755 /usr/local/bin/zap-addon-check; \
+    P=/usr/share/zaproxy/plugin; \
+    fetch() { \
+        echo "pinning $1 $3"; \
+        curl -fsSL --retry 3 --retry-delay 2 -o "$P/$1-$2-$3.zap.part" \
+            "https://github.com/zaproxy/zap-extensions/releases/download/$1-v$3/$1-$2-$3.zap"; \
+        mv "$P/$1-$2-$3.zap.part" "$P/$1-$2-$3.zap"; \
+        for old in "$P"/"$1"-*.zap; do \
+            [ "$old" = "$P/$1-$2-$3.zap" ] || { echo "  removing superseded $old"; rm -f "$old"; }; \
+        done; \
+    }; \
+    fetch graphql alpha "${ZAP_GRAPHQL_ADDON_VERSION}"; \
+    fetch commonlib release "${ZAP_COMMONLIB_ADDON_VERSION}"; \
+    zap-addon-check --start \
+        --pin "graphql:alpha:${ZAP_GRAPHQL_ADDON_VERSION}" \
+        --pin "commonlib:release:${ZAP_COMMONLIB_ADDON_VERSION}"; \
+    rm -rf /root/.ZAP
+
 # --- 3b. A WEBDRIVER, so ZAP's AJAX spider can drive a real browser (build #15) ------
 #
 # WHY A BROWSER IS THE WHOLE FEATURE. A passive sweep of a live bug bounty program returned

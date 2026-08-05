@@ -4144,3 +4144,40 @@ chance of a two-second poll overwriting a half-finished edit.
 
 `data/kb/entries.jsonl` is **not touched by this build**; it stands at 2,747 from another
 session's uncommitted work, and the committed fixture's 2,744 is left exactly as it was.
+
+### Build #19, CI — main was already red, and then this build broke it a different way
+
+**CI was failing before build #19 was pushed**, at `test_exploits.py`, since the curated-overlay
+commit two before it. Three defects had to be fixed to get green, and **all three are the same
+shape: a check that quietly depends on state only this laptop has.**
+
+**1 and 2 — two mirror-dependent claims in `test_exploits.py`.** `/data/` is gitignored, so a
+clean checkout has no exploit-db mirror. `full.stats()["entries"]` raised `KeyError` because
+`stats()` reports the MIRROR's own counts and there were none; and `assert ix.ready is True`
+under the heading *"a broken overlay must not take the 47k-row mirror down"* asserted a property
+**about a mirror that is not there**. The first was fixed by stating the property so it holds in
+both environments — the merged index holds the mirror's rows plus the overlay's, and with no
+mirror that is the overlay's alone. The second is genuinely unobservable without a mirror, so it
+reports **NOT-RUN**, the shape `test_kb_fixture.py` already uses. Neither was weakened to a skip:
+everything below them still runs everywhere, including the check the file exists for — that a
+malformed overlay is *reported* rather than swallowed.
+
+The lesson the second one taught is the useful one: **after the first fix, the next assertion in
+the same file failed for the same reason.** So the third pass did not push and wait — it patched
+`exploits.index.INDEX_PATH` to a nonexistent path and ran **all 17 functions in the file**, 0
+failures, before committing.
+
+**3 — BACKTICKS IN THE SUITE'S OWN DESCRIPTION STRINGS ARE COMMAND SUBSTITUTION.**
+`run_safety_tests.sh` passes each test's description as a double-quoted shell string, so a
+backtick in one **runs**. This build wrote two: `` `held` `` printed *"held: not found"* and
+carried on, and `` `| sh` `` was a **parse error that killed the script with exit 2** — after
+every test in it had passed.
+
+**A green local run said nothing about it.** Windows MSYS parsed the file; CI's `dash` did not.
+That is precisely the "it works on this laptop" failure the docker-stripped run exists to catch
+for a different dependency, and it argues for `sh -n` on that script being part of the routine.
+
+And it was not new: **one pre-existing description had the same defect** —
+`test_scan_session_health`'s `` `unknown` `` and `` `ok` `` (build #16) have been executing as
+commands and blanking themselves out of the printed guard text ever since, non-fatal only by
+luck of which words were chosen. Both are fixed; no `run_test` line carries a backtick now.

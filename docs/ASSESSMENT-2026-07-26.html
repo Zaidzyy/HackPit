@@ -395,6 +395,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#the-screens-were-looked-at-and-here-is-how-because-the-usual-way-was-unavailable">The screens were LOOKED AT, and here is how, because the usual way was unavailable</a></li>
 <li><a href="#what-was-not-done-and-why">What was NOT done, and why</a></li>
 <li><a href="#verification_8">Verification</a></li>
+<li><a href="#build-19-ci-main-was-already-red-and-then-this-build-broke-it-a-different-way">Build #19, CI — main was already red, and then this build broke it a different way</a></li>
 </ul>
 </li>
 </ul>
@@ -4303,5 +4304,35 @@ callbacks per the frontend AGENTS.md rule, and the one place that would have nee
 chance of a two-second poll overwriting a half-finished edit.</p>
 <p><code>data/kb/entries.jsonl</code> is <strong>not touched by this build</strong>; it stands at 2,747 from another
 session's uncommitted work, and the committed fixture's 2,744 is left exactly as it was.</p>
+<h3 id="build-19-ci-main-was-already-red-and-then-this-build-broke-it-a-different-way">Build #19, CI — main was already red, and then this build broke it a different way</h3>
+<p><strong>CI was failing before build #19 was pushed</strong>, at <code>test_exploits.py</code>, since the curated-overlay
+commit two before it. Three defects had to be fixed to get green, and <strong>all three are the same
+shape: a check that quietly depends on state only this laptop has.</strong></p>
+<p><strong>1 and 2 — two mirror-dependent claims in <code>test_exploits.py</code>.</strong> <code>/data/</code> is gitignored, so a
+clean checkout has no exploit-db mirror. <code>full.stats()["entries"]</code> raised <code>KeyError</code> because
+<code>stats()</code> reports the MIRROR's own counts and there were none; and <code>assert ix.ready is True</code>
+under the heading <em>"a broken overlay must not take the 47k-row mirror down"</em> asserted a property
+<strong>about a mirror that is not there</strong>. The first was fixed by stating the property so it holds in
+both environments — the merged index holds the mirror's rows plus the overlay's, and with no
+mirror that is the overlay's alone. The second is genuinely unobservable without a mirror, so it
+reports <strong>NOT-RUN</strong>, the shape <code>test_kb_fixture.py</code> already uses. Neither was weakened to a skip:
+everything below them still runs everywhere, including the check the file exists for — that a
+malformed overlay is <em>reported</em> rather than swallowed.</p>
+<p>The lesson the second one taught is the useful one: <strong>after the first fix, the next assertion in
+the same file failed for the same reason.</strong> So the third pass did not push and wait — it patched
+<code>exploits.index.INDEX_PATH</code> to a nonexistent path and ran <strong>all 17 functions in the file</strong>, 0
+failures, before committing.</p>
+<p><strong>3 — BACKTICKS IN THE SUITE'S OWN DESCRIPTION STRINGS ARE COMMAND SUBSTITUTION.</strong>
+<code>run_safety_tests.sh</code> passes each test's description as a double-quoted shell string, so a
+backtick in one <strong>runs</strong>. This build wrote two: <code>`held`</code> printed <em>"held: not found"</em> and
+carried on, and <code>`| sh`</code> was a <strong>parse error that killed the script with exit 2</strong> — after
+every test in it had passed.</p>
+<p><strong>A green local run said nothing about it.</strong> Windows MSYS parsed the file; CI's <code>dash</code> did not.
+That is precisely the "it works on this laptop" failure the docker-stripped run exists to catch
+for a different dependency, and it argues for <code>sh -n</code> on that script being part of the routine.</p>
+<p>And it was not new: <strong>one pre-existing description had the same defect</strong> —
+<code>test_scan_session_health</code>'s <code>`unknown`</code> and <code>`ok`</code> (build #16) have been executing as
+commands and blanking themselves out of the printed guard text ever since, non-fatal only by
+luck of which words were chosen. Both are fixed; no <code>run_test</code> line carries a backtick now.</p>
 </body>
 </html>

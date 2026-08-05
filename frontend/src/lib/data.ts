@@ -161,6 +161,18 @@ export const SURFACE_BANDS: SurfaceBand[] = [
         desc: "Record what your tools send — then actively scan it.",
         needsStack: true,
       },
+      // OPERATE for the same reason the proxy is, and the hint is true of it exactly: the
+      // intruder's start IS human-approved (the scanner's four gates, unchanged) and it needs
+      // the stack. It sits next to :repeater and :proxy because that is the real path — capture
+      // a request, replay it, then run a payload set through the one parameter that looked odd.
+      {
+        key: "intruder",
+        icon: "⁂",
+        label: ":intruder",
+        href: "/intruder",
+        desc: "One request, marked positions, a payload set — one approval.",
+        needsStack: true,
+      },
     ],
   },
   {

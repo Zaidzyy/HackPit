@@ -1451,6 +1451,233 @@ def history(container: str, port: int, start: int = 0, count: int = 50):
 
 
 # --------------------------------------------------------------------------- #
+# HISTORY FILTERING (build #19 item 3) — asking a question of 1,300 captured messages
+#
+# The only tool over the capture was `start`/`count`. With ~1,300 messages recorded across an
+# engagement that is a paging control, not a way to find anything: "show me the POSTs that came
+# back 500" was a job for the operator's eyes and a scroll bar.
+#
+# *** THE COUNTS ARE THE FEATURE, NOT THE DECORATION. ***
+# A filter is the perfect place for this repo's recurring silent empty, because "no rows" is a
+# completely ordinary answer. Three different facts all present as an empty list:
+#
+#   * ZAP holds no traffic at all                     -> total == 0
+#   * we read traffic and nothing matched             -> scanned > 0, matched == 0
+#   * we could not READ the traffic we tried to read  -> read_ok False / dropped > 0
+#
+# ...and a fourth, which is the one a naive implementation creates: we only LOOKED at the newest
+# window, so the match exists and is older than we bothered to check. That is why `scanned` and
+# `truncated` are reported separately from `total`, and why the default scan reach is the WHOLE
+# capture rather than a page of it.
+#
+# IT IS A READ, SO IT IS UNGATED, exactly like the history it reads.
+# --------------------------------------------------------------------------- #
+#: Rows pulled from ZAP per API call while filtering. ZAP returns full request AND response
+#: bodies, so a page of 5,000 is a multi-hundred-megabyte JSON parse; 200 is what `history` has
+#: been using in anger since build #16.
+HISTORY_SCAN_PAGE = 200
+#: How many messages a filter will read before it stops and SAYS it stopped. Generous enough to
+#: cover the whole of a real engagement's capture (build #17 measured 1,296) and finite so a
+#: daemon left running for a week cannot turn a panel refresh into a minutes-long read.
+HISTORY_SCAN_CAP = 5000
+
+
+class HistoryFilter(BaseModel):
+    """What to look for. EVERY FIELD IS OPTIONAL AND AN UNSET FIELD MATCHES EVERYTHING.
+
+    No field here can refuse anything — the widest possible filter is the default, and a filter
+    nobody set is `history` with extra counting.
+    """
+
+    host: str = Field(
+        "",
+        description="A host pattern in the ENGAGEMENT SCOPE VOCABULARY, parsed by scope.py — so "
+        "`api.example.com` is that exact host and `*.example.com` is its subdomains, matching "
+        "dot-anchored. It deliberately does NOT invent a bare-suffix spelling: a host filter that "
+        "meant something different here than it means in a scope field is how `notexample.com` "
+        "gets to match `example.com`.",
+    )
+    method: list[str] = Field(default_factory=list, description="GET/POST/… — any of these.")
+    status: list[int] = Field(
+        default_factory=list,
+        description="Exact codes (404) and/or CLASSES written as a single digit (4 = 4xx). A "
+        "response ZAP never received has no status and matches only when this is unset.",
+    )
+    url_contains: str = Field("", description="Case-insensitive substring of the full URL.")
+    has_param: bool | None = Field(
+        None,
+        description="True = only requests carrying a query string or a form/JSON body. False = "
+        "only those carrying neither. None = both. This is the 'what is worth attacking' filter.",
+    )
+    content_type: str = Field(
+        "", description="Case-insensitive substring of the RESPONSE Content-Type, e.g. 'json'."
+    )
+    in_scope_of: str = Field(
+        "",
+        description="An engagement id. Keeps only exchanges whose host is inside that "
+        "engagement's program scope. THE SCOPE IS NOT RE-DERIVED HERE — it comes from "
+        "engagement.resolved_scope(), the same matcher the executor and the repeater refuse on.",
+    )
+
+
+class FilteredHistory(BaseModel):
+    """Matching exchanges AND the arithmetic that makes an empty list readable.
+
+    See the block comment above for why every one of these counts exists. The short version: an
+    empty ``exchanges`` is four different facts and the operator must be able to tell which.
+    """
+
+    exchanges: list["CapturedExchange"] = Field(default_factory=list)
+    total: int = Field(0, description="Messages ZAP holds in total, from its own counter.")
+    scanned: int = Field(0, description="Messages actually READ and tested against the filter.")
+    matched: int = Field(0, description="Messages that matched — before `limit` was applied.")
+    returned: int = Field(0, description="Rows in `exchanges`. Less than `matched` means `limit`.")
+    dropped: int = Field(
+        0, description="Rows ZAP returned that could not be PARSED, so they were never tested "
+        "against the filter at all. Non-zero means this answer is incomplete."
+    )
+    read_ok: bool = Field(
+        True, description="False means at least one page came back unreadable — a different fact "
+        "from 'nothing matched'."
+    )
+    truncated: bool = Field(
+        False,
+        description="True means the scan stopped at the cap with older messages never examined, "
+        "so a match may exist that this answer does not contain. NEVER silently true.",
+    )
+    scope_note: str = Field(
+        "", description="How `in_scope_of` was resolved — or why it could not be, in which case "
+        "it was IGNORED and everything was kept rather than everything being refused."
+    )
+
+
+def _exchange_has_param(ex: "CapturedExchange") -> bool:
+    """A query string, or a body that looks like it carries fields. Deliberately generous: this
+    is a 'worth attacking' hint, and a false positive costs a row in a list."""
+    from urllib.parse import urlsplit as _urlsplit
+
+    if _urlsplit(ex.request.url).query:
+        return True
+    body = (ex.request.body or "").strip()
+    return bool(body)
+
+
+def _response_content_type(ex: "CapturedExchange") -> str:
+    for h in ex.response.headers:
+        if h.name.lower() == "content-type":
+            return h.value.lower()
+    return ""
+
+
+def _status_matches(status: int | None, wanted: list[int]) -> bool:
+    """``4`` means 4xx; ``404`` means 404. A single digit is unambiguous because no HTTP status
+    is one digit, so the two spellings can share a field without a mode flag."""
+    if not wanted:
+        return True
+    if status is None:
+        return False
+    for w in wanted:
+        if 1 <= w <= 9:
+            if status // 100 == w:
+                return True
+        elif status == w:
+            return True
+    return False
+
+
+def exchange_matches(ex: "CapturedExchange", filt: HistoryFilter,
+                     scope_matcher: Any = None) -> bool:
+    """Does one captured exchange match? PURE — no I/O, so the whole predicate is unit-testable
+    against fixtures without a daemon, which is what lets the hermetic suite cover it."""
+    if filt.method:
+        if ex.request.method.upper() not in {m.strip().upper() for m in filt.method if m.strip()}:
+            return False
+    if not _status_matches(ex.response.status, filt.status):
+        return False
+    if filt.url_contains and filt.url_contains.lower() not in ex.request.url.lower():
+        return False
+    if filt.content_type and filt.content_type.lower() not in _response_content_type(ex):
+        return False
+    if filt.has_param is not None and _exchange_has_param(ex) is not filt.has_param:
+        return False
+
+    # Imported here, like every other cross-module reference in this file, so proxy.py stays
+    # importable on its own — `engagement` reaches back into this module's siblings.
+    from . import scope as scope_mod
+
+    host = scope_mod.bare_host(ex.request.url)
+    if filt.host:
+        # Dot-anchored, via the SAME parser the engagement scope uses, so `*.example.com`,
+        # `example.com` and an exact host all mean here what they mean everywhere else. Writing a
+        # second host matcher is how `notexample.com` gets to match `example.com`.
+        pattern = scope_mod.parse_scope(filt.host, resolve=False)
+        if not host or not pattern.in_scope(host):
+            return False
+    if scope_matcher is not None and (not host or not scope_matcher.in_scope(host)):
+        return False
+    return True
+
+
+def filter_history(container: str, port: int, filt: HistoryFilter,
+                   limit: int = 200, max_scan: int = HISTORY_SCAN_CAP) -> FilteredHistory:
+    """Search the capture. READ-ONLY and UNGATED, like :func:`history`.
+
+    *** IT SCANS FROM THE NEWEST BACKWARDS AND SAYS WHERE IT STOPPED. ***
+    Newest-first because that is what an operator is looking for, and because `history`'s own
+    build #17 defect was answering "recent" with the oldest rows. `truncated` is the honest half:
+    it means older messages exist that were never examined, so a match may be missing. A filter
+    that quietly searched one page would reproduce that defect exactly, with a scarier failure —
+    "there are no 500s on this target" is a conclusion someone acts on.
+
+    THE SCOPE MATCHER IS FETCHED ONCE, HERE, AND HANDED TO THE PURE PREDICATE. An engagement id
+    that names nothing active does NOT refuse the search: `scope_note` says so and the filter is
+    dropped. This is a read of traffic that already happened — refusing to show an operator their
+    own capture because an engagement ended would be a prohibition invented by the tooling.
+    """
+    from . import engagement
+
+    out = FilteredHistory(total=captured_count(container, port))
+    scope_matcher = None
+    if filt.in_scope_of:
+        eng = engagement.get_active(filt.in_scope_of)
+        if eng is None:
+            out.scope_note = (
+                f"engagement {filt.in_scope_of!r} is not active — the in-scope filter was IGNORED "
+                "and every host is included. Nothing was hidden from you."
+            )
+        else:
+            scope_matcher = engagement.resolved_scope(eng)
+            out.scope_note = f"in scope for {filt.in_scope_of}: {scope_matcher.describe()}"
+
+    remaining_scan = max(0, int(max_scan))
+    offset = 0
+    while offset < out.total and remaining_scan > 0:
+        page_size = min(HISTORY_SCAN_PAGE, remaining_scan)
+        page = history_page(container, port, start=offset, count=page_size)
+        if not page.read_ok:
+            out.read_ok = False
+            break
+        out.dropped += page.dropped
+        # `returned + dropped` is what ZAP actually handed over for this window, which is the
+        # honest denominator: rows that could not be parsed were never tested against the filter.
+        consumed = page.returned + page.dropped
+        out.scanned += page.returned
+        for ex in reversed(page.exchanges):          # newest first within the window
+            if exchange_matches(ex, filt, scope_matcher):
+                out.matched += 1
+                if len(out.exchanges) < limit:
+                    out.exchanges.append(ex)
+        if consumed <= 0:
+            break                                    # nothing came back; do not spin
+        offset += consumed
+        remaining_scan -= consumed
+
+    out.returned = len(out.exchanges)
+    out.truncated = out.read_ok and offset < out.total
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # THE SCANNER (build #14 part 3) — GATED start, OBSERVED status, UNGATED stop
 #
 # What this adds over part 1's `zaproxy -cmd -quickurl <url>`: an aim. `-quickurl` spiders the

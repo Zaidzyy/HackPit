@@ -1581,6 +1581,13 @@ export type RepeaterRequest = {
   engagement_id?: string | null;
   session_id?: string | null;
   /**
+   * THE COOKIE JAR (build #19 item 2). ON by default — the thing it fixes, every authenticated
+   * flow breaking on the SECOND request, is the common case. `false` sends with NO session
+   * WITHOUT emptying the jar: testing what an unauthenticated caller sees is a real test and it
+   * must not cost you the session you established by hand.
+   */
+  use_cookie_jar?: boolean;
+  /**
    * PAYLOAD SHAPING (build #18 item 4) — transforms applied to every `[[…]]` span in the URL
    * and body, in order. An OPTION, NOT A GATE: no confirm, no acknowledgement, no refusal if
    * unset. With no shapes the markers are simply stripped, which is what makes shaped-versus-
@@ -1623,7 +1630,42 @@ export type RepeaterExchange = {
   shapes_applied: string[];
   /** Shapes that did nothing, and why. WARN AND CONTINUE — the request was still sent. */
   shape_warnings: string[];
+  /**
+   * THE COOKIE JAR'S DISCLOSURE (build #19 item 2). A `Cookie:` header you did not type has to
+   * explain itself, or the jar is state that silently changes a request.
+   *
+   * NOTE THE ABSENCE OF A VALUE FIELD on CookieAttachment. That is not an oversight — this
+   * object is a JSON body anything downstream may log, and never handing a session token over
+   * cannot regress, while redacting it afterwards depends on a redactor being correct forever.
+   */
+  cookies_attached: CookieAttachment[];
+  cookies_stored: CookieAttachment[];
+  cookie_warnings: string[];
+  cookie_jar_used: boolean;
 };
+
+/** One cookie, described. NAME, DOMAIN, PATH and PROVENANCE — deliberately no value. */
+export type CookieAttachment = {
+  name: string;
+  domain: string;
+  path: string;
+  set_by_url: string;
+  set_at: string;
+};
+
+const jarQS = (sessionId: string | null) =>
+  sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
+
+/** What is in the jar. Value-free by construction — the route has no value to give. */
+export const repeaterCookies = (sessionId: string | null, signal?: AbortSignal) =>
+  getJSON<CookieAttachment[]>(`/cockpit/repeater/cookies${jarQS(sessionId)}`, signal);
+
+/** Empty the jar. Ungated — clearing state removes capability. */
+export const clearRepeaterCookies = (sessionId: string | null, signal?: AbortSignal) =>
+  delJSON<{ session_id: string | null; cleared: number }>(
+    `/cockpit/repeater/cookies${jarQS(sessionId)}`,
+    signal
+  );
 
 /** The shaping vocabulary, from the backend so the UI carries no second copy of the list. */
 export type ShapeVocabulary = {
@@ -1853,6 +1895,227 @@ export const proxyHistory = (
     `/cockpit/proxy/history?container=${encodeURIComponent(container)}&port=${port}&count=${count}`,
     signal
   );
+
+/* -------------------------------------------------------------------------- */
+/* HISTORY FILTERING (build #19 item 3)                                        */
+/*                                                                             */
+/* THE COUNTS ARE THE FEATURE. An empty `exchanges` is FOUR different facts —   */
+/* ZAP holds nothing, nothing matched, the read failed, or the scan stopped     */
+/* before reaching the rows that would have matched. The screen must be able to */
+/* tell them apart, so every count comes back and `truncated` is never silent.  */
+/* -------------------------------------------------------------------------- */
+export type HistoryFilter = {
+  host?: string;
+  method?: string[];
+  status?: number[];
+  url_contains?: string;
+  has_param?: boolean | null;
+  content_type?: string;
+  in_scope_of?: string;
+};
+
+export type FilteredHistory = {
+  exchanges: CapturedExchange[];
+  total: number;
+  /** Messages actually READ and tested against the filter. */
+  scanned: number;
+  /** Messages that matched, BEFORE `limit` was applied. */
+  matched: number;
+  returned: number;
+  /** Rows that could not be parsed, so they were never tested at all. */
+  dropped: number;
+  read_ok: boolean;
+  /** Older messages exist that were never examined — a match may be missing. */
+  truncated: boolean;
+  scope_note: string;
+};
+
+export const filterProxyHistory = (
+  container: string,
+  port: number,
+  filter: HistoryFilter,
+  limit = 200,
+  signal?: AbortSignal
+) =>
+  postJSON<FilteredHistory>(
+    `/cockpit/proxy/history/filter?container=${encodeURIComponent(container)}&port=${port}&limit=${limit}`,
+    filter,
+    signal
+  );
+
+/* -------------------------------------------------------------------------- */
+/* INTERCEPTION (build #19 item 4)                                             */
+/*                                                                             */
+/* UNGATED IN BOTH DIRECTIONS. A request is held, a HUMAN reads it, a HUMAN     */
+/* edits it, a HUMAN forwards it — the press IS the approval. And while         */
+/* breaking is on the operator's own BROWSER IS FROZEN, so a gate that could    */
+/* refuse to turn it off would look exactly like the target having gone down.   */
+/* -------------------------------------------------------------------------- */
+export type InterceptState = {
+  container: string;
+  port: number;
+  /** ZAP's own `isBreakAll`. */
+  breaking: boolean;
+  /** Is a request actually WAITING? From httpMessage being non-empty — NEVER from
+   *  `break_on_request`, which is a SETTING and reads true with nothing held. */
+  held: boolean;
+  /** The held request, raw. Empty when none. */
+  message: string;
+  break_on_request: boolean;
+  break_on_response: boolean;
+  /** False means the daemon did not answer — a DIFFERENT fact from "breaking is off". */
+  read_ok: boolean;
+  detail: string;
+};
+
+const interceptQS = (container: string, port: number) =>
+  `container=${encodeURIComponent(container)}&port=${port}`;
+
+export const getIntercept = (container: string, port: number, signal?: AbortSignal) =>
+  getJSON<InterceptState>(`/cockpit/proxy/intercept?${interceptQS(container, port)}`, signal);
+
+export const setIntercept = (
+  container: string,
+  port: number,
+  on: boolean,
+  signal?: AbortSignal
+) =>
+  postJSON<InterceptState>(
+    `/cockpit/proxy/intercept?on=${on}&${interceptQS(container, port)}`,
+    {},
+    signal
+  );
+
+export const replaceIntercepted = (
+  container: string,
+  port: number,
+  body: { http_header: string; http_body: string },
+  signal?: AbortSignal
+) =>
+  postJSON<InterceptState>(
+    `/cockpit/proxy/intercept/message?${interceptQS(container, port)}`,
+    body,
+    signal
+  );
+
+export const releaseIntercepted = (
+  container: string,
+  port: number,
+  verb: "continue" | "drop" | "step",
+  signal?: AbortSignal
+) =>
+  postJSON<InterceptState>(
+    `/cockpit/proxy/intercept/release?verb=${verb}&${interceptQS(container, port)}`,
+    {},
+    signal
+  );
+
+/** DROP whatever is held and turn breaking OFF. The one-click way out. Never gated. */
+export const panicIntercept = (container: string, port: number, signal?: AbortSignal) =>
+  postJSON<{
+    dropped_held_request: boolean;
+    was_breaking: boolean;
+    state: InterceptState;
+    detail: string;
+  }>(`/cockpit/proxy/intercept/panic?${interceptQS(container, port)}`, {}, signal);
+
+/* -------------------------------------------------------------------------- */
+/* THE INTRUDER (build #19 item 5)                                             */
+/*                                                                             */
+/* GATED EXACTLY LIKE THE SCANNER: the four gates, no new ones. HackPit refuses */
+/* BATCHING ACROSS APPROVALS; it has never refused one approval that produces   */
+/* many requests, because ffuf, nuclei and the ZAP active scanner are each      */
+/* exactly that. The payload set and positions are IN the approved surface, the */
+/* way crawl depth and duration are in the spider's.                            */
+/* -------------------------------------------------------------------------- */
+export type IntruderRequest = {
+  url: string;
+  method: string;
+  headers: RepeaterHeader[];
+  body: string;
+  /** THE PAYLOAD SET, verbatim. Every entry goes into the approved surface. */
+  payloads: string[];
+  /** sniper = one position at a time; battering-ram = every position, same payload. */
+  mode: string;
+  shapes: string[];
+  follow_redirects: boolean;
+  insecure: boolean;
+  delay_ms: number;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  use_cookie_jar: boolean;
+  approved: boolean;
+  /** Demanded by the GATE when the payloads warrant it, not by the form. */
+  dangerous_ack: boolean;
+};
+
+export type IntruderResult = {
+  index: number;
+  /** The payload AS SENT — i.e. after shaping. */
+  payload: string;
+  position: number;
+  url: string;
+  status: number | null;
+  size_bytes: number;
+  time_ms: number;
+  body_excerpt: string;
+  error: string;
+  /** The signal. A fuzzer's finding is the row that is not like the others. */
+  differs_from_baseline: boolean;
+};
+
+export type IntruderJob = {
+  id: string;
+  state: string;
+  request: IntruderRequest;
+  container: string;
+  started_at: string;
+  finished_at: string;
+  positions: number;
+  planned: number;
+  sent: number;
+  results: IntruderResult[];
+  baseline: IntruderResult | null;
+  /** The payload set was longer than the ceiling. Reported, never silent. */
+  capped: boolean;
+  warnings: string[];
+  /** Requests NOT sent because a payload moved the URL off-scope. */
+  scope_refusals: number;
+};
+
+export type IntruderPreview = {
+  argv: string[];
+  positions: number;
+  planned: number;
+  sample: { position: number; payload: string; url: string }[];
+  warnings: string[];
+  capped: boolean;
+  /** What the four gates WOULD say. `null` means nothing stands in the way. */
+  gate: { gate: string; reason: string; dangerous_flags: string[] } | null;
+};
+
+export const getIntruderStatus = (signal?: AbortSignal) =>
+  getJSON<{ container: string; up: boolean; ready: boolean; running: number; detail: string }>(
+    "/cockpit/intruder/status",
+    signal
+  );
+
+/** What would be sent AND whether the gate would refuse it — sending nothing. */
+export const intruderPreview = (req: IntruderRequest, signal?: AbortSignal) =>
+  postJSON<IntruderPreview>("/cockpit/intruder/preview", req, signal);
+
+export const startIntruder = (req: IntruderRequest, signal?: AbortSignal) =>
+  postJSON<IntruderJob>("/cockpit/intruder", req, signal);
+
+export const listIntruderJobs = (signal?: AbortSignal) =>
+  getJSON<IntruderJob[]>("/cockpit/intruder", signal);
+
+export const getIntruderJob = (id: string, signal?: AbortSignal) =>
+  getJSON<IntruderJob>(`/cockpit/intruder/${encodeURIComponent(id)}`, signal);
+
+/** Stop an in-flight job. NOT GATED — the panic button, exactly like stopping a scan. */
+export const stopIntruderJob = (id: string, signal?: AbortSignal) =>
+  delJSON<IntruderJob>(`/cockpit/intruder/${encodeURIComponent(id)}`, signal);
 
 /* -------------------------------------------------------------------------- */
 /* THE WAF-BYPASS HEADER (build #18 item 1)                                    */

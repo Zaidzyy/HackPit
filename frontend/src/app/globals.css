@@ -8065,10 +8065,26 @@ a.hp-card {
 .hp-tn-cardsub { font-size: 12px; color: var(--dim); margin: -4px 0 10px; }
 .hp-tn-form, .hp-tn-routeform { display: flex; flex-wrap: wrap; gap: 8px; }
 .hp-tn-form select, .hp-tn-form input, .hp-tn-routeform input,
+.hp-tn-form textarea, .hp-tn textarea,
 .hp-tn-form button, .hp-tn-routeform button {
   font-family: var(--font-jetbrains-mono), monospace; font-size: 12.5px;
   background: rgba(0,0,0,0.35); border: 1px solid var(--border); border-radius: 6px;
   color: var(--white); padding: 8px 10px;
+}
+/* THE MIRROR OF THE CHECKBOX FIX BELOW, AND THE SAME LESSON FROM THE OTHER SIDE.
+   That rule OVER-matched `input`; this one UNDER-matched by never naming `textarea`, so a
+   textarea in a cockpit screen rendered as bare unstyled text on a dark background — visible
+   in a headless screenshot of `:intruder` 2026-08-05, which is the only way it could have been
+   found: tsc, next build and eslint cannot see whether an element has a style.
+   Fixed HERE rather than in the two screens that noticed, because the next screen with a
+   textarea would have hit it too. `.hp-tn textarea` is scoped to the cockpit vocabulary and
+   collides with nothing — `:engagement` uses its own `.hp-eng-textarea` outside `.hp-tn`. */
+.hp-tn textarea {
+  width: 100%; resize: vertical; line-height: 1.5;
+}
+.hp-tn textarea::placeholder { color: var(--dim); opacity: 0.7; }
+.hp-tn textarea:focus, .hp-tn-form input:focus, .hp-tn-form select:focus {
+  outline: none; border-color: var(--accent-line);
 }
 .hp-tn-form input { flex: 1 1 200px; min-width: 120px; }
 .hp-tn-form .hp-tn-port { flex: 0 0 130px; }

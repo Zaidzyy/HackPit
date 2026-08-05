@@ -55,7 +55,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
-from . import config, engagement, loot, runstore, scope as scope_mod
+from . import config, cookiejar, engagement, loot, runstore, scope as scope_mod
 from .models import RunRecord
 
 # Response-body cap (chars). A repeater response is meant to be read; a multi-MB download is
@@ -104,6 +104,18 @@ class RepeaterRequest(BaseModel):
         None, description="When set + active, the URL host is scope-checked; out-of-scope refused."
     )
     session_id: str | None = Field(None, description="Engagement to record + keep history against.")
+    # *** THE COOKIE JAR (build #19 item 2) — ON BY DEFAULT, AND DISCLOSED ON EVERY SEND. ***
+    # Defaulting this False would have left the feature switched off for everyone who did not
+    # know it existed, and the thing it fixes — every authenticated flow breaking on the SECOND
+    # request — is the common case rather than the exotic one. What pays for the default is that
+    # the exchange REPORTS every attached cookie, where it came from and what it suppressed, so
+    # the state cannot change a request invisibly. See cockpit/cookiejar.py.
+    use_cookie_jar: bool = Field(
+        True,
+        description="Attach stored cookies matching this URL, and store any Set-Cookie from the "
+        "response. Set false to send with NO session — testing what an unauthenticated caller "
+        "sees is a real test, and it must not need the jar to be emptied first.",
+    )
     # *** PAYLOAD SHAPING (build #18 item 4) — AN OPTION, NOT A GATE. ***
     # No confirm, no acknowledgement and no refusal if unset. The repeater is human-only by
     # construction and a human clicking Send IS the approval; this changes the bytes of a request
@@ -160,6 +172,24 @@ class RepeaterExchange(BaseModel):
         default_factory=list,
         description="Shapes that did nothing, and why — an unknown name, or a request-level "
         "shape with nothing to act on. WARN AND CONTINUE: the request was still sent.",
+    )
+    #: *** THE JAR'S DISCLOSURE. A HEADER THE OPERATOR DID NOT TYPE HAS TO EXPLAIN ITSELF. ***
+    #: `cookies` carries NO VALUES — only the name, the domain and path it was stored under, and
+    #: the response that set it. See cookiejar.CookieAttachment for why there is no value field:
+    #: this object is serialised into an API response and a run record renders into a REPORT, and
+    #: never handing a credential over cannot regress.
+    cookies_attached: list["cookiejar.CookieAttachment"] = Field(default_factory=list)
+    cookies_stored: list["cookiejar.CookieAttachment"] = Field(
+        default_factory=list,
+        description="Cookies this response's Set-Cookie headers put INTO the jar. Names only.",
+    )
+    cookie_warnings: list[str] = Field(
+        default_factory=list,
+        description="Cookies the operator's own Cookie: header suppressed, Secure cookies "
+        "withheld from an http URL, and anything unparseable. WARN AND CONTINUE throughout.",
+    )
+    cookie_jar_used: bool = Field(
+        True, description="False when the send deliberately went WITHOUT the jar."
     )
 
 
@@ -272,8 +302,26 @@ def shape_request(req: RepeaterRequest) -> tuple[str, str, list[str], list[str]]
     return url, body, applied, warnings
 
 
+#: A `Cookie:` header the operator typed. Split on ';' and read the names to the left of '='.
+def typed_cookie_names(req: RepeaterRequest) -> frozenset[str]:
+    """Cookie NAMES already present in a composed `Cookie:` header. Those beat the jar's copies.
+
+    Duplicate `Cookie:` headers are read as well as one — curl sends them all, so pretending only
+    the first exists would make the jar suppress the wrong set.
+    """
+    names: set[str] = set()
+    for h in req.headers:
+        if h.name.strip().lower() != "cookie":
+            continue
+        for pair in (h.value or "").split(";"):
+            name, sep, _ = pair.strip().partition("=")
+            if sep and name.strip():
+                names.add(name.strip())
+    return frozenset(names)
+
+
 def _build_curl(req: RepeaterRequest, sentinel: str, *, url: str, has_body: bool,
-                chunked: bool = False) -> list[str]:
+                chunked: bool = False, cookie_header: str = "") -> list[str]:
     """The curl argv for one request. Every request field is a discrete argv token.
 
     ``url`` and ``has_body`` are PASSED IN rather than read off ``req``, because after build #18
@@ -299,12 +347,30 @@ def _build_curl(req: RepeaterRequest, sentinel: str, *, url: str, has_body: bool
     has_ua = any(h.name.strip().lower() == "user-agent" for h in req.headers)
     if not has_ua:
         argv += ["-A", _DEFAULT_UA]
+    # *** ONE `Cookie:` HEADER, NEVER TWO, AND THAT IS NOT A STYLE CHOICE. ***
+    # RFC 6265 §5.4 is explicit that a user agent MUST NOT attach more than one Cookie header,
+    # and servers disagree about what to do when one arrives: some concatenate, some read the
+    # first and drop the rest. Emitting the jar as a second `-H "Cookie: …"` would therefore
+    # produce a request whose meaning depends on the target's parser — a silent wrong answer of
+    # exactly the shape this repo keeps finding. So when the jar contributes, the operator's
+    # typed cookies and the jar's are joined into a single header, operator's first.
+    #
+    # WHEN THE JAR CONTRIBUTES NOTHING THE HEADERS GO OUT EXACTLY AS TYPED — duplicates included.
+    # Two Cookie headers may be precisely what an operator is testing, and this must not be the
+    # code that quietly decides they may not.
+    typed_cookie_values = [h.value for h in req.headers if h.name.strip().lower() == "cookie"]
     for h in req.headers:
         name = h.name.strip()
         if not name:
             continue
+        if cookie_header and name.lower() == "cookie":
+            continue                       # folded into the single header emitted below
         # `curl -H "Name: value"` — one token, no shell, so ':' / spaces / etc. are literal.
         argv += ["-H", f"{name}: {h.value}"]
+    if cookie_header:
+        merged = "; ".join([v.strip().rstrip(";") for v in typed_cookie_values if v.strip()]
+                           + [cookie_header])
+        argv += ["-H", f"Cookie: {merged}"]
 
     # Body on STDIN via @- so no request byte ever reaches the argv (or a shell).
     if has_body:
@@ -428,6 +494,13 @@ def send(req: RepeaterRequest) -> RepeaterExchange:
     HUMAN-ONLY — called only from the HTTP route. Refuses (nothing sent) if the open sandbox is
     down or the host is out of scope for a named engagement. Otherwise runs curl argv-only, caps
     and parses the response, records the run for audit and keeps it in the session history.
+
+    *** THE COOKIE JAR IS APPLIED HERE AND DISCLOSED ON THE EXCHANGE (build #19 item 2). ***
+    Cookies matching the SHAPED url are attached, this response's `Set-Cookie` headers are stored
+    against the FINAL url, and both are reported by name on the returned exchange. No cookie
+    VALUE reaches the exchange, the run record or anything downstream of them — see
+    cockpit/cookiejar.py, and note that the run record below still carries only the method, the
+    URL and the shapes, because `report.py` renders a run record's argv verbatim into a report.
     """
     method = req.method.strip().upper()
     if method not in _METHODS:
@@ -448,6 +521,24 @@ def send(req: RepeaterRequest) -> RepeaterExchange:
             "(docker compose -f docker/docker-compose.yml up -d)"
         )
 
+    # THE JAR, on the way out. Selection happens on the SHAPED url for the same reason the scope
+    # check does: the cookies attached must be the ones matching the host that is actually
+    # reached, and nothing stops an operator marking a [[…]] span inside the host.
+    jar = cookiejar.jar_for(req.session_id)
+    if req.use_cookie_jar:
+        selection = jar.select(sent_url, typed_cookie_names(req))
+    else:
+        selection = cookiejar.CookieSelection()
+    cookie_warnings: list[str] = []
+    for name in selection.suppressed:
+        cookie_warnings.append(
+            f"cookie {name!r} is in the jar but you typed it yourself — YOUR value was sent"
+        )
+    for name in selection.skipped_secure:
+        cookie_warnings.append(
+            f"cookie {name!r} is marked Secure and this URL is plain http — not attached"
+        )
+
     run_id = uuid.uuid4().hex[:12]
     sent_at = _now()
     sentinel = _SENTINEL_TMPL.format(uuid.uuid4().hex)
@@ -455,7 +546,8 @@ def send(req: RepeaterRequest) -> RepeaterExchange:
     argv = ["docker", "exec", "-i", *loot.exec_flags(workdir),
             config.KALI_OPEN_CONTAINER,
             *_build_curl(req, sentinel, url=sent_url, has_body=bool(sent_body),
-                         chunked="chunked" in shapes_applied)]
+                         chunked="chunked" in shapes_applied,
+                         cookie_header=selection.header)]
 
     resp = RepeaterResponse()
     timeout = config.clamp_timeout(req.timeout_seconds) + 15  # curl enforces --max-time; this is a backstop
@@ -473,11 +565,30 @@ def send(req: RepeaterRequest) -> RepeaterExchange:
     except FileNotFoundError:
         resp.error = "docker CLI not found on PATH"
 
+    # ...and on the way back in. `final_url` is preferred over the sent URL because with `-L` the
+    # Set-Cookie may have come from the LAST hop, and storing it against the first host would
+    # file the session cookie under a domain that never issued it.
+    stored: list[cookiejar.CookieAttachment] = []
+    if req.use_cookie_jar:
+        set_cookies = [h.value for h in resp.headers if h.name.lower() == "set-cookie"]
+        if set_cookies:
+            origin = resp.final_url or sent_url
+            before = {(c.domain, c.path, c.name) for c in jar.cookies()}
+            cookie_warnings.extend(jar.ingest(set_cookies, origin))
+            stored = [
+                cookiejar.CookieAttachment(name=c.name, domain=c.domain, path=c.path,
+                                           set_by_url=c.set_by_url, set_at=c.set_at)
+                for c in jar.cookies()
+                if (c.domain, c.path, c.name) not in before or c.set_by_url == origin
+            ]
+
     exchange = RepeaterExchange(
         id=uuid.uuid4().hex[:12], run_id=run_id, request=req, response=resp,
         sent_at=sent_at, container=config.KALI_OPEN_CONTAINER, session_id=req.session_id,
         sent_url=sent_url, sent_body=sent_body,
         shapes_applied=shapes_applied, shape_warnings=shape_warnings,
+        cookies_attached=selection.attached, cookies_stored=stored,
+        cookie_warnings=cookie_warnings, cookie_jar_used=req.use_cookie_jar,
     )
 
     # Audit — recorded like every other run. command="http" keeps the log honest about what this

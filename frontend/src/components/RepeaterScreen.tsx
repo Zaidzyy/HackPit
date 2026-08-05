@@ -5,7 +5,9 @@ import { PageShell } from "./PageShell";
 import { CopyButton } from "./CopyButton";
 import {
   ApiError,
+  clearRepeaterCookies,
   getRepeaterStatus,
+  repeaterCookies,
   getRepeaterShapes,
   repeaterPreview,
   repeaterSend,
@@ -49,6 +51,10 @@ export function RepeaterScreen() {
   const [follow, setFollow] = useState(false);
   const [insecure, setInsecure] = useState(false);
   const [engagementId, setEngagementId] = useState("");
+  // The cookie jar (build #19 item 2). `jarCount` is null until it has been read once — "we
+  // have not looked" is a different thing from "the jar is empty", and the button says so.
+  const [useJar, setUseJar] = useState(true);
+  const [jarCount, setJarCount] = useState<number | null>(null);
 
   const [history, setHistory] = useState<RepeaterExchange[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -108,6 +114,7 @@ export function RepeaterScreen() {
       engagement_id: engagementId.trim() || null,
       session_id: engagementId.trim() || null,
       shapes,
+      use_cookie_jar: useJar,
     };
     try {
       const ex = await repeaterSend(req, ctrl.signal);
@@ -119,7 +126,33 @@ export function RepeaterScreen() {
     } finally {
       setSending(false);
     }
-  }, [method, url, headers, body, follow, insecure, engagementId, sending, shapes]);
+  }, [method, url, headers, body, follow, insecure, engagementId, sending, shapes, useJar]);
+
+  /** Empty this session's jar. Ungated — clearing state removes capability, never adds it. */
+  const clearJar = useCallback(async () => {
+    try {
+      const out = await clearRepeaterCookies(engagementId.trim() || null);
+      setJarCount(0);
+      setError(
+        out.cleared > 0
+          ? `cookie jar emptied — ${out.cleared} cookie(s) dropped`
+          : "cookie jar was already empty"
+      );
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    }
+  }, [engagementId]);
+
+  // Re-read the jar after every send, because a send is the only thing that changes it.
+  useEffect(() => {
+    let live = true;
+    repeaterCookies(engagementId.trim() || null)
+      .then((cs) => live && setJarCount(cs.length))
+      .catch(() => live && setJarCount(null));
+    return () => {
+      live = false;
+    };
+  }, [engagementId, history.length]);
 
   /**
    * Show the request AS IT WOULD GO ON THE WIRE, without sending it. It calls the same backend
@@ -290,6 +323,22 @@ export function RepeaterScreen() {
                 />
                 accept invalid TLS
               </label>
+              {/* THE COOKIE JAR (build #19 item 2). ON by default, because the thing it fixes —
+                  every authenticated flow breaking on the SECOND request — is the common case.
+                  Unchecking it sends with NO session WITHOUT emptying the jar, because "what
+                  does an unauthenticated caller see" is a real test that must not cost you the
+                  session you spent five minutes establishing. */}
+              <label className="hp-rp-opt" title="Attach stored cookies and store Set-Cookie.">
+                <input
+                  type="checkbox"
+                  checked={useJar}
+                  onChange={(e) => setUseJar(e.target.checked)}
+                />
+                use cookie jar
+              </label>
+              <button type="button" className="hp-rp-addh" onClick={clearJar}>
+                empty jar{jarCount === null ? "" : ` (${jarCount})`}
+              </button>
               <input
                 className="hp-rp-eng"
                 value={engagementId}
@@ -358,6 +407,44 @@ export function RepeaterScreen() {
                 <pre className="hp-rp-body">{current.sent_url}</pre>
               </div>
             )}
+
+            {/* ---- THE JAR'S DISCLOSURE (build #19 item 2) ----------------------
+                A `Cookie:` header the operator did not type has to explain itself, or the jar
+                is state that silently changes a request. NAMES ONLY — there is no value field
+                on the wire and none on the screen; to see a value, read the response that set
+                it in the history below. */}
+            {current &&
+            (current.cookies_attached.length > 0 ||
+              current.cookies_stored.length > 0 ||
+              current.cookie_warnings.length > 0) ? (
+              <div className="hp-rp-bodywrap">
+                <div className="hp-rp-subhead">
+                  cookie jar
+                  {current.cookie_jar_used ? "" : " — NOT USED for this send"}
+                </div>
+                {current.cookies_attached.length > 0 && (
+                  <pre className="hp-rp-body">
+                    {"attached to this request:\n"}
+                    {current.cookies_attached
+                      .map((c) => `  ${c.name}  (${c.domain}${c.path}) set by ${c.set_by_url}`)
+                      .join("\n")}
+                  </pre>
+                )}
+                {current.cookies_stored.length > 0 && (
+                  <pre className="hp-rp-body">
+                    {"stored from this response:\n"}
+                    {current.cookies_stored
+                      .map((c) => `  ${c.name}  (${c.domain}${c.path})`)
+                      .join("\n")}
+                  </pre>
+                )}
+                {current.cookie_warnings.map((w) => (
+                  <div key={w} className="hp-rp-error">
+                    {w}
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
             {error && <div className="hp-rp-error">{error}</div>}
           </section>

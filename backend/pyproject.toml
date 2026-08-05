@@ -29,3 +29,12 @@ codescan = [
 pipeline = [
     "pypdf>=6.0",
 ]
+# The MCP server (backend/mcp_server.py — build #19 item 6). OPTIONAL because it is a SEPARATE
+# PROCESS an operator registers with an MCP client; the backend serves every route without it.
+# Deliberately not required by the safety lock either: `backend/mcp_tools.py` holds the registry
+# and both audits and imports nothing from `mcp`, so `test_mcp_safety.py` enumerates every
+# exposed tool in CI where this group is absent.
+#   cd backend && uv pip install --python .venv/Scripts/python.exe mcp
+mcp = [
+    "mcp>=1.0",
+]

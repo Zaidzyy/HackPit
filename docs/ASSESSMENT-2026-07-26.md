@@ -3782,3 +3782,365 @@ was declared nowhere** — not in `backend/pyproject.toml`, not in any requireme
 ingester could never have run on a clean checkout; it had only ever run where pypdf happened to
 be installed. Now an optional group beside `codescan`, which is the existing precedent for
 tooling the backend serves every route without.
+
+## Build #19 — the interactive half, and eyes for the agent (2026-08-05)
+
+Build #18 made HackPit *reach* targets that were refusing it. What it never touched is a gap
+measured by comparing HackPit against Burp rather than against its own backlog: **the proxy
+records faithfully and cannot change anything mid-flight.** Four things fall out of that —
+interception, a repeater cookie jar, history filtering, an intruder — plus an MCP server, because
+`hexstrike-ai` already gives an agent hands and nothing gives it eyes on *this* engagement.
+
+**The build adds no gate, no confirm, no blocklist and no allow-list narrowing** — not in the
+product and not in a proof script. Where something could refuse, it warns and continues. Two
+places decline to send an API call, and both are named below with the argument for why that is a
+defect fix rather than a prohibition.
+
+### Item 1 — the go/no-go, and it was a GO for a reason nobody would have guessed
+
+Nothing in item 4 was written before this answered. Build #14 was written against
+`zap-baseline.py`, which does not exist in Kali, and only the image build caught it — so
+`docs/proof/build19_break_api.py` enumerates what ZAP 2.17.0 actually exposes and then drives the
+whole loop against a real origin, **reading that origin's own access log as the arbiter**. Every
+one of these endpoints will answer `{"Result":"OK"}` for things it did not do.
+
+**VERDICT: 27 passed, 0 failed. Hold, read, replace, forward and drop all work.** The origin log
+shows only the *replaced* requests; the dropped ones are absent; breaking off restores traffic.
+
+Five traps, and the first four were each written down WRONG before they were measured:
+
+**1. `brk` IS NOT IN THE INSTALLED ADD-ON LIST AND THE API IS THERE ANYWAY.**
+`autoupdate/view/installedAddons` returns 48 add-ons and the Break add-on is not among them;
+every `break/` view and action answers regardless, because `BreakAPI` ships in ZAP core. **A
+go/no-go taken off that inventory would have said NO to a feature that works.** An add-on list is
+not an API surface — and neither is the documentation: `core/view/apiSummary` is `bad_view` in
+2.17.0 and `/JSON/break/view/` returns ZAP's *welcome page* as a 200 of HTML. The surface had to
+be established by probing names and reading the error CODE, where a genuinely absent action
+answers `bad_action` and one that merely needs a held message answers `does_not_exist`.
+
+**2. `http-all` IS THE ONLY `type` THE ACTION ACCEPTS.** `http-request`, `http-response` and
+`http-sender` — two of which name views that DO exist — every one answers `illegal_parameter`.
+This module's first docstring claimed `http-request` "answers OK and holds nothing"; the proof
+disagreed and the proof was right. `BREAK_TYPE` is a constant rather than a request field, for
+the simplest possible reason: there is nothing else to choose.
+
+**3. `continue` TURNS BREAKING OFF. `step` AND `drop` LEAVE IT ON.** `isBreakAll` reads true
+while a request is held and false immediately after `continue`. That is ZAP's break-panel
+semantics (Continue means "let everything go"), and it is not a detail: an operator who forwards
+a request expecting to catch the next one catches nothing, and the global banner correctly
+vanishes underneath them. `release()` reads the state back and says so in `detail`.
+
+**4. `isBreakRequest` IS A SETTING, NOT A STATE.** It reads true whenever breaking is switched
+on, with nothing held. A panel wired to it reports "a request is waiting" forever, so `held` is
+derived from `httpMessage` being non-empty and a test asserts that by AST.
+
+### *** 5. A `drop` WITH NOTHING HELD PERMANENTLY WEDGES THE BREAK MANAGER. ***
+
+The worst one, and **the proof script found it by doing it.** After a single stray
+`break/action/drop/` against a daemon holding nothing, that daemon still HOLDS requests —
+`isBreakAll` true, the origin never sees them, the client blocks — but `break/view/httpMessage`
+returns `""` forever and `setHttpMessage` therefore never applies. Interception silently becomes
+a way to freeze your own browser with no way to read or release anything.
+
+It took four wrong hypotheses to find, and the wrong ones are worth recording because each was
+plausible and each was killed by a measurement rather than by argument:
+
+| hypothesis | how it died |
+|---|---|
+| the daemon degrades over a long session | a **brand-new** daemon wedged on the first stray drop |
+| unreadable from the host, readable from inside | an interleaved read got `""` from **both**, on one held request |
+| it is a latency problem | 301 host polls over 45 s, never readable |
+| `drop`-then-enable stops it holding | an A/B said both arms still HOLD — but that A/B ran on an already-wedged daemon, which is why it looked like a refutation |
+
+What settled it was a **single-variable experiment on fresh daemons, twice in each direction**:
+with the stray drop, 23 passed / 4 failed; with that one line removed, 27 / 0.
+
+So every drop in the product is guarded by a read-back. `release()` will not send `drop` unless
+something is held, and `panic()` drops only when `before.held` says there is something to drop.
+**That is not a prohibition on the operator** — dropping nothing was never a meaningful action —
+**it is refusing to send an API call that breaks the daemon.** `panic()` is the function most
+likely to be pressed when nothing is held, because it is the "I think the target is down" button;
+an unguarded drop there would have destroyed interception for the rest of that daemon's life at
+exactly the moment the operator was most confused.
+
+**And the reset in the proof is shaped by the same finding.** The obvious reset is `drop` then
+`state=false` — which is the bug. It now reads first and only drops something really there,
+which is exactly the guard the product carries.
+
+### Item 2 — the repeater cookie jar, and a value that never leaves the module
+
+Every authenticated flow broke on the SECOND request: the login returned a `Set-Cookie`, nothing
+kept it, and the follow-up went out anonymous. `cockpit/cookiejar.py` is a per-session RFC 6265
+jar — domain and path matching dot-anchored, `Secure` honoured, `Max-Age` beating `Expires`, an
+expired cookie DELETING rather than storing (that is how a server logs you out, and a jar that
+kept it would silently re-authenticate the next request).
+
+**THE JAR IS STATE, AND STATE THAT SILENTLY CHANGES A REQUEST IS A TRAP**, so:
+
+* **`CookieAttachment` HAS NO `value` FIELD AT ALL.** It carries the name, the domain and path it
+  was stored under, and the URL of the response that set it. That model is what goes on the
+  exchange, into the API response and onto the screen. Build #18's rule restated: never handing a
+  secret over cannot regress, while redacting it afterwards depends on a redactor being correct
+  forever.
+* **A cookie the operator typed WINS**, and the suppression is named. An explicit `Cookie:` is
+  them testing a specific value; a jar that overwrote it would make the request under test
+  unreachable.
+* **`use_cookie_jar: false` sends with no session WITHOUT emptying the jar** — testing what an
+  unauthenticated caller sees is a real test and must not cost a session established by hand.
+* **`evil.example.com` cannot set a cookie for `example.com`** (RFC 6265 §5.3 step 6). That is the
+  one place the jar declines to store something, and it still does not refuse the SEND: it warns,
+  drops that cookie, and the exchange proceeds.
+
+**THE REDACTOR THAT WOULD HAVE HAD TO BE CORRECT IS NEVER CALLED (checked, not assumed).**
+`report.py::redact_captured_body` knows the word "cookie" — and no production path invokes it;
+its only callers are tests. Meanwhile `report.py::_run_cmdline` renders a run record's command
+line **verbatim** into a report. So the run record has to be cookie-free *by construction* rather
+than cleaned, and it is: `args` stays `[method, sent_url, *shapes]`. A test asserts both halves,
+including that `redact_captured_body` still has no production caller — because if that changes,
+this lock's argument changes with it.
+
+**ONE `Cookie:` HEADER ON THE WIRE, NEVER TWO.** RFC 6265 §5.4 says a user agent must not send
+two, and servers disagree about what to do when one arrives — some concatenate, some read the
+first. Emitting the jar as a second `-H` would have made the request's meaning depend on the
+target's parser, which is a silent wrong answer of exactly the shape this repo keeps finding. The
+jar merges into a single header, operator's cookies first. **When the jar contributes nothing the
+headers go out exactly as typed, duplicates included** — two Cookie headers may be precisely what
+an operator is testing, and this must not be the code that quietly decides they may not.
+
+### Item 3 — history filtering, where the counts ARE the feature
+
+~1,300 captured messages and the only tool was `start`/`count`. `filter_history` filters
+server-side on host, method, status, URL substring, has-parameter, content-type and engagement
+scope — and **the host filter is `scope.py`'s own parser**, so `api.example.com` and
+`*.example.com` mean here exactly what they mean in a scope field. A second host matcher is how
+`notexample.com` gets to match `example.com`.
+
+A filter is the perfect place for this repo's recurring silent empty, because "no rows" is a
+completely ordinary answer. **Four different facts present as an empty list** and the response
+distinguishes all four: ZAP holds nothing (`total`), we read and nothing matched (`scanned`,
+`matched`), we could not read what ZAP holds (`read_ok`, `dropped`), or **we stopped scanning
+before reaching the rows that would have matched** (`truncated`). That last is the one a naive
+implementation creates, and it would have been `history`'s own build #17 defect in a new place
+with a scarier failure: "there are no 500s on this target" is a conclusion someone acts on. The
+scan pages through the whole capture and `truncated` is never silently true.
+
+An engagement id that names nothing active does **not** refuse the search — `scope_note` says the
+filter was ignored and everything was kept. This is a read of traffic that already happened;
+refusing to show an operator their own capture because an engagement ended would be a prohibition
+invented by the tooling.
+
+### Item 4 — interception, which adds no gate because there is nothing to bypass
+
+Turn breaking on, know when a request is held, read it, replace it, forward it, drop it. **This
+is a surfacing job, not a proxy-building job** — nothing in `cockpit/intercept.py` parses TLS,
+holds a socket or forwards a byte; every verb is one call to an API measured working first.
+
+**Every route is ungated in BOTH directions.** A request is held, a human reads it, a human edits
+it, a human presses forward — the press IS the approval, the same position `:kali` and the
+repeater already take. Interception also strictly *reduces* what reaches the target: with
+breaking on, nothing goes anywhere until a person says so. "Off" matters most: while breaking is
+on **the operator's own browser is frozen**, so a gate that could refuse to stop it would be
+indistinguishable from the target having gone down.
+
+That is also why the screen carries a **loud global banner** whenever breaking is on, saying
+which of the two states it is in ("a request is HELD" versus "traffic is being held, nothing yet
+— a frozen browser right now is something else"), with **drop-everything-and-turn-it-off one
+click away** without scrolling. The panel polls every two seconds, because a held request has to
+announce itself rather than wait to be refreshed into view.
+
+The replaced request travels as a **POST form body**, never a URL: a held request routinely
+carries a session cookie and an Authorization header, and `_api_get` would put those in ZAP's own
+history *and* on a `docker exec … curl …` argv that `ps` on this host can read. Build #18's
+bypass-header reasoning, applied to a third secret.
+
+### Item 5 — the intruder, and why one approval may buy thousands of requests
+
+**HackPit refuses BATCHING ACROSS APPROVALS** — an agent queueing five commands behind one human
+click. It has never refused ONE approval that produces many requests, and could not: `ffuf`,
+`nuclei` and the ZAP active scanner are each a single approval buying thousands, and the
+scanner's own measurement was 376 requests from one press. An intruder is that same shape, gated
+by the SAME four gates with no new ones.
+
+Positions reuse the `[[…]]` shaping marker — one vocabulary, not two — and what is *inside* the
+markers is the BASELINE value, so `sniper` leaves the other positions at their original values
+rather than blanking them. Blanking would change two things at once and make every result
+uninterpretable. The baseline request is sent FIRST, with markers stripped, which is build #18's
+control half: without it "this response is different" has nothing to be different from.
+
+**THE PAYLOAD SET IS IN THE APPROVED SURFACE, COMPLETE AND UNTRUNCATED.** Rendering "…and 4,993
+more" would let a payload carrying `| sh` sit at position 5,000 where the danger heuristic cannot
+see it while the human approves a summary — Critical 2 expressed in a payload list. Measured: the
+danger gate fires on payload CONTENT, and a test plants a shell payload at position 200 and
+asserts the gate still catches it.
+
+**THE RED-CONFIRM IS THE GATE'S TO DEMAND, NOT THE FORM'S.** A set of ordinary injection strings
+does not trip it; one carrying `| sh` does. Requiring the ack unconditionally would have been
+this build adding a confirm. **So would declaring `ffuf` an attack tool** to make the feature feel
+appropriately dangerous — that would have added a red-confirm to every existing ffuf run in the
+product, and a test asserts a plain in-lab `ffuf` still needs none.
+
+A correction this build made to its own first draft: `intruder.py` originally justified declaring
+`ffuf` by saying it "is already in the allowlist". **There is no tool allowlist.** The module that
+sounds like one says so in its own comment — `SUGGESTED_COMMANDS` is "Informational only … NOT an
+allowlist; anything may run". Membership proves nothing; the real property is that the declared
+command must DESCRIBE what runs, because that string is what a human approves and what the danger
+heuristic reads.
+
+The scope check runs **per request, on the substituted URL** — a payload can contain a `.` and a
+`/`, and a marked span inside the host would otherwise send the request somewhere the gate never
+saw. An off-scope substitution is COUNTED and the job continues; one payload walking off-scope
+must not throw away the other 4,999. The ceiling caps and REPORTS rather than refusing, and stop
+is ungated like every other stop here.
+
+Pitchfork and cluster bomb are deliberately absent: they need two independent sets, and a cluster
+bomb of two 1,000-entry lists is a million requests from one press — that deserves its own
+argument rather than inheriting this one.
+
+### Item 6 — the MCP server: eyes, not hands
+
+Fifteen tools. Fourteen are reads — engagement and scope, filtered proxy history, scan status,
+alerts, session health, interception state, CDN fronting, findings, engagement state, KB search,
+the arsenal, the CVE/exploit index including the curated overlay, and a command-scope check. One
+is write-shaped: **`propose_command`, which appends to an approval queue and runs nothing.**
+
+*** THE LINE. *** HackPit's action routes take `approved=true` and `dangerous_ack=true` **in the
+request body**. If an MCP tool could set those fields the agent would approve itself and every
+gate in this codebase would become theatre — which is exactly why `proxy._gate_request` passes
+`GATE_KEY_PLACEHOLDER`. So `test_mcp_safety.py` enumerates **every exposed tool** and asserts:
+
+* no approval field is nameable, at any schema depth **and** through an open schema —
+  `additionalProperties: False` is part of the line, because an open schema makes
+  `{"approved": true}` sendable whether or not the handler reads it;
+* no handler reaches an execution path, by AST, following the module's own helpers.
+
+**Both audits carry a positive control that plants a violation and proves it is caught**, because
+an audit that always returns `[]` would pass forever. And the server itself refuses to start if
+either audit fails — the one refusal in build #19, and a self-check rather than a prohibition: it
+declines to EXPOSE a violating surface; it never refuses a user action.
+
+**Approving a proposal does not run it, and that absence is the design.** The obvious next feature
+is "approve and run"; wiring it would make the queue a SECOND place that can set an approval
+field, reachable by anything that can reach the queue. `review()` marks a row and stops. The
+`Proposal` model deliberately carries no gate field NAMES either — if it did, the next person to
+wire it into an `ExecRequest` would do so by copying them across, and the agent would have written
+the value.
+
+The gate preview beside each row **always asks with both flags false**, so what comes back is the
+first gate standing in the way. Asking with them set would answer "this would be allowed", which
+reads as permission and is a question nobody asked.
+
+**Two reads are deliberately narrowed, and neither is a gate.** The intercept read tells an agent
+THAT a request is held and how many bytes it is, never its contents — a held request is the one
+read whose payload is a live credential rather than recorded traffic. The engagement-state read
+returns credentials as host, username and kind, never values.
+
+**Transport is stdio**, and build #19's own week is the reason: Burp's MCP server was measured
+answering **403 to every combination tried**, rejecting browser-looking User-Agents and
+non-allowlisted `Origin` headers as DNS-rebinding defence. That is a real threat against a
+localhost HTTP MCP server — any page in the operator's browser can POST to `127.0.0.1`. stdio has
+no port and no rebinding surface. If it ever moves to HTTP it needs the same protection, and
+route auth is still not built.
+
+**The registry imports no MCP SDK.** `mcp_tools.py` holds the tools and both audits;
+`mcp_server.py` is the transport. That split is structural: it means the lock runs in CI, where
+the optional dependency is absent. A line that could only be checked on one laptop is not a line.
+
+### Six defects this build found in its own work, and each needed a different kind of check
+
+**1. SIX OF FIFTEEN MCP HANDLERS WERE WRITTEN AGAINST NAMES THAT DO NOT EXIST.**
+`pipeline.search`, `state.store.list_findings`, `state.store.session_summary`, `arsenal.catalog`,
+`exploits.index.by_cve` and `cockpit.fronting.recorded_verdicts` — all invented, along with
+`attack_path.plan_for_session`. Build #14's lesson arriving exactly on schedule, and caught only
+by calling every tool for real rather than by any type-check. Three more followed on the second
+pass: `DATA_KB` is the entries FILE not its directory (the tool reported "the knowledge base is
+not built" about a KB with 2,744 rows in it), `EngagementRecord.id` is `engagement_id`, and
+`Template.command` is `Template.template`.
+
+**2. THE EXECUTION AUDIT SILENTLY PASSED A HANDLER IT COULD NOT READ.**
+`ast.parse(source.lstrip())` strips only the first line's indentation, so any handler defined at
+an indent raised `IndentationError` — and the audit caught it and `continue`d. The positive
+control planted a handler calling `subprocess.run` and the audit reported CLEAN. **Two fixes, and
+the second is the one that matters:** `textwrap.dedent`, and an unreadable handler is now an
+OFFENCE rather than a pass. "We could not check this" must never read as "this is fine" — the same
+`read_ok` rule the rest of the codebase runs on, applied to the safety check itself.
+
+**3. TWO EXISTING WHOLE-TREE LOCKS FIRED ON THIS BUILD, AND BOTH WERE RIGHT.** `FORBIDDEN_CALLS`
+named the `:kali` shell and the tunnel starter as string literals, and `test_kali.py` and
+`test_tunnels.py` failed the build **on this file**. Those scanners strip docstrings and comments
+but NOT other string literals — because blanking every string would go blind to
+`import_module("cockpit.kali")`, which is precisely the indirection they exist to catch.
+
+The fix was neither to weaken the scanners nor to spell the names evasively. It was to notice
+that the list was carrying **a second, weaker copy of locks that already cover every file in the
+tree, this one included**, and that catch imports and indirection a name-match never could. The
+rule left behind: an entry point belongs in that list only if it has no whole-tree lock of its
+own — and if adding a name breaks the suite somewhere unrelated, that is the duplication showing,
+so delete the name rather than narrowing the lock.
+
+**4. A CONTROL PHRASED "NOT REFUSED" MADE A TEST DEPEND ON DOCKER — THE THIRD TIME.**
+`test_intruder.py` asserted `validate(approved_lab_job) is None`. Without Docker the ISOLATION
+gate legitimately fires at `gate='sandbox'`, so the file would have gone red in CI, after two
+previous CI catches in build #14 part 3 and build #15. **The docker-stripped run caught it**,
+which is exactly what that run is for. Every control now asks "not refused at THIS gate".
+
+**5. A SHARED CSS RULE UNDER-MATCHED, AND ONLY A SCREENSHOT COULD SEE IT.**
+`.hp-tn-form select, input, button` never named `textarea`, so every textarea on a cockpit screen
+rendered as bare unstyled text on a dark background. This is the exact mirror of the checkbox
+defect recorded three lines above it in `globals.css` — that rule OVER-matched `input`; this one
+under-matched by omission — and it earns the same answer: **fix the rule, not the screen that
+noticed**, because the next screen with a textarea would have hit it too. `tsc`, `next build` and
+`eslint` were all green throughout, and `test_css_vocabulary.py` passed because every class did
+exist. Only looking at it found this.
+
+**6. JSX DROPPED A SPACE THAT IS PRESENT IN THE SOURCE.** `<em>required</em> when` rendered as
+`<em>required</em>when`. Verified against the served HTML rather than trusted from the
+screenshot's kerning, then fixed with the explicit `{" "}` this codebase already uses everywhere —
+which is presumably why it does.
+
+### The screens were LOOKED AT, and here is how, because the usual way was unavailable
+
+The Claude-in-Chrome extension was not connected this session. Rather than downgrade to "tsc
+passed", the sandbox's own Chromium was pointed at the dev server through
+`host.docker.internal:3000` and **`:proxy`, `:intruder` and `:repeater` were screenshotted and
+read**. Defects 5 and 6 above are what that found; both were fixed and re-shot. `:intruder` is a
+new top-level route and has a tile in `SURFACE_BANDS` (band `operate`, whose hint — "every
+command human-approved · needs the stack" — is true of both halves of it), so it is not the
+orphaned route `/proxy` was for two builds.
+
+### What was NOT done, and why
+
+* **`test_kb_fixture.py` is RED locally and this build did not fix it, deliberately.** The live
+  KB is at **2,747**, not 2,744, because another session's uncommitted work
+  (`pipeline/authored/authored_entries.jsonl` and two more `curated.json` rows) added three
+  entries. Regenerating the committed fixture would fold someone else's change into this commit
+  *and* break CI, because the fixture would then project a KB whose source rows are not committed.
+  CI is unaffected either way: that file's completeness and staleness checks need a live KB and
+  report NOT-RUN on a clean checkout, by design. **Build #19 touched no KB file**, and neither
+  the authored corpus nor `curated.json` is in this commit.
+* **The image is NOT rebuilt.** Nothing in this build changes it — interception, the jar, the
+  filter, the intruder and the MCP server are all backend and frontend code against tools the
+  image already ships.
+* **Caido, route auth, scanner pacing, mobile scope** — Zaid's standing skips, untouched.
+
+### Verification
+
+`docs/proof/build19_break_api.py`: **27 passed, 0 failed**, four consecutive green runs plus two
+more on freshly-restarted daemons. `docker/proof/browser_intercept_proof.sh`: **25 passed, 0
+failed** — nothing build #15 or #17 established was disturbed.
+
+Hermetic safety suite green at **85 test files**, every one exiting 0, with `test_kb_fixture.py`
+excluded for the reason above — four new: the cookie jar, interception plus history filtering, the
+intruder, and the MCP line. Every control is phrased *"not refused at THIS gate"*.
+
+The four new files, plus the eight existing ZAP / repeater / kali / tunnel locks this build
+touches, re-run with **`docker` stripped from `PATH` and the strip verified to bite first**
+(docker gone, `git` still present — the KB ingester's recovery path needs it): 12 of 12 green.
+
+`npx tsc --noEmit` 0, `npm run build` 0, `npm run lint` at the accepted baseline of **11 errors +
+1 warning**, unchanged from `main` — the new effects route their `setState` through async
+callbacks per the frontend AGENTS.md rule, and the one place that would have needed an effect
+(syncing the held request into the editor) is a **derivation** instead, which also removes any
+chance of a two-second poll overwriting a half-finished edit.
+
+`data/kb/entries.jsonl` is **not touched by this build**; it stands at 2,747 from another
+session's uncommitted work, and the committed fixture's 2,744 is left exactly as it was.

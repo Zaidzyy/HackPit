@@ -222,6 +222,14 @@ run_test test_auth_scan.py "scan policy + authenticated scanning (baseline-then-
 
 run_test test_fronting.py "CDN fronting + the silent-empty sweep (unknown is a real answer / an unreadable read is not a zero)"
 
+run_test test_cookiejar.py "repeater COOKIE JAR (the disclosure has NO value field, with a control / a cross-domain Set-Cookie is refused storage / host-only stays on its host / dot-anchored domains / an expired cookie DELETES / the operator's own Cookie wins and the suppression is named / ONE Cookie header on the wire, never two / no cookie reaches the run record, which report.py renders verbatim / no gate field, and the jar refuses nothing)"
+
+run_test test_intercept.py "INTERCEPTION + history filtering (http-all is the only break type / `held` from the MESSAGE, never the isBreakRequest SETTING / A DROP WITH NOTHING HELD WEDGES THE DAEMON, so neither release nor panic can send one / panic drops BEFORE switching off / continue stops breaking and step does not / an unreadable daemon is not a False, with a control / NO GATE on any intercept route / filter: 4 means 4xx, the host filter is the scope parser, has_param None is BOTH, and the scan walks the whole capture with truncated never silently false)"
+
+run_test test_intruder.py "INTRUDER (the four gates each fire WITH A CONTROL and the ack clears danger / THE WHOLE PAYLOAD SET IS IN THE APPROVED SURFACE, so one carrying `| sh` at position 200 still trips the gate / sniper keeps the other positions BASELINE / the baseline request is sent FIRST / per-request scope check on the SUBSTITUTED url / the ceiling CAPS AND REPORTS rather than refusing / stop ungated / the run record carries no payloads / A PLAIN ffuf STILL NEEDS NO RED-CONFIRM -- this build added no confirm)"
+
+run_test test_mcp_safety.py "MCP server THE LINE (every exposed tool enumerated: NONE can set an approval field at any depth, NONE has an open schema, NONE reaches an execution path -- each with a POSITIVE CONTROL that plants a violation and proves it is caught / an UNAUDITABLE handler is an offence, not a pass / exactly one write-shaped tool and it queues without running / approving a proposal executes nothing / the gate preview asks with both flags FALSE / the registry imports no MCP SDK so this runs in CI / the server REFUSES TO START on a violating surface)"
+
 if [ "$1" = "--with-proof" ]; then
   echo
   echo "== live Docker isolation PROOF (lab — must exit 0) =="

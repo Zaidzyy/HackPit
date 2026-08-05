@@ -8,9 +8,15 @@ import {
   clearAuthContexts,
   deleteBypassHeader,
   getAuthContext,
+  filterProxyHistory,
+  getIntercept,
   getProxyStatus,
   ingestScanAlerts,
   listProxies,
+  panicIntercept,
+  releaseIntercepted,
+  replaceIntercepted,
+  setIntercept as setIntercept_,
   listScanPolicies,
   listScans,
   proxyHistory,
@@ -27,7 +33,9 @@ import {
   syncBypassHeaders,
   type AuthContext,
   type CapturedExchange,
+  type FilteredHistory,
   type HistoryPage,
+  type InterceptState,
   type Proxy,
   type ProxyStatus,
   type Scan,
@@ -113,6 +121,29 @@ export function ProxyScreen() {
   const [headerBusy, setHeaderBusy] = useState(false);
   const [headerNote, setHeaderNote] = useState<string | null>(null);
 
+  // INTERCEPTION (build #19 item 4). `edit` is the textarea; `intercept.message` is what ZAP
+  // holds. They are separate on purpose: typing into the box must not look like it has changed
+  // the held request, because it has not until Replace is pressed.
+  const [intercept, setIntercept] = useState<InterceptState | null>(null);
+  // `null` means "not edited" and the box DERIVES from what ZAP holds. That is deliberately not
+  // a useEffect that copies the message into state on every poll: the frontend AGENTS.md rule is
+  // that new setState goes through async callbacks and never an effect body, and a 2-second
+  // poll writing into the textarea would also have overwritten a half-finished edit.
+  const [draft, setDraft] = useState<string | null>(null);
+  const [interceptBusy, setInterceptBusy] = useState(false);
+  const [interceptNote, setInterceptNote] = useState<string | null>(null);
+
+  // HISTORY FILTERING (build #19 item 3)
+  const [filtered, setFiltered] = useState<FilteredHistory | null>(null);
+  const [fHost, setFHost] = useState("");
+  const [fMethod, setFMethod] = useState("");
+  const [fStatus, setFStatus] = useState("");
+  const [fUrl, setFUrl] = useState("");
+  const [fType, setFType] = useState("");
+  const [fParams, setFParams] = useState(false);
+  const [fScope, setFScope] = useState(false);
+  const [filtering, setFiltering] = useState(false);
+
   // the authenticated context (build #18 items 6 and 7)
   const [ctxTarget, setCtxTarget] = useState("");
   const [loggedIn, setLoggedIn] = useState("");
@@ -158,6 +189,141 @@ export function ProxyScreen() {
       .then(setPolicies)
       .catch(() => setPolicies([]));
   }, []);
+
+  /* ---- INTERCEPTION (build #19 item 4) --------------------------------------
+   * THE POLL IS THE FEATURE, NOT A REFRESH BUTTON. A held request FREEZES the browser that
+   * made it, and an operator who has forgotten breaking is on reads that as the target having
+   * gone down. The banner has to appear on its own, so this polls while a proxy is live.
+   *
+   * `null` on failure, never a synthesised "not breaking" — the panel draws an unreadable
+   * daemon differently from a quiet one, which is the distinction `read_ok` exists for. */
+  const pollIntercept = useCallback(() => {
+    if (!live) return;
+    getIntercept(live.container, live.port)
+      .then(setIntercept)
+      .catch(() => setIntercept(null));
+  }, [live]);
+
+  useEffect(() => {
+    pollIntercept();
+    if (!live) return;
+    const t = setInterval(pollIntercept, 2000);
+    return () => clearInterval(t);
+  }, [pollIntercept, live]);
+
+  // The editor DERIVES from what ZAP holds until the operator types. No effect, no copy, and
+  // therefore nothing that can overwrite a half-written edit on the next poll.
+  const edit = draft ?? intercept?.message ?? "";
+  const editDirty = draft !== null;
+
+  const toggleBreaking = useCallback(
+    async (on: boolean) => {
+      if (!live || interceptBusy) return;
+      setInterceptBusy(true);
+      setInterceptNote(null);
+      try {
+        setIntercept(await setIntercept_(live.container, live.port, on));
+      } catch (e) {
+        setInterceptNote(e instanceof ApiError ? e.message : String(e));
+      } finally {
+        setInterceptBusy(false);
+      }
+    },
+    [live, interceptBusy]
+  );
+
+  const applyEdit = useCallback(async () => {
+    if (!live || interceptBusy) return;
+    setInterceptBusy(true);
+    setInterceptNote(null);
+    try {
+      // The header and body split on the FIRST blank line, which is what an HTTP message is.
+      const nl = edit.includes("\r\n\r\n") ? "\r\n\r\n" : "\n\n";
+      const at = edit.indexOf(nl);
+      const header = at === -1 ? edit : edit.slice(0, at + nl.length);
+      const body = at === -1 ? "" : edit.slice(at + nl.length);
+      const next = await replaceIntercepted(live.container, live.port, {
+        http_header: header,
+        http_body: body,
+      });
+      setIntercept(next);
+      setDraft(null);
+      setInterceptNote(
+        next.held
+          ? "replaced — the held request now carries your bytes. Nothing has been forwarded yet."
+          : next.detail || "nothing is held any more; the replacement was not applied."
+      );
+    } catch (e) {
+      setInterceptNote(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setInterceptBusy(false);
+    }
+  }, [live, edit, interceptBusy]);
+
+  const release = useCallback(
+    async (verb: "continue" | "drop" | "step") => {
+      if (!live || interceptBusy) return;
+      setInterceptBusy(true);
+      setInterceptNote(null);
+      try {
+        setIntercept(await releaseIntercepted(live.container, live.port, verb));
+        setDraft(null);
+      } catch (e) {
+        setInterceptNote(e instanceof ApiError ? e.message : String(e));
+      } finally {
+        setInterceptBusy(false);
+      }
+    },
+    [live, interceptBusy]
+  );
+
+  const panic = useCallback(async () => {
+    if (!live) return;
+    setInterceptBusy(true);
+    try {
+      const out = await panicIntercept(live.container, live.port);
+      setIntercept(out.state);
+      setDraft(null);
+      setInterceptNote(out.detail);
+    } catch (e) {
+      setInterceptNote(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setInterceptBusy(false);
+    }
+  }, [live]);
+
+  /* ---- HISTORY FILTERING (build #19 item 3) -------------------------------- */
+  const runFilter = useCallback(async () => {
+    if (!live || filtering) return;
+    setFiltering(true);
+    setError(null);
+    try {
+      setFiltered(
+        await filterProxyHistory(live.container, live.port, {
+          host: fHost.trim(),
+          method: fMethod
+            .split(/[\s,]+/)
+            .map((m) => m.trim())
+            .filter(Boolean),
+          status: fStatus
+            .split(/[\s,]+/)
+            .map((s) => Number.parseInt(s, 10))
+            .filter((n) => Number.isFinite(n)),
+          url_contains: fUrl.trim(),
+          content_type: fType.trim(),
+          // `null` means "both", which is NOT the same as false ("only requests with no
+          // parameters"). An unchecked box must not silently become a filter.
+          has_param: fParams ? true : null,
+          in_scope_of: fScope ? live.engagement_id ?? "" : "",
+        })
+      );
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+      setFiltered(null);
+    } finally {
+      setFiltering(false);
+    }
+  }, [live, filtering, fHost, fMethod, fStatus, fUrl, fType, fParams, fScope]);
 
   const saveBypassHeader = useCallback(async () => {
     const engagement = live?.engagement_id ?? engagementId.trim();
@@ -467,6 +633,27 @@ export function ProxyScreen() {
 
         {error && <div className="hp-tn-error">{error}</div>}
 
+        {/* ---- BREAKING IS ON — THE GLOBAL INDICATOR (build #19 item 4) --------
+            A held request FREEZES the browser that made it. An operator who has forgotten
+            breaking is on reads a frozen tab as the target having gone down, and starts
+            debugging the wrong thing. So this banner is deliberately loud, it says which of the
+            two states it is in, and "drop everything and turn it off" is ONE CLICK away from
+            here without scrolling to the panel below. */}
+        {intercept?.breaking ? (
+          <div className="hp-tn-error">
+            <strong>
+              INTERCEPTION IS ON — {intercept.held ? "A REQUEST IS HELD" : "traffic is being held"}
+            </strong>
+            .{" "}
+            {intercept.held
+              ? "The browser or tool that sent it is frozen waiting for you. Forward it, drop it, or turn breaking off."
+              : "The next request through this proxy will stop and wait. Nothing is held yet — a frozen browser right now is something else."}{" "}
+            <button type="button" className="hp-tn-stop" onClick={panic} disabled={interceptBusy}>
+              drop it and turn breaking off
+            </button>
+          </div>
+        ) : null}
+
         {/* ---- start / stop --------------------------------------------------- */}
         <section className="hp-tn-card">
           <div className="hp-tn-cardhead">{live ? "running" : "start the recording proxy"}</div>
@@ -593,6 +780,235 @@ export function ProxyScreen() {
                 </div>
               </div>
             </>
+          )}
+        </section>
+
+        {/* ---- INTERCEPTION (build #19 item 4) --------------------------------- */}
+        <section className="hp-tn-card">
+          <div className="hp-tn-cardhead">intercept · hold a request and change it</div>
+          <div className="hp-tn-cardsub">
+            Hold a request in flight, read it, rewrite it, then forward or drop it. This exposes{" "}
+            <strong>ZAP&rsquo;s own break API</strong> — HackPit does not build a proxy. There is{" "}
+            <strong>no approval to press</strong>: a request is held, you read it, you edit it,
+            you forward it. Interception only ever <em>reduces</em> what reaches the target.
+          </div>
+          {!live ? (
+            <p className="hp-tn-note">Start a proxy first — there is no daemon to break on.</p>
+          ) : intercept && !intercept.read_ok ? (
+            <p className="hp-tn-error">
+              The daemon did not answer, so this is{" "}
+              <strong>&ldquo;we could not read it&rdquo;</strong> and not &ldquo;breaking is
+              off&rdquo;. {intercept.detail}
+            </p>
+          ) : (
+            <>
+              <div className="hp-tn-form">
+                <button
+                  type="button"
+                  onClick={() => toggleBreaking(!(intercept?.breaking ?? false))}
+                  disabled={interceptBusy}
+                >
+                  {intercept?.breaking ? "stop holding traffic" : "start holding traffic"}
+                </button>
+                <span className={`hp-tn-state ${intercept?.breaking ? "is-listening" : "is-down"}`}>
+                  {intercept?.breaking ? "breaking" : "off"}
+                </span>
+                <span className={`hp-tn-state ${intercept?.held ? "is-listening" : "is-down"}`}>
+                  {intercept?.held ? "request HELD" : "nothing held"}
+                </span>
+                <button
+                  type="button"
+                  className="hp-tn-stop"
+                  onClick={panic}
+                  disabled={interceptBusy || !intercept?.breaking}
+                >
+                  panic — drop and turn off
+                </button>
+              </div>
+
+              <p className="hp-tn-note">
+                Only ZAP&rsquo;s <code>http-all</code> break type actually holds anything.{" "}
+                <code>http-request</code> answers <code>{"{\"Result\":\"OK\"}"}</code> and lets the
+                request straight through — measured against the origin&rsquo;s own access log —
+                so HackPit does not offer it as a choice. <code>break_on_request</code> is a{" "}
+                <em>setting</em> and reads true with nothing held, which is why the
+                &ldquo;HELD&rdquo; pill above is driven by the message itself.
+              </p>
+
+              {intercept?.held ? (
+                <>
+                  <div className="hp-tn-olhint">
+                    the held request — edit it, then Replace{" "}
+                    <CopyButton text={intercept.message} />
+                    {editDirty ? " · edited, not yet applied" : ""}
+                  </div>
+                  <textarea
+                    value={edit}
+                    onChange={(e) => setDraft(e.target.value)}
+                    rows={14}
+                    spellCheck={false}
+                    style={{ width: "100%", fontFamily: "var(--hp-mono, monospace)" }}
+                  />
+                  <div className="hp-tn-form">
+                    <button type="button" onClick={applyEdit} disabled={interceptBusy || !editDirty}>
+                      replace
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDraft(null)}
+                      disabled={!editDirty}
+                    >
+                      reset to held
+                    </button>
+                    <button type="button" onClick={() => release("continue")} disabled={interceptBusy}>
+                      forward
+                    </button>
+                    <button type="button" onClick={() => release("step")} disabled={interceptBusy}>
+                      forward + break next
+                    </button>
+                    <button
+                      type="button"
+                      className="hp-tn-stop"
+                      onClick={() => release("drop")}
+                      disabled={interceptBusy}
+                    >
+                      drop
+                    </button>
+                  </div>
+                </>
+              ) : intercept?.breaking ? (
+                <p className="hp-tn-note">
+                  Breaking is on and nothing is held yet. Make a request through this proxy and it
+                  will stop here.
+                </p>
+              ) : null}
+              {interceptNote ? <p className="hp-tn-note">{interceptNote}</p> : null}
+            </>
+          )}
+        </section>
+
+        {/* ---- HISTORY FILTERING (build #19 item 3) --------------------------- */}
+        <section className="hp-tn-card">
+          <div className="hp-tn-cardhead">search the capture</div>
+          <div className="hp-tn-cardsub">
+            Paging is not searching. Ask a question of the whole capture instead — and read the
+            counts, because <strong>an empty result is four different facts</strong>: ZAP holds
+            nothing, nothing matched, the read failed, or the scan stopped before reaching the
+            rows that would have matched.
+          </div>
+          <div className="hp-tn-form">
+            <input
+              value={fHost}
+              onChange={(e) => setFHost(e.target.value)}
+              placeholder="host — api.example.com or *.example.com"
+            />
+            <input
+              value={fMethod}
+              onChange={(e) => setFMethod(e.target.value)}
+              placeholder="method — POST, PUT"
+              className="hp-tn-port"
+            />
+            <input
+              value={fStatus}
+              onChange={(e) => setFStatus(e.target.value)}
+              placeholder="status — 404 or 4 for 4xx"
+              className="hp-tn-port"
+            />
+          </div>
+          <div className="hp-tn-form">
+            <input
+              value={fUrl}
+              onChange={(e) => setFUrl(e.target.value)}
+              placeholder="URL contains — /api/"
+            />
+            <input
+              value={fType}
+              onChange={(e) => setFType(e.target.value)}
+              placeholder="content-type — json"
+              className="hp-tn-port"
+            />
+            <label>
+              <input
+                type="checkbox"
+                checked={fParams}
+                onChange={(e) => setFParams(e.target.checked)}
+              />{" "}
+              has parameters
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={fScope}
+                onChange={(e) => setFScope(e.target.checked)}
+                disabled={!live?.engagement_id}
+              />{" "}
+              in engagement scope
+            </label>
+            <button type="button" onClick={runFilter} disabled={!live || filtering}>
+              {filtering ? "searching…" : "search"}
+            </button>
+          </div>
+
+          {filtered ? (
+            <>
+              <div className="hp-tn-cardsub">
+                <strong>
+                  {filtered.matched} matched
+                </strong>{" "}
+                · scanned {filtered.scanned} of {filtered.total} held · showing {filtered.returned}
+                {filtered.dropped > 0 ? ` · ${filtered.dropped} unparseable and never tested` : ""}
+              </div>
+              {filtered.truncated ? (
+                <p className="hp-tn-error">
+                  The scan stopped before the end of the capture, so{" "}
+                  <strong>a match may exist that this list does not contain</strong>. Narrow the
+                  filter or raise the scan reach — do not read this as &ldquo;there are none&rdquo;.
+                </p>
+              ) : null}
+              {!filtered.read_ok ? (
+                <p className="hp-tn-error">
+                  At least one page came back unreadable — this is not &ldquo;nothing
+                  matched&rdquo;.
+                </p>
+              ) : null}
+              {filtered.scope_note ? (
+                <p className="hp-tn-note">{filtered.scope_note}</p>
+              ) : null}
+              {filtered.exchanges.length === 0 ? (
+                <p className="hp-tn-note">
+                  Nothing matched — and the counts above say that is a real zero rather than a
+                  failed read.
+                </p>
+              ) : (
+                <ul className="hp-tn-list">
+                  {filtered.exchanges.map((ex) => (
+                    <li key={`f-${ex.id}`} className="hp-tn-row">
+                      <div className="hp-tn-rowtop">
+                        <span className="hp-tn-kind">{ex.request.method}</span>
+                        <span
+                          className="hp-tn-subs"
+                          style={{ flex: "1 1 320px", wordBreak: "break-all" }}
+                        >
+                          {ex.request.url}
+                        </span>
+                        <span className="hp-tn-state is-listening">
+                          {ex.response.status ?? "—"}
+                        </span>
+                        <span className="hp-tn-olhint">{ex.response.size_bytes}b</span>
+                        <button type="button" onClick={() => setScanTarget(ex.request.url)}>
+                          aim scanner
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          ) : (
+            <p className="hp-tn-note">
+              No search run yet. An unset field matches everything, so pressing search with an
+              empty form is the widest possible read.
+            </p>
           )}
         </section>
 

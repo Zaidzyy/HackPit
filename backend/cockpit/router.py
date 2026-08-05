@@ -45,7 +45,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import allowlist, config, engagement, executor, jobs, loot, runstore
+from . import cookiejar as cookiejar_mod
 from . import exposure as exposure_mod
+from . import intercept as intercept_mod
+from . import intruder as intruder_mod
+from . import proposals as proposals_mod
 from . import redirector as redirector_mod
 from . import session as live_session
 from . import kali as kali_mod
@@ -667,12 +671,185 @@ def repeater_preview(req: repeater_mod.RepeaterRequest) -> dict[str, Any]:
     return {"url": url, "body": body, "shapes_applied": applied, "warnings": warnings}
 
 
+@router.get("/repeater/cookies", response_model=list[cookiejar_mod.CookieAttachment])
+def repeater_cookies(
+    session_id: str | None = Query(None, description="Whose jar to describe."),
+) -> list[cookiejar_mod.CookieAttachment]:
+    """What is in this session's cookie jar. READ-ONLY, UNGATED — and VALUE-FREE.
+
+    The response model is :class:`CookieAttachment`, which has no ``value`` field at all. That is
+    the whole disclosure design: an operator has to be able to answer "why did that header appear
+    on my request" without the answer being an HTTP body containing their session token. If you
+    want the value, read the response that set it — it is in the repeater history, raw.
+    """
+    return cookiejar_mod.jar_for(session_id).disclosure()
+
+
+@router.delete("/repeater/cookies")
+def clear_repeater_cookies(
+    session_id: str | None = Query(None, description="Whose jar to empty."),
+) -> dict[str, Any]:
+    """Empty the jar. NOT GATED — clearing state REMOVES capability, like every other stop here.
+
+    Sending WITHOUT the jar is a different thing and does not need this: set
+    ``use_cookie_jar: false`` on one send and the stored session is left intact for the next one.
+    """
+    return {"session_id": session_id, "cleared": cookiejar_mod.clear_jar(session_id)}
+
+
 @router.get("/repeater/history", response_model=list[repeater_mod.RepeaterExchange])
 def repeater_history(
     session_id: str | None = Query(None, description="Engagement whose send history to return."),
 ) -> list[repeater_mod.RepeaterExchange]:
     """Most-recent-first send history for a session — feeds the replay / diff panel. Read-only."""
     return repeater_mod.history(session_id)
+
+
+# --------------------------------------------------------------------------- #
+# THE INTRUDER (build #19 item 5) — a captured request, positions, ONE approval.
+#
+# *** IT IS GATED EXACTLY LIKE THE SCANNER: THE FOUR GATES, NO NEW ONES. ***
+# HackPit refuses BATCHING ACROSS APPROVALS. It has never refused one approval that produces
+# many requests, and could not: ffuf, nuclei and the ZAP active scanner are each a single
+# approval buying thousands. The payload set and the positions are in the approved surface for
+# the same reason crawl depth and duration are in the spider's — a fuzzer that decides its own
+# bounds has stopped describing what it will do.
+# --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# THE APPROVAL QUEUE (build #19 item 6) — where a proposed command waits for a human.
+#
+# *** NOTHING HERE EXECUTES, AND APPROVING DOES NOT RUN. ***
+# `review` marks a row reviewed and stops. To run the command the operator sends it to
+# `/cockpit/exec` themselves with the gate fields THEY set — which is the whole of item 6's
+# line: there is exactly ONE place approval is expressed, and it is the human's own request to
+# the execution route. Wiring "approve" to execution would make this a second place that can set
+# an approval field, reachable by anything that can reach the queue.
+# --------------------------------------------------------------------------- #
+@router.get("/proposals", response_model=list[dict])
+def list_proposals(
+    session_id: str | None = Query(None),
+    status: str = Query("", description="pending | approved | rejected."),
+) -> list[dict[str, Any]]:
+    """The queue, newest first, each row WITH the gate verdict it would meet.
+
+    The verdict is asked with `approved=False` and `dangerous_ack=False` — always — so what comes
+    back is the FIRST gate standing in the way. Asking with the flags set would answer "this
+    would be allowed", which reads as permission and is a question nobody asked.
+    """
+    return [
+        {**p.model_dump(), "command_line": p.command_line(),
+         "gate_preview": proposals_mod.gate_preview(p)}
+        for p in proposals_mod.listing(session_id, status)
+    ]
+
+
+@router.post("/proposals/{pid}/review", response_model=dict)
+def review_proposal(
+    pid: str,
+    status: str = Query(..., description="approved | rejected."),
+    note: str = Query(""),
+) -> dict[str, Any]:
+    """Mark a proposal reviewed. IT DOES NOT RUN IT — see the block comment above.
+
+    Ungated: this writes a status onto a piece of paper. The gate that matters runs when the
+    operator sends the command to the execution route.
+    """
+    p = proposals_mod.review(pid, status, note)
+    if p is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no proposal {pid!r}"})
+    return {**p.model_dump(), "command_line": p.command_line(),
+            "gate_preview": proposals_mod.gate_preview(p),
+            "note": "REVIEWED, NOT RUN. Send it to /cockpit/exec with your own approval flags "
+                    "if you want it to run."}
+
+
+@router.get("/intruder/status")
+def get_intruder_status() -> dict[str, Any]:
+    """Sandbox availability + running-job count — drives the UI banner. Read-only."""
+    return intruder_mod.status()
+
+
+@router.post("/intruder/preview")
+def intruder_preview(req: intruder_mod.IntruderRequest) -> dict[str, Any]:
+    """WHAT WOULD BE SENT, and WHETHER THE GATE WOULD REFUSE IT — without sending anything.
+
+    Both halves come from the same functions the start path uses (`plan`, `validate`,
+    `intruder_argv_for`), so a preview cannot drift from the run. The gate verdict is included
+    because "would this need a red-confirm" is a question worth answering BEFORE composing a
+    5,000-entry payload set, and answering it costs nothing.
+    """
+    work, warnings, capped = intruder_mod.plan(req)
+    verdict = intruder_mod.validate(req)
+    return {
+        "argv": intruder_mod.intruder_argv_for(req),
+        "positions": len(intruder_mod.find_positions(req.url))
+        + len(intruder_mod.find_positions(req.body)),
+        "planned": len(work),
+        "sample": [
+            {"position": pos, "payload": p,
+             "url": intruder_mod.substitute(req.url, p, None if pos < 0 else pos)}
+            for pos, p in work[:10]
+        ],
+        "warnings": warnings,
+        "capped": capped,
+        "gate": None if verdict is None else {
+            "gate": verdict.gate, "reason": verdict.reason,
+            "dangerous_flags": list(verdict.dangerous_flags or []),
+        },
+    }
+
+
+@router.post("/intruder", response_model=intruder_mod.IntruderJob)
+def start_intruder(req: intruder_mod.IntruderRequest) -> intruder_mod.IntruderJob:
+    """Run a payload set against the marked positions of one request. GATED, then it runs.
+
+    *** THIS SENDS REAL ATTACK TRAFFIC — one request per payload per position. ***
+    `executor.validate_request` runs against the equivalent `ffuf` command BEFORE anything is
+    sent, so an unapproved or off-target job sends nothing. The red-confirm is demanded by the
+    GATE and not by this route: measured, a payload carrying `| sh` trips "reverse-shell /
+    code-exec pattern", and a payload set of ordinary SQLi strings does not. Requiring the ack
+    unconditionally here would be this build adding a confirm, which it may not.
+
+    A SAFETY refusal (approval / danger / target / isolation) is **403** naming the gate; an
+    AVAILABILITY problem (sandbox down) is **409**. Nothing is sent on either.
+    """
+    try:
+        return intruder_mod.start(req)
+    except intruder_mod.IntruderRefused as exc:
+        code = 409 if exc.gate in {"unavailable", "limit"} else 403
+        raise HTTPException(status_code=code, detail={
+            "gate": exc.gate, "reason": exc.reason, "dangerous_flags": exc.dangerous_flags,
+        })
+
+
+@router.get("/intruder", response_model=list[intruder_mod.IntruderJob])
+def list_intruder_jobs(
+    session_id: str | None = Query(None),
+) -> list[intruder_mod.IntruderJob]:
+    """Every intruder job, newest first. Read-only, ungated — a results table polls this."""
+    return intruder_mod.list_jobs(session_id)
+
+
+@router.get("/intruder/{job_id}", response_model=intruder_mod.IntruderJob)
+def get_intruder_job(job_id: str) -> intruder_mod.IntruderJob:
+    """One job with its results. Read-only, ungated."""
+    job = intruder_mod.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no intruder job {job_id!r}"})
+    return job
+
+
+@router.delete("/intruder/{job_id}", response_model=intruder_mod.IntruderJob)
+def stop_intruder_job(job_id: str) -> intruder_mod.IntruderJob:
+    """Stop an in-flight job. NOT GATED — the panic button, exactly like `stop_scan`.
+
+    Thousands of requests may still be queued when this is called. A gate that could refuse to
+    stop them would make the system less safe.
+    """
+    job = intruder_mod.stop(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no intruder job {job_id!r}"})
+    return job
 
 
 # --- Pivot / tunnel routing (Phase 4 item 4 — chisel / ligolo-ng) ------------------- #
@@ -811,6 +988,31 @@ def proxy_history(
     return proxy_mod.history_page(container, port, start=start, count=count)
 
 
+@router.post("/proxy/history/filter", response_model=proxy_mod.FilteredHistory)
+def proxy_history_filter(
+    filt: proxy_mod.HistoryFilter,
+    container: str = Query(..., description="Sandbox container the proxy runs in."),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+    limit: int = Query(200, ge=1, le=1000, description="Most rows to RETURN. `matched` still "
+                                                       "reports how many there were."),
+    max_scan: int = Query(proxy_mod.HISTORY_SCAN_CAP, ge=1, le=20000),
+) -> proxy_mod.FilteredHistory:
+    """Ask a question of the capture. READ-ONLY and UNGATED, like the history it reads.
+
+    *** IT IS A POST AND IT STILL EXECUTES NOTHING. *** The filter is an object with seven
+    optional fields including lists, which a query string can only carry by being re-parsed at
+    both ends — the second implementation this repo's credential-vault docstring warns about.
+    The method says "here is a body", not "here is a side effect", and a test asserts by AST that
+    this route reaches no execution path.
+
+    *** THE COUNTS ARE WHY THIS EXISTS. *** `matched`, `scanned`, `total`, `dropped`, `read_ok`
+    and `truncated` are all reported because an empty `exchanges` is four different facts: ZAP
+    holds nothing, nothing matched, we could not read what ZAP holds, or we stopped scanning
+    before reaching the rows that would have matched. `truncated` is never silently true.
+    """
+    return proxy_mod.filter_history(container, port, filt, limit=limit, max_scan=max_scan)
+
+
 @router.get("/proxy/session-health")
 def proxy_session_health(
     container: str = Query(..., description="Sandbox container the proxy runs in."),
@@ -843,6 +1045,95 @@ def proxy_session_health(
 # and a reviewer actually look: exactly one route below can send attack traffic, it is the only
 # POST that takes gate fields, and it is the only one that can answer 403.
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# INTERCEPTION (build #19 item 4) — hold, read, replace, forward, drop.
+#
+# *** EVERY ROUTE HERE IS UNGATED, AND THAT IS THE DESIGN RATHER THAN AN OVERSIGHT. ***
+# A request is held, a HUMAN reads it, a HUMAN edits it, a HUMAN presses forward. There is no
+# approval to bypass because the person pressing the button is the approval — the same position
+# :kali and the repeater already take. Interception also strictly REDUCES what reaches the
+# target: with breaking on, nothing goes anywhere until a person says so. And while it is on,
+# the operator's own browser is FROZEN, so a gate that could refuse to turn it off would be
+# indistinguishable from the target having gone down.
+#
+# It exposes ZAP's break API; it does not build a proxy. See cockpit/intercept.py for the five
+# measured traps, of which the sharpest is that `type=http-request` answers OK and holds nothing.
+# --------------------------------------------------------------------------- #
+@router.get("/proxy/intercept", response_model=intercept_mod.InterceptState)
+def get_intercept(
+    container: str = Query(..., description="Sandbox container the proxy runs in."),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+) -> intercept_mod.InterceptState:
+    """Is breaking on, and is a request waiting? OBSERVED from ZAP on every call, never cached.
+
+    `held` comes from `httpMessage` being non-empty and NEVER from `isBreakRequest`, which is a
+    SETTING that reads true with nothing held — a panel wired to it would say "a request is
+    waiting" forever. `read_ok` False means the daemon did not answer, which the UI must not draw
+    the same way as "breaking is off".
+    """
+    return intercept_mod.observed(container, port)
+
+
+@router.post("/proxy/intercept", response_model=intercept_mod.InterceptState)
+def set_intercept(
+    on: bool = Query(..., description="true holds traffic; false lets it flow."),
+    container: str = Query(...),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+) -> intercept_mod.InterceptState:
+    """Turn breaking on or off. UNGATED IN BOTH DIRECTIONS — see the block comment above.
+
+    The answer is the state READ BACK, never ZAP's `{"Result":"OK"}`: the same endpoint returns
+    that OK for `type=http-request`, which was measured holding absolutely nothing.
+    """
+    return intercept_mod.set_breaking(container, port, on)
+
+
+class InterceptReplace(BaseModel):
+    """The bytes to put in place of the held request."""
+
+    http_header: str = Field(..., description="Request line + headers, CRLF separated.")
+    http_body: str = ""
+
+
+@router.post("/proxy/intercept/message", response_model=intercept_mod.InterceptState)
+def replace_intercepted(
+    payload: InterceptReplace,
+    container: str = Query(...),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+) -> intercept_mod.InterceptState:
+    """Replace the held request. Nothing is forwarded — that is a separate, explicit press.
+
+    A POST BODY rather than a query string, and the module hands it to ZAP the same way: a held
+    request routinely carries a session cookie and an Authorization header, and `_api_get` would
+    put those in ZAP's own history and on a `docker exec … curl …` argv that `ps` can read.
+    """
+    return intercept_mod.replace_intercepted_message(container, port, payload)
+
+
+@router.post("/proxy/intercept/release", response_model=intercept_mod.InterceptState)
+def release_intercepted(
+    verb: str = Query("continue", description="continue (forward) | drop (bin it) | step."),
+    container: str = Query(...),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+) -> intercept_mod.InterceptState:
+    """Let the held request go. UNGATED. An unknown verb is REPORTED and releases nothing."""
+    return intercept_mod.release(container, port, verb)
+
+
+@router.post("/proxy/intercept/panic")
+def panic_intercept(
+    container: str = Query(...),
+    port: int = Query(proxy_mod.DEFAULT_PROXY_PORT),
+) -> dict[str, Any]:
+    """DROP whatever is held and turn breaking OFF. The one-click way out, and never gated.
+
+    The order matters and is the whole function: switching breaking off first leaves the held
+    request held with nothing left to release it through, which was measured during item 1 as a
+    request that timed out at 15 seconds with breaking already reported off.
+    """
+    return intercept_mod.panic(container, port)
+
+
 @router.post("/proxy/scan", response_model=proxy_mod.Scan)
 def start_scan(req: proxy_mod.ScanStartRequest) -> proxy_mod.Scan:
     """Actively scan ONE URL the recording proxy already captured.

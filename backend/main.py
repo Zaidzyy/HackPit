@@ -93,6 +93,9 @@ from arsenal.router import (  # noqa: E402
 from exploits.router import router as exploits_router  # noqa: E402  (backend/exploits — CVE index)
 from oob import config as oob_config  # noqa: E402  (backend/oob — the canary's one configuration)
 from oob import tokens as oob_tokens  # noqa: E402  (canary token minting + correlation)
+from oob import interactsh as oob_interactsh  # noqa: E402  (interact.sh second OOB backend)
+from oob import settings as oob_settings  # noqa: E402  (OOB auto-poll setting)
+from oob import autopoll as oob_autopoll  # noqa: E402  (read-only background callback sweep)
 from oob.router import router as oob_router  # noqa: E402  (out-of-band canary panel)
 
 DATA_KB = REPO_ROOT / "data" / "kb" / "entries.jsonl"
@@ -318,6 +321,10 @@ async def lifespan(app: FastAPI):
     # VPS; nothing started here opens a socket.
     oob_tokens.init_db()
     oob_config.init_db()
+    # the interact.sh second OOB backend: its session/map/seen tables and the auto-poll setting
+    # share the same file. Registering a session opens outbound sockets; init here does not.
+    oob_interactsh.init_db()
+    oob_settings.init_db()
     # structured engagement state (hosts/services/endpoints/credentials/findings) + the
     # task tree share it too. This is what the orchestrator reasons over instead of
     # re-reading stdout tails.
@@ -358,6 +365,10 @@ async def lifespan(app: FastAPI):
         cockpit_reconcile.check_in_background(loaded)
     except Exception:  # noqa: BLE001 - never fail startup over the catalog
         pass
+    # OOB auto-poll: a read-only background sweep that files callbacks from both canary backends
+    # without a click. It reaches poll_all -> ingest -> state and NO execution surface, so it does
+    # not cross the propose-only invariant. Daemon thread; sleeps first, so start is never blocked.
+    oob_autopoll.start(app)
     yield
     set_codescan_kb(None, None, None, None)
     STATE.entries = []

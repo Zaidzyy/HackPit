@@ -33,7 +33,7 @@ import socket
 import time
 from typing import Any
 
-from . import config, poll, tokens
+from . import config, interactsh, poll, tokens
 
 # The engagement id throwaway verify tokens are minted under. Namespaced so a verify run can
 # never file a finding into a real engagement, and so its tokens are trivially clearable.
@@ -70,16 +70,17 @@ def _hits_for(token: str, after: int) -> list[dict[str, Any]]:
     return []
 
 
-def verify() -> dict[str, Any]:
-    """Run all three checks and report each one. Never raises for a failing check."""
+def _self_hosted_checks() -> list[dict[str, Any]]:
+    """The three self-hosted checks (health/http/dns), or three not-run when unconfigured.
+
+    Returns a list rather than short-circuiting the whole verify, so the interact.sh check still
+    runs when only interact.sh is set up.
+    """
     if not config.is_configured():
-        return {
-            "ok": False,
-            "checks": [
-                _check(name, "not-run", "no canary is configured")
-                for name in ("health", "http", "dns")
-            ],
-        }
+        return [
+            _check(name, "not-run", "the self-hosted canary is not configured")
+            for name in ("health", "http", "dns")
+        ]
 
     zone = config.zone()
     checks: list[dict[str, Any]] = []
@@ -93,7 +94,7 @@ def verify() -> dict[str, Any]:
         # more failures that all mean the same thing.
         checks.append(_check("http", "not-run", "the canary could not be read"))
         checks.append(_check("dns", "not-run", "the canary could not be read"))
-        return {"ok": False, "checks": checks}
+        return checks
 
     if not state["zone_matches"]:
         checks.append(_check(
@@ -171,6 +172,75 @@ def verify() -> dict[str, Any]:
             ))
 
     tokens.clear(VERIFY_ENGAGEMENT)
+    return checks
+
+
+def _interactsh_check() -> dict[str, Any]:
+    """The interact.sh live round-trip — the one check that can run WITHOUT owning infrastructure.
+
+    Generates a verify host, resolves it through the system resolver (which reaches interact.sh's
+    authoritative DNS), and looks for the interaction to come back. Reads with ``mark_seen=False``
+    so a verify never consumes a real pending callback the auto-poll has not filed yet. The verify
+    token is minted under ``VERIFY_ENGAGEMENT``, which has no state session, so even if it did get
+    filed it could never land as a real finding.
+    """
+    if not interactsh.is_registered():
+        return _check("interactsh", "not-run", "no interact.sh session is registered")
+    try:
+        generated = interactsh.generate(VERIFY_ENGAGEMENT, note="canary verify")
+    except interactsh.InteractshError as exc:
+        return _check("interactsh", "fail", str(exc))
+
+    host, suffix = generated["host"], generated["suffix"]
+    try:
+        # The resolution reaching interact.sh's DNS is the hit; whether it "succeeds" locally
+        # (an address is returned) does not matter and often it will not.
+        socket.getaddrinfo(host, None, family=socket.AF_INET)
+    except OSError:
+        pass
+
+    try:
+        for attempt in range(POLL_ATTEMPTS):
+            if attempt:
+                time.sleep(SETTLE_SECONDS)
+            hits = interactsh.poll_correlated(mark_seen=False)
+            match = [h for h in hits if h.get("token") == suffix]
+            if match:
+                return _check(
+                    "interactsh", "pass",
+                    f"resolving {host} reached interact.sh and correlated back",
+                    source_ip=match[0].get("source_ip", ""),
+                )
+        return _check(
+            "interactsh", "fail",
+            f"resolved {host} but no interaction came back from interact.sh within the window — "
+            f"the session may have expired, or outbound DNS is blocked from this machine",
+        )
+    except interactsh.InteractshError as exc:
+        return _check("interactsh", "fail", f"could not poll interact.sh: {exc}")
+    finally:
+        interactsh.clear(VERIFY_ENGAGEMENT)
+
+
+def verify() -> dict[str, Any]:
+    """Run every check and report each one. Never raises for a failing check.
+
+    Both backends are checked: the self-hosted health/http/dns triad, and the interact.sh live
+    round-trip. When a backend is not set up its checks report NOT-RUN — never folded into a pass.
+    """
+    self_hosted = config.is_configured()
+    ish = interactsh.is_registered()
+    if not self_hosted and not ish:
+        checks = [
+            _check(name, "not-run",
+                   "no canary is configured — set up the self-hosted canary or register an "
+                   "interact.sh session")
+            for name in ("health", "http", "dns", "interactsh")
+        ]
+        return {"ok": False, "checks": checks, "not_run": [c["check"] for c in checks]}
+
+    checks = _self_hosted_checks()
+    checks.append(_interactsh_check())
     return {
         "ok": all(c["status"] == "pass" for c in checks),
         "checks": checks,

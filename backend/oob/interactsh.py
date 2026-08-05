@@ -539,7 +539,7 @@ def _normalize(interaction: dict[str, Any]) -> dict[str, Any]:
     return hit, suffix, uid
 
 
-def poll_correlated() -> list[dict[str, Any]]:
+def poll_correlated(mark_seen: bool = True) -> list[dict[str, Any]]:
     """Fetch new interactions, decrypt, correlate each to the step that minted it.
 
     Returns correlated hit dicts (the shape ``poll.findings_for`` files). Returns ``[]`` when
@@ -550,6 +550,11 @@ def poll_correlated() -> list[dict[str, Any]]:
     An uncorrelated interaction is KEPT and flagged ``correlated: False`` (same rule as the
     self-hosted correlate): a stray hit means the zone is being crawled, or a payload landed at
     the wrong name, and silently dropping it would make that look identical to silence.
+
+    ``mark_seen=False`` is the verify path: it returns everything currently visible WITHOUT
+    recording it as seen, so a verify run can look for its own token without consuming a real
+    pending callback the auto-poll has not filed yet — the same read-only discipline the
+    self-hosted verify uses by reading with an explicit cursor.
     """
     if not is_registered():
         return []
@@ -560,8 +565,11 @@ def poll_correlated() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     if isinstance(data, list) and data and aes_key_b64:
         aes_key = decrypt_aes_key(_private_key(), str(aes_key_b64))
-        with _connect() as conn:
-            seen = {r[0] for r in conn.execute("SELECT uid FROM oob_interactsh_seen").fetchall()}
+        if mark_seen:
+            with _connect() as conn:
+                seen = {r[0] for r in conn.execute("SELECT uid FROM oob_interactsh_seen").fetchall()}
+        else:
+            seen = set()
         fresh: list[str] = []
         for item in data:
             try:
@@ -583,12 +591,13 @@ def poll_correlated() -> list[dict[str, Any]]:
                 "note": record["note"] if record else "",
                 "minted_at": record["at"] if record else None,
             })
-        if fresh:
+        if mark_seen and fresh:
             with _write_lock, _connect() as conn:
                 conn.executemany(
                     "INSERT OR IGNORE INTO oob_interactsh_seen (uid, at) VALUES (?, ?)",
                     [(k, _now()) for k in fresh],
                 )
-    with _write_lock, _connect() as conn:
-        conn.execute("UPDATE oob_interactsh SET last_poll = ? WHERE row_id = ?", (_now(), ROW_ID))
+    if mark_seen:
+        with _write_lock, _connect() as conn:
+            conn.execute("UPDATE oob_interactsh SET last_poll = ? WHERE row_id = ?", (_now(), ROW_ID))
     return out

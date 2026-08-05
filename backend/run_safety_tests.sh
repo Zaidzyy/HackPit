@@ -212,6 +212,7 @@ run_test test_oob_router.py "OOB router dual-backend surface (GET /oob carries b
 run_test test_oob_templates.py "OOB payload templates (token left of the zone per the server's own parser / renders and stops)"
 
 run_test test_oob_deploy_safety.py "OOB deploy SAFETY invariants (signature carries NO destination / no agent path / refusal sends nothing / secret never in an argv)"
+run_test test_oob_interactsh_safety.py "OOB interact.sh SAFETY invariants (no execution/delivery surface / no backend coupling to the repeater / poll refuses redirects + ambient proxy / session secrets never a key in the public view)"
 
 run_test test_redirector.py "C2 redirector (LIVE loopback forward both ways / the two ends agree on the tunnel port / UDP gets socat, never a bogus ssh -R)"
 

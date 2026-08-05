@@ -240,11 +240,17 @@ def _violations(source: str) -> list[str]:
 # absolute, and make the network half a PINNED SET so that a third module gaining reach fails
 # here — which is a stronger statement than the original made, not a weaker one.
 #
-#   poll.py   — fetches the read API (spec §3.3). Locked further in test_oob_poll.py: fixed
-#               destination from the config store, fixed paths, no redirects, no proxy.
-#   verify.py — resolves <token>.<zone> through the system resolver to prove NS delegation
-#               (spec §3.5). A getaddrinfo, and nothing else.
-_MAY_REACH_NETWORK = {"poll.py", "verify.py"}
+#   poll.py      — fetches the read API (spec §3.3). Locked further in test_oob_poll.py: fixed
+#                  destination from the config store, fixed paths, no redirects, no proxy.
+#   verify.py    — resolves <token>.<zone> through the system resolver to prove NS delegation
+#                  (spec §3.5), and now also runs the interact.sh live round-trip.
+#   interactsh.py — the second OOB backend (spec 2026-08-06). register/poll/deregister over HTTP
+#                  against the CONFIGURED interact.sh server, resolved server-side, with the same
+#                  containment poll.py has (no redirects, no ambient proxy, capped, parse-never-
+#                  execute). Locked in test_oob_interactsh.py + test_oob_interactsh_safety.py.
+#                  (autopoll.py drives a sweep but imports NO client itself — it reaches the
+#                  network only through poll_all, so it is not — and must not be — pinned here.)
+_MAY_REACH_NETWORK = {"poll.py", "verify.py", "interactsh.py"}
 
 # What those two are allowed to reach: the stdlib client and the resolver, nothing more. The
 # ban on subprocess/docker/pty/ctypes still applies to them in full.

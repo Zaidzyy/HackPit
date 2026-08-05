@@ -40,8 +40,10 @@ plus a scope check ``:kali`` does not have:
 
 Callbacks note: a repeater cannot receive a blind out-of-band callback (SSRF/XXE/blind RCE)
 because those come back to a PUBLICLY reachable listener, which a laptop behind NAT does not
-have. That is the VPS-for-callbacks piece — its own decision (D2), still deferred until bounty
-work needs it. The repeater sends and reads the direct response; it is not a collaborator.
+have. That listener shipped as the OOB canary (build #13 part 3) and now has two backends — a
+self-hosted VPS canary and interact.sh. The repeater still only sends and reads the direct
+response; it is not a collaborator, and nothing here imports the OOB modules. A payload minted
+by the canary panel reaches this surface as pre-filled text the operator sends by hand.
 """
 
 from __future__ import annotations

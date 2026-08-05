@@ -4318,10 +4318,27 @@ export type OOBTemplate = {
 
 export type OOBPayload = OOBTemplate & { payload: string };
 
+/** interact.sh session status — masked. The correlation-id PREFIX is a public DNS label; the
+ *  secret-key, private key and auth token are never returned (only `has_secret`). */
+export type OOBInteractshStatus = {
+  server: string;
+  correlation_prefix: string;
+  generated: number;
+  registered_at: string;
+  last_poll: string;
+  has_secret: boolean;
+};
+
+/** The read-only auto-poll setting. `interval` is floored server-side. */
+export type OOBAutopoll = { enabled: boolean; interval: number };
+
 export type OOBStatus = {
   configured: boolean;
   config: OOBConfig | null;
   ns: OOBNsDelegation | null;
+  interactsh: OOBInteractshStatus | null;
+  interactsh_default_server: string;
+  autopoll: OOBAutopoll;
   templates: OOBTemplate[];
   vuln_classes: string[];
   remote_dir: string;
@@ -4335,7 +4352,15 @@ export type OOBToken = {
   at: string;
 };
 
-export type OOBMintResult = { token: OOBToken; zone: string; payloads: OOBPayload[] };
+/** Self-hosted mint: a token against the configured zone. */
+export type OOBSelfHostedMint = { token: OOBToken; zone: string; payloads: OOBPayload[] };
+/** interact.sh mint: the assigned host and the per-mint suffix that correlates it. */
+export type OOBInteractshMint = { host: string; suffix: string; payloads: OOBPayload[] };
+
+/** Mint renders under EVERY configured backend; each is null when that backend is not set up. */
+export type OOBMintResult = {
+  backends: { self_hosted: OOBSelfHostedMint | null; interactsh: OOBInteractshMint | null };
+};
 
 /** A hit, joined to the mint record that explains it. `correlated: false` means it arrived
  *  but could not be attributed — kept deliberately, never dropped. */
@@ -4349,19 +4374,25 @@ export type OOBHit = {
   host?: string;
   source_ip: string;
   at: string;
-  seq: number;
+  /** The self-hosted server's sequence number; interact.sh hits have none. */
+  seq?: number;
   correlated: boolean;
   engagement_id: string | null;
   step_id: string | null;
   note: string;
+  /** Which backend caught it — "interactsh" for interact.sh hits, absent for self-hosted. */
+  backend?: string;
 };
 
+/** poll_all sweeps BOTH backends: per-backend summaries + the merged hits, filed once. A
+ *  backend that errored is recorded in `errors` rather than stopping the other. */
 export type OOBPollResult = {
+  self_hosted: { hits: number; cursor: number; after: number } | null;
+  interactsh: { hits: number } | null;
   hits: OOBHit[];
-  cursor: number;
-  after: number;
   filed: number;
   unfiled: (OOBHit & { reason: string })[];
+  errors: { backend: string; reason: string }[];
 };
 
 /** One verify check. `not-run` is a first-class status and is never folded into a pass. */
@@ -4435,6 +4466,22 @@ export const deployOOB = (approved: boolean, signal?: AbortSignal) =>
 
 export const verifyOOB = (signal?: AbortSignal) =>
   postJSON<OOBVerifyResult>("/oob/verify", {}, signal);
+
+/** Start (or rotate) an interact.sh session. The secret + keypair are minted server-side and
+ *  never returned — only the masked status. */
+export const registerInteractsh = (
+  input: { server?: string; auth_token?: string },
+  signal?: AbortSignal
+) => postJSON<OOBInteractshStatus>("/oob/interactsh/register", input, signal);
+
+export const deregisterInteractsh = (signal?: AbortSignal) =>
+  delJSON<{ removed: boolean; note: string }>("/oob/interactsh", signal);
+
+/** Toggle the read-only auto-poll and set its interval (floored server-side). */
+export const setOOBAutopoll = (
+  input: { enabled: boolean; interval: number },
+  signal?: AbortSignal
+) => postJSON<{ autopoll: OOBAutopoll }>("/oob/autopoll", input, signal);
 
 // ---- listener exposure: local profiles + the C2 redirector (build #13) ---- //
 

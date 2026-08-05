@@ -109,6 +109,22 @@ export function RepeaterScreen() {
     getRepeaterShapes(ctrl.signal)
       .then(setVocab)
       .catch(() => setVocab(null));
+    // send-to-repeater seed from the OOB canary panel: a URL payload lands in the URL field, any
+    // other payload (an XXE body, a header value) lands in the body for the operator to place.
+    // Applied via a microtask so the setState is in an async callback, not the effect body
+    // (frontend/AGENTS.md keeps the eslint set-state-in-effect count at baseline).
+    Promise.resolve().then(() => {
+      try {
+        const seed = sessionStorage.getItem("hp-repeater-seed");
+        if (seed) {
+          sessionStorage.removeItem("hp-repeater-seed");
+          if (/^https?:\/\//i.test(seed)) setUrl(seed);
+          else setBody(seed);
+        }
+      } catch {
+        /* storage disabled — nothing to seed */
+      }
+    });
     return () => ctrl.abort();
   }, []);
 

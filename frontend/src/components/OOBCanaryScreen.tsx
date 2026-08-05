@@ -1,26 +1,35 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { PageShell } from "./PageShell";
 import { CopyButton } from "./CopyButton";
 import {
   ApiError,
   deleteOOBConfig,
   deployOOB,
+  deregisterInteractsh,
   getOOB,
   listOOBTokens,
   mintOOBToken,
   pollOOB,
+  registerInteractsh,
   saveOOBConfig,
+  setOOBAutopoll,
   verifyOOB,
   type OOBCheck,
   type OOBDeployResult,
   type OOBMintResult,
+  type OOBPayload,
   type OOBPollResult,
   type OOBStatus,
   type OOBToken,
   type OOBVerifyResult,
 } from "@/lib/api";
+
+/** send-to-repeater hands a payload across screens through sessionStorage; RepeaterScreen reads
+ *  and clears this key on mount. The same channel HackPitShell uses for its entered flag. */
+const REPEATER_SEED_KEY = "hp-repeater-seed";
 
 /**
  * :oob — the out-of-band canary panel (build #13 part 3, spec §3.5).
@@ -68,6 +77,12 @@ export function OOBCanaryScreen() {
   const [vulnClass, setVulnClass] = useState("");
   const [minted, setMinted] = useState<OOBMintResult | null>(null);
   const [tokenList, setTokenList] = useState<OOBToken[]>([]);
+
+  // interact.sh backend (zero-infrastructure)
+  const [interactshServer, setInteractshServer] = useState("");
+  const [interactshAuth, setInteractshAuth] = useState("");
+
+  const router = useRouter();
 
   /** Every setState here lands in a `.then` callback, never in the effect body — that is the
    *  accepted pattern in frontend/AGENTS.md, and writing it as an `async` function whose body
@@ -181,7 +196,83 @@ export function OOBCanaryScreen() {
     [run, engagementId, stepId, note, vulnClass]
   );
 
+  const registerIsh = useCallback(
+    () =>
+      run("register-ish", async () => {
+        await registerInteractsh({
+          server: interactshServer.trim() || undefined,
+          auth_token: interactshAuth.trim() || undefined,
+        });
+        setInteractshAuth("");
+        await refresh();
+      }),
+    [run, interactshServer, interactshAuth, refresh]
+  );
+
+  const deregisterIsh = useCallback(
+    () =>
+      run("deregister-ish", async () => {
+        await deregisterInteractsh();
+        await refresh();
+      }),
+    [run, refresh]
+  );
+
+  const toggleAutopoll = useCallback(
+    (enabled: boolean, interval: number) =>
+      run("autopoll", async () => {
+        await setOOBAutopoll({ enabled, interval });
+        await refresh();
+      }),
+    [run, refresh]
+  );
+
+  /** Hand a rendered payload to the repeater: stash it, then navigate. RepeaterScreen seeds its
+   *  URL (for http(s):// payloads) or body from this on mount. Delivery stays a human action —
+   *  the operator still clicks Send there; nothing is sent from here. */
+  const sendToRepeater = useCallback(
+    (payload: string) => {
+      try {
+        sessionStorage.setItem(REPEATER_SEED_KEY, payload);
+      } catch {
+        /* private mode / storage disabled — the repeater just opens empty */
+      }
+      router.push("/repeater");
+    },
+    [router]
+  );
+
   const config = status?.config ?? null;
+  const interactsh = status?.interactsh ?? null;
+  const autopoll = status?.autopoll ?? null;
+  const anyBackend = Boolean(config) || Boolean(interactsh);
+
+  /** One payload row, reused for both backends: the technique, the one-liner, copy + send. */
+  const renderPayload = (p: OOBPayload) => (
+    <li key={p.id} className="hp-tn-row">
+      <div className="hp-tn-rowtop">
+        <span className="hp-tn-kind">{p.vuln_class}</span>
+        <span className="hp-tn-subs">
+          {p.title} — {p.sink}
+        </span>
+      </div>
+      <div className="hp-tn-oneliner">
+        <pre className="hp-tn-pre">{p.payload}</pre>
+        <CopyButton text={p.payload} />
+        <button
+          className="hp-tn-stop"
+          onClick={() => sendToRepeater(p.payload)}
+          title="Open the repeater with this payload pre-filled — you still click Send there"
+        >
+          → repeater
+        </button>
+      </div>
+      <div className="hp-tn-olhint">
+        A hit proves: {p.proves}
+        {p.note ? ` · ${p.note}` : ""}
+      </div>
+    </li>
+  );
 
   return (
     <PageShell crumbs={[{ label: "cockpit", href: "/cockpit" }, { label: "oob canary" }]}>
@@ -361,10 +452,95 @@ export function OOBCanaryScreen() {
           </section>
         )}
 
-        {/* ---- verify ------------------------------------------------------ */}
-        {config && (
+        {/* ---- interact.sh — the zero-infrastructure backend --------------- */}
+        <section className="hp-tn-card">
+          <div className="hp-tn-cardhead">interact.sh · zero-infrastructure backend</div>
+          <p className="hp-tn-note">
+            No VPS and no domain: register with ProjectDiscovery&rsquo;s public OOB service and
+            paste its host into a payload. Callbacks land in engagement state exactly like the
+            self-hosted canary — the difference is they <em>transit a third party</em>, which is
+            why the owned backend above still exists. Run both; paste whichever fits.
+          </p>
+          {interactsh ? (
+            <>
+              <ul className="hp-tn-list">
+                <li className="hp-tn-row">
+                  <div className="hp-tn-rowtop">
+                    <span className="hp-tn-kind">✓ registered</span>
+                    <span className="hp-tn-subs">
+                      {interactsh.server} · id {interactsh.correlation_prefix} ·{" "}
+                      {interactsh.generated} payload{interactsh.generated === 1 ? "" : "s"} generated
+                      {interactsh.last_poll ? ` · last poll ${interactsh.last_poll.slice(0, 19)}` : ""}
+                    </span>
+                  </div>
+                </li>
+              </ul>
+              <div className="hp-tn-actions">
+                <span className="hp-tn-actions-label">act</span>
+                <button className="hp-tn-stop" onClick={deregisterIsh} disabled={busy !== null}>
+                  {busy === "deregister-ish" ? "forgetting…" : "deregister + forget"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="hp-tn-form">
+                <input
+                  className="hp-tn-input"
+                  value={interactshServer}
+                  onChange={(e) => setInteractshServer(e.target.value)}
+                  placeholder={`interact.sh server (default ${status?.interactsh_default_server ?? "oast.fun"})`}
+                  aria-label="interact.sh server"
+                />
+                <input
+                  className="hp-tn-input"
+                  value={interactshAuth}
+                  onChange={(e) => setInteractshAuth(e.target.value)}
+                  placeholder="auth token (only for a self-hosted interactsh-server)"
+                  aria-label="interact.sh auth token"
+                />
+              </div>
+              <div className="hp-tn-actions">
+                <span className="hp-tn-actions-label">act</span>
+                <button className="hp-tn-start" onClick={registerIsh} disabled={busy !== null}>
+                  {busy === "register-ish" ? "registering…" : "register a session"}
+                </button>
+              </div>
+            </>
+          )}
+        </section>
+
+        {/* ---- auto-poll --------------------------------------------------- */}
+        {anyBackend && autopoll && (
           <section className="hp-tn-card">
-            <div className="hp-tn-cardhead">4 · verify</div>
+            <div className="hp-tn-cardhead">auto-poll · file callbacks automatically</div>
+            <p className="hp-tn-note">
+              A background sweep reads your own callbacks from both backends and files the
+              correlated ones as findings, so they appear without clicking <em>poll</em>. This is
+              read-only automation — it sends nothing and runs no command; a human still approves
+              every action against a target. Interval is floored at 30s.
+            </p>
+            <div className="hp-tn-actions">
+              <span className="hp-tn-actions-label">act</span>
+              <button
+                className={autopoll.enabled ? "hp-tn-stop" : "hp-tn-start"}
+                onClick={() => toggleAutopoll(!autopoll.enabled, autopoll.interval)}
+                disabled={busy !== null}
+              >
+                {busy === "autopoll"
+                  ? "saving…"
+                  : autopoll.enabled
+                    ? `on · every ${autopoll.interval}s — turn off`
+                    : "off — turn on"}
+              </button>
+            </div>
+          </section>
+        )}
+
+        {/* ---- verify ------------------------------------------------------ */}
+        {anyBackend && (
+          <section className="hp-tn-card">
+            <div className="hp-tn-cardhead">verify · are the canaries working?</div>
             <p className="hp-tn-note">
               Every link in this chain fails <em>silently</em> — a payload that produces no hit
               looks the same whether the target was not vulnerable or the zone was never
@@ -395,9 +571,9 @@ export function OOBCanaryScreen() {
         )}
 
         {/* ---- mint + payloads --------------------------------------------- */}
-        {config && (
+        {anyBackend && (
           <section className="hp-tn-card">
-            <div className="hp-tn-cardhead">5 · mint a token, take the payload</div>
+            <div className="hp-tn-cardhead">mint a token, take the payload</div>
             <div className="hp-tn-form">
               <input
                 className="hp-tn-input"
@@ -444,27 +620,24 @@ export function OOBCanaryScreen() {
                 {busy === "mint" ? "minting…" : "mint + render"}
               </button>
             </div>
-            {minted && (
-              <ul className="hp-tn-list">
-                {minted.payloads.map((p) => (
-                  <li key={p.id} className="hp-tn-row">
-                    <div className="hp-tn-rowtop">
-                      <span className="hp-tn-kind">{p.vuln_class}</span>
-                      <span className="hp-tn-subs">
-                        {p.title} — {p.sink}
-                      </span>
-                    </div>
-                    <div className="hp-tn-oneliner">
-                      <pre className="hp-tn-pre">{p.payload}</pre>
-                      <CopyButton text={p.payload} />
-                    </div>
-                    <div className="hp-tn-olhint">
-                      A hit proves: {p.proves}
-                      {p.note ? ` · ${p.note}` : ""}
-                    </div>
-                  </li>
-                ))}
-              </ul>
+            {minted?.backends.self_hosted && (
+              <>
+                <p className="hp-tn-olhint">
+                  self-hosted · {minted.backends.self_hosted.token.token}.
+                  {minted.backends.self_hosted.zone}
+                </p>
+                <ul className="hp-tn-list">
+                  {minted.backends.self_hosted.payloads.map(renderPayload)}
+                </ul>
+              </>
+            )}
+            {minted?.backends.interactsh && (
+              <>
+                <p className="hp-tn-olhint">interact.sh · {minted.backends.interactsh.host}</p>
+                <ul className="hp-tn-list">
+                  {minted.backends.interactsh.payloads.map(renderPayload)}
+                </ul>
+              </>
             )}
             {tokenList.length > 0 && (
               <p className="hp-tn-olhint">
@@ -476,14 +649,14 @@ export function OOBCanaryScreen() {
         )}
 
         {/* ---- poll -------------------------------------------------------- */}
-        {config && (
+        {anyBackend && (
           <section className="hp-tn-card">
-            <div className="hp-tn-cardhead">6 · collect callbacks</div>
+            <div className="hp-tn-cardhead">collect callbacks</div>
             <p className="hp-tn-note">
-              Fetches everything newer than the cursor, correlates each hit back to the step that
-              minted its token, and files the correlated ones as findings. Hits that cannot be
-              attributed are listed rather than dropped — &ldquo;something arrived I could not
-              place&rdquo; is a different fact from &ldquo;nothing arrived&rdquo;.
+              Sweeps BOTH backends, correlates each hit back to the step that minted its token, and
+              files the correlated ones as findings. Hits that cannot be attributed are listed
+              rather than dropped — &ldquo;something arrived I could not place&rdquo; is a different
+              fact from &ldquo;nothing arrived&rdquo;. Auto-poll does this on a timer.
             </p>
             <button className="hp-tn-start" onClick={poll} disabled={busy !== null}>
               {busy === "poll" ? "polling…" : "poll now"}
@@ -492,15 +665,30 @@ export function OOBCanaryScreen() {
               <>
                 <p className="hp-tn-olhint">
                   {polled.hits.length} hit{polled.hits.length === 1 ? "" : "s"} read · {polled.filed}{" "}
-                  filed as findings · cursor now {polled.cursor}
+                  filed as findings
+                  {polled.self_hosted ? ` · self-hosted cursor ${polled.self_hosted.cursor}` : ""}
+                  {polled.interactsh ? ` · interact.sh ${polled.interactsh.hits}` : ""}
                   {polled.unfiled.length > 0 ? ` · ${polled.unfiled.length} unattributed` : ""}
                 </p>
+                {polled.errors.length > 0 && (
+                  <ul className="hp-tn-list">
+                    {polled.errors.map((e) => (
+                      <li key={e.backend} className="hp-tn-row">
+                        <div className="hp-tn-rowtop">
+                          <span className="hp-tn-kind">✗ {e.backend}</span>
+                          <span className="hp-tn-subs">{e.reason}</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 <ul className="hp-tn-list">
-                  {polled.hits.map((h) => (
-                    <li key={h.seq} className="hp-tn-row">
+                  {polled.hits.map((h, i) => (
+                    <li key={`${h.backend ?? "sh"}-${h.seq ?? h.token ?? i}`} className="hp-tn-row">
                       <div className="hp-tn-rowtop">
                         <span className="hp-tn-kind">
                           {h.correlated ? "✓" : "?"} {h.kind}
+                          {h.backend === "interactsh" ? " · interact.sh" : ""}
                         </span>
                         <span className="hp-tn-subs">
                           {h.kind === "dns" ? h.qname : `${h.method} ${h.path}`} from {h.source_ip}{" "}
@@ -516,11 +704,11 @@ export function OOBCanaryScreen() {
           </section>
         )}
 
-        {!config && (
+        {!anyBackend && (
           <p className="hp-tn-sub">
-            Nothing is configured yet. You need a VPS you own and a domain you can add NS records
-            to — HackPit deliberately creates neither. Fill in the zone and address above, then
-            delegate, deploy and verify in order.
+            No backend is set up yet. Either register an interact.sh session above (zero
+            infrastructure), or — for a private, owned canary — fill in a VPS you own and a domain
+            you can add NS records to, then delegate, deploy and verify in order.
           </p>
         )}
       </div>

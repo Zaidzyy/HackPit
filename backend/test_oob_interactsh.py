@@ -77,3 +77,58 @@ def test_crypto_round_trip():
 def test_decrypt_rejects_garbage():
     with pytest.raises(ish.InteractshError):
         ish.decrypt_interaction(b"\x00" * 32, "not-base64-@@@")
+
+
+# --------------------------------------------------------------------------- #
+# Task 2 — session store + register/deregister
+# --------------------------------------------------------------------------- #
+def test_register_stores_and_masks(tmp_path, monkeypatch):
+    monkeypatch.setattr(ish, "DB_PATH", tmp_path / "s.db")
+    posted = {}
+    monkeypatch.setattr(
+        ish, "_http_post",
+        lambda path, body: posted.update({"path": path, "body": body}) or {"message": "ok"},
+    )
+    ish.init_db()
+    pub = ish.register(server_host="oast.fun")
+    assert posted["path"] == "/register"
+    assert posted["body"]["correlation-id"] == pub["correlation_prefix"]
+    assert "secret-key" in posted["body"] and "public-key" in posted["body"]
+    assert set(pub) == {
+        "server", "correlation_prefix", "generated", "registered_at", "last_poll", "has_secret",
+    }
+    assert pub["has_secret"] is True
+    assert ish.is_registered() is True
+    assert ish.server() == "oast.fun"
+
+
+def test_register_rotates(tmp_path, monkeypatch):
+    monkeypatch.setattr(ish, "DB_PATH", tmp_path / "s.db")
+    monkeypatch.setattr(ish, "_http_post", lambda path, body: {"message": "ok"})
+    ish.init_db()
+    first = ish.register()
+    second = ish.register()
+    assert first["correlation_prefix"] != second["correlation_prefix"]
+
+
+def test_register_rolls_back_on_server_refusal(tmp_path, monkeypatch):
+    monkeypatch.setattr(ish, "DB_PATH", tmp_path / "s.db")
+
+    def boom(path, body):
+        raise ish.InteractshError("server said no")
+
+    monkeypatch.setattr(ish, "_http_post", boom)
+    ish.init_db()
+    with pytest.raises(ish.InteractshError):
+        ish.register()
+    assert ish.is_registered() is False  # no half-registered session left behind
+
+
+def test_deregister_forgets(tmp_path, monkeypatch):
+    monkeypatch.setattr(ish, "DB_PATH", tmp_path / "s.db")
+    monkeypatch.setattr(ish, "_http_post", lambda path, body: {"message": "ok"})
+    ish.init_db()
+    ish.register()
+    assert ish.deregister() is True
+    assert ish.is_registered() is False
+    assert ish.deregister() is False  # nothing to do the second time

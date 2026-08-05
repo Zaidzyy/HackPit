@@ -35,8 +35,16 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import secrets
+import sqlite3
 import string
+import threading
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -142,3 +150,283 @@ def decrypt_interaction(aes_key: bytes, data_b64: str) -> dict:
     if not isinstance(obj, dict):
         raise InteractshError("a decrypted interaction was not a JSON object")
     return obj
+
+
+# --------------------------------------------------------------------------- #
+# session store — one interact.sh registration, in the gitignored sessions.db
+# --------------------------------------------------------------------------- #
+# Resolved the same way the sibling modules resolve it (tokens.py:46), not imported from another
+# package for a path both already know.
+DB_PATH = Path(__file__).parent.parent / "sessions.db"
+
+_write_lock = threading.Lock()
+
+# There is one interact.sh session, like there is one canary. The row id is a constant.
+ROW_ID = "interactsh"
+
+# A hostname, nothing else — this value is spliced into a URL, so the grammar excludes every
+# character that could then appear anywhere but a host label. Matches config._HOST_RE.
+_HOST_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9.-]{0,253}[a-zA-Z0-9])?$")
+
+# Containment ceilings, matching poll.py.
+TIMEOUT_SECONDS = 15
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
+
+
+def init_db() -> None:
+    """Create the interact.sh tables. Idempotent; safe to call on every startup.
+
+    Three tables: the single session row, the per-mint suffix->step correlation map, and the
+    seen-interaction set that makes re-polling idempotent.
+    """
+    with _connect() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS oob_interactsh (
+                row_id         TEXT PRIMARY KEY,
+                server         TEXT NOT NULL,
+                correlation_id TEXT NOT NULL,
+                secret_key     TEXT NOT NULL,
+                private_key    TEXT NOT NULL,
+                auth_token     TEXT NOT NULL DEFAULT '',
+                registered_at  TEXT NOT NULL,
+                last_poll      TEXT NOT NULL DEFAULT '',
+                generated      INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS oob_interactsh_map (
+                suffix        TEXT PRIMARY KEY,
+                engagement_id TEXT NOT NULL,
+                step_id       TEXT,
+                note          TEXT NOT NULL DEFAULT '',
+                at            TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS oob_interactsh_map_eng ON oob_interactsh_map (engagement_id)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS oob_interactsh_seen (uid TEXT PRIMARY KEY, at TEXT NOT NULL)"
+        )
+
+
+def _raw() -> sqlite3.Row | None:
+    try:
+        with _connect() as conn:
+            return conn.execute(
+                "SELECT * FROM oob_interactsh WHERE row_id = ?", (ROW_ID,)
+            ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+
+
+def is_registered() -> bool:
+    """True when there is an interact.sh session to generate payloads under or poll."""
+    return _raw() is not None
+
+
+def server() -> str:
+    row = _raw()
+    return (row["server"] if row else "") or ""
+
+
+def correlation_id() -> str:
+    row = _raw()
+    return (row["correlation_id"] if row else "") or ""
+
+
+def _secret_key() -> str:
+    row = _raw()
+    return (row["secret_key"] if row else "") or ""
+
+
+def _private_key() -> str:
+    row = _raw()
+    return (row["private_key"] if row else "") or ""
+
+
+def _auth_token() -> str:
+    row = _raw()
+    return (row["auth_token"] if row else "") or ""
+
+
+def session_public() -> dict[str, Any] | None:
+    """The masked view — never a secret. None when not registered.
+
+    Reports the correlation-id as ``correlation_prefix`` (it is a public DNS label anyway) and
+    the presence of a secret as ``has_secret``, the same shape ``config.public`` uses. The
+    secret-key, private key and auth token are never serialised.
+    """
+    row = _raw()
+    if row is None:
+        return None
+    d = dict(row)
+    return {
+        "server": d["server"],
+        "correlation_prefix": d["correlation_id"],
+        "generated": int(d["generated"]),
+        "registered_at": d["registered_at"],
+        "last_poll": d["last_poll"] or "",
+        "has_secret": bool(d["secret_key"] and d["private_key"]),
+    }
+
+
+def _forget() -> None:
+    """Drop the session and everything scoped to it (map + seen). Used on rotate and deregister."""
+    with _write_lock, _connect() as conn:
+        conn.execute("DELETE FROM oob_interactsh WHERE row_id = ?", (ROW_ID,))
+        conn.execute("DELETE FROM oob_interactsh_map")
+        conn.execute("DELETE FROM oob_interactsh_seen")
+
+
+# --------------------------------------------------------------------------- #
+# contained HTTP — the same shape poll.py uses, for the same reasons
+# --------------------------------------------------------------------------- #
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuses to redirect. SUBCLASSES the default so build_opener does not re-add one.
+
+    A poll that followed a ``302 http://169.254.169.254/...`` from a tampered or proxied server
+    would become an SSRF from the backend host. Returning None makes urllib raise for the 3xx.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+def _opener() -> urllib.request.OpenerDirector:
+    """Follows NO redirect and honours NO ambient proxy — both load-bearing, see poll.py."""
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+
+
+def _base() -> str:
+    host = server()
+    if not host:
+        raise InteractshError("no interact.sh session — register one first")
+    return f"https://{host}"
+
+
+def _headers() -> dict[str, str]:
+    headers = {"Accept": "application/json"}
+    token = _auth_token()
+    if token:
+        headers["Authorization"] = token
+    return headers
+
+
+def _read(response) -> dict[str, Any]:
+    raw = response.read(MAX_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise InteractshError("interact.sh returned more than this client will read — refusing")
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw.decode("utf-8", "replace"))
+    except ValueError as exc:
+        raise InteractshError("interact.sh returned something that is not JSON") from exc
+    if not isinstance(payload, dict):
+        raise InteractshError("interact.sh returned JSON that is not an object")
+    return payload
+
+
+def _http_post(path: str, body: dict[str, Any]) -> dict[str, Any]:
+    """POST JSON to a fixed path on the CONFIGURED server. No redirect, no ambient proxy."""
+    data = json.dumps(body).encode()
+    request = urllib.request.Request(
+        _base() + path,
+        data=data,
+        headers={**_headers(), "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with _opener().open(request, timeout=TIMEOUT_SECONDS) as response:
+            return _read(response)
+    except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            raise InteractshError(
+                f"interact.sh answered a redirect ({exc.code}), which is never followed"
+            ) from exc
+        raise InteractshError(f"interact.sh answered HTTP {exc.code} on {path}") from exc
+    except urllib.error.URLError as exc:
+        raise InteractshError(f"could not reach interact.sh at {server()}: {exc.reason}") from exc
+    except OSError as exc:  # pragma: no cover - socket-level failures
+        raise InteractshError(f"could not reach interact.sh at {server()}: {exc}") from exc
+
+
+def _http_get(path: str, query: str = "") -> dict[str, Any]:
+    """GET a fixed path + query from the CONFIGURED server. No redirect, no ambient proxy."""
+    request = urllib.request.Request(_base() + path + query, headers=_headers(), method="GET")
+    try:
+        with _opener().open(request, timeout=TIMEOUT_SECONDS) as response:
+            return _read(response)
+    except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            raise InteractshError(
+                f"interact.sh answered a redirect ({exc.code}), which is never followed"
+            ) from exc
+        raise InteractshError(f"interact.sh answered HTTP {exc.code} on {path}") from exc
+    except urllib.error.URLError as exc:
+        raise InteractshError(f"could not reach interact.sh at {server()}: {exc.reason}") from exc
+    except OSError as exc:  # pragma: no cover - socket-level failures
+        raise InteractshError(f"could not reach interact.sh at {server()}: {exc}") from exc
+
+
+# --------------------------------------------------------------------------- #
+# register / deregister
+# --------------------------------------------------------------------------- #
+def register(server_host: str = DEFAULT_SERVER, auth_token: str = "") -> dict[str, Any]:
+    """Start (or rotate) an interact.sh session and register the keypair with the server.
+
+    Rotating replaces any prior session and clears its correlation map + seen set — a new
+    correlation-id means the old suffixes belong to a session that no longer exists. The row is
+    written BEFORE the network call so ``_base`` can resolve the destination; on a failed
+    ``/register`` it is rolled back, so a half-registered session is never left behind.
+    """
+    host = (server_host or DEFAULT_SERVER).strip().lower()
+    if not _HOST_RE.match(host):
+        raise InteractshError(f"interact.sh server must be a hostname, got {server_host!r}")
+    priv_pem, pub_b64 = new_keypair()
+    cid, sk = new_correlation_id(), secrets.token_hex(16)
+    _forget()
+    with _write_lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO oob_interactsh (row_id, server, correlation_id, secret_key, private_key, "
+            "auth_token, registered_at, last_poll, generated) VALUES (?,?,?,?,?,?,?,?,0)",
+            (ROW_ID, host, cid, sk, priv_pem, (auth_token or "").strip(), _now(), ""),
+        )
+    body = {"public-key": pub_b64, "secret-key": sk, "correlation-id": cid}
+    try:
+        _http_post("/register", body)
+    except InteractshError:
+        _forget()  # do not leave a session the server never accepted
+        raise
+    pub = session_public()
+    assert pub is not None
+    return pub
+
+
+def deregister() -> bool:
+    """Best-effort deregister on the server, then forget locally. True if a session existed."""
+    if not is_registered():
+        return False
+    body = {"correlation-id": correlation_id(), "secret-key": _secret_key()}
+    try:
+        _http_post("/deregister", body)
+    except InteractshError:
+        pass  # the server may already have expired the session; forgetting locally is the point
+    _forget()
+    return True

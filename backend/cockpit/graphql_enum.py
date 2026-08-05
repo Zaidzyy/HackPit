@@ -34,6 +34,23 @@ nothing gets shipped green.
     hotchocolate   Core/src/Validation/Properties/Resources.resx + Rules/FieldSelectionsRule.cs
     graphql-dotnet Validation/Errors/FieldsOnCorrectTypeError.cs + Utilities/StringUtils.cs
                      + Validation/Errors/KnownArgumentNamesError.cs
+    sangria        modules/core/.../validation/Violation.scala + util/StringUtil.scala
+    morpheus       (brand only) Validation/Internal/Directive.hs -- it shares graphql-js's field
+                     wording and is told apart ONLY by a directive-location probe
+
+*** TWO MORE, FROM TRIAGING THE LONG TAIL, AND THE SECOND BROKE AN ASSUMPTION. ***
+sangria rides graphql-core: same single-quoted sentence, cap of five, and a joiner that DROPS the
+Oxford comma graphql-core keeps (`'a', 'b' or 'c'`). It parses correctly with no new code, which is
+the point -- pulling quoted runs is blind to the separator in both directions.
+
+morpheus-graphql is the assumption-breaker: the FIRST core measured that speaks graphql-js's
+unknown-field sentence to the character and NEVER suggests. `Selection.hs` builds
+`Cannot query field "x" on type "Y".` and stops. So the field probe alone reads it as
+graphql-js-that-suggests, and only its ungrammatical directive-location error ("may not TO be used
+on") tells the truth. It is the one brand probe that downgrades `suggests`, justified exactly as
+Hasura's core-setting probe is. (Its source carries a `Did you mean "x { ... }"?` line too -- but
+only in a stale doc COMMENT above `subfieldsNotSelected`, which emits no such clause. On the wire
+morpheus never sends it, so it was never the ScalarLeafs hazard graphql-js and HotChocolate are.)
 
 *** THE THREE READ LAST WENT THREE DIFFERENT WAYS, WHICH IS THE ARGUMENT FOR READING THEM. ***
 They were added together, from one plan, on one assumption -- that each would need its own parser.
@@ -229,6 +246,14 @@ CORE_DIALECT: dict[str, str] = {
     # graphql-php server fingerprints as `graphql-js`. The DIALECT is right, which is what the
     # parser needs; the brand is not recoverable from this probe and is not guessed.
     "graphql-dotnet": "graphql-core",
+    # sangria (Scala) also rides graphql-core, and it is the one that proves the quoted-run parser
+    # is separator-blind in BOTH directions: graphql-dotnet has the Oxford comma graphql-core has,
+    # sangria DROPS it. StringUtil.quotedOrList wraps in single quotes and orList joins
+    # `start.mkString(", ") or last` -- so three names read `'a', 'b' or 'c'`, no comma before
+    # `or`, where graphql-core writes `'a', 'b', or 'c'`. Same sentence, same quote, cap of five;
+    # a different joiner that the parser never has to know about. READ: Violation.scala +
+    # util/StringUtil.scala.
+    "sangria": "graphql-core",
     "graphql-ruby": "graphql-ruby",
     "async-graphql": "async-graphql",
 }
@@ -264,6 +289,13 @@ ENGINE_CORE: dict[str, str] = {
     # two engines and so does this table -- collapsing them to "dotnet" is the brand-vs-core
     # mistake this module was written to avoid.
     "graphql-dotnet": "graphql-dotnet",
+    # sangria rides graphql-core the way graphql-php rides graphql-js: correct dialect, correct
+    # parsing, brand NOT recoverable from the field sentence and therefore not guessed at runtime.
+    "sangria": "sangria",
+    # morpheus-graphql is the odd one: it shares graphql-js's field wording but never suggests, so
+    # it has no dialect and is identified only by its directive-location probe. Kept here so the
+    # brand id is a named thing rather than a bare string in classify_fingerprint.
+    "morpheus": "morpheus",
     # *** graphw00f HAS NO ID FOR async-graphql. *** Its only Rust engine is `juniper`, so this
     # one brand cannot be compared across the two tools and there is nothing to align to. Named
     # for the crate. Note also that graphw00f carries `graphql-dotnet` as an engine SEPARATE from
@@ -544,8 +576,13 @@ def classify_fingerprint(responses: dict[str, str]) -> EngineFingerprint:
                 out.evidence.append(f"bad_field: matched {core}'s unknown-field wording")
                 break
 
-    # 2. THE BRAND, where a probe names one. Refinement only -- it must never change the dialect,
-    #    because the dialect was measured directly and a brand check is an inference about it.
+    # 2. THE BRAND, where a probe names one. Refinement only, with TWO named exceptions -- a brand
+    #    check must never move the dialect to a DIFFERENT suggestion dialect, because the dialect
+    #    was measured directly and a brand guess is an inference about it. The exceptions are Hasura
+    #    and morpheus: both are POSITIVE identifications (a root type of query_root IS Hasura; "may
+    #    not TO be used" IS morpheus), and both NULLIFY the dialect to "" because the identified
+    #    engine does not suggest at all. Setting `suggests=False` on a positive id is allowed;
+    #    swapping one suggestion dialect for another on a mere brand hint is not.
     skip = "\n".join(error_messages(responses.get("skip_directive", "") or ""))
     syntax = "\n".join(error_messages(responses.get("syntax_error", "") or ""))
     # `__typename` succeeds, so its answer is DATA and not an error -- read raw.
@@ -556,6 +593,24 @@ def classify_fingerprint(responses: dict[str, str]) -> EngineFingerprint:
     elif "can't be applied to queries" in skip or "missing required arguments: if" in skip:
         out.engine = "ruby"
         out.evidence.append("skip_directive: graphql-ruby's directive-location wording")
+    if "may not to be used on" in skip:
+        # SOURCE: morpheus-graphql Validation/Internal/Directive.hs -- validateDirectiveLocation
+        #   throwError $ "Directive " <> msg name <> " may not to be used on " <> msg loc
+        # The ungrammatical "may not TO be used" is morpheus's alone; graphql-js writes "may not be
+        # used on". This is the ONE brand probe that DOWNGRADES `suggests`, and it is allowed to for
+        # the same reason Hasura's query_root is allowed to SET the core: it is a positive
+        # identification, not an inference about the dialect.
+        #
+        # *** WHY A DOWNGRADE IS NEEDED AT ALL. *** morpheus is the first core measured that shares
+        # graphql-js's unknown-field SENTENCE and never suggests -- Selection.hs builds
+        # `Cannot query field "x" on type "Y".` with graphql-js's exact wording and stops. The
+        # field probe therefore reads it as graphql-js/suggests=True, and only this directive slip
+        # tells the truth. Without it, an operator spends a whole wordlist run to earn
+        # `suggestions_disabled` where the honest answer is `suggestions_unsupported`. No name is
+        # ever fabricated either way; this just stops the wasted run and fixes the label.
+        out.core, out.engine, out.suggests, out.confidence = "morpheus", "morpheus", False, "high"
+        out.dialect = ""
+        out.evidence.append("skip_directive: morpheus's 'may not to be used' directive wording")
     if '"RootQueryType"' in typename or "'RootQueryType'" in typename:
         # SOURCE: absinthe lib/absinthe/schema.ex -- `@default_query_name "RootQueryType"`, the
         # default for the `query do ... end` macro. BRAND ONLY, and it must stay that way: the

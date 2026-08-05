@@ -4764,12 +4764,16 @@ control is now <strong>eight planted violations</strong> plus four innocents tha
 the same rebuild, plus the follow-on it named: field-suggestion enumeration. All four landed.</p>
 <blockquote>
 <p><strong>CLOSED 2026-08-05.</strong> The build's own leftover — three engines named but unmeasured — was read
-in the same session, and the long tail behind it was triaged rather than left as an open
-question. Nine engines were resolved in total: <strong>four read from source</strong> (Absinthe,
-async-graphql, HotChocolate, graphql-dotnet), <strong>five measured as never suggesting</strong>, one found to
-be <strong>already covered</strong> by an existing core, and <strong>one left open and named</strong> (sangria). Two
-shipping defects were found and fixed on the way — a fabricated schema field, and a dropped
-argument-suggestion clause. Nothing is outstanding that is not written down below.</p>
+in the same session, the long tail behind it was triaged, and the two live findings that triage
+surfaced were then closed too. <strong>Eleven engines resolved in total:</strong> six read from source and
+given a parser or a non-suggesting entry (Absinthe, async-graphql, HotChocolate, graphql-dotnet,
+<strong>sangria</strong>, and graphql-js's Python/PHP/Go siblings already present); four measured as never
+suggesting (lacinia, caliban, agoo, pg_graphql); one already covered by an existing core
+(dgraph → gqlparser); and <strong>morpheus</strong>, which shares graphql-js's sentence and is now told apart
+by a directive probe. Three shipping defects were found and fixed on the way — a fabricated schema
+field, a dropped argument-suggestion clause, and a strikethrough that rendered as literal tildes —
+and one claim in this document (morpheus's ScalarLeafs message) was retracted as wrong. <strong>Nothing
+is left open.</strong></p>
 </blockquote>
 <p><strong>The build adds no gate, no confirm, no blocklist and no allow-list narrowing</strong> — not in the
 product and not in a proof script. The one place it changes what an operator can reach, it
@@ -4986,8 +4990,8 @@ is a cheap question with an expensive answer: a core that never suggests is a tw
 <tr>
 <td><strong>sangria</strong></td>
 <td>Scala</td>
-<td><strong>yes — open</strong></td>
-<td><code>Violation.scala:257</code> <code>Cannot query field '$f' on type '$t'.</code> + <code>didYouMean(suggestedFieldNames)</code>. Single quotes confirmed; <strong><code>StringUtil.orList</code> not yet read</strong>, so the joiner and cap are unmeasured</td>
+<td><strong>yes — now closed</strong></td>
+<td><code>Violation.scala:257</code> <code>Cannot query field '$f' on type '$t'.</code> + <code>didYouMean(...)</code>. <code>StringUtil</code> read: single quotes, cap five, <strong>and no Oxford comma</strong> (<code>'a', 'b' or 'c'</code>). Rides graphql-core; the missing comma is invisible to quoted-run extraction. Locked with a fixture and a test</td>
 </tr>
 <tr>
 <td>lacinia</td>
@@ -5010,8 +5014,8 @@ is a cheap question with an expensive answer: a core that never suggests is a tw
 <tr>
 <td>morpheus-graphql</td>
 <td>Haskell</td>
-<td>no</td>
-<td>its <strong>only</strong> <code>Did you mean</code> is a comment quoting the ScalarLeafs message</td>
+<td><strong>no — now closed</strong></td>
+<td>shares graphql-js's field sentence exactly, identified by a directive probe and downgraded to <code>suggestions_unsupported</code>. Its only <code>Did you mean</code> is a stale doc-comment it never sends</td>
 </tr>
 <tr>
 <td>pg_graphql</td>
@@ -5021,24 +5025,28 @@ is a cheap question with an expensive answer: a core that never suggests is a tw
 </tr>
 </tbody>
 </table>
-<p><strong>Five of seven never suggest. One is already covered. One is genuinely open, and it is one line.</strong>
-The tail was worth measuring precisely because measuring it was cheap and it turned out to be almost
-entirely empty.</p>
+<p><strong>Five of seven never suggest. One is already covered. One suggests — sangria — and it is now
+closed</strong> (see its row: read, and locked with a fixture and a test). The tail was worth measuring
+precisely because measuring it was cheap and it turned out to be almost entirely empty.</p>
 <p>Three things fell out that matter more than the tally:</p>
 <ul>
-<li><strong>morpheus-graphql carries the ScalarLeafs message too</strong> — a third independent implementation
-  (after graphql-js and HotChocolate) shipping <code>Did you mean "hobby { ... }"?</code>. It parses to nothing
-  in all four dialects. The fabricated-field fix was general, and this is the evidence rather than
-  the hope.</li>
 <li><strong>No shadowing.</strong> caliban's <code>does not exist</code> (against graphql-ruby's <code>doesn't exist</code>),
   pg_graphql's <code>selected on type</code> (against async-graphql's <code>on type</code>) and lacinia's unquoted form
   all classify as <code>unknown</code> — near misses that stay misses.</li>
-<li>⚠ <strong>morpheus is the first core known to share graphql-js's unknown-field sentence and never
-  suggest.</strong> It fingerprints as <code>graphql-js</code>, <code>suggests: True</code>, high confidence — and only learns
-  otherwise <em>after</em> spending a wordlist run to earn <code>suggestions_disabled</code> where the truth is
-  <code>suggestions_unsupported</code>. No name is ever fabricated and the operator still stops, so this is a
-  wasted run and a slightly wrong label, not a wrong answer. <strong>Open, and not fixed here:</strong> it needs
-  a brand probe, which is exactly the parser work this pass excluded.</li>
+<li><strong>morpheus is the first core that shares graphql-js's unknown-field sentence and never
+  suggests</strong> — and it is now handled. The field probe alone reads it as <code>graphql-js</code>,
+  <code>suggests: True</code>; its ungrammatical directive-location error (<code>Directive "skip" may not TO be
+  used on QUERY</code>) is unique to morpheus and downgrades it to <code>suggestions_unsupported</code>. That is the
+  one brand probe permitted to change <code>suggests</code>, justified exactly as Hasura's core-setting probe
+  is: a positive identification, not an inference. Without it an operator would have spent a full
+  wordlist run to earn <code>suggestions_disabled</code> where the truth is <code>unsupported</code> — a wasted run and a
+  wrong label, never a fabricated name.</li>
+<li>⚠ <strong>A correction to this document.</strong> An earlier draft claimed morpheus "carries the ScalarLeafs
+  message too" — a third <code>Did you mean "hobby { ... }"?</code> after graphql-js and HotChocolate. That was
+  <strong>wrong</strong>: the string is a stale doc-comment above <code>subfieldsNotSelected</code>, and the function emits
+  <code>must have a selection of subfields</code> and stops. morpheus never sends it, so it was never a
+  fabricated-field hazard. The Name-production filter would refuse it regardless, and a test asserts
+  both — but the claim that it reached the wire is retracted.</li>
 </ul>
 <p>Two structural tests were added with them, because the <em>shape</em> of adding a core is what breaks:
 <code>classify_fingerprint</code> carried a <strong>literal tuple</strong> of the three dialects that existed when it was

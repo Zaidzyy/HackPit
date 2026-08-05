@@ -4608,12 +4608,16 @@ Build #20 closed with three leftovers that were **one chain**, because all three
 the same rebuild, plus the follow-on it named: field-suggestion enumeration. All four landed.
 
 > **CLOSED 2026-08-05.** The build's own leftover — three engines named but unmeasured — was read
-> in the same session, and the long tail behind it was triaged rather than left as an open
-> question. Nine engines were resolved in total: **four read from source** (Absinthe,
-> async-graphql, HotChocolate, graphql-dotnet), **five measured as never suggesting**, one found to
-> be **already covered** by an existing core, and **one left open and named** (sangria). Two
-> shipping defects were found and fixed on the way — a fabricated schema field, and a dropped
-> argument-suggestion clause. Nothing is outstanding that is not written down below.
+> in the same session, the long tail behind it was triaged, and the two live findings that triage
+> surfaced were then closed too. **Eleven engines resolved in total:** six read from source and
+> given a parser or a non-suggesting entry (Absinthe, async-graphql, HotChocolate, graphql-dotnet,
+> **sangria**, and graphql-js's Python/PHP/Go siblings already present); four measured as never
+> suggesting (lacinia, caliban, agoo, pg_graphql); one already covered by an existing core
+> (dgraph → gqlparser); and **morpheus**, which shares graphql-js's sentence and is now told apart
+> by a directive probe. Three shipping defects were found and fixed on the way — a fabricated schema
+> field, a dropped argument-suggestion clause, and a strikethrough that rendered as literal tildes —
+> and one claim in this document (morpheus's ScalarLeafs message) was retracted as wrong. **Nothing
+> is left open.**
 
 **The build adds no gate, no confirm, no blocklist and no allow-list narrowing** — not in the
 product and not in a proof script. The one place it changes what an operator can reach, it
@@ -4840,32 +4844,36 @@ is a cheap question with an expensive answer: a core that never suggests is a tw
 | Engine | Lang | Suggests? | Evidence |
 |---|---|---|---|
 | **dgraph** | Go | **already covered** | `go.mod` pins `dgraph-io/gqlparser/v2`; its `fields_on_correct_type.go` appends `" Did you mean " + QuotedOrList(...) + "?"` — the **`gqlparser` core this project already parses** |
-| **sangria** | Scala | **yes — open** | `Violation.scala:257` `Cannot query field '$f' on type '$t'.` + `didYouMean(suggestedFieldNames)`. Single quotes confirmed; **`StringUtil.orList` not yet read**, so the joiner and cap are unmeasured |
+| **sangria** | Scala | **yes — now closed** | `Violation.scala:257` `Cannot query field '$f' on type '$t'.` + `didYouMean(...)`. `StringUtil` read: single quotes, cap five, **and no Oxford comma** (`'a', 'b' or 'c'`). Rides graphql-core; the missing comma is invisible to quoted-run extraction. Locked with a fixture and a test |
 | lacinia | Clojure | no | `parser.clj:1160` `Cannot query field %s on type %s.`; zero `Did you mean`/`suggest` in the repo |
 | caliban | Scala | no | `Validator.scala:582` `Field '$f' does not exist on type '$t'.`; zero `Did you mean` |
 | agoo | C | no | zero `Did you mean` in the entire repository; its only field-related error strings are allocation failures |
-| morpheus-graphql | Haskell | no | its **only** `Did you mean` is a comment quoting the ScalarLeafs message |
+| morpheus-graphql | Haskell | **no — now closed** | shares graphql-js's field sentence exactly, identified by a directive probe and downgraded to `suggestions_unsupported`. Its only `Did you mean` is a stale doc-comment it never sends |
 | pg_graphql | Rust | no | `builder.rs:1739` `Unknown field "{}" selected on type "{}"`; zero `Did you mean` |
 
-**Five of seven never suggest. One is already covered. One is genuinely open, and it is one line.**
-The tail was worth measuring precisely because measuring it was cheap and it turned out to be almost
-entirely empty.
+**Five of seven never suggest. One is already covered. One suggests — sangria — and it is now
+closed** (see its row: read, and locked with a fixture and a test). The tail was worth measuring
+precisely because measuring it was cheap and it turned out to be almost entirely empty.
 
 Three things fell out that matter more than the tally:
 
-* **morpheus-graphql carries the ScalarLeafs message too** — a third independent implementation
-  (after graphql-js and HotChocolate) shipping `Did you mean "hobby { ... }"?`. It parses to nothing
-  in all four dialects. The fabricated-field fix was general, and this is the evidence rather than
-  the hope.
 * **No shadowing.** caliban's `does not exist` (against graphql-ruby's `doesn't exist`),
   pg_graphql's `selected on type` (against async-graphql's `on type`) and lacinia's unquoted form
   all classify as `unknown` — near misses that stay misses.
-* ⚠ **morpheus is the first core known to share graphql-js's unknown-field sentence and never
-  suggest.** It fingerprints as `graphql-js`, `suggests: True`, high confidence — and only learns
-  otherwise *after* spending a wordlist run to earn `suggestions_disabled` where the truth is
-  `suggestions_unsupported`. No name is ever fabricated and the operator still stops, so this is a
-  wasted run and a slightly wrong label, not a wrong answer. **Open, and not fixed here:** it needs
-  a brand probe, which is exactly the parser work this pass excluded.
+* **morpheus is the first core that shares graphql-js's unknown-field sentence and never
+  suggests** — and it is now handled. The field probe alone reads it as `graphql-js`,
+  `suggests: True`; its ungrammatical directive-location error (`Directive "skip" may not TO be
+  used on QUERY`) is unique to morpheus and downgrades it to `suggestions_unsupported`. That is the
+  one brand probe permitted to change `suggests`, justified exactly as Hasura's core-setting probe
+  is: a positive identification, not an inference. Without it an operator would have spent a full
+  wordlist run to earn `suggestions_disabled` where the truth is `unsupported` — a wasted run and a
+  wrong label, never a fabricated name.
+* ⚠ **A correction to this document.** An earlier draft claimed morpheus "carries the ScalarLeafs
+  message too" — a third `Did you mean "hobby { ... }"?` after graphql-js and HotChocolate. That was
+  **wrong**: the string is a stale doc-comment above `subfieldsNotSelected`, and the function emits
+  `must have a selection of subfields` and stops. morpheus never sends it, so it was never a
+  fabricated-field hazard. The Name-production filter would refuse it regardless, and a test asserts
+  both — but the claim that it reached the wire is retracted.
 
 Two structural tests were added with them, because the *shape* of adding a core is what breaks:
 `classify_fingerprint` carried a **literal tuple** of the three dialects that existed when it was

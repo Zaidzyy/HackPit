@@ -100,6 +100,21 @@ DOTNET_ARG = ("Unknown argument 'identifer' on field 'user' of type 'Query'. "
 # so graphql-dotnet does NOT carry the message that was fabricating fields.
 DOTNET_LEAF = "Field usr of type User must have a sub selection"
 
+# sangria (Scala): graphql-core's sentence and quote, but the joiner DROPS the Oxford comma.
+# `'a', 'b' or 'c'` where graphql-core writes `'a', 'b', or 'c'`. Rides the graphql-core dialect.
+SANGRIA_TWO = "Cannot query field 'usr' on type 'Query'. Did you mean 'user' or 'users'?"
+SANGRIA_THREE = "Cannot query field 'usr' on type 'Query'. Did you mean 'user', 'users' or 'userById'?"
+SANGRIA_NONE = "Cannot query field 'zzzzzzz' on type 'Query'."
+
+# morpheus-graphql (Haskell): the field sentence is graphql-js's to the character, so it can only
+# be told apart by the directive probe. `may not TO be used` is morpheus's ungrammatical own.
+MORPHEUS_BAD_FIELD = 'Cannot query field "usr" on type "Query".'
+MORPHEUS_SKIP = 'Directive "skip" may not to be used on QUERY'
+# The stale doc-comment's message, which morpheus does NOT actually emit -- proving it is not a
+# ScalarLeafs hazard the way graphql-js's real one was.
+MORPHEUS_LEAF_NEVER_SENT = ('Field "hobby" of type "Hobby!" must have a selection of subfields. '
+                            'Did you mean "hobby { ... }"?')
+
 # HotChocolate: backticks, and no name suggestion anywhere in the validation resources.
 HOTCHOCOLATE_NONE = "The field `usr` does not exist on the type `Query`."
 # *** THE TRAP FIXTURE. *** The ONE `Did you mean` in HotChocolate's Resources.resx, from the
@@ -235,6 +250,54 @@ def test_dotnet_is_TWO_engines_and_the_argument_clause_has_no_question_mark() ->
     print("  graphql-dotnet parses fields AND its `?`-less argument clause: PASS")
 
 
+def test_sangria_rides_graphql_core_and_its_MISSING_oxford_comma_does_not_leak() -> None:
+    """*** THE SEPARATOR-BLIND PARSER, PROVEN IN THE OTHER DIRECTION. ***
+
+    graphql-dotnet rides graphql-core WITH the Oxford comma; sangria rides it WITHOUT. Same
+    sentence, same single quote, same cap -- a joiner that writes `'a', 'b' or 'c'`. If the parser
+    were splitting on `, ` the last name would come back as `b' or 'c` on sangria. It pulls quoted
+    runs, so both land as clean names and neither needs its own dialect.
+    """
+    assert " or 'userById'" in SANGRIA_THREE and ", or " not in SANGRIA_THREE
+    assert [s.name for s in ge.parse_suggestions(SANGRIA_TWO, "graphql-core")] == ["user", "users"]
+    assert [s.name for s in ge.parse_suggestions(SANGRIA_THREE, "graphql-core")] == [
+        "user", "users", "userById"]
+    assert ge.CORE_DIALECT["sangria"] == "graphql-core"
+    fp = ge.classify_fingerprint({"bad_field": SANGRIA_TWO})
+    assert fp.core == "graphql-core" and fp.suggests is True
+    print("  sangria parses under graphql-core with no Oxford comma of its own: PASS")
+
+
+def test_morpheus_shares_graphql_js_wording_but_the_directive_probe_downgrades_it() -> None:
+    """*** THE FIRST CORE THAT SPEAKS graphql-js AND NEVER SUGGESTS. ***
+
+    morpheus's unknown-field sentence is graphql-js's to the character, so the field probe alone
+    calls it graphql-js/suggests=True -- a confident, wrong `suggestions_disabled` waiting to
+    happen after a wasted wordlist run. Its ungrammatical directive-location error is the only
+    thing that tells them apart, and it is allowed to downgrade `suggests` for the same reason
+    Hasura's query_root is allowed to set the core: a positive brand identification.
+    """
+    # Field probe alone: indistinguishable from graphql-js.
+    only_field = ge.classify_fingerprint({"bad_field": MORPHEUS_BAD_FIELD})
+    assert only_field.core == "graphql-js" and only_field.suggests is True
+
+    # With the directive probe we already send, the truth comes out.
+    full = ge.classify_fingerprint({"bad_field": MORPHEUS_BAD_FIELD, "skip_directive": MORPHEUS_SKIP})
+    assert full.core == "morpheus" and full.suggests is False and full.confidence == "high"
+    assert full.dialect == ""
+    status, _ = ge.status_for(full, unknown_field_errors=0, found=0, requests_sent=0)
+    assert status == "suggestions_unsupported", (
+        "morpheus must land on unsupported, NOT disabled -- there is nothing to switch on")
+
+    # *** AND IT DOES NOT CARRY THE ScalarLeafs HAZARD. *** The `Did you mean "x { ... }"?` line is
+    # a stale doc-comment in morpheus's source, not a wire message -- but even if it were sent, the
+    # Name-production filter (added for graphql-js/HotChocolate) already refuses it in every
+    # dialect. Belt and braces: the correction to my own overstatement, asserted.
+    for dialect in ge.DIALECTS:
+        assert ge.parse_suggestions(MORPHEUS_LEAF_NEVER_SENT, dialect) == [], dialect
+    print("  morpheus: field probe reads graphql-js, directive probe downgrades to unsupported: PASS")
+
+
 def test_EVERY_dialect_is_REACHABLE_from_classify_fingerprint() -> None:
     """*** THE STRUCTURAL ONE. THIS IS THE TEST THAT WOULD HAVE CAUGHT THE LAST BUG. ***
 
@@ -279,6 +342,7 @@ def test_each_fixture_classifies_to_its_OWN_core_and_not_a_NEIGHBOURS() -> None:
         (GQLPARSER_TWO, "graphql-js"),
         (CORE_TWO, "graphql-core"),
         (DOTNET_TWO, "graphql-core"),     # byte-identical, so this IS the right answer
+        (SANGRIA_TWO, "graphql-core"),    # same -- rides graphql-core, no Oxford comma of its own
         (RUBY_ONE, "graphql-ruby"),
         (ASYNC_TWO, "async-graphql"),
         (ABSINTHE_TWO, "graphql-js"),     # byte-identical, so this IS the right answer
@@ -605,6 +669,8 @@ if __name__ == "__main__":
     test_hotchocolate_NEVER_suggests_and_its_ONE_did_you_mean_is_not_a_field()
     test_absinthe_rides_graphql_js_for_FIELDS_and_yields_NOTHING_for_arguments()
     test_dotnet_is_TWO_engines_and_the_argument_clause_has_no_question_mark()
+    test_sangria_rides_graphql_core_and_its_MISSING_oxford_comma_does_not_leak()
+    test_morpheus_shares_graphql_js_wording_but_the_directive_probe_downgrades_it()
     test_EVERY_dialect_is_REACHABLE_from_classify_fingerprint()
     test_each_fixture_classifies_to_its_OWN_core_and_not_a_NEIGHBOURS()
     test_the_separator_differs_and_a_split_parser_would_be_wrong()

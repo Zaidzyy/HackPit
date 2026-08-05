@@ -377,6 +377,12 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#an-existing-lock-broke-and-it-was-right-to">An existing lock broke, and it was right to</a></li>
 </ul>
 </li>
+<li><a href="#two-sources-evaluated-and-declined-2026-08-05-with-the-reasons-so-nobody-re-reads-them">Two sources evaluated and declined (2026-08-05) — with the reasons, so nobody re-reads them</a><ul>
+<li><a href="#tim-barcctf_writeups-209-pdfs-and-the-commands-are-pictures">tim-barc/ctf_writeups — 209 PDFs, and the commands are pictures</a></li>
+<li><a href="#sourcessome-vulmd-declined-for-the-kb-redirected-to-the-index">sources/some vul.md — declined for the KB, redirected to the index</a></li>
+<li><a href="#an-undeclared-dependency-found-on-the-way">An undeclared dependency, found on the way</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -3917,5 +3923,52 @@ used to cover by accident got its own test: mirror absent, overlay present, whic
 clone before the ingester has ever run.</p>
 <p><code>data/kb/entries.jsonl</code> is <strong>unchanged at 2744</strong> — this was an index decision, not a KB one.
 Suite <strong>82 files, all green</strong>.</p>
+<h2 id="two-sources-evaluated-and-declined-2026-08-05-with-the-reasons-so-nobody-re-reads-them">Two sources evaluated and declined (2026-08-05) — with the reasons, so nobody re-reads them</h2>
+<p><code>sources/gitbooks-manifest.md</code> set the precedent: an evaluation that ends in nothing is only
+worth the tokens if the <em>reason</em> is written down, or the next person re-reads 200 MB to reach
+the same answer.</p>
+<h3 id="tim-barcctf_writeups-209-pdfs-and-the-commands-are-pictures"><code>tim-barc/ctf_writeups</code> — 209 PDFs, and the commands are pictures</h3>
+<p>The repo looked promising against a strong prior: the 0xdf batch produced 27 fingerprints from
+106 writeups, making writeups the highest-yield source type this KB has ingested. <strong>The prior
+did not transfer, for two measured reasons.</strong></p>
+<p><strong>First, it is not the same kind of corpus.</strong> Filenames nominate; content decides. Roughly 147
+of 209 are CyberDefenders / BTLO / LetsDefend labs, and much of the remainder is HTB Sherlocks
+and TryHackMe blue rooms (<code>brutus</code>, <code>conti</code>, <code>lockbit</code>, <code>boogeyman</code>, <code>snort_*</code>, <code>tshark*</code>,
+<code>zeek_exercises</code>). The genuinely offensive subset is ~20–25 beginner TryHackMe rooms.</p>
+<p><strong>A real gap did open up, and it is worth recording because it was surprising.</strong> Those rooms are
+absent from the KB <em>by name</em> — <code>pickle rick</code> 0, <code>mr robot</code> 0, <code>basic pentesting</code> 0,
+<code>bounty hacker</code> 0, <code>wgel</code> 0, <code>colddbox</code> 0. The 200 existing <code>writeup</code> entries are HTB boxes and
+challenge categories, 176 of them carrying steps with code blocks, which is what
+<code>attack_path.build_writeup_path</code> replays. TryHackMe is a platform the KB does not cover, so
+those rooms would have added something real.</p>
+<p><strong>Then the measurement killed it.</strong> Running the repo's own ingester over all 62 non-blue
+candidates, the offensive rooms yield <strong>nothing runnable</strong>: <code>pickle_rick</code> 0 command lines,
+<code>basic_pentesting</code> 0, <code>photographer</code> 0, <code>blogger1</code> 0, <code>dav</code> 0. The reason is visible in the
+extracted text:</p>
+<blockquote>
+<p>"Here is the Nmap command that was used:" … "Next, I used Gobuster to brute-force directories"</p>
+</blockquote>
+<p><strong>The commands are screenshots.</strong> 23–42 images per file and ~350–500 characters per page: these
+are narrated screenshot writeups, where the prose describes the attack and every command is an
+image. Ingesting them would produce entries that look like box walkthroughs and cannot drive a
+single command — worse than absent, because the writeup-first attack path would find them and
+have nothing to run. The rows that <em>did</em> score highest for commands are the blue ones
+(<code>masterminds</code> 18, <code>snort_challenge</code> 5 with 112 blue markers), where the extracted "commands"
+are the analyst's <code>tshark</code> and <code>volatility</code> invocations, not an attacker's.</p>
+<p>This is the "an exit code is not a result" family one level further out: <strong>the file exists, it
+parses, it produces entries, and the entries are empty of the only thing that makes them
+useful.</strong> OCR could recover the commands, and is deliberately not proposed — a
+mis-transcribed command in a corpus that drives an attack path is a fabrication with a plausible
+shape, which is the one failure mode this KB's whole curation discipline exists to prevent.</p>
+<h3 id="sourcessome-vulmd-declined-for-the-kb-redirected-to-the-index"><code>sources/some vul.md</code> — declined for the KB, redirected to the index</h3>
+<p>Covered in full in the curated-overlay section above: KB-saturated on every class it teaches,
+but three of its findings belonged in the CVE→exploit index because the <em>public version verdict</em>
+for them is wrong. Declined as a KB batch, accepted as five index rows.</p>
+<h3 id="an-undeclared-dependency-found-on-the-way">An undeclared dependency, found on the way</h3>
+<p><code>pipeline/ingest_box_pdfs.py</code> does <code>from pypdf import PdfReader</code> at module import, and <strong>pypdf
+was declared nowhere</strong> — not in <code>backend/pyproject.toml</code>, not in any requirements file. The
+ingester could never have run on a clean checkout; it had only ever run where pypdf happened to
+be installed. Now an optional group beside <code>codescan</code>, which is the existing precedent for
+tooling the backend serves every route without.</p>
 </body>
 </html>

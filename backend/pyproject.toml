@@ -20,3 +20,12 @@ codescan = [
     "semgrep>=1.100",
     "bandit>=1.7",
 ]
+# The KB ingesters that read PDF writeups. OPTIONAL for the same reason as codescan — the
+# backend serves every route without it — but NOT optional for `pipeline/ingest_box_pdfs.py`,
+# which does `from pypdf import PdfReader` at module import and could therefore never have run
+# on a clean checkout. Found 2026-08-05 while evaluating a writeup repo; the ingester had only
+# ever been run in an environment where pypdf happened to be present.
+#   cd backend && uv pip install --python .venv/Scripts/python.exe pypdf
+pipeline = [
+    "pypdf>=6.0",
+]

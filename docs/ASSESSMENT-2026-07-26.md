@@ -3723,3 +3723,62 @@ clone before the ingester has ever run.
 
 `data/kb/entries.jsonl` is **unchanged at 2744** — this was an index decision, not a KB one.
 Suite **82 files, all green**.
+
+## Two sources evaluated and declined (2026-08-05) — with the reasons, so nobody re-reads them
+
+`sources/gitbooks-manifest.md` set the precedent: an evaluation that ends in nothing is only
+worth the tokens if the *reason* is written down, or the next person re-reads 200 MB to reach
+the same answer.
+
+### `tim-barc/ctf_writeups` — 209 PDFs, and the commands are pictures
+
+The repo looked promising against a strong prior: the 0xdf batch produced 27 fingerprints from
+106 writeups, making writeups the highest-yield source type this KB has ingested. **The prior
+did not transfer, for two measured reasons.**
+
+**First, it is not the same kind of corpus.** Filenames nominate; content decides. Roughly 147
+of 209 are CyberDefenders / BTLO / LetsDefend labs, and much of the remainder is HTB Sherlocks
+and TryHackMe blue rooms (`brutus`, `conti`, `lockbit`, `boogeyman`, `snort_*`, `tshark*`,
+`zeek_exercises`). The genuinely offensive subset is ~20–25 beginner TryHackMe rooms.
+
+**A real gap did open up, and it is worth recording because it was surprising.** Those rooms are
+absent from the KB *by name* — `pickle rick` 0, `mr robot` 0, `basic pentesting` 0,
+`bounty hacker` 0, `wgel` 0, `colddbox` 0. The 200 existing `writeup` entries are HTB boxes and
+challenge categories, 176 of them carrying steps with code blocks, which is what
+`attack_path.build_writeup_path` replays. TryHackMe is a platform the KB does not cover, so
+those rooms would have added something real.
+
+**Then the measurement killed it.** Running the repo's own ingester over all 62 non-blue
+candidates, the offensive rooms yield **nothing runnable**: `pickle_rick` 0 command lines,
+`basic_pentesting` 0, `photographer` 0, `blogger1` 0, `dav` 0. The reason is visible in the
+extracted text:
+
+> "Here is the Nmap command that was used:" … "Next, I used Gobuster to brute-force directories"
+
+**The commands are screenshots.** 23–42 images per file and ~350–500 characters per page: these
+are narrated screenshot writeups, where the prose describes the attack and every command is an
+image. Ingesting them would produce entries that look like box walkthroughs and cannot drive a
+single command — worse than absent, because the writeup-first attack path would find them and
+have nothing to run. The rows that *did* score highest for commands are the blue ones
+(`masterminds` 18, `snort_challenge` 5 with 112 blue markers), where the extracted "commands"
+are the analyst's `tshark` and `volatility` invocations, not an attacker's.
+
+This is the "an exit code is not a result" family one level further out: **the file exists, it
+parses, it produces entries, and the entries are empty of the only thing that makes them
+useful.** OCR could recover the commands, and is deliberately not proposed — a
+mis-transcribed command in a corpus that drives an attack path is a fabrication with a plausible
+shape, which is the one failure mode this KB's whole curation discipline exists to prevent.
+
+### `sources/some vul.md` — declined for the KB, redirected to the index
+
+Covered in full in the curated-overlay section above: KB-saturated on every class it teaches,
+but three of its findings belonged in the CVE→exploit index because the *public version verdict*
+for them is wrong. Declined as a KB batch, accepted as five index rows.
+
+### An undeclared dependency, found on the way
+
+`pipeline/ingest_box_pdfs.py` does `from pypdf import PdfReader` at module import, and **pypdf
+was declared nowhere** — not in `backend/pyproject.toml`, not in any requirements file. The
+ingester could never have run on a clean checkout; it had only ever run where pypdf happened to
+be installed. Now an optional group beside `codescan`, which is the existing precedent for
+tooling the backend serves every route without.

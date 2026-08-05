@@ -70,12 +70,21 @@ def main() -> None:
         host, suffix = generated["host"], generated["suffix"]
         print(f"  generated host: {host}")
 
-        # 3. resolve it — the DNS query reaching interact.sh IS the hit
-        print("  resolving the host to trigger a callback ...")
+        # 3. trigger a callback — a DNS resolution AND an HTTP GET, so the proof lands on a
+        #    network that allows either. (On a filtered network that intercepts interact.sh
+        #    traffic — e.g. an EDR/DNS filter that blocklists oast.* — neither reaches the real
+        #    server, and this proof correctly reports FAIL; run it from an unfiltered network.)
+        print("  triggering a callback (DNS + HTTP) ...")
         try:
             socket.getaddrinfo(host, None, family=socket.AF_INET)
         except OSError:
-            pass  # resolution 'failing' locally is fine; the query still reached interact.sh
+            pass  # a DNS query that 'fails' locally may still have reached interact.sh
+        try:
+            import urllib.request
+
+            urllib.request.urlopen(f"http://{host}/hp-proof", timeout=10).read()
+        except Exception:
+            pass  # the request reaching interact.sh's HTTP listener is the hit, not the response
 
         # 4. poll until it comes back
         found = None

@@ -4991,3 +4991,66 @@ file this build does not touch, and it is recorded rather than waved away.
 * **No OOB canary provisioning** — a separate parked decision.
 * **No new gate, confirm, blocklist or allow-list narrowing** — the build's own requirement, and
   the one change to reachability removes a restriction rather than adding one.
+
+## interact.sh — a second, zero-infrastructure OOB backend (2026-08-06)
+
+The out-of-band canary (build #13 part 3) was the private, owned option: it catches blind
+callbacks, but only after a VPS, a domain and a one-time NS delegation exist. This adds a second
+backend alongside it — ProjectDiscovery's public **interact.sh** service, the same shape as Burp
+Collaborator — so the same capability exists with **no infrastructure at all**. Both backends can
+be configured and live at once; a poll sweeps both and merges the findings. It is an *addition*,
+never a replacement, for one reason stated plainly to the operator: interact.sh callbacks **transit
+a third party**, which is exactly why the owned backend still exists.
+
+**The valuable half is reused unchanged.** interact.sh works inversely to the self-hosted canary —
+*it* assigns the correlation-id and encrypts every callback to a public key we register, so a new
+module owns a keypair and a session rather than a VPS and a zone. But the part that is actually the
+product — correlate a callback back to the step that caused it, file it as a finding — is
+backend-agnostic. Both backends normalise into the *same* hit dict, and the existing
+`findings_for`/`ingest` files them identically. What is new is one transport: register / generate /
+poll / deregister, with the RSA-OAEP-SHA256 + AES-256-CFB handshake interact.sh uses (the
+`cryptography` library was already present; no new dependency).
+
+**The new outbound poll carries the self-hosted poll's containment, asserted, not asserted-in-a-comment.**
+It is a new egress path out of the operator's machine, so it inherits exactly what `poll.py` has:
+the destination is the configured interact.sh server resolved server-side, never a request field; no
+redirect is followed (a tampered or proxied server answering `302 http://169.254.169.254/…` is an
+error, not an SSRF from the backend host); no ambient proxy is honoured; the response is byte-capped;
+JSON is parsed and never executed; and every decrypted interaction is treated as untrusted input,
+capped before it becomes a record. The secret-key, RSA private key and any self-hosted auth token are
+write-only — stored in the gitignored `sessions.db`, never returned by any view. **The oob-package
+network-reach guard did its job:** it pins the set of modules allowed to touch the network and
+*failed* the moment `interactsh.py` gained reach, forcing the containment treatment and this
+paragraph rather than letting a new egress path in quietly.
+
+**Two conveniences were added, and exactly one line was drawn.** *Auto-poll* is a background sweep
+that files callbacks from both backends without a click — but it is **read-only automation**: it
+reaches `poll_all → ingest → state` and no execution surface, sends nothing, and runs no command, so
+it does **not** cross the propose-only invariant (a dedicated safety test asserts it reaches no
+execution or delivery surface). *Send-to-repeater* pre-fills a rendered payload into the repeater
+editor — as a **frontend action only**: no backend OOB module imports the repeater, so its
+human-only `send()` guarantee is untouched and the operator still clicks Send. The alternative —
+HackPit firing the payload at a target itself — was scoped, named as the reversal of the project's
+central invariant it would be, and **declined** in favour of this (the operator's L1 choice).
+
+**Verification.** The hermetic suite gained two files and grew the token and template locks. The
+crypto is exercised for real against an in-process interact.sh-style encryptor — a keypair is
+generated, an interaction is AES-CFB-encrypted and its AES key RSA-OAEP-wrapped to the client's
+public key, and the client is asserted to decrypt → correlate → file. Coverage includes the
+containment (no redirect, no ambient proxy, response cap), the suffix correlation map, dedup by
+`<uid>|<timestamp>`, the kept-and-flagged uncorrelated hit, `poll_all` merging both backends and
+isolating a backend failure, the masked view never returning a secret, and the router rendering only
+configured backends. **Live**, against a public server (`oast.pro`), registration, the crypto
+handshake and polling were confirmed end to end. The one leg reported **NOT-RUN here** is the
+callback delivery itself: this environment's resolver blocks or synthesises answers for `oast.*`
+(a common EDR/DNS-filter behaviour — `oast.fun` did not resolve at all), so no callback reaches the
+real server from inside it. `docs/proof/oob_interactsh_proof.py` runs the full round-trip from an
+unfiltered network — the same honesty the self-hosted backend's NS-delegation check already carries,
+and, notably, the one live check that needs **no infrastructure of the operator's own**, only a
+network that does not filter interact.sh.
+
+The stale note in `cockpit/repeater.py` that still called the VPS-for-callbacks piece "deferred
+(D2)" was corrected — that listener shipped in build #13 part 3 and now has two backends. The full
+safety suite is green (the `test_redirector.py` UDP-port flake recorded above recurred once and
+passed on a clean re-run, in a file this build does not touch). No new gate, confirm, blocklist or
+allow-list narrowing; the only reachability change adds an option and removes no restriction.

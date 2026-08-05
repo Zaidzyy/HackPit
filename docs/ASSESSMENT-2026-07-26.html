@@ -443,6 +443,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#what-was-not-done-and-why_2">What was NOT done, and why</a></li>
 </ul>
 </li>
+<li><a href="#interactsh-a-second-zero-infrastructure-oob-backend-2026-08-06">interact.sh — a second, zero-infrastructure OOB backend (2026-08-06)</a></li>
 </ul>
 </li>
 </ul>
@@ -5153,5 +5154,61 @@ file this build does not touch, and it is recorded rather than waved away.</p>
 <li><strong>No new gate, confirm, blocklist or allow-list narrowing</strong> — the build's own requirement, and
   the one change to reachability removes a restriction rather than adding one.</li>
 </ul>
+<h2 id="interactsh-a-second-zero-infrastructure-oob-backend-2026-08-06">interact.sh — a second, zero-infrastructure OOB backend (2026-08-06)</h2>
+<p>The out-of-band canary (build #13 part 3) was the private, owned option: it catches blind
+callbacks, but only after a VPS, a domain and a one-time NS delegation exist. This adds a second
+backend alongside it — ProjectDiscovery's public <strong>interact.sh</strong> service, the same shape as Burp
+Collaborator — so the same capability exists with <strong>no infrastructure at all</strong>. Both backends can
+be configured and live at once; a poll sweeps both and merges the findings. It is an <em>addition</em>,
+never a replacement, for one reason stated plainly to the operator: interact.sh callbacks <strong>transit
+a third party</strong>, which is exactly why the owned backend still exists.</p>
+<p><strong>The valuable half is reused unchanged.</strong> interact.sh works inversely to the self-hosted canary —
+<em>it</em> assigns the correlation-id and encrypts every callback to a public key we register, so a new
+module owns a keypair and a session rather than a VPS and a zone. But the part that is actually the
+product — correlate a callback back to the step that caused it, file it as a finding — is
+backend-agnostic. Both backends normalise into the <em>same</em> hit dict, and the existing
+<code>findings_for</code>/<code>ingest</code> files them identically. What is new is one transport: register / generate /
+poll / deregister, with the RSA-OAEP-SHA256 + AES-256-CFB handshake interact.sh uses (the
+<code>cryptography</code> library was already present; no new dependency).</p>
+<p><strong>The new outbound poll carries the self-hosted poll's containment, asserted, not asserted-in-a-comment.</strong>
+It is a new egress path out of the operator's machine, so it inherits exactly what <code>poll.py</code> has:
+the destination is the configured interact.sh server resolved server-side, never a request field; no
+redirect is followed (a tampered or proxied server answering <code>302 http://169.254.169.254/…</code> is an
+error, not an SSRF from the backend host); no ambient proxy is honoured; the response is byte-capped;
+JSON is parsed and never executed; and every decrypted interaction is treated as untrusted input,
+capped before it becomes a record. The secret-key, RSA private key and any self-hosted auth token are
+write-only — stored in the gitignored <code>sessions.db</code>, never returned by any view. <strong>The oob-package
+network-reach guard did its job:</strong> it pins the set of modules allowed to touch the network and
+<em>failed</em> the moment <code>interactsh.py</code> gained reach, forcing the containment treatment and this
+paragraph rather than letting a new egress path in quietly.</p>
+<p><strong>Two conveniences were added, and exactly one line was drawn.</strong> <em>Auto-poll</em> is a background sweep
+that files callbacks from both backends without a click — but it is <strong>read-only automation</strong>: it
+reaches <code>poll_all → ingest → state</code> and no execution surface, sends nothing, and runs no command, so
+it does <strong>not</strong> cross the propose-only invariant (a dedicated safety test asserts it reaches no
+execution or delivery surface). <em>Send-to-repeater</em> pre-fills a rendered payload into the repeater
+editor — as a <strong>frontend action only</strong>: no backend OOB module imports the repeater, so its
+human-only <code>send()</code> guarantee is untouched and the operator still clicks Send. The alternative —
+HackPit firing the payload at a target itself — was scoped, named as the reversal of the project's
+central invariant it would be, and <strong>declined</strong> in favour of this (the operator's L1 choice).</p>
+<p><strong>Verification.</strong> The hermetic suite gained two files and grew the token and template locks. The
+crypto is exercised for real against an in-process interact.sh-style encryptor — a keypair is
+generated, an interaction is AES-CFB-encrypted and its AES key RSA-OAEP-wrapped to the client's
+public key, and the client is asserted to decrypt → correlate → file. Coverage includes the
+containment (no redirect, no ambient proxy, response cap), the suffix correlation map, dedup by
+<code>&lt;uid&gt;|&lt;timestamp&gt;</code>, the kept-and-flagged uncorrelated hit, <code>poll_all</code> merging both backends and
+isolating a backend failure, the masked view never returning a secret, and the router rendering only
+configured backends. <strong>Live</strong>, against a public server (<code>oast.pro</code>), registration, the crypto
+handshake and polling were confirmed end to end. The one leg reported <strong>NOT-RUN here</strong> is the
+callback delivery itself: this environment's resolver blocks or synthesises answers for <code>oast.*</code>
+(a common EDR/DNS-filter behaviour — <code>oast.fun</code> did not resolve at all), so no callback reaches the
+real server from inside it. <code>docs/proof/oob_interactsh_proof.py</code> runs the full round-trip from an
+unfiltered network — the same honesty the self-hosted backend's NS-delegation check already carries,
+and, notably, the one live check that needs <strong>no infrastructure of the operator's own</strong>, only a
+network that does not filter interact.sh.</p>
+<p>The stale note in <code>cockpit/repeater.py</code> that still called the VPS-for-callbacks piece "deferred
+(D2)" was corrected — that listener shipped in build #13 part 3 and now has two backends. The full
+safety suite is green (the <code>test_redirector.py</code> UDP-port flake recorded above recurred once and
+passed on a clean re-run, in a file this build does not touch). No new gate, confirm, blocklist or
+allow-list narrowing; the only reachability change adds an option and removes no restriction.</p>
 </body>
 </html>

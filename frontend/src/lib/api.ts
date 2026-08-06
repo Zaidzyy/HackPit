@@ -2684,6 +2684,138 @@ export const stopNucleiJob = (id: string, signal?: AbortSignal) =>
   delJSON<NucleiJob>(`/cockpit/nuclei/jobs/${encodeURIComponent(id)}`, signal);
 
 /* -------------------------------------------------------------------------- */
+/* GUIDED RECON -> RANKED ATTACK SURFACE (:recon) — the front door             */
+/* -------------------------------------------------------------------------- */
+export type ReconRequest = {
+  /** In-scope domain (or apex) to start from. EMPTY = the engagement's declared target. */
+  domain: string;
+  rate_limit?: number | null;
+  timeout_seconds?: number | null;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  approved: boolean;
+  dangerous_ack: boolean;
+};
+
+export type ReconStageResult = {
+  tool: string;
+  argv: string[];
+  state: string;
+  note: string;
+};
+
+export type ReconJob = {
+  id: string;
+  kind: string; // passive | active
+  state: string;
+  argv: string[];
+  domain: string;
+  container: string;
+  mode: string;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  started_at: string;
+  finished_at: string;
+  stages: ReconStageResult[];
+  discovered_in_scope: string[];
+  /** Surfaced READ-ONLY — never scanned, never upserted. */
+  discovered_out_of_scope: string[];
+  new_hosts: number;
+  new_services: number;
+  new_endpoints: number;
+  new_findings: number;
+  output_tail: string;
+  warnings: string[];
+  refused: string;
+  refused_gate: string;
+};
+
+export type ReconStatus = {
+  container: string;
+  up: boolean;
+  ready: boolean;
+  running: number;
+  detail: string;
+};
+
+export type ReconPreview = {
+  kind: string;
+  domain: string;
+  argv: string[];
+  pipeline: string[];
+  gate: CredGate;
+};
+
+export type RankedEndpoint = {
+  url: string;
+  params: string[];
+  tech: string;
+  status: number | null;
+};
+
+export type RankedTarget = {
+  address: string;
+  hostname: string;
+  score: number;
+  reasons: string[];
+  open_services: number;
+  services: string[];
+  cve_stacks: string[];
+  param_endpoints: RankedEndpoint[];
+  auth_endpoints: string[];
+  findings: number;
+  /** The endpoints worth pointing :nuclei at first. */
+  nuclei_targets: string[];
+};
+
+export type ReconSurface = {
+  session_id: string;
+  generated_at: string;
+  counts: Record<string, number>;
+  targets: RankedTarget[];
+  notes: string[];
+};
+
+export const getReconStatus = (signal?: AbortSignal) =>
+  getJSON<ReconStatus>("/cockpit/recon/status", signal);
+
+/** The entry argv + gate verdict for a sweep, running nothing. */
+export const reconPreview = (
+  req: ReconRequest,
+  kind: "passive" | "active" = "passive",
+  signal?: AbortSignal
+) => postJSON<ReconPreview>(`/cockpit/recon/preview?kind=${kind}`, req, signal);
+
+/** Passive sweep: subfinder -> dnsx -> httpx -> gau/waybackurls/katana. One approval. */
+export const startReconPassive = (req: ReconRequest, signal?: AbortSignal) =>
+  postJSON<ReconJob>("/cockpit/recon/passive", req, signal);
+
+/** Active sweep: naabu -> nmap -sV over the in-scope live hosts. One more approval. */
+export const startReconActive = (req: ReconRequest, signal?: AbortSignal) =>
+  postJSON<ReconJob>("/cockpit/recon/active", req, signal);
+
+export const listReconJobs = (sessionId?: string, signal?: AbortSignal) =>
+  getJSON<ReconJob[]>(
+    "/cockpit/recon/jobs" +
+      (sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""),
+    signal
+  );
+
+export const getReconJob = (id: string, signal?: AbortSignal) =>
+  getJSON<ReconJob>(`/cockpit/recon/jobs/${encodeURIComponent(id)}`, signal);
+
+/** Stop an in-flight sweep. NOT GATED — the panic button, like stopping a scan. */
+export const stopReconJob = (id: string, signal?: AbortSignal) =>
+  delJSON<ReconJob>(`/cockpit/recon/jobs/${encodeURIComponent(id)}`, signal);
+
+/** The ranked attack surface for a session — advisory, executes nothing. */
+export const getReconSurface = (sessionId: string, signal?: AbortSignal) =>
+  getJSON<ReconSurface>(
+    `/cockpit/recon/surface?session_id=${encodeURIComponent(sessionId)}`,
+    signal
+  );
+
+/* -------------------------------------------------------------------------- */
 /* THE WAF-BYPASS HEADER (build #18 item 1)                                    */
 /*                                                                             */
 /* THE VALUE IS A CREDENTIAL AND ONLY TRAVELS ONE WAY. `setBypassHeader` sends  */

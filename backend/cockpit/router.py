@@ -55,6 +55,7 @@ from . import graphql_zap as graphql_zap_mod
 from . import intercept as intercept_mod
 from . import intruder as intruder_mod
 from . import nuclei as nuclei_mod
+from . import recon as recon_mod
 from . import proposals as proposals_mod
 from . import redirector as redirector_mod
 from . import session as live_session
@@ -1169,6 +1170,123 @@ def stop_nuclei_job(job_id: str) -> nuclei_mod.NucleiJob:
     if job is None:
         raise HTTPException(status_code=404, detail={"reason": f"no nuclei job {job_id!r}"})
     return job
+
+
+# --- guided recon -> ranked attack surface (:recon — the front door) ---------------- #
+#
+# THE FRONT DOOR, WIRED. A recon sweep is ONE approved job with an ungated stop — the SAME shape
+# nuclei / the intruder / ffuf already are. `executor.validate_request` runs BEFORE anything
+# spawns; the sweep runs in the OPEN engagement sandbox (recon needs egress + the scope lives on
+# the engagement record). NO new gate: one approval buys the whole passive (or active) sweep.
+# Discovered hosts are sorted by the scope — in-scope join the live allowed set and are the only
+# hosts the probing tools touch; out-of-scope are surfaced read-only and NEVER scanned or upserted.
+# The ranked surface (`recon.rank_surface`) is ADVISORY — it proposes an order and runs nothing.
+
+
+def _recon_refusal(exc: recon_mod.ReconRefused):
+    """One refusal shape: 403 for a SAFETY gate, 409 for AVAILABILITY/engagement/input."""
+    code = 409 if exc.gate in {"unavailable", "input", "engagement", "loot"} else 403
+    raise HTTPException(status_code=code, detail={
+        "gate": exc.gate, "reason": exc.reason, "dangerous_flags": exc.dangerous_flags,
+    })
+
+
+@router.get("/recon/status")
+def get_recon_status() -> dict[str, Any]:
+    """Engagement-sandbox availability + running-sweep count — the UI banner. Read-only."""
+    return recon_mod.status()
+
+
+@router.post("/recon/preview")
+def recon_preview(req: recon_mod.ReconRequest, kind: str = Query("passive")) -> dict[str, Any]:
+    """The entry argv + the gate verdict for a sweep, running nothing.
+
+    Same builders + `_gate` the start path uses, so the preview cannot drift from the run. The
+    gate verdict is asked before composing a sweep, and answering it costs nothing.
+    """
+    domain = ""
+    record = engagement.get_active(req.engagement_id) if req.engagement_id else None
+    domain = recon_mod._resolve_domain(req, record)
+    argv = (
+        recon_mod.naabu_argv("<in-scope hosts>", req.rate_limit)
+        if kind == "active"
+        else recon_mod.subfinder_argv(domain or "<domain>")
+    )
+    verdict = recon_mod.validate(req, kind)
+    return {
+        "kind": kind,
+        "domain": domain,
+        "argv": argv,
+        "pipeline": (
+            ["subfinder", "dnsx", "httpx", "gau", "waybackurls", "katana"]
+            if kind == "passive" else ["naabu", "nmap -sV"]
+        ),
+        "gate": None if verdict is None else {
+            "gate": verdict.gate, "reason": verdict.reason,
+            "dangerous_flags": list(verdict.dangerous_flags or []),
+        },
+    }
+
+
+@router.post("/recon/passive", response_model=recon_mod.ReconJob)
+def start_recon_passive(req: recon_mod.ReconRequest) -> recon_mod.ReconJob:
+    """Run a PASSIVE recon sweep (subfinder -> dnsx -> httpx -> gau/waybackurls/katana) as ONE
+    approved job. Bug-bounty safe by default; seeds in-scope hosts/endpoints into engagement state.
+
+    GATED, then runs: `executor.validate_request` runs against the equivalent `subfinder -d
+    <domain>` BEFORE anything spawns. Out-of-scope discoveries are surfaced read-only, never
+    scanned. A SAFETY refusal is 403 naming the gate; availability/engagement/input is 409.
+    """
+    try:
+        return recon_mod.start_passive(req)
+    except recon_mod.ReconRefused as exc:
+        _recon_refusal(exc)
+
+
+@router.post("/recon/active", response_model=recon_mod.ReconJob)
+def start_recon_active(req: recon_mod.ReconRequest) -> recon_mod.ReconJob:
+    """Run an ACTIVE service-scan sweep (naabu -> nmap -sV) over the IN-SCOPE live hosts as ONE
+    more approved job. *** THIS SENDS REAL SCAN TRAFFIC. *** The scanner only ever reads a host
+    file recon built from in-scope hosts. GATED before any spawn; the stop button is ungated.
+    """
+    try:
+        return recon_mod.start_active(req)
+    except recon_mod.ReconRefused as exc:
+        _recon_refusal(exc)
+
+
+@router.get("/recon/jobs", response_model=list[recon_mod.ReconJob])
+def list_recon_jobs(session_id: str | None = Query(None)) -> list[recon_mod.ReconJob]:
+    """Every recon sweep, newest first. Read-only, ungated — the live view polls this."""
+    return recon_mod.list_jobs(session_id)
+
+
+@router.get("/recon/jobs/{job_id}", response_model=recon_mod.ReconJob)
+def get_recon_job(job_id: str) -> recon_mod.ReconJob:
+    """One sweep with its stages + discovery counts. Read-only, ungated."""
+    job = recon_mod.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no recon job {job_id!r}"})
+    return job
+
+
+@router.delete("/recon/jobs/{job_id}", response_model=recon_mod.ReconJob)
+def stop_recon_job(job_id: str) -> recon_mod.ReconJob:
+    """Stop an in-flight sweep. NOT GATED — the panic button, exactly like `stop_scan`."""
+    job = recon_mod.stop(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no recon job {job_id!r}"})
+    return job
+
+
+@router.get("/recon/surface", response_model=recon_mod.ReconSurface)
+def get_recon_surface(session_id: str = Query(...)) -> recon_mod.ReconSurface:
+    """The RANKED attack surface for a session — hosts scored by likely-exploitable, with the WHY.
+
+    ADVISORY ONLY: it reads engagement state and scores it; it executes nothing and triggers no
+    scan. Each target carries a clean handoff into :attack-paths / :nuclei.
+    """
+    return recon_mod.rank_surface(session_id)
 
 
 # --- Pivot / tunnel routing (Phase 4 item 4 — chisel / ligolo-ng) ------------------- #

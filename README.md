@@ -51,6 +51,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | 🔎 **Knowledge base + hybrid search** | 2,747 deduped, source-attributed techniques across 33 categories. `⌘K` finds them by meaning. |
 | 🧭 **Guided attack paths** | Recon → privesc walkthroughs, write-up-first, KB-grounded, AI gap-fill clearly marked. |
 | 🎯 **Gated cockpit** | Real Kali execution, one approved command at a time, behind four ordered gates. |
+| ◈ **Guided recon** | Scoped domain → recon as approved jobs → ranked attack surface; discoveries can only widen the set *within* scope. |
 | 🕸️ **Web app testing** | Recording proxy, repeater, intruder, GraphQL, browser interception, OOB callbacks. |
 | ◎ **Nuclei template scan** | Scoped target(s) → templates → severity-ranked findings, one approval; results flow into engagement state. |
 | 🪟 **Windows / AD** | BloodHound graph → route to Domain Admin → walk it live over WinRM. |
@@ -149,6 +150,16 @@ A full web surface behind the same gates: a **recording proxy** that captures tr
   <img src="assets/screenshots/24-intruder.png" alt="The intruder — payload positions and fuzzing under one approval" width="49%">
   <img src="assets/screenshots/26-exposure.png" alt="Browser interception — publish the proxy to a real Chrome" width="49%">
 </p>
+
+### Guided recon → ranked attack surface
+
+The front door a bounty or pentest actually starts from. Give **`:recon`** a scoped domain and it runs recon as **approved jobs**, seeds the engagement's structured state (hosts/services/endpoints), and **ranks the surface** so you know what to hit first. A **passive sweep** — bug-bounty safe, the default — chains `subfinder → dnsx → httpx → gau/waybackurls/katana` for live hosts, tech, URLs and their parameters; an **active sweep** (one more approval) adds `naabu → nmap -sV` service detection. Each sweep is **one** approved job (the same `ffuf` / nuclei shape, **no new gate**) with an ungated stop, in the open engagement sandbox. **Scope is a correctness property here, not an extra gate**: every discovered host is sorted by the declared scope — in-scope names join the live allowed set and are the *only* hosts the probing tools are pointed at; out-of-scope names are surfaced **read-only** and never scanned or stored. Then `rank_surface` scores each host by likely-exploitable — open services, **CVE-worthy stacks** (via the 47k-exploit index), parameter-rich endpoints (IDOR/injection surface), auth surfaces, and any findings — and lists them with the *why*, each carrying a one-click handoff into `:attack-paths` and `:nuclei`. Advisory only: it proposes an order and runs nothing.
+
+<p align="center">
+  <img src="assets/screenshots/33-recon.png" alt="The recon surface — a scoped domain kicks off the passive/active sweeps, then the ranked attack surface lists example.com hosts by likely-exploitable: api.example.com first (3 open services incl. OpenSSH 7.4 and Apache httpd 2.4.49 with hundreds of known CVEs, parameter-rich API endpoints, auth surfaces, a High SQLi finding), each target showing its reason and a copy-to-nuclei handoff" width="90%">
+</p>
+
+> One approval per sweep, ungated stop; discoveries can only widen the allowed set *within* the declared scope. Above, the ranked surface against a scoped `example.com` lab puts `api.example.com` on top — its OpenSSH 7.4 / nginx / Apache 2.4.49 stack, param-rich endpoints and a High SQLi finding earning the score — with each target handing off cleanly into `:attack-paths` and `:nuclei`.
 
 ### Credential attack
 

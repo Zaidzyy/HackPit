@@ -469,6 +469,187 @@ def parse_hashcat_pairs(text: str, known: "set[str] | frozenset[str]") -> dict[s
 
 
 # --------------------------------------------------------------------------- #
+# recon discovery — subfinder / dnsx / naabu / url-listers (:recon)
+# --------------------------------------------------------------------------- #
+def _plain_host(line: str) -> str:
+    """A bare host out of one line of a discovery tool's plain output ('' if none)."""
+    tok = (line or "").strip().split()[0] if (line or "").strip() else ""
+    if not tok or tok[0] in "{[#*":
+        return ""
+    tok = tok.split("://")[-1].split("/")[0].split("?")[0]
+    tok = tok.split("@")[-1]
+    if tok.count(":") == 1:  # host:port (not a v6 literal)
+        tok = tok.split(":", 1)[0]
+    tok = tok.strip().strip(".").lower()
+    return tok if "." in tok else ""
+
+
+def parse_subfinder(text: str, session_id: str, run_id: str | None = None) -> Parsed:
+    """subfinder output (one subdomain per line, or `-oJ` JSON) -> candidate Host rows.
+
+    DISCOVERY, NOT LIVENESS: a name subfinder pulled from CT logs / passive sources is not
+    proven up, so ``status`` is left blank — dnsx/httpx set it once a name actually resolves or
+    answers. One Host per unique name; duplicates and non-host noise are dropped.
+    """
+    out = Parsed()
+    seen: set[str] = set()
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        host = ""
+        if line.startswith("{"):
+            try:
+                obj = json.loads(line)
+                host = str(obj.get("host") or obj.get("input") or "").strip().lower()
+            except (ValueError, TypeError):
+                host = ""
+        else:
+            host = _plain_host(line)
+        if not host or host in seen:
+            continue
+        seen.add(host)
+        out.hosts.append(
+            Host(session_id=session_id, address=host, hostname=host, source_run_id=run_id)
+        )
+    return out
+
+
+def parse_dnsx(text: str, session_id: str, run_id: str | None = None) -> Parsed:
+    """dnsx output -> resolved Host rows (``status='up'``).
+
+    dnsx ``-json`` emits ``{"host": "...", "a": ["1.2.3.4", ...]}``; a name that resolved IS
+    live at the DNS layer, so status is 'up'. Plain ``-silent`` output (one host, optionally
+    followed by ``[A] ip``) is also accepted. The name is the identity.
+    """
+    out = Parsed()
+    seen: set[str] = set()
+
+    def _add(host: str) -> None:
+        host = host.strip().strip(".").lower()
+        if host and "." in host and host not in seen:
+            seen.add(host)
+            out.hosts.append(
+                Host(session_id=session_id, address=host, hostname=host, status="up",
+                     source_run_id=run_id)
+            )
+
+    saw_json = False
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if line.startswith("{"):
+            saw_json = True
+            try:
+                obj = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(obj, dict):
+                _add(str(obj.get("host") or obj.get("input") or ""))
+    if not saw_json:
+        for raw in (text or "").splitlines():
+            _add(_plain_host(raw))
+    return out
+
+
+def parse_naabu(text: str, session_id: str, run_id: str | None = None) -> Parsed:
+    """naabu port output -> OPEN Service rows. naabu only reports open ports, so state='open'.
+
+    JSON: ``{"host": "...", "ip": "1.2.3.4", "port": 80}``. Plain: ``host:port``. The IP is the
+    service identity when present (a scan of one name can span several A records); the name is
+    also recorded as an up Host so downstream tools can resolve it.
+    """
+    out = Parsed()
+    saw_json = False
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line.startswith("{"):
+            continue
+        saw_json = True
+        try:
+            obj = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        port = obj.get("port")
+        addr = str(obj.get("ip") or obj.get("host") or "").strip().lower()
+        if not isinstance(port, int) or not addr:
+            continue
+        out.services.append(
+            Service(session_id=session_id, address=addr, port=port, proto="tcp",
+                    state="open", source_run_id=run_id)
+        )
+        host = str(obj.get("host") or "").strip().lower()
+        if host and host != addr and "." in host:
+            out.hosts.append(
+                Host(session_id=session_id, address=host, status="up", source_run_id=run_id)
+            )
+    if saw_json:
+        return out
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if ":" not in line or line[0] in "{[#":
+            continue
+        host, _sep, port = line.rpartition(":")
+        host = host.strip().strip(".").lower()
+        if host and port.strip().isdigit():
+            out.services.append(
+                Service(session_id=session_id, address=host, port=int(port.strip()),
+                        proto="tcp", state="open", source_run_id=run_id)
+            )
+    return out
+
+
+def _query_params(url: str) -> list[str]:
+    """The distinct query-parameter NAMES in a URL (never the values), order-preserved.
+
+    Hand-parsed on purpose: the state package is regression-locked to import nothing
+    network-capable (test_state.py bans ``urllib``), and a query string only needs a split.
+    """
+    if "?" not in url:
+        return []
+    query = url.split("?", 1)[1].split("#", 1)[0]
+    names: list[str] = []
+    for pair in query.split("&"):
+        if not pair:
+            continue
+        key = pair.split("=", 1)[0].strip()
+        if key and key not in names:
+            names.append(key)
+    return names
+
+
+def parse_urls(text: str, session_id: str, run_id: str | None = None) -> Parsed:
+    """A flat list of URLs (gau / waybackurls / katana) -> Endpoint rows with query params mined.
+
+    Each line is one URL (katana ``-jsonl`` objects carrying a ``url``/``endpoint`` are also
+    read). The query string's parameter NAMES are the IDOR/injection surface the ranker weighs,
+    so they are extracted; values never are. Duplicate URLs collapse to one endpoint.
+    """
+    out = Parsed()
+    seen: set[str] = set()
+    for raw in (text or "").splitlines():
+        url = raw.strip()
+        if url.startswith("{"):
+            try:
+                obj = json.loads(url)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(obj, dict):
+                continue
+            req = obj.get("request") if isinstance(obj.get("request"), dict) else {}
+            url = str(obj.get("url") or req.get("endpoint") or "").strip()
+        if not url.lower().startswith("http") or url in seen:
+            continue
+        seen.add(url)
+        out.endpoints.append(
+            Endpoint(session_id=session_id, url=url, params=_query_params(url),
+                     source_run_id=run_id)
+        )
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # dispatch
 # --------------------------------------------------------------------------- #
 #: filename suffix -> parser, for files that appear in a run's loot directory.
@@ -485,6 +666,14 @@ STDOUT_PARSERS = {
     "httpx-toolkit": parse_httpx,
     "ffuf": parse_ffuf,
     "nuclei": parse_nuclei,
+    # :recon discovery tools — so a plain terminal run of any of them ingests too, with no
+    # extra wiring, exactly as httpx/netexec already do.
+    "subfinder": parse_subfinder,
+    "dnsx": parse_dnsx,
+    "naabu": parse_naabu,
+    "gau": parse_urls,
+    "waybackurls": parse_urls,
+    "katana": parse_urls,
     "secretsdump.py": parse_secretsdump,
     "secretsdump": parse_secretsdump,
     # netexec is the spray/auth driver; `nxc` is its own short alias. A plain netexec run in

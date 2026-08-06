@@ -121,6 +121,18 @@ export const SURFACE_BANDS: SurfaceBand[] = [
         countKey: "sessions",
         needsStack: true,
       },
+      // OPERATE, and the FRONT DOOR: give it a scoped domain and it runs recon as approved jobs,
+      // seeds in-scope hosts/services/endpoints into engagement state, and ranks the surface by
+      // likely-exploitable. One approval per sweep, ungated stop; discoveries can only ever widen
+      // the allowed set WITHIN the declared scope — out-of-scope names stay read-only.
+      {
+        key: "recon",
+        icon: "◈",
+        label: ":recon",
+        href: "/recon",
+        desc: "Scoped domain → recon jobs → ranked attack surface. One approval per sweep.",
+        needsStack: true,
+      },
       {
         key: "terminal",
         icon: "▮",

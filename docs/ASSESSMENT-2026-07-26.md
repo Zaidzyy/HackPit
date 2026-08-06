@@ -4045,6 +4045,29 @@ route auth is still not built.
 `mcp_server.py` is the transport. That split is structural: it means the lock runs in CI, where
 the optional dependency is absent. A line that could only be checked on one laptop is not a line.
 
+**LIVE-VERIFIED END TO END, AND REGISTERED WITH A REAL HOST (2026-08-06).** The server was driven
+over stdio by a genuine MCP client, not just started: `initialize` came back as `hackpit`,
+`tools/list` returned all fifteen, and `hackpit_arsenal` was *called* for real — a 14.7 KB
+round-trip carrying the 121-entry tool catalog, not a schema dump. The optional `mcp` package
+(v1.23.3) was already present in the backend venv, so nothing had to be installed. It is now
+registered with Claude Code at **user scope**, alongside the other security servers
+(`hexstrike-ai`, `burp`, `ghidra`); user scope was deliberate, because the per-project local scope
+keys off the exact launch directory and kept splitting `HackPit` from `HackPit/backend`.
+`claude mcp list` reports it **✔ Connected**, and the tools surface as `mcp__hackpit__*` in a host
+session after a restart. Note the reads that reflect *live* ZAP or engagement state
+(`hackpit_scan_status`, `hackpit_alerts`, `hackpit_proxy_history`, `hackpit_session_health`) only
+carry data when a scan or proxy session is actually up; the file-backed reads (KB, arsenal,
+exploit index, engagement state) work with the backend down.
+
+**README TODO — the README still does not mention the MCP server exists.** When the README is next
+written or revised, add two things: (a) that HackPit ships an MCP server exposing fifteen
+read-mostly tools over stdio (`propose_command` is the only write, and it queues rather than
+runs), and (b) the install/registration steps for Claude Desktop or Claude Code —
+`uv pip install --python backend/.venv/Scripts/python.exe mcp` if the optional `mcp` group is
+absent, then
+`claude mcp add --scope user hackpit -- <backend>/.venv/Scripts/python.exe <backend>/mcp_server.py`,
+and a restart of the host so the `mcp__hackpit__*` tools load.
+
 ### Six defects this build found in its own work, and each needed a different kind of check
 
 **1. SIX OF FIFTEEN MCP HANDLERS WERE WRITTEN AGAINST NAMES THAT DO NOT EXIST.**

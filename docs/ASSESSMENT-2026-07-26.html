@@ -4266,6 +4266,27 @@ route auth is still not built.</p>
 <p><strong>The registry imports no MCP SDK.</strong> <code>mcp_tools.py</code> holds the tools and both audits;
 <code>mcp_server.py</code> is the transport. That split is structural: it means the lock runs in CI, where
 the optional dependency is absent. A line that could only be checked on one laptop is not a line.</p>
+<p><strong>LIVE-VERIFIED END TO END, AND REGISTERED WITH A REAL HOST (2026-08-06).</strong> The server was driven
+over stdio by a genuine MCP client, not just started: <code>initialize</code> came back as <code>hackpit</code>,
+<code>tools/list</code> returned all fifteen, and <code>hackpit_arsenal</code> was <em>called</em> for real — a 14.7 KB
+round-trip carrying the 121-entry tool catalog, not a schema dump. The optional <code>mcp</code> package
+(v1.23.3) was already present in the backend venv, so nothing had to be installed. It is now
+registered with Claude Code at <strong>user scope</strong>, alongside the other security servers
+(<code>hexstrike-ai</code>, <code>burp</code>, <code>ghidra</code>); user scope was deliberate, because the per-project local scope
+keys off the exact launch directory and kept splitting <code>HackPit</code> from <code>HackPit/backend</code>.
+<code>claude mcp list</code> reports it <strong>✔ Connected</strong>, and the tools surface as <code>mcp__hackpit__*</code> in a host
+session after a restart. Note the reads that reflect <em>live</em> ZAP or engagement state
+(<code>hackpit_scan_status</code>, <code>hackpit_alerts</code>, <code>hackpit_proxy_history</code>, <code>hackpit_session_health</code>) only
+carry data when a scan or proxy session is actually up; the file-backed reads (KB, arsenal,
+exploit index, engagement state) work with the backend down.</p>
+<p><strong>README TODO — the README still does not mention the MCP server exists.</strong> When the README is next
+written or revised, add two things: (a) that HackPit ships an MCP server exposing fifteen
+read-mostly tools over stdio (<code>propose_command</code> is the only write, and it queues rather than
+runs), and (b) the install/registration steps for Claude Desktop or Claude Code —
+<code>uv pip install --python backend/.venv/Scripts/python.exe mcp</code> if the optional <code>mcp</code> group is
+absent, then
+<code>claude mcp add --scope user hackpit -- &lt;backend&gt;/.venv/Scripts/python.exe &lt;backend&gt;/mcp_server.py</code>,
+and a restart of the host so the <code>mcp__hackpit__*</code> tools load.</p>
 <h3 id="six-defects-this-build-found-in-its-own-work-and-each-needed-a-different-kind-of-check">Six defects this build found in its own work, and each needed a different kind of check</h3>
 <p><strong>1. SIX OF FIFTEEN MCP HANDLERS WERE WRITTEN AGAINST NAMES THAT DO NOT EXIST.</strong>
 <code>pipeline.search</code>, <code>state.store.list_findings</code>, <code>state.store.session_summary</code>, <code>arsenal.catalog</code>,

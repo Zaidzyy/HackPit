@@ -16,8 +16,11 @@
   <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=nextdotjs&logoColor=white">
   <img alt="Tests" src="https://img.shields.io/badge/tests-93%20suites-brightgreen?style=flat-square">
   <img alt="Knowledge base" src="https://img.shields.io/badge/knowledge%20base-2%2C747%20entries-8A2BE2?style=flat-square">
+  <img alt="Powered by Claude" src="https://img.shields.io/badge/powered%20by-Claude%20Agent%20SDK%20(Opus)-D97757?style=flat-square&logo=anthropic&logoColor=white">
+  <img alt="Offensive security" src="https://img.shields.io/badge/offensive%20security-red%20team-b31b1b?style=flat-square">
+  <img alt="Pentest / bug bounty / CTF" src="https://img.shields.io/badge/pentest%20%C2%B7%20bug%20bounty%20%C2%B7%20CTF-8B0000?style=flat-square">
   <img alt="LLM safety" src="https://img.shields.io/badge/LLM-grounded%20%C2%B7%20no%20autonomy-9b59b6?style=flat-square">
-  <img alt="Local-first" src="https://img.shields.io/badge/local--first-Ollama-111111?style=flat-square">
+  <img alt="Local-first" src="https://img.shields.io/badge/local--first-Ollama%20fallback-111111?style=flat-square">
 </p>
 
 HackPit is an **AI-driven offensive-security companion with a gated execution cockpit**. It started as one thing — turn a scattered pile of pentest notes into a single searchable knowledge base — and grew into a second: a Kali cockpit where the AI plans the attack and you approve every command it runs.
@@ -27,7 +30,7 @@ Two ideas make it different from "an LLM that hacks":
 - **Grounded, not generated.** Every answer cites a real technique from *your* library. Commands come from the knowledge base, never invented by the model — and anything the AI does add is clearly badged `AI-SUGGESTED · VERIFY`.
 - **Proposes, never fires.** The agent plans the whole kill-chain, but a human approves each command individually. There is no autonomous mode — and that's a deliberate design choice, enforced in code, not a missing feature.
 
-It runs **local-first** on your own machine, so engagement data never has to leave it.
+It runs **local-first** — the knowledge base, hybrid search, and every execution surface stay on your machine. The default AI composer is the **Claude Agent SDK (Opus)**, driven through your local Claude Code login with no API key; switch to local **Ollama** any time you want a fully-offline setup where nothing leaves at all.
 
 <p align="center">
   <img src="assets/screenshots/02-home.png" alt="HackPit home — category grid and live knowledge-base counters" width="100%">
@@ -87,6 +90,14 @@ Describe a target and HackPit composes an ordered **recon → enumeration → ex
 ### Engagements, assistant & grounded reports
 
 Turn a path into a **living engagement** — checked steps, pasted evidence, captured hosts/creds/findings that persist. A **session-aware assistant** answers against your actual progress and cites real techniques. One click drafts a **grounded report** (exec summary, scope, methodology, attack narrative) built from your evidence — with OSCP-style proof tables and **CVSS 3.1 computed, not asserted**.
+
+Every saved path lives in one place, with its own progress and evidence tracked locally:
+
+<p align="center">
+  <img src="assets/screenshots/30-engagements.png" alt="The engagements list — saved attack paths with per-engagement progress" width="80%">
+</p>
+
+Open one and it's a working engagement; finish it and the report writes itself from what you actually did:
 
 <p align="center">
   <img src="assets/screenshots/07-engagement.png" alt="A live engagement with checked steps and pasted results" width="49%">
@@ -210,9 +221,17 @@ HackPit ships an optional **Model Context Protocol server** (`backend/mcp_server
 
 ---
 
-## 🤖 Multi-provider LLM — local-first, key-swappable
+## 🤖 Multi-provider LLM — Claude by default, swappable
 
-Defaults to a **local Ollama** runtime — `qwen3:8b` for composition and chat, `nomic-embed-text` for embeddings, `llava` for note-image captions — so nothing leaves your machine. Prefer a hosted model? Drop a key for **OpenAI · Anthropic · Groq · OpenRouter · xAI** and swap without touching code.
+The default composer is the **Claude Agent SDK (Opus)** — it runs through your local `claude` CLI (Claude Code) with **no API key**, so a machine already signed into Claude Code reasons on a frontier model out of the box. Every other provider is one config change away, and the choice is honest about where your data goes:
+
+| Provider | Model(s) | Notes |
+|---|---|---|
+| **Claude Agent SDK** *(default)* | `opus` (or `sonnet` / `haiku`) | No key — uses your Claude Code login. Prompts go to Anthropic. |
+| **Ollama** *(offline)* | `qwen3:8b`, `nomic-embed-text`, `llava` | Fully local — nothing leaves the machine. The automatic fallback if the `claude` CLI is unavailable. |
+| **OpenAI · Anthropic · OpenRouter** | your choice | Drop an API key and swap without touching code. |
+
+Embeddings for the vector half of search always run locally on **Ollama** (`nomic-embed-text`), independent of the composer you pick.
 
 ---
 
@@ -304,8 +323,9 @@ Stated plainly rather than left to be discovered:
 | **Backend** | FastAPI, Uvicorn, NumPy, Python 3.14 |
 | **Execution** | Docker — one Kali image, three containers with different runtime postures |
 | **Search** | Hybrid BM25 (lexical) + vector (cosine over local embeddings) |
-| **LLM (local)** | Ollama — `qwen3:8b`, `nomic-embed-text`, `llava` |
-| **LLM (optional)** | OpenAI · Anthropic · Groq · OpenRouter · xAI (key-swappable) |
+| **LLM (default)** | Claude Agent SDK (Opus) via the local `claude` CLI — no API key |
+| **LLM (offline)** | Ollama — `qwen3:8b`, `nomic-embed-text`, `llava` |
+| **LLM (API, optional)** | OpenAI · Anthropic · OpenRouter (key-swappable) |
 | **Windows/AD** | `pywinrm` (NTLM/Negotiate, pass-the-hash) — optional, live-target only |
 | **Detection data** | ATT&CK v19 + SigmaHQ, verified against live upstream |
 | **Integration** | Model Context Protocol server (15 read-only tools) |
@@ -394,6 +414,35 @@ Actively built. The KB, search, attack paths, engagements, reports, cockpit, web
 ## Why I built it
 
 <!-- TODO(Zaid): your own words. -->
+
+---
+
+## 🛠️ Build notes — a case study
+
+<!-- Draft in a first-person voice for you to keep, cut, or rewrite. -->
+
+HackPit was as much an experiment in **AI-native development** as it was an offensive-security tool. I didn't hand-write every layer — I directed a model through the build and made the architecture, safety, and integration calls in between. Here's the honest version of how it went.
+
+**The pipeline**
+
+- **Code, tests & the safety architecture** — built with **Claude (Claude Code, Opus)**, with me directing the design, the four-gate model, and every safety invariant. The project is now 90+ test files of guards, many of which exist only to prove a gate *fires*.
+- **The knowledge base** — synthesized from my own notes plus public sources through a local `ingest → normalize → consolidate → embed` pipeline, with embeddings on Ollama's `nomic-embed-text`. Raw sources stay git-ignored; only the pipeline and per-source manifests ship.
+- **The reasoning** — the attack-path composer and cockpit planner run on the same Claude Agent SDK the app now defaults to, grounded so they can only cite techniques the KB actually holds.
+
+**What broke, and how I fixed it** — the fixes are the engineering:
+
+- **A green test suite hid real bugs.** Live-fire runs found defects the hermetic suite couldn't. The out-of-band backend decrypted callbacks with the wrong AES mode (CFB instead of CTR) — and the hermetic test *agreed with its own bug*; only a real round-trip against a public OAST server caught it.
+- **A safety gate that could be side-stepped.** The danger heuristic classified the first token of a WinRM command while the transport ran the whole joined script — so the red-confirm could be dodged on that path. Found by reading the code adversarially, recorded rather than papered over.
+- **"OK" is not a result.** A crawl returned `{"Result":"OK"}` and zero URLs three different ways (a loopback-bound container, Chromium refusing to run as root, ZAP preferring its own bundled chromedriver) before I learned to assert the *outcome*, never the exit code.
+- **The frontend can't be trusted to the type-checker.** `tsc`, `next build`, and eslint can't see whether a CSS class exists or an animation actually reveals — a screen isn't verified until it's been *looked at*. (Even the screenshots in this README are captured headlessly and then eyeballed one by one.)
+
+**What I'd do differently / roadmap**
+
+- **Authentication.** Every route is unauthenticated; localhost-only is the current mitigation and a hard blocker before any non-localhost deployment. It's the next thing.
+- **Prove the deferred surfaces in the field.** The C2 callback, a delegated DNS zone, and a detonated artifact on an instrumented host need a VPS — they're verified structurally today, not live.
+- **Grow tier-1.** The KB is 2,747 entries but only 132 are my own authored notes — the highest-leverage work left is writing, not ingesting.
+
+Honestly: the safety model is the part I'm most careful about, and it's also the part that most constrained the "just let it run" fun — which is exactly the point.
 
 ---
 

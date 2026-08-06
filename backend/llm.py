@@ -51,26 +51,29 @@ VALID_PROVIDERS = ("ollama", "openai", "anthropic", "openrouter", "claude-agent-
 # and the Claude Agent SDK (the machine's Claude Code subscription login).
 _NO_KEY_PROVIDERS = ("ollama", "claude-agent-sdk")
 
-# Default provider is LOCAL Ollama — free, offline, needs no API key.
-# Default model is llama3.1:8b: it reliably grounds the attack-path composer.
-# qwen3:8b (a reasoning model) tends to produce steps that fail the grounding
-# pass -> a 503 "no usable steps"; llama3.1 does not. <think> blocks from any
-# reasoning model are still stripped in extract_json, so either works.
+# Default provider is the CLAUDE AGENT SDK (Opus) — it runs through the local
+# `claude` CLI (Claude Code) with NO API key, so a machine already logged into
+# Claude Code composes on a frontier model out of the box. If the `claude` CLI
+# is unavailable the call transparently falls back to local Ollama (see
+# `chat()` below), so the offline path still works with no configuration.
+# Ollama (llama3.1:8b) is the recommended fully-offline choice; llama3.1 grounds
+# the attack-path composer reliably, and any reasoning model's <think> blocks
+# are stripped in extract_json either way.
 DEFAULTS: dict[str, str] = {
-    "provider": "ollama",
-    "model": "llama3.1:8b",
+    "provider": "claude-agent-sdk",
+    "model": "opus",
     "host": "http://localhost:11434",  # only used by the ollama provider
 }
 
 # Sensible default model per remote provider, applied when a provider is chosen
 # without naming a model. The Agent SDK takes a Claude alias (sonnet/opus/haiku)
-# or a full id; default to Sonnet for a strong, cost-sane frontier completion.
+# or a full id; default to Opus for the strongest frontier completion.
 PROVIDER_DEFAULT_MODEL: dict[str, str] = {
     "ollama": "llama3.1:8b",
     "openai": "gpt-4o-mini",
     "anthropic": "claude-opus-4-8",
     "openrouter": "openai/gpt-4o-mini",
-    "claude-agent-sdk": "sonnet",
+    "claude-agent-sdk": "opus",
 }
 
 

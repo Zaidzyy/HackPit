@@ -445,6 +445,7 @@ a { color: var(--accent); text-decoration: none; }
 </li>
 <li><a href="#interactsh-a-second-zero-infrastructure-oob-backend-2026-08-06">interact.sh — a second, zero-infrastructure OOB backend (2026-08-06)</a></li>
 <li><a href="#credential-attack-spray-captured-creds-crack-captured-hashes-credentials-2026-08-06">Credential attack — spray captured creds, crack captured hashes (:credentials) (2026-08-06)</a></li>
+<li><a href="#documentation-housekeeping-2026-08-06">Documentation &amp; housekeeping (2026-08-06)</a></li>
 </ul>
 </li>
 </ul>
@@ -5300,5 +5301,53 @@ under <code>-m 1000</code> and a kerberoast ticket under <code>-m 13100</code>, 
 <code>netexec smb … -u /loot/…/users.txt -p /loot/…/pass.txt -d LAB</code> with the gate's verdict shown before
 anything runs — the secret lists as files, on screen, exactly as designed. No new gate, confirm,
 blocklist or allow-list narrowing.</p>
+<h2 id="documentation-housekeeping-2026-08-06">Documentation &amp; housekeeping (2026-08-06)</h2>
+<p>Recorded here once, for completeness — these are documentation, packaging and a couple of small
+behaviour changes that landed alongside the <code>:credentials</code> build, not new capabilities of their own.</p>
+<ul>
+<li>
+<p><strong>README, rewritten whole-project.</strong> The old README described only the companion. It was replaced
+  with a full rewrite covering every current surface (companion + cockpit + Windows/AD + C2/tunnels +
+  web-app testing + OOB + MCP), with a badge row, a demo-video/logo placeholder, an "at a glance"
+  table, the four-gate safety model, an honest security-posture/limits section, and a "Build notes"
+  case study. Counts were <strong>verified against the repo, not the old prose</strong>: 2,747 KB entries, 121
+  tools / 306 templates, 47,108 exploits / 25,041 CVEs, 65 ATT&amp;CK / 49 Sigma, 93 test files, 15 MCP
+  tools, 27 screens. The code-only / provenance framing (<code>sources/*-manifest.md</code>, gitignored KB) was
+  kept.</p>
+</li>
+<li>
+<p><strong>Apache-2.0 LICENSE added.</strong> The repo had no <code>LICENSE</code> file backing its stated license; the full
+  Apache-2.0 text was added and the README badge/section now link to it.</p>
+</li>
+<li>
+<p><strong>Default LLM → Claude Agent SDK (Opus).</strong> <code>backend/llm.py</code> DEFAULTS now resolve to the Claude
+  Agent SDK on model <code>opus</code> (via the local <code>claude</code> CLI, no API key), with local Ollama as the
+  automatic offline fallback. The README's provider list was corrected — it had listed Groq/xAI,
+  which the code never supported (real set: ollama, openai, anthropic, openrouter, claude-agent-sdk).</p>
+</li>
+<li>
+<p><strong>CI dependency fix — main had been red since interact.sh.</strong> <code>oob/interactsh.py</code> imports
+  <code>cryptography</code> at module top and <code>main.py</code> imports it unconditionally, so <code>import main</code> failed on
+  CI's bare dependency set (<code>ModuleNotFoundError: cryptography</code>). <code>cryptography</code> is now declared in
+  <code>backend/pyproject.toml</code> as a core dependency and installed in the CI step; CI is green again.</p>
+</li>
+<li>
+<p><strong>Four build specs authored</strong> (<code>docs/superpowers/specs/2026-08-06-*.md</code>) for the next offensive
+  surfaces — credential-attack (now BUILT, above), a cloud IAM-privesc graph, a nuclei template-scan
+  surface, and a guided recon → ranked attack-surface flow. Each rides the existing per-command
+  human-approval gate and adds no new gate; each carries a §6 requiring a README section + a real
+  lab-only screenshot + this assessment's update as part of its own definition of done.</p>
+</li>
+<li>
+<p><strong>Screenshots — headless-Edge method + a live-lab refresh.</strong> The README's screenshots are captured
+  with headless Edge against the running app (the Chrome extension being unavailable), then eyeballed
+  (a class the type-checker cannot see still renders invisible — <code>frontend-class-vocabulary</code>). The
+  stale home (which showed the old <code>1,551</code> counter) and intro splash were refreshed, and the
+  container-dependent cockpit screens (proxy, C2/Sliver, tunnels, OOB, intruder, repeater) were
+  re-captured against the running stack with live lab data — seeded from a demo engagement scoped to
+  the OWASP Juice Shop lab target, with the lab-target's network isolation restored afterward and
+  real bounty targets kept out of every frame.</p>
+</li>
+</ul>
 </body>
 </html>

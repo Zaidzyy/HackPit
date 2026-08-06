@@ -5149,3 +5149,45 @@ under `-m 1000` and a kerberoast ticket under `-m 13100`, and the spray preview 
 `netexec smb … -u /loot/…/users.txt -p /loot/…/pass.txt -d LAB` with the gate's verdict shown before
 anything runs — the secret lists as files, on screen, exactly as designed. No new gate, confirm,
 blocklist or allow-list narrowing.
+
+## Documentation & housekeeping (2026-08-06)
+
+Recorded here once, for completeness — these are documentation, packaging and a couple of small
+behaviour changes that landed alongside the `:credentials` build, not new capabilities of their own.
+
+- **README, rewritten whole-project.** The old README described only the companion. It was replaced
+  with a full rewrite covering every current surface (companion + cockpit + Windows/AD + C2/tunnels +
+  web-app testing + OOB + MCP), with a badge row, a demo-video/logo placeholder, an "at a glance"
+  table, the four-gate safety model, an honest security-posture/limits section, and a "Build notes"
+  case study. Counts were **verified against the repo, not the old prose**: 2,747 KB entries, 121
+  tools / 306 templates, 47,108 exploits / 25,041 CVEs, 65 ATT&CK / 49 Sigma, 93 test files, 15 MCP
+  tools, 27 screens. The code-only / provenance framing (`sources/*-manifest.md`, gitignored KB) was
+  kept.
+
+- **Apache-2.0 LICENSE added.** The repo had no `LICENSE` file backing its stated license; the full
+  Apache-2.0 text was added and the README badge/section now link to it.
+
+- **Default LLM → Claude Agent SDK (Opus).** `backend/llm.py` DEFAULTS now resolve to the Claude
+  Agent SDK on model `opus` (via the local `claude` CLI, no API key), with local Ollama as the
+  automatic offline fallback. The README's provider list was corrected — it had listed Groq/xAI,
+  which the code never supported (real set: ollama, openai, anthropic, openrouter, claude-agent-sdk).
+
+- **CI dependency fix — main had been red since interact.sh.** `oob/interactsh.py` imports
+  `cryptography` at module top and `main.py` imports it unconditionally, so `import main` failed on
+  CI's bare dependency set (`ModuleNotFoundError: cryptography`). `cryptography` is now declared in
+  `backend/pyproject.toml` as a core dependency and installed in the CI step; CI is green again.
+
+- **Four build specs authored** (`docs/superpowers/specs/2026-08-06-*.md`) for the next offensive
+  surfaces — credential-attack (now BUILT, above), a cloud IAM-privesc graph, a nuclei template-scan
+  surface, and a guided recon → ranked attack-surface flow. Each rides the existing per-command
+  human-approval gate and adds no new gate; each carries a §6 requiring a README section + a real
+  lab-only screenshot + this assessment's update as part of its own definition of done.
+
+- **Screenshots — headless-Edge method + a live-lab refresh.** The README's screenshots are captured
+  with headless Edge against the running app (the Chrome extension being unavailable), then eyeballed
+  (a class the type-checker cannot see still renders invisible — `frontend-class-vocabulary`). The
+  stale home (which showed the old `1,551` counter) and intro splash were refreshed, and the
+  container-dependent cockpit screens (proxy, C2/Sliver, tunnels, OOB, intruder, repeater) were
+  re-captured against the running stack with live lab data — seeded from a demo engagement scoped to
+  the OWASP Juice Shop lab target, with the lab-target's network isolation restored afterward and
+  real bounty targets kept out of every frame.

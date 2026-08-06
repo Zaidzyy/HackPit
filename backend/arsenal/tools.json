@@ -1394,6 +1394,84 @@
       ]
     },
     {
+      "name": "pacu",
+      "category": "cloud",
+      "purpose": "AWS exploitation framework — enumerate permissions and map IAM privilege-escalation paths against the account the credentials belong to.",
+      "phases": [
+        "enumeration",
+        "privesc"
+      ],
+      "techniques": [
+        "IAM permission enumeration",
+        "privilege-escalation path discovery",
+        "cloud attack surface mapping"
+      ],
+      "docs": "https://github.com/RhinoSecurityLabs/pacu",
+      "templates": [
+        {
+          "label": "Enumerate IAM permissions",
+          "template": "pacu --session hackpit --module-name iam__enum_permissions --exec",
+          "note": "Read-only: enumerates the caller's IAM permissions. Uses the account the sandbox credentials belong to."
+        },
+        {
+          "label": "Scan for privilege escalation",
+          "template": "pacu --session hackpit --module-name iam__privesc_scan --exec --no-changes",
+          "note": "--no-changes keeps it detection-only: it reports privesc paths without exploiting them."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--session",
+          "what": "the pacu session (loot/state) name"
+        },
+        {
+          "flag": "--module-name",
+          "what": "the module to run"
+        },
+        {
+          "flag": "--no-changes",
+          "what": "detection-only — do not mutate the account"
+        }
+      ]
+    },
+    {
+      "name": "cloudfox",
+      "category": "cloud",
+      "purpose": "Read-only cloud attack-surface and IAM permission mapper (AWS/Azure/GCP) — finds exploitable relationships an attacker would use, without changing anything.",
+      "phases": [
+        "enumeration",
+        "privesc"
+      ],
+      "techniques": [
+        "IAM permission mapping",
+        "attack surface enumeration",
+        "principal/role relationship discovery"
+      ],
+      "docs": "https://github.com/BishopFox/cloudfox",
+      "templates": [
+        {
+          "label": "AWS all-checks",
+          "template": "cloudfox aws all-checks",
+          "note": "Read-only enumeration against the account the sandbox credentials belong to; writes loot to disk."
+        },
+        {
+          "label": "Map who-can-do-what (permissions)",
+          "template": "cloudfox aws permissions",
+          "note": "Builds the principal -> permission table the IAM privilege-escalation graph reasons over."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "aws / azure / gcp",
+          "what": "the provider"
+        },
+        {
+          "flag": "--profile",
+          "what": "the named credential profile to use"
+        }
+      ]
+    },
+    {
       "name": "trivy",
       "category": "cloud",
       "purpose": "Scanner for container images, filesystems and IaC — known CVEs, misconfiguration and exposed secrets.",

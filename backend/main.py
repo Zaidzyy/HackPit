@@ -76,6 +76,12 @@ from adgraph.router import (  # noqa: E402
     set_grounder,
     set_scope_resolver as set_ad_scope_resolver,
 )
+from cloudgraph import store as cloud_store  # noqa: E402  (backend/cloudgraph — cloud IAM graph)
+from cloudgraph.router import (  # noqa: E402
+    router as cloud_router,
+    set_grounder as set_cloud_grounder,
+    set_scope_resolver as set_cloud_scope_resolver,
+)
 from detection.router import (  # noqa: E402  (backend/detection — purple-team footprint)
     router as detection_router,
     set_run_lookup as set_detection_run_lookup,
@@ -316,6 +322,8 @@ async def lifespan(app: FastAPI):
     cockpit_winprofiles.init_db()
     # parsed AD attack-path graphs share it too.
     ad_store.init_db()
+    # parsed cloud IAM privilege-escalation graphs share it too.
+    cloud_store.init_db()
     # out-of-band canary: minted tokens and the one canary configuration share it too. The
     # LISTENER those tokens are for is a separate deployable (oob/server.py) that runs on a
     # VPS; nothing started here opens a socket.
@@ -397,6 +405,10 @@ app.include_router(cockpit_router)
 # AD attack-path graph (see adgraph/). Read-only graph/parse/path/technique endpoints; every
 # abuse command it surfaces still runs ONLY through the cockpit executor above.
 app.include_router(ad_router)
+# Cloud IAM privilege-escalation graph (see cloudgraph/). ENUMERATION is a gated job (the
+# recon/nuclei shape); the graph/path/technique/orchestrate routes are read-only and every abuse
+# command they surface still runs ONLY through the cockpit executor above.
+app.include_router(cloud_router)
 # Detection footprint (see detection/). READ-ONLY purple-team annotation: what a DEFENDER would
 # see for a command/step/run — ATT&CK tag, telemetry, the Sigma rule that would fire, loudness.
 # It executes nothing and changes no gate; it only describes.
@@ -468,6 +480,50 @@ def _ad_kb_grounder(seeds: str) -> dict | None:
 
 # Wire the KB grounder into the AD graph router (technique endpoint uses it for grounding).
 set_grounder(_ad_kb_grounder)
+
+
+# Only cloud KB categories may GROUND a cloud IAM abuse edge — so an AD/web entry can never supply
+# the command for an IAM privesc abuse. If nothing cloud-relevant matches, the technique's own
+# catalog template is used (ai_suggested), exactly like the AD grounder falls back.
+_CLOUD_GROUND_CATEGORIES = frozenset({"cloud"})
+
+
+# A grounded cloud command is only useful if it is an actual CLI invocation — the cloud KB is
+# prose-heavy and its code blocks are often JSON policy documents or output samples, which are not
+# runnable and would render worse than the precise catalog template. So a KB hit only GROUNDS an
+# edge when at least one of its commands starts with a cloud CLI verb; otherwise we fall back to the
+# catalog (ai_suggested), exactly as an unmatched seed would.
+_CLOUD_CLI_HEADS = ("aws", "az", "gcloud", "gsutil", "pacu", "cloudfox", "kubectl", "curl")
+
+
+def _looks_like_cloud_cli(cmd: str) -> bool:
+    line = next((ln.strip() for ln in (cmd or "").splitlines()
+                 if ln.strip() and not ln.strip().startswith("#")), "")
+    head = line.split(" ", 1)[0].rsplit("/", 1)[-1].lower()
+    return head in _CLOUD_CLI_HEADS
+
+
+def _cloud_kb_grounder(seeds: str) -> dict | None:
+    """Ground a cloud IAM abuse edge in the KB (the 534-entry hacktricks-cloud corpus): the best
+    cloud-relevant entry whose commands include a real CLI invocation for the technique's seed
+    terms, via the SAME hybrid search + entry_commands the AD grounder uses. Returns
+    ``{id, title, commands}`` or None (→ the catalog fallback / ai_suggested)."""
+    try:
+        hits = _resilient_search(seeds, 8, "hybrid")
+    except Exception:
+        return None
+    for h in hits:
+        e = STATE.by_id.get(h.get("id"))
+        if not e or e.get("category") not in _CLOUD_GROUND_CATEGORIES:
+            continue
+        cmds = [c for c in attack_path.entry_commands(e) if _looks_like_cloud_cli(c.get("cmd", ""))]
+        if cmds:
+            return {"id": e["id"], "title": e.get("title") or e["id"], "commands": cmds}
+    return None
+
+
+# Wire the cloud KB grounder into the cloud graph router.
+set_cloud_grounder(_cloud_kb_grounder)
 
 
 def _detection_run_lookup(run_id: str) -> dict | None:
@@ -1822,6 +1878,9 @@ def _loop_scope_context(engagement_id: str | None) -> orchestrator.ScopeContext 
 # only ever receives an inert, read-only description of what it may target, and an id that is
 # set but not active fails CLOSED with 409 rather than silently degrading to lab mode.
 set_ad_scope_resolver(_loop_scope_context)
+# The SAME resolver feeds the cloud orchestrator, for the same reason: the cloud proposer receives
+# only an inert, read-only scope description and cannot enter or look up an engagement itself.
+set_cloud_scope_resolver(_loop_scope_context)
 
 
 @app.post("/sessions/{session_id}/loop/propose", response_model=LoopProposeOut)

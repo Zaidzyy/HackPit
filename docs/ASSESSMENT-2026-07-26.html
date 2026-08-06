@@ -447,6 +447,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#credential-attack-spray-captured-creds-crack-captured-hashes-credentials-2026-08-06">Credential attack — spray captured creds, crack captured hashes (:credentials) (2026-08-06)</a></li>
 <li><a href="#nuclei-template-scan-the-bug-bounty-staple-wired-nuclei-2026-08-06">Nuclei template scan — the bug-bounty staple, wired (:nuclei) (2026-08-06)</a></li>
 <li><a href="#documentation-housekeeping-2026-08-06">Documentation &amp; housekeeping (2026-08-06)</a></li>
+<li><a href="#cloud-attack-surface-iam-privesc-graph-the-cloud-parallel-to-bloodhound-cloud-graph-2026-08-06">Cloud attack surface &amp; IAM privesc graph — the cloud parallel to BloodHound (:cloud-graph) (2026-08-06)</a></li>
 </ul>
 </li>
 </ul>
@@ -626,6 +627,11 @@ a { color: var(--accent); text-decoration: none; }
 <td>Nuclei template scan (<code>:nuclei</code>)</td>
 <td><strong>New (2026-08-06)</strong></td>
 <td>Scoped target(s) → templates → severity-ranked <code>Finding</code>s. ONE approved job with an ungated stop — the <code>ffuf</code> / ZAP-active-scan shape, gated by the same <code>validate_request</code>, <strong>no new gate</strong>; the per-mode sandbox is resolved by <code>executor.resolve_mode</code> (isolated lab / open engagement). Default targets seed from the session's in-scope endpoints; results dedupe by <code>(template-id, matched-at)</code> and upsert into the same engagement <code>Finding</code> store the report renders. Pure planner/parser (<code>cockpit/nuclei.py</code> — argv + JSONL parse, AST-asserted no-exec); the worker gates then spawns. <strong>Verified live</strong> against the lab (Prometheus-metrics medium + tech fingerprints).</td>
+</tr>
+<tr>
+<td>Cloud IAM privesc graph (<code>:cloud-graph</code>)</td>
+<td><strong>New (2026-08-06)</strong></td>
+<td>The cloud parallel to the AD graph. Enumeration (<code>ScoutSuite</code> + <code>Prowler</code>, with <code>pacu</code>/<code>cloudfox</code> added to the arsenal + sandbox image in this build) is ONE approved job — the recon/nuclei shape, gated by the same <code>validate_request</code>, <strong>no new gate</strong>, engagement-bound. Its JSON is parsed into a typed IAM privilege-escalation graph (<code>cloudgraph/</code>, a near-clone of <code>adgraph/</code>): principals + resources wired by abusable IAM relationships (<code>sts:AssumeRole</code>, <code>iam:PassRole</code>/<code>AttachRolePolicy</code>/<code>CreatePolicyVersion</code>, <code>lambda:UpdateFunctionCode</code>, Azure <code>Owner</code>-on-self / app-cred-add, GCP <code>serviceAccountTokenCreator</code>/<code>actAs</code>). BFS routes to an admin/owner principal; the orchestrator <strong>picks an EDGE INDEX, never authors a command</strong> (regression-locked by an AST + source scan in <code>test_cloudgraph_safety.py</code>) — the abuse is KB-grounded (534-entry cloud corpus, precise CLI catalog behind it) and runs only through the gated executor, with <code>advance</code> requiring an approved exit-0 run checked server-side. Privesc paths + Prowler misconfigs land as engagement <code>Finding</code>s. Multi-cloud by construction (provider on every node); AWS end-to-end, Azure/GCP node/edge + technique support in place.</td>
 </tr>
 <tr>
 <td>Guided recon → ranked surface (<code>:recon</code>)</td>
@@ -5399,5 +5405,67 @@ behaviour changes that landed alongside the <code>:credentials</code> build, not
   real bounty targets kept out of every frame.</p>
 </li>
 </ul>
+<h2 id="cloud-attack-surface-iam-privesc-graph-the-cloud-parallel-to-bloodhound-cloud-graph-2026-08-06">Cloud attack surface &amp; IAM privesc graph — the cloud parallel to BloodHound (<code>:cloud-graph</code>) (2026-08-06)</h2>
+<p>HackPit could already route from an owned low-priv user to Domain Admin over a typed graph of abusable
+AD edges. This build gives the <strong>cloud</strong> the same thing: enumerate an account, build a typed <strong>IAM
+privilege-escalation graph</strong>, and route to an <strong>admin/owner-equivalent</strong> principal — walked the exact
+edge-index way the BloodHound orchestrator already works. The new package <code>backend/cloudgraph/</code> is a
+near-clone of <code>adgraph/</code>, deliberately: <code>schema.py</code> (nodes carry a <code>provider</code>, so one engine serves
+AWS/Azure/GCP), <code>parser.py</code> (ScoutSuite/Prowler JSON → graph, the cloud equivalent of the BloodHound
+parser), <code>paths.py</code> (the same BFS + k-alternatives), <code>orchestrator.py</code> (copied wholesale — the model
+picks an edge index, a pick outside the frontier is refused not repaired, it authors nothing and
+executes nothing), <code>techniques.py</code> (a cloud abuse catalog), <code>store.py</code>, <code>router.py</code>, <code>sample_data.py</code>,
+and the enumeration worker.</p>
+<p><strong>It adds NO new gate — §0's binding constraint.</strong> Two surfaces, both mirroring what already exists.
+<em>Enumeration</em> is a <strong>gated job</strong> (the recon/nuclei/credattack shape): <code>ScoutSuite</code> + <code>Prowler</code> (+ <code>cloudfox</code>)
+run as ONE approved job, gated by the same <code>executor.validate_request</code> before anything spawns, with an
+ungated stop, engagement-bound because a real cloud API needs the open, loot-mounted sandbox where the
+credentials live. <em>The walk</em> is <strong>propose-only</strong>: the orchestrator hands back an edge index; the abuse
+COMMAND comes from the deterministic, KB-grounded technique catalog, not the model; approval goes to the
+SAME <code>POST /cockpit/exec</code> every other command uses; and <code>advance</code> moves the walk <strong>only</strong> on a run that
+was approved and exited 0, verified server-side against the recorded run. The two halves are separate
+modules on purpose — <code>enumerate.py</code> is the only thing that execs, and <code>orchestrator.py</code> is AST- and
+source-scanned to prove it execs nothing, so the propose-only invariant is regression-locked, not
+asserted.</p>
+<p><strong>The privesc edges are the real ones an attacker walks</strong>, derived from IAM policy statements:
+<code>sts:AssumeRole</code>, <code>iam:AddUserToGroup</code>/<code>AttachUserPolicy</code>/<code>AttachRolePolicy</code>/<code>PutUserPolicy</code>/<code>CreatePolicyVersion</code>/<code>UpdateAssumeRolePolicy</code>/<code>CreateAccessKey</code>/<code>CreateLoginProfile</code>/<code>PassRole</code>, <code>lambda:UpdateFunctionCode</code>/<code>CreateFunction</code>, <code>ec2:RunInstances</code>, <code>secretsmanager:GetSecretValue</code>, <code>kms:Decrypt</code>, plus Azure <code>Owner</code>-on-self / app-credential-add / VM run-command / AKS admin-creds and GCP <code>serviceAccountTokenCreator</code> / <code>actAs</code> / <code>setIamPolicy</code>. A Lambda/EC2 abuse edge is redirected to the compute's <strong>execution role</strong> — that is where the privilege actually lands. A principal that can do <code>*:*</code> (or holds <code>AdministratorAccess</code>) is marked the admin objective. Privilege-escalation paths <strong>and</strong> Prowler misconfigurations land as engagement <code>Finding</code>s, so they flow into the report the same way every other finding does.</p>
+<p><strong>KB-grounding, made honest for a prose-heavy corpus.</strong> The 534-entry <code>hacktricks-cloud</code> KB grounds each
+edge via the same hybrid-search + <code>entry_commands</code> mechanism the AD grounder uses — but the cloud corpus
+is reference/prose, and a seed-term match routinely returns a JSON policy document or an unrelated <code>aws</code>
+command. So a grounded command is <strong>adopted only when its CLI action matches the edge's own</strong> (<code>aws iam
+attach-role-policy</code> == <code>aws iam attach-role-policy</code>); otherwise the precise catalog command is kept and the
+KB entry is still <strong>cited</strong> as the explanation. Enrich, never mis-ground. This was caught live: with the
+naive grounder the <code>AttachRolePolicy</code> hop rendered <code>aws stepfunctions test-state</code> — a real CLI, wrong abuse —
+before the match-guard fixed it.</p>
+<p><strong>pacu + cloudfox added to the arsenal AND the sandbox image, up front (part of this build, not a follow-up).</strong>
+Both are catalogued in <code>arsenal/tools.json</code> (read-only enumeration templates; the actual IAM-mutating abuse a
+path leads to is a <code>cloudgraph</code> technique command that clears the executor gates, <em>not</em> an arsenal tool — pinned
+benign in <code>test_arsenal_safety.py</code>) and installed in <code>docker/Dockerfile.sandbox</code> alongside <code>awscli</code>, <code>scoutsuite</code>
+(binary <code>scout</code>, <strong>not</strong> <code>scoutsuite</code> — the kali-sandbox name trap) and <code>prowler</code>, each in its own venv, cloudfox
+as a release binary. <code>docker/proof/cloud_install_proof.sh</code> re-checks every name the catalog templates hardcode
+against the built image and the running container — the <code>zap_install_proof</code> lesson (a hermetic test can only feed
+the parser a string it chose itself). <strong>The image rebuild + this proof are the one step run outside Claude</strong> (Docker
+trips the real-time classifier; run <code>docker compose -f docker/docker-compose.yml build engage-sandbox</code> then
+<code>sh docker/proof/cloud_install_proof.sh</code>).</p>
+<p><strong>Frontend <code>/cockpit/cloud</code></strong> clones <code>/cockpit/ad</code>: the same kill-chain route canvas (reusing the <code>hp-adg-*</code>
+primitives — no new CSS), provider tabs (AWS/Azure/GCP), the agent-proposes-an-edge orchestrator panel, and a
+per-hop drawer with the KB-grounded command, the destructive red-confirm, and the defender's-eye detection
+disclosure. <strong>The screen was looked at</strong> (<code>frontend-class-vocabulary</code>): the synthetic AWS sample renders a real
+3-hop route — <code>dev-alice</code> (owned) → <code>developers</code> → <code>ci-deployer</code> → <code>break-glass-admin</code> (admin/owner) — with no
+cloud credentials. A <code>?demo=1</code> deep-link auto-ingests the sample so the headless-Edge screenshot renders the
+route, not the empty state (the recon-surface pattern).</p>
+<p><strong>Verification.</strong> <code>test_cloudgraph.py</code> (parser: ScoutSuite/Prowler JSON → graph; BFS to an admin principal;
+orchestrator edge-index proposal; <code>advance</code> requires an approved exit-0 run) and <code>test_cloudgraph_safety.py</code>
+(mirrors <code>test_adorch_safety.py</code>: the model picks an INDEX never a command and an out-of-frontier pick is
+refused; the orchestrator executes nothing by AST and has zero <code>:kali</code>; never-auto-run; no second execution
+path; inherited-rights edges never acquire a command even from a loud grounder; ENUMERATION ADDS NO GATE — its
+argv builders execute nothing by AST, <code>start</code> reaches the executor gate before any spawn, approval + red-confirm
+default FALSE, it is engagement-bound and <code>stop</code> is ungated; lab unchanged) both pass, and are wired into
+<code>run_safety_tests.sh</code>. <code>next build</code> exits 0 with <code>/cockpit/cloud</code> in the route table.</p>
+<p><strong>Assumptions (per §5), stated.</strong> Enumeration is <strong>AWS end-to-end</strong> today; the schema, technique catalog and
+routing already carry Azure/GCP node/edge kinds, and the enumerate worker runs <code>scout</code>/<code>prowler</code> for those
+providers, but the deep policy-statement → privesc-edge extraction is AWS-first — Azure/GCP produce
+principal/resource nodes + their findings via the same tolerant reader. The default objective is an
+admin/owner-equivalent principal; the operator can name a different target node.</p>
 </body>
 </html>

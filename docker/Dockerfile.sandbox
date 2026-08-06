@@ -512,6 +512,39 @@ RUN set -eu; \
     chmod -R a+rX /opt/regulator /opt/SSTImap /opt/dorks_hunter /opt/cloud_enum /opt/dnsvalidator /opt/msftrecon; \
     for b in regulator SSTImap dorks_hunter cloud_enum dnsvalidator msftrecon; do command -v "$b" >/dev/null; done
 
+# --- 9e-ter. cloud IAM privilege-escalation tooling (the :cloud graph) ---------
+# The tools the cloud IAM graph enumerates with, plus the AWS CLI the abuse commands run through.
+# Each Python tool gets its OWN venv (their pins conflict — prowler pins boto3/pydantic hard) and a
+# PATH wrapper, the mkvenv idiom above. THE BINARY NAME IS VERIFIED, not assumed (kali-sandbox
+# image trap): the `scoutsuite` package ships `scout`, so that is what the catalog template calls;
+# `pacu`/`prowler`/`aws` keep their names. cloudfox has no PyPI package — it ships a release binary
+# (the Go toolchain built at 9d is already gone), fetched like trufflehog. Every binary is
+# smoke-checked so a bad install fails the build, and docker/proof/cloud_install_proof.sh re-checks
+# that every name the catalog templates hardcode resolves inside the running container.
+RUN set -eu; \
+    wrap() { printf '#!/bin/sh\nexec %s "$@"\n' "$2" > "/usr/local/bin/$1"; chmod 0755 "/usr/local/bin/$1"; }; \
+    python3 -m venv /opt/awscli && /opt/awscli/bin/pip install --no-cache-dir -q awscli \
+        && wrap aws "/opt/awscli/bin/aws"; \
+    python3 -m venv /opt/scoutsuite && /opt/scoutsuite/bin/pip install --no-cache-dir -q scoutsuite \
+        && wrap scout "/opt/scoutsuite/bin/scout"; \
+    python3 -m venv /opt/prowler && /opt/prowler/bin/pip install --no-cache-dir -q prowler \
+        && wrap prowler "/opt/prowler/bin/prowler"; \
+    python3 -m venv /opt/pacu && /opt/pacu/bin/pip install --no-cache-dir -q pacu \
+        && wrap pacu "/opt/pacu/bin/pacu"; \
+    chmod -R a+rX /opt/awscli /opt/scoutsuite /opt/prowler /opt/pacu; \
+    for b in aws scout prowler pacu; do command -v "$b" >/dev/null || { echo "MISSING cloud tool: $b"; exit 1; }; done
+
+# cloudfox — release binary (no PyPI, and the Go toolchain from stage 9d is already removed).
+RUN set -eu; \
+    apt-get update && apt-get install -y --no-install-recommends unzip && rm -rf /var/lib/apt/lists/*; \
+    CF_VER="$(curl -fsSL https://api.github.com/repos/BishopFox/cloudfox/releases/latest | jq -r .tag_name)"; \
+    [ -n "$CF_VER" ] && [ "$CF_VER" != "null" ] || { echo "cloudfox: could not resolve latest tag"; exit 1; }; \
+    curl -fsSL "https://github.com/BishopFox/cloudfox/releases/download/${CF_VER}/cloudfox-linux-amd64.zip" -o /tmp/cf.zip; \
+    unzip -oq /tmp/cf.zip -d /tmp/cf; \
+    install -m0755 "$(find /tmp/cf -type f -name cloudfox | head -1)" /usr/local/bin/cloudfox; \
+    rm -rf /tmp/cf /tmp/cf.zip; \
+    command -v cloudfox >/dev/null || { echo "MISSING cloud tool: cloudfox"; exit 1; }
+
 # --- 9e-bis. GraphQL tooling (build #20 item 6) ---
 #
 # *** TWO OF THESE FOUR MUST NOT COME FROM PyPI, AND THAT IS A SUPPLY-CHAIN FINDING. ***

@@ -3709,6 +3709,223 @@ export const adOrchestrateAdvance = (
   signal?: AbortSignal
 ) => postJSON<ADAdvanceResult>("/cockpit/ad/orchestrate/advance", body, signal);
 
+// ==========================================================================
+// Cloud IAM privilege-escalation graph (backend/cloudgraph) — the cloud
+// parallel to the AD graph above. Enumeration is a gated job; the graph /
+// path / technique / orchestrate routes are read-only, and every abuse
+// command runs only through the same gated cockpit executor.
+// ==========================================================================
+
+export type CloudProvider = "aws" | "azure" | "gcp";
+
+export type CloudNode = {
+  id: string;
+  type:
+    | "user"
+    | "role"
+    | "group"
+    | "serviceaccount"
+    | "bucket"
+    | "function"
+    | "secret"
+    | "kmskey"
+    | "policy"
+    | "account"
+    | "resource";
+  label: string;
+  provider: string;
+  high_value: boolean;
+  owned: boolean;
+  props: Record<string, unknown>;
+};
+
+export type CloudCommand = { lang: string; cmd: string; truncated?: boolean };
+
+/** The KB-grounded abuse technique for one IAM edge. `commands[0]` is what the operator would
+ *  send to the gated executor. */
+export type CloudTechnique = {
+  kind: string;
+  title: string;
+  summary: string;
+  tool: string;
+  destructive: boolean;
+  grounded: boolean;
+  ai_suggested: boolean;
+  entry_id: string | null;
+  entry_title: string | null;
+  commands: CloudCommand[];
+  why: string;
+};
+
+export type CloudPathEdge = {
+  source: string;
+  target: string;
+  kind: string;
+  source_label: string;
+  target_label: string;
+  props: Record<string, unknown>;
+  technique?: CloudTechnique;
+};
+
+export type CloudPath = {
+  node_ids: string[];
+  edges: CloudPathEdge[];
+  length: number;
+  cost: number;
+};
+
+export type CloudPathResult = {
+  found: boolean;
+  path: CloudPath | null;
+  alternatives: CloudPath[];
+  reason: string | null;
+  target: string;
+  target_label: string;
+};
+
+export type CloudGraph = {
+  provider: string | null;
+  account: string | null;
+  nodes: CloudNode[];
+  edges: {
+    source: string;
+    target: string;
+    kind: string;
+    abusable: boolean;
+    props: Record<string, unknown>;
+  }[];
+  stats: Record<string, number>;
+  warnings: string[];
+};
+
+export type CloudIngestResult = {
+  graph_id: string;
+  provider: string | null;
+  account: string | null;
+  stats: Record<string, number>;
+  warnings: string[];
+  findings: number;
+};
+
+/** Ingest a captured cloud enumeration (or the built-in synthetic AWS sample) into a graph. */
+export const cloudIngest = (
+  body: {
+    session_id?: string | null;
+    engagement_id?: string | null;
+    collection?: unknown;
+    use_sample?: boolean;
+  },
+  signal?: AbortSignal
+) => postJSON<CloudIngestResult>("/cockpit/cloud/ingest", body, signal);
+
+export const cloudGetGraph = (graphId: string, signal?: AbortSignal) =>
+  getJSON<CloudGraph>(`/cockpit/cloud/graph/${encodeURIComponent(graphId)}`, signal);
+
+export const cloudLatest = (sessionId: string, signal?: AbortSignal) =>
+  getJSON<CloudGraph & { graph_id: string }>(
+    `/cockpit/cloud/latest?session_id=${encodeURIComponent(sessionId)}`,
+    signal
+  );
+
+/** Compute the route(s) to an admin/owner-equivalent principal (auto-picked when omitted),
+ *  with the KB-grounded abuse technique attached to each hop. */
+export const cloudComputePath = (
+  body: { graph_id: string; start: string; target?: string | null; with_techniques?: boolean },
+  signal?: AbortSignal
+) => postJSON<CloudPathResult>("/cockpit/cloud/path", body, signal);
+
+export const cloudTechnique = (
+  body: { graph_id: string; source: string; target: string; kind: string },
+  signal?: AbortSignal
+) => postJSON<CloudTechnique>("/cockpit/cloud/technique", body, signal);
+
+// ---- cloud orchestration: the agent PROPOSES the next edge (an index) ------ //
+
+export type CloudProposal = {
+  edge: { source: string; target: string; kind: string; source_label: string; target_label: string };
+  technique: {
+    title: string | null;
+    summary: string | null;
+    tool: string | null;
+    destructive: boolean;
+    grounded: boolean;
+    entry_id: string | null;
+    entry_title: string | null;
+  };
+  command: string;
+  args: string[];
+  cmd_display: string;
+  rationale: string;
+  runnable: boolean;
+  resolution: "ready" | "note-only" | "unparsable";
+  destructive_unresolved: boolean;
+  gate_ok: boolean;
+  gate_reason: string;
+  dangerous_flags: string[];
+  requires_confirm: boolean;
+  destructive_technique: boolean;
+};
+
+export type CloudProposeResult = {
+  done: boolean;
+  proposal: CloudProposal | null;
+  reason: string | null;
+  candidates: number;
+  goal: string;
+  goal_label: string;
+  state: { owned: string[]; traversed: string[] };
+  mode: "lab" | "engagement";
+  note: string;
+};
+
+export type CloudAdvanceResult = {
+  state: { owned: string[]; traversed: string[] };
+  owned_label: string;
+  objective_reached: boolean;
+  remaining_frontier: number;
+};
+
+/** Ask the agent for the next edge to abuse. Executes NOTHING — returns a proposal. */
+export const cloudOrchestratePropose = (
+  body: {
+    graph_id: string;
+    owned: string[];
+    traversed?: string[];
+    target?: string | null;
+    engagement_id?: string | null;
+    avoid?: string[];
+  },
+  signal?: AbortSignal
+) => postJSON<CloudProposeResult>("/cockpit/cloud/orchestrate/propose", body, signal);
+
+/** Record that an abuse step SUCCEEDED. `run_id` must name an approved run that exited 0 — the
+ *  walk does not advance on a refused, unapproved or failed step. */
+export const cloudOrchestrateAdvance = (
+  body: {
+    graph_id: string;
+    owned: string[];
+    traversed: string[];
+    source: string;
+    target: string;
+    kind: string;
+    session_id?: string | null;
+    run_id?: string | null;
+  },
+  signal?: AbortSignal
+) => postJSON<CloudAdvanceResult>("/cockpit/cloud/orchestrate/advance", body, signal);
+
+// ---- cloud enumeration (a gated job) — status only for the panel banner ---- //
+export type CloudEnumStatus = {
+  container: string;
+  up: boolean;
+  ready: boolean;
+  running: number;
+  detail: string;
+};
+
+export const cloudEnumStatus = (signal?: AbortSignal) =>
+  getJSON<CloudEnumStatus>("/cockpit/cloud/enumerate/status", signal);
+
 /** Build (do NOT run) the collector ExecRequest. The returned `request` is sent to
  *  execCockpitStream to run through the gated executor (approve-each, scope-locked DC). */
 export type ADCollectPreview = {

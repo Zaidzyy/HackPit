@@ -126,6 +126,10 @@ run_test test_adorch_safety.py "AD ORCHESTRATION safety (agent proposes only / n
 
 run_test test_adgraph_safety.py "AD graph SAFETY invariants (no exec in adgraph / zero :kali / collector+abuse gated / lab unchanged)"
 
+run_test test_cloudgraph.py "cloud IAM graph tests (ScoutSuite/Prowler JSON -> privesc graph / BFS route to an admin principal / orchestrator edge-index proposal / advance requires an approved exit-0 run)"
+
+run_test test_cloudgraph_safety.py "cloud IAM ORCHESTRATION safety (the model picks an INDEX never a command and an out-of-frontier pick is refused / the orchestrator executes nothing by AST and has zero :kali / never-auto-run: a proposed step submitted unapproved is refused / no second execution path, no batch / inherited-rights edges never acquire a command even from the KB grounder / ENUMERATION ADDS NO GATE: its argv builders execute nothing by AST, start reaches the executor gate before any spawn, approval + red-confirm default FALSE, it is engagement-bound and stop is ungated / lab unchanged)"
+
 run_test test_detection.py "detection footprint tests (matching / ATT&CK / grounded+ai_suggested / tagging / report)"
 
 run_test test_detection_safety.py "detection SAFETY invariants (no exec / read-only / cockpit untouched / describes-not-evades)"

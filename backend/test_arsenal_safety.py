@@ -269,8 +269,12 @@ _MUST_NOT_FIRE = frozenset({
     "Find-InterestingDomainAcl",
     # credential attack — online guessing and OFFLINE cracking. No code runs on the target.
     "hydra", "kerbrute", "hashcat", "john", "jtr", "john the ripper", "ssh2john",
-    # cloud posture
+    # cloud posture + IAM privesc mapping. cloudfox is read-only enumeration; pacu's catalogued
+    # templates are read-only too (iam__enum_permissions, and iam__privesc_scan --no-changes is
+    # detection-only). The actual IAM-mutating abuse a privesc path leads to is NOT an arsenal tool
+    # — it is a cloudgraph technique command that clears the executor gates like everything else.
     "prowler", "scoutsuite", "scout", "trivy", "kube-hunter", "s3scanner", "cloud_enum",
+    "pacu", "cloudfox",
     # local binary analysis — operates on a file, not a host
     "ghidra", "analyzeHeadless", "radare2", "r2", "gdb", "strings",
     # local exploit-DB search

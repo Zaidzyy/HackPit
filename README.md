@@ -55,11 +55,12 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | 🕸️ **Web app testing** | Recording proxy, repeater, intruder, GraphQL, browser interception, OOB callbacks. |
 | ◎ **Nuclei template scan** | Scoped target(s) → templates → severity-ranked findings, one approval; results flow into engagement state. |
 | 🪟 **Windows / AD** | BloodHound graph → route to Domain Admin → walk it live over WinRM. |
+| ☁️ **Cloud IAM privesc** | ScoutSuite/Prowler/pacu/cloudfox → typed IAM graph → route to an admin/owner identity across AWS/Azure/GCP; the agent picks an edge, you approve every command. |
 | 🔑 **Credential attack** | Spray captured/OSINT creds, crack captured hashes — one approval per job; secrets stay in loot files, a hit lights the AD graph. |
 | 📡 **C2 & tunnels** | Sliver implants, DNS tunnels, pivots, a public redirector — all gated. |
 | 🛡️ **Purple-team view** | The defender's-eye footprint of every command, with an honest OPSEC channel. |
 | 📝 **Grounded reports** | OSCP/CPTS/H1 templates, evidence spliced from real state, CVSS computed not asserted. |
-| 🧰 **Arsenal · exploits · SAST** | 121-tool catalog, a 47k-exploit CVE index, and an 8-language code scanner. |
+| 🧰 **Arsenal · exploits · SAST** | 123-tool catalog, a 47k-exploit CVE index, and an 8-language code scanner. |
 | 🔌 **MCP server** | 15 read-only tools so another AI agent can *see* your engagement — eyes, not hands. |
 
 ---
@@ -216,6 +217,18 @@ Ingest **BloodHound** data, get a typed graph, route to Domain Admin, and **walk
   <img src="assets/screenshots/13-cockpit-ad.png" alt="The AD attack-path graph — BloodHound ingest, route to Domain Admin" width="49%">
   <img src="assets/screenshots/15-windows.png" alt="The WinRM driver — run AD abuse live against a Windows target you control" width="49%">
 </p>
+
+---
+
+## ☁️ Cloud attack surface & IAM privesc graph
+
+The cloud parallel to the AD graph. Point **`:cloud-graph`** at an account and it enumerates as **one approved job** — `ScoutSuite` + `Prowler`, with `pacu` and `cloudfox` added to the arsenal and the sandbox image in this build — then parses their JSON into a **typed IAM privilege-escalation graph**: principals (users, roles, groups, service accounts) and resources (buckets, functions, secrets, KMS keys) wired by the abusable IAM relationships an attacker actually walks — `sts:AssumeRole`, `iam:PassRole`, `iam:AttachRolePolicy`, `iam:CreatePolicyVersion`, `lambda:UpdateFunctionCode`, Azure `Owner`-on-self / app-credential-add, GCP `serviceAccountTokenCreator` / `actAs`. A BFS over the abusable edges finds the shortest route to an **admin/owner-equivalent** principal, and — exactly like the AD graph — the agent **picks an edge to abuse (an index into the real frontier), never authors a command**: each edge's abuse is grounded in the 534-entry cloud KB (with the precise CLI catalog behind it) and runs **only** through the same gated executor, so you approve every command individually. Advancing the walk requires a run that was actually approved and exited 0, checked server-side. The privilege-escalation paths and Prowler misconfigurations land as **findings** in engagement state. Multi-cloud by construction (provider on every node); enumeration is AWS-end-to-end today with Azure/GCP node/edge and technique support in place.
+
+<p align="center">
+  <img src="assets/screenshots/34-cloud.png" alt="The cloud IAM privesc graph — a synthetic AWS account renders a 3-hop route from an owned low-priv user to an admin role: dev-alice (owned) —MemberOf→ developers —AssumeRole→ ci-deployer —AttachRolePolicy→ break-glass-admin (admin/owner), with AWS/Azure/GCP provider tabs and the agent-proposes-an-edge orchestrator panel above" width="90%">
+</p>
+
+> No cloud credentials needed to see it work: the sample is a **synthetic AWS account** (no real account id, ARN or tenant) with a real 3-hop IAM privilege-escalation route to an admin role. A live enumeration wires in the same way — a gated job in the open engagement sandbox — when a real account is in scope.
 
 ---
 

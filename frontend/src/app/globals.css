@@ -6199,6 +6199,13 @@ a.hp-card {
   gap: 12px;
   flex-wrap: wrap;
 }
+/* provider tabs (AWS/Azure/GCP) on the cloud IAM graph — a chip row reusing hp-tn-chip */
+.hp-adg-providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 12px;
+}
 .hp-adg-count {
   font-family: var(--font-jetbrains-mono), monospace;
   font-size: 12px;

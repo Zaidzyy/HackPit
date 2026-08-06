@@ -1,7 +1,7 @@
 """Hermetic tests for the interact.sh OOB backend (backend/oob/interactsh.py).
 
 No network: the interact.sh server is simulated in-process. ``_server_encrypt`` does exactly
-what the real server does to an interaction — AES-256-CFB the JSON, RSA-OAEP-SHA256 the AES key
+what the real server does to an interaction — AES-256-CTR the JSON, RSA-OAEP-SHA256 the AES key
 with the client's registered public key — so the crypto round-trip is exercised for real.
 
 Standalone by convention (the safety runner executes ``python test_x.py``, not pytest): no
@@ -27,12 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from cryptography.hazmat.primitives import hashes, serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import padding  # noqa: E402
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms  # noqa: E402
-
-try:
-    from cryptography.hazmat.decrepit.ciphers.modes import CFB  # noqa: E402
-except ImportError:  # pragma: no cover
-    from cryptography.hazmat.primitives.ciphers.modes import CFB  # noqa: E402
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes  # noqa: E402
 
 from oob import interactsh as ish  # noqa: E402
 
@@ -79,7 +74,7 @@ def _server_encrypt(public_key_b64: str, interaction: dict) -> tuple[str, str]:
     pub = serialization.load_pem_public_key(pem)
     aes_key = os.urandom(32)
     iv = os.urandom(16)
-    enc = Cipher(algorithms.AES(aes_key), CFB(iv)).encryptor()
+    enc = Cipher(algorithms.AES(aes_key), modes.CTR(iv)).encryptor()
     blob = iv + enc.update(json.dumps(interaction).encode()) + enc.finalize()
     aes_key_b64 = base64.b64encode(
         pub.encrypt(

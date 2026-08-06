@@ -48,15 +48,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms
-
-# interact.sh uses AES-CFB, which cryptography is relocating to ``decrepit`` (the mode is old,
-# not the library's choice — it is the wire format). Import from the new home when it exists so
-# no deprecation warning fires, and fall back for older cryptography.
-try:  # cryptography >= 43
-    from cryptography.hazmat.decrepit.ciphers.modes import CFB
-except ImportError:  # pragma: no cover - older cryptography
-    from cryptography.hazmat.primitives.ciphers.modes import CFB
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 DEFAULT_SERVER = "oast.fun"
 
@@ -129,7 +121,13 @@ def decrypt_aes_key(private_pem: str, aes_key_b64: str) -> bytes:
 
 
 def decrypt_interaction(aes_key: bytes, data_b64: str) -> dict:
-    """Decrypt one interaction blob: base64 -> ``IV(16) || ciphertext``, AES-256-CFB.
+    """Decrypt one interaction blob: base64 -> ``IV(16) || ciphertext``, AES-256-**CTR**.
+
+    interact.sh encrypts interactions with Go's ``cipher.NewCTR`` — a stream mode whose 16-byte
+    IV is the initial counter, prepended to the ciphertext. (It is emphatically NOT CFB: with
+    CFB only the first 16-byte block decrypts and the rest is garbage, and a self-consistent test
+    that both encrypts and decrypts with CFB will pass while every real callback fails. This was
+    caught by running the live proof against oast.pro.)
 
     Treats the input as hostile: caps the decoded length before touching it and returns a named
     error rather than a raw exception for anything malformed, because this data arrived from the
@@ -140,7 +138,7 @@ def decrypt_interaction(aes_key: bytes, data_b64: str) -> dict:
         if len(blob) > MAX_INTERACTION_BYTES:
             raise InteractshError("interaction exceeds the cap — refusing")
         iv, ciphertext = blob[:16], blob[16:]
-        dec = Cipher(algorithms.AES(aes_key), CFB(iv)).decryptor()
+        dec = Cipher(algorithms.AES(aes_key), modes.CTR(iv)).decryptor()
         plaintext = dec.update(ciphertext) + dec.finalize()
         obj = json.loads(plaintext.decode("utf-8", "replace"))
     except InteractshError:

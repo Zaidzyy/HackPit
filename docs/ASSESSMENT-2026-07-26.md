@@ -5049,8 +5049,22 @@ unfiltered network — the same honesty the self-hosted backend's NS-delegation 
 and, notably, the one live check that needs **no infrastructure of the operator's own**, only a
 network that does not filter interact.sh.
 
+**Frontend, and it was looked at, not just built.** The `:oob` panel gained an interact.sh card
+(register / status / deregister), an auto-poll toggle, dual-backend mint rendering, and a per-payload
+**→ repeater** button — the send-to-repeater convenience, which is a frontend-only action (no backend
+OOB module imports the repeater, so its human-only `send()` guarantee holds). It was verified
+mechanically — `tsc` clean, the CSS-vocabulary lock passing so no class renders invisible, the eslint
+baseline held at 11, `next build` exit 0 — and then **visually**, against the running stack: the
+unconfigured panel shows the interact.sh card with its form and the gated sections correctly hidden;
+registering (live, on `oast.pro`) flips the card to a registered status and reveals the auto-poll,
+verify, mint and collect sections, and a live mint returned 15 interact.sh payloads. The registration,
+poll and mint were thereby confirmed end to end through the real API and UI, not only in the hermetic
+suite; the session was deregistered afterward and no state leaked into the repo.
+
 The stale note in `cockpit/repeater.py` that still called the VPS-for-callbacks piece "deferred
 (D2)" was corrected — that listener shipped in build #13 part 3 and now has two backends. The full
-safety suite is green (the `test_redirector.py` UDP-port flake recorded above recurred once and
-passed on a clean re-run, in a file this build does not touch). No new gate, confirm, blocklist or
-allow-list narrowing; the only reachability change adds an option and removes no restriction.
+safety suite is green — **93 test files, every one exited 0** (up from 89; the four new files are the
+interact.sh backend, its safety invariants, the auto-poll setting/tick, and the dual-backend router).
+The `test_redirector.py` UDP-port flake recorded above recurred once and passed on a clean re-run, in
+a file this build does not touch. No new gate, confirm, blocklist or allow-list narrowing; the only
+reachability change adds an option and removes no restriction.

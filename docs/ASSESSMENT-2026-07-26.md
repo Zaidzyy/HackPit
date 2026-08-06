@@ -75,6 +75,7 @@ Per-command approval is therefore **standing policy, not a deferred item**, and 
 | Live sessions | **Well-designed, now tooled** | Start is a gated command; stdin is human-only and source-scan locked. |
 | HTTP repeater | **New (Phase 4)** | Compose/send/replay/diff. Argv-only curl inside the hardcoded open box (no shell parses a request field; body on stdin), human-only + source-scan locked like `:kali`, scope-checked against a named engagement, every send run-recorded. |
 | Pivot / tunnels | **New (Phase 4)** | chisel/ligolo-ng lifecycle (human-only start/stop) + pure route resolution and a **visible** proxychains rewrite applied *before* the approval screen. A tunnel's subnet enters scope only via an explicit, audited amendment; recon expansion still cannot widen. |
+| Credential attack (`:credentials`) | **New (2026-08-06)** | Spray captured/OSINT creds across a service (netexec / kerbrute / hydra) or crack captured hashes (hashcat, mode auto-detected). ONE approved job per spray/crack with an ungated stop — the intruder's shape on a long process, gated by the same `validate_request`, **no new gate**. Secrets go to loot files, never an argv; a hit writes a validated credential + finding into state and marks the AD node **owned**. Planner (`cockpit/credattack.py`) executes nothing (AST-asserted); execution is the gated worker (`cockpit/credjobs.py`). |
 
 ### AD graph + orchestration
 
@@ -5099,3 +5100,52 @@ interact.sh backend, its safety invariants, the auto-poll setting/tick, and the 
 The `test_redirector.py` UDP-port flake recorded above recurred once and passed on a clean re-run, in
 a file this build does not touch. No new gate, confirm, blocklist or allow-list narrowing; the only
 reachability change adds an option and removes no restriction.
+
+## Credential attack — spray captured creds, crack captured hashes (`:credentials`) (2026-08-06)
+
+The state model has captured credentials and hashes since Phase 2, the arsenal has catalogued
+`netexec`, `kerbrute`, `hydra`, `hashcat` and `john` since the start, and the AD graph has had an
+owned-node concept since the WinRM build. What was missing was the wire between them: a way to
+*use* a captured hash. This build is that wire — and nothing more, deliberately.
+
+**One approval buys the whole job — the intruder's argument, applied to a long process.** A spray of
+300 accounts and a crack of 40 hashes are each ONE job that produces many attempts. HackPit refuses
+*batching across approvals*; it has never refused one approval that produces many requests, and could
+not — `ffuf`, `nuclei`, the ZAP scanner and the intruder are each a single press buying thousands. So
+`:credentials` adds **no new gate**: `executor.validate_request` runs against the equivalent `netexec`
+/ `hashcat` command before anything spawns, and the stop button is the ungated panic switch, exactly
+like `stop_scan`. The one place the intruder's shape had to change is the stop: the intruder checks a
+flag between its own requests, but a spray is one `netexec` process, so the worker holds the process
+handle and `stop()` kills it — and also enforces the operator's `stop_on_lockouts` knob by watching the
+output for `STATUS_ACCOUNT_LOCKED`. That knob, and the delay, are *operator inputs, not gates*: a slower
+spray is a quieter spray, not a safer one, and refusing to run because a number was left at zero would
+be a prohibition the tooling invented.
+
+**The planner executes nothing; the worker is the only thing that runs.** `cockpit/credattack.py` is
+pure — it builds argv, detects the hashcat mode from a hash's shape, and correlates tool output back
+into typed state — and an AST walk over its own source (like `state/`'s) asserts it imports nothing
+that executes and calls no `subprocess`/`eval`. The execution lives in `cockpit/credjobs.py`, the gated
+job worker. **Secrets never land on an argv:** the user list, the password list and the hash list are
+written to files under the engagement's loot directory and the argv references only their paths — a
+password on the command line ends up in the persisted `RunRecord` that `report.py` renders verbatim,
+which is the exact leak `secretargs` was built to stop. A crack that reaches the argv would be that
+same defect wearing a hash. Both are regression-locked in `test_credattack_safety.py`.
+
+**A crack recovers the account, not just the plaintext.** hashcat prints `hash:plaintext`, but that
+split is ambiguous for salted/Kerberos hashes whose own body contains `:`. Rather than guess, the parser
+matches each line against the hashes that were actually *submitted* — the longest known hash that
+prefixes the line wins — so the account is recovered unambiguously from state that produced the job. A
+hit emits a new `password` credential for that principal (the NT hash is kept, still usable for
+pass-the-hash), a `high` finding, and marks the principal **owned** in the session's AD graph, opening
+new frontier edges in `:ad-graph`. That last step is the payoff the whole loop was for: a cracked hash
+becomes a new route to Domain Admin.
+
+**Built, verified, and looked at.** The two new test files (`test_credattack.py`, its safety twin) join
+the runner; the full hermetic safety suite is green — **95 test files, every one exited 0** — and the
+CSS-vocabulary lock passes against the new screen, so no class renders invisible. `next build` exits 0
+with `/credentials` compiled. The screen was then **looked at**, not just built (`frontend-class-vocabulary`):
+against the running stack, seeding from a synthetic lab engagement grouped three captured NTLM hashes
+under `-m 1000` and a kerberoast ticket under `-m 13100`, and the spray preview rendered the exact
+`netexec smb … -u /loot/…/users.txt -p /loot/…/pass.txt -d LAB` with the gate's verdict shown before
+anything runs — the secret lists as files, on screen, exactly as designed. No new gate, confirm,
+blocklist or allow-list narrowing.

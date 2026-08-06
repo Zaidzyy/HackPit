@@ -173,6 +173,18 @@ export const SURFACE_BANDS: SurfaceBand[] = [
         desc: "One request, marked positions, a payload set — one approval.",
         needsStack: true,
       },
+      // OPERATE, and the payoff of the whole state model: spray captured/OSINT creds across a
+      // service, or crack captured hashes with a wordlist — one approval per job, an ungated
+      // stop. A hit writes a validated credential + finding into state and marks the AD node
+      // owned, which opens new frontier edges in :ad-graph.
+      {
+        key: "credentials",
+        icon: "🔑",
+        label: ":credentials",
+        href: "/credentials",
+        desc: "Spray captured creds, crack captured hashes — one approval per job.",
+        needsStack: true,
+      },
     ],
   },
   {

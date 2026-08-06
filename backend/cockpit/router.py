@@ -46,6 +46,8 @@ from pydantic import BaseModel, Field
 
 from . import allowlist, config, engagement, executor, jobs, loot, runstore
 from . import cookiejar as cookiejar_mod
+from . import credattack as credattack_mod
+from . import credjobs as credjobs_mod
 from . import exposure as exposure_mod
 from . import graphql as graphql_mod
 from . import graphql_enum as graphql_enum_mod
@@ -924,6 +926,147 @@ def stop_intruder_job(job_id: str) -> intruder_mod.IntruderJob:
     job = intruder_mod.stop(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail={"reason": f"no intruder job {job_id!r}"})
+    return job
+
+
+# --- Credential attack (:credentials — spray captured/OSINT creds, crack captured hashes) --- #
+#
+# THE CREDENTIAL LOOP, WIRED. Spray a service with a user/password list, or crack captured
+# hashes with a wordlist, as ONE approved job with a working ungated stop — the intruder's shape
+# applied to a long-running process. `executor.validate_request` runs BEFORE anything spawns; a
+# successful spray/crack writes a validated credential + a finding into engagement state and
+# marks the matching AD node owned. NO new gate: per-command human approval is the only bound,
+# exactly as everywhere else. The planning + parsing is `credattack` (pure, executes nothing);
+# the execution is `credjobs` (the gated job worker).
+
+
+def _cred_refusal(exc: credjobs_mod.CredRefused):
+    """One refusal shape for spray + crack: 403 for a SAFETY gate, 409 for AVAILABILITY/input."""
+    code = 409 if exc.gate in {"unavailable", "engagement", "loot", "input"} else 403
+    raise HTTPException(status_code=code, detail={
+        "gate": exc.gate, "reason": exc.reason, "dangerous_flags": exc.dangerous_flags,
+    })
+
+
+@router.get("/credentials/status")
+def get_credentials_status() -> dict[str, Any]:
+    """Engagement-sandbox availability + running-job count — the UI banner. Read-only."""
+    return credjobs_mod.status()
+
+
+@router.get("/credentials/plan")
+def credentials_plan(
+    session_id: str | None = Query(None),
+    wordlist: str = Query("/usr/share/wordlists/rockyou.txt"),
+) -> dict[str, Any]:
+    """DRY PREVIEW seeded from captured state: which hashes are crackable (grouped by hashcat
+    mode) and the account/known-password lists a spray could use. Executes nothing."""
+    from state import store as state_store  # lazy: keep router import-light
+
+    creds = state_store.load(session_id or "").credentials if session_id else []
+    plan = credattack_mod.plan_crack(
+        credattack_mod.CrackRequest(session_id=session_id, wordlist=wordlist), creds
+    )
+    return {
+        "crackable": [g.model_dump() for g in plan.crack],
+        "usernames": credattack_mod.state_usernames(creds),
+        "known_passwords": len(credattack_mod.state_passwords(creds)),
+        "warnings": plan.warnings,
+    }
+
+
+@router.post("/credentials/spray/preview")
+def spray_preview(req: credattack_mod.SprayRequest) -> dict[str, Any]:
+    """The EXACT spray argv and the gate verdict, without sending anything. Same functions the
+    start path uses, so the preview cannot drift from the run."""
+    plan = credattack_mod.plan_spray(req)
+    verdict = credattack_mod.validate_spray(req)
+    return {
+        "argv": plan.spray.argv if plan.spray else [],
+        "users": plan.spray.users if plan.spray else 0,
+        "passwords": plan.spray.passwords if plan.spray else 0,
+        "warnings": plan.warnings,
+        "gate": None if verdict is None else {
+            "gate": verdict.gate, "reason": verdict.reason,
+            "dangerous_flags": list(verdict.dangerous_flags or []),
+        },
+    }
+
+
+@router.post("/credentials/crack/preview")
+def crack_preview(req: credattack_mod.CrackRequest) -> dict[str, Any]:
+    """The hashcat invocations a crack WOULD run (one per mode) + the gate verdict. Sends nothing."""
+    from state import store as state_store
+
+    creds = state_store.load(req.session_id or "").credentials if req.session_id else []
+    plan = credattack_mod.plan_crack(req, creds)
+    verdict = credattack_mod.validate_crack(req)
+    return {
+        "groups": [g.model_dump() for g in plan.crack],
+        "warnings": plan.warnings,
+        "gate": None if verdict is None else {
+            "gate": verdict.gate, "reason": verdict.reason,
+            "dangerous_flags": list(verdict.dangerous_flags or []),
+        },
+    }
+
+
+@router.post("/credentials/spray", response_model=credjobs_mod.CredJob)
+def start_spray(req: credattack_mod.SprayRequest) -> credjobs_mod.CredJob:
+    """Spray a service with a user/password list as ONE approved job. GATED, then it runs.
+
+    `executor.validate_request` runs against the equivalent `netexec` command BEFORE anything
+    spawns — an unapproved or off-scope job runs nothing. The stop button (DELETE below) is the
+    ungated panic switch. A SAFETY refusal is 403 naming the gate; an availability/input problem
+    is 409. A successful hit writes a validated credential + finding into state and marks the AD
+    node owned.
+    """
+    try:
+        return credjobs_mod.start_spray(req)
+    except credjobs_mod.CredRefused as exc:
+        _cred_refusal(exc)
+
+
+@router.post("/credentials/crack", response_model=credjobs_mod.CredJob)
+def start_crack(req: credattack_mod.CrackRequest) -> credjobs_mod.CredJob:
+    """Crack captured hashes with a wordlist as ONE approved job. GATED, then it runs.
+
+    The hashes come from engagement state and are written to a loot file — never the argv. A
+    crack names no host, so it is an engagement-mode target-less command (allowed); in lab mode
+    it is refused, which is why an active engagement is required. A crack recovers the account
+    (from the submitted hash) as a new password credential + a high finding.
+    """
+    try:
+        return credjobs_mod.start_crack(req)
+    except credjobs_mod.CredRefused as exc:
+        _cred_refusal(exc)
+
+
+@router.get("/credentials/jobs", response_model=list[credjobs_mod.CredJob])
+def list_cred_jobs(session_id: str | None = Query(None)) -> list[credjobs_mod.CredJob]:
+    """Every spray/crack job, newest first. Read-only, ungated — the results feed polls this."""
+    return credjobs_mod.list_jobs(session_id)
+
+
+@router.get("/credentials/jobs/{job_id}", response_model=credjobs_mod.CredJob)
+def get_cred_job(job_id: str) -> credjobs_mod.CredJob:
+    """One job with its recovered credentials. Read-only, ungated."""
+    job = credjobs_mod.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no credential job {job_id!r}"})
+    return job
+
+
+@router.delete("/credentials/jobs/{job_id}", response_model=credjobs_mod.CredJob)
+def stop_cred_job(job_id: str) -> credjobs_mod.CredJob:
+    """Stop an in-flight spray/crack. NOT GATED — the panic button, exactly like `stop_scan`.
+
+    A spray may still have hundreds of accounts queued; a gate that could refuse to stop it would
+    make the system less safe. Sets the stop event and kills the process.
+    """
+    job = credjobs_mod.stop(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no credential job {job_id!r}"})
     return job
 
 

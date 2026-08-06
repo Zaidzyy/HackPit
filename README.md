@@ -14,7 +14,7 @@
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.14-3776AB?style=flat-square&logo=python&logoColor=white">
   <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=nextdotjs&logoColor=white">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-93%20suites-brightgreen?style=flat-square">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-95%20suites-brightgreen?style=flat-square">
   <img alt="Knowledge base" src="https://img.shields.io/badge/knowledge%20base-2%2C747%20entries-8A2BE2?style=flat-square">
   <img alt="Powered by Claude" src="https://img.shields.io/badge/powered%20by-Claude%20Agent%20SDK%20(Opus)-D97757?style=flat-square&logo=anthropic&logoColor=white">
   <img alt="Offensive security" src="https://img.shields.io/badge/offensive%20security-red%20team-b31b1b?style=flat-square">
@@ -53,6 +53,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | 🎯 **Gated cockpit** | Real Kali execution, one approved command at a time, behind four ordered gates. |
 | 🕸️ **Web app testing** | Recording proxy, repeater, intruder, GraphQL, browser interception, OOB callbacks. |
 | 🪟 **Windows / AD** | BloodHound graph → route to Domain Admin → walk it live over WinRM. |
+| 🔑 **Credential attack** | Spray captured/OSINT creds, crack captured hashes — one approval per job; secrets stay in loot files, a hit lights the AD graph. |
 | 📡 **C2 & tunnels** | Sliver implants, DNS tunnels, pivots, a public redirector — all gated. |
 | 🛡️ **Purple-team view** | The defender's-eye footprint of every command, with an honest OPSEC channel. |
 | 📝 **Grounded reports** | OSCP/CPTS/H1 templates, evidence spliced from real state, CVSS computed not asserted. |
@@ -147,6 +148,16 @@ A full web surface behind the same gates: a **recording proxy** that captures tr
   <img src="assets/screenshots/24-intruder.png" alt="The intruder — payload positions and fuzzing under one approval" width="49%">
   <img src="assets/screenshots/26-exposure.png" alt="Browser interception — publish the proxy to a real Chrome" width="49%">
 </p>
+
+### Credential attack
+
+The payoff of the state model: **use** the credentials and hashes HackPit has already captured. **Spray** a user/password list across a service (SMB, WinRM, LDAP, SSH, Kerberos, an HTTP form…) or **crack** captured hashes with a wordlist — each is *one* approved job with an ungated stop, gated by the same executor gates every command clears. The user, password and hash lists are written to loot files and referenced by path, so no secret ever lands on the command line; the hashcat mode is detected from each hash's shape. A hit writes a **validated credential + a finding** back into engagement state and marks the matching principal **owned** in `:ad-graph`, opening new frontier edges — the loop closing.
+
+<p align="center">
+  <img src="assets/screenshots/31-credentials.png" alt="The credential-attack surface — a spray preview showing the exact netexec argv with the secret lists as loot files, the gate enforcing, and captured hashes grouped by auto-detected hashcat mode" width="90%">
+</p>
+
+> Spray builds the exact `netexec` command — with the user/password lists as loot files, never on the argv — and shows the gate's answer before anything runs; captured hashes are grouped by an auto-detected hashcat mode (NTLM, kerberoast, …), one approval per crack.
 
 ### Out-of-band callbacks
 

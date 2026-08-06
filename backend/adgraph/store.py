@@ -106,6 +106,47 @@ def list_for_session(session_id: str) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def mark_owned(session_id: str, principals: list[str]) -> list[str]:
+    """Mark the graph nodes for ``principals`` as OWNED in the session's latest graph.
+
+    THE PAYOFF OF THE CREDENTIAL LOOP: a sprayed/cracked credential makes the matching
+    principal owned, which opens new frontier edges the next time :ad-graph asks for the route.
+    Pure persistence — no execution, no network. Matches a principal (a bare account name) to a
+    node by its label's SAM part (``user@DOMAIN`` -> ``user``), the whole label, or a
+    ``samaccountname`` prop, case-insensitively. Returns the labels it newly marked; marks
+    nothing (never raises) when there is no graph or no match.
+    """
+    if not session_id or not principals:
+        return []
+    latest = latest_for_session(session_id)
+    if not latest:
+        return []
+    graph = latest.get("graph")
+    graph_id = latest.get("graph_id")
+    if not isinstance(graph, dict) or not graph_id:
+        return []
+    wanted = {p.strip().lower() for p in principals if p.strip()}
+    marked: list[str] = []
+    for node in graph.get("nodes", []):
+        if not isinstance(node, dict) or node.get("owned"):
+            continue
+        label = str(node.get("label") or "")
+        sam = label.split("@", 1)[0].strip().lower()
+        props = node.get("props") or {}
+        prop_sam = str(props.get("samaccountname") or "").strip().lower()
+        if sam in wanted or label.strip().lower() in wanted or (prop_sam and prop_sam in wanted):
+            node["owned"] = True
+            marked.append(label or node.get("id", ""))
+    if not marked:
+        return []
+    with _write_lock, _connect() as conn:
+        conn.execute(
+            "UPDATE ad_graphs SET graph_json = ? WHERE graph_id = ?",
+            (json.dumps(graph), graph_id),
+        )
+    return marked
+
+
 def _row(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     try:

@@ -2441,6 +2441,150 @@ export const stopIntruderJob = (id: string, signal?: AbortSignal) =>
   delJSON<IntruderJob>(`/cockpit/intruder/${encodeURIComponent(id)}`, signal);
 
 /* -------------------------------------------------------------------------- */
+/* CREDENTIAL ATTACK (:credentials) — spray captured creds, crack captured hashes */
+/* -------------------------------------------------------------------------- */
+export type SprayRequest = {
+  service: string;
+  target: string;
+  usernames: string[];
+  /** Written to a loot file, never an argv. */
+  passwords: string[];
+  domain: string;
+  http_form: string;
+  /** Operator knobs, NOT gates — a slower spray is a quieter spray, not a safer one. */
+  delay: number;
+  stop_on_lockouts: number;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  approved: boolean;
+  dangerous_ack: boolean;
+};
+
+export type CrackRequest = {
+  /** Accounts to crack; empty = every crackable hash in state. */
+  principals: string[];
+  wordlist: string;
+  rule: string;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  approved: boolean;
+  dangerous_ack: boolean;
+};
+
+export type CredGate = { gate: string; reason: string; dangerous_flags: string[] } | null;
+
+export type CrackGroup = {
+  mode: number;
+  name: string;
+  principals: string[];
+  hashes: number;
+  argv: string[];
+};
+
+export type CredPlan = {
+  crackable: CrackGroup[];
+  usernames: string[];
+  known_passwords: number;
+  warnings: string[];
+};
+
+export type SprayPreview = {
+  argv: string[];
+  users: number;
+  passwords: number;
+  warnings: string[];
+  gate: CredGate;
+};
+
+export type CrackPreview = {
+  groups: CrackGroup[];
+  warnings: string[];
+  gate: CredGate;
+};
+
+export type CredHit = {
+  principal: string;
+  domain: string;
+  target: string;
+  admin: boolean;
+  note: string;
+};
+
+export type CredJob = {
+  id: string;
+  kind: string;
+  state: string;
+  argv: string[];
+  target: string;
+  container: string;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  started_at: string;
+  finished_at: string;
+  attempts: number;
+  lockouts: number;
+  hits: CredHit[];
+  new_credentials: number;
+  new_findings: number;
+  /** AD nodes this job marked owned — the payoff that lights :ad-graph. */
+  owned: string[];
+  output_tail: string;
+  warnings: string[];
+  refused: string;
+  refused_gate: string;
+};
+
+export type CredStatus = {
+  container: string;
+  up: boolean;
+  ready: boolean;
+  running: number;
+  detail: string;
+};
+
+export const getCredentialsStatus = (signal?: AbortSignal) =>
+  getJSON<CredStatus>("/cockpit/credentials/status", signal);
+
+/** State-seeded dry preview: which hashes are crackable + the account/known-password lists. */
+export const getCredentialsPlan = (
+  sessionId: string,
+  wordlist?: string,
+  signal?: AbortSignal
+) =>
+  getJSON<CredPlan>(
+    `/cockpit/credentials/plan?session_id=${encodeURIComponent(sessionId)}` +
+      (wordlist ? `&wordlist=${encodeURIComponent(wordlist)}` : ""),
+    signal
+  );
+
+/** The exact argv and the gate verdict, sending nothing. */
+export const sprayPreview = (req: SprayRequest, signal?: AbortSignal) =>
+  postJSON<SprayPreview>("/cockpit/credentials/spray/preview", req, signal);
+
+export const crackPreview = (req: CrackRequest, signal?: AbortSignal) =>
+  postJSON<CrackPreview>("/cockpit/credentials/crack/preview", req, signal);
+
+export const startSpray = (req: SprayRequest, signal?: AbortSignal) =>
+  postJSON<CredJob>("/cockpit/credentials/spray", req, signal);
+
+export const startCrack = (req: CrackRequest, signal?: AbortSignal) =>
+  postJSON<CredJob>("/cockpit/credentials/crack", req, signal);
+
+export const listCredJobs = (sessionId?: string, signal?: AbortSignal) =>
+  getJSON<CredJob[]>(
+    "/cockpit/credentials/jobs" +
+      (sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""),
+    signal
+  );
+
+export const getCredJob = (id: string, signal?: AbortSignal) =>
+  getJSON<CredJob>(`/cockpit/credentials/jobs/${encodeURIComponent(id)}`, signal);
+
+/** Stop an in-flight spray/crack. NOT GATED — the panic button, like stopping a scan. */
+export const stopCredJob = (id: string, signal?: AbortSignal) =>
+  delJSON<CredJob>(`/cockpit/credentials/jobs/${encodeURIComponent(id)}`, signal);
+
+/* -------------------------------------------------------------------------- */
 /* THE WAF-BYPASS HEADER (build #18 item 1)                                    */
 /*                                                                             */
 /* THE VALUE IS A CREDENTIAL AND ONLY TRAVELS ONE WAY. `setBypassHeader` sends  */

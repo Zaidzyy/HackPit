@@ -444,6 +444,7 @@ a { color: var(--accent); text-decoration: none; }
 </ul>
 </li>
 <li><a href="#interactsh-a-second-zero-infrastructure-oob-backend-2026-08-06">interact.sh — a second, zero-infrastructure OOB backend (2026-08-06)</a></li>
+<li><a href="#credential-attack-spray-captured-creds-crack-captured-hashes-credentials-2026-08-06">Credential attack — spray captured creds, crack captured hashes (:credentials) (2026-08-06)</a></li>
 </ul>
 </li>
 </ul>
@@ -613,6 +614,11 @@ a { color: var(--accent); text-decoration: none; }
 <td>Pivot / tunnels</td>
 <td><strong>New (Phase 4)</strong></td>
 <td>chisel/ligolo-ng lifecycle (human-only start/stop) + pure route resolution and a <strong>visible</strong> proxychains rewrite applied <em>before</em> the approval screen. A tunnel's subnet enters scope only via an explicit, audited amendment; recon expansion still cannot widen.</td>
+</tr>
+<tr>
+<td>Credential attack (<code>:credentials</code>)</td>
+<td><strong>New (2026-08-06)</strong></td>
+<td>Spray captured/OSINT creds across a service (netexec / kerbrute / hydra) or crack captured hashes (hashcat, mode auto-detected). ONE approved job per spray/crack with an ungated stop — the intruder's shape on a long process, gated by the same <code>validate_request</code>, <strong>no new gate</strong>. Secrets go to loot files, never an argv; a hit writes a validated credential + finding into state and marks the AD node <strong>owned</strong>. Planner (<code>cockpit/credattack.py</code>) executes nothing (AST-asserted); execution is the gated worker (<code>cockpit/credjobs.py</code>).</td>
 </tr>
 </tbody>
 </table>
@@ -5251,5 +5257,48 @@ interact.sh backend, its safety invariants, the auto-poll setting/tick, and the 
 The <code>test_redirector.py</code> UDP-port flake recorded above recurred once and passed on a clean re-run, in
 a file this build does not touch. No new gate, confirm, blocklist or allow-list narrowing; the only
 reachability change adds an option and removes no restriction.</p>
+<h2 id="credential-attack-spray-captured-creds-crack-captured-hashes-credentials-2026-08-06">Credential attack — spray captured creds, crack captured hashes (<code>:credentials</code>) (2026-08-06)</h2>
+<p>The state model has captured credentials and hashes since Phase 2, the arsenal has catalogued
+<code>netexec</code>, <code>kerbrute</code>, <code>hydra</code>, <code>hashcat</code> and <code>john</code> since the start, and the AD graph has had an
+owned-node concept since the WinRM build. What was missing was the wire between them: a way to
+<em>use</em> a captured hash. This build is that wire — and nothing more, deliberately.</p>
+<p><strong>One approval buys the whole job — the intruder's argument, applied to a long process.</strong> A spray of
+300 accounts and a crack of 40 hashes are each ONE job that produces many attempts. HackPit refuses
+<em>batching across approvals</em>; it has never refused one approval that produces many requests, and could
+not — <code>ffuf</code>, <code>nuclei</code>, the ZAP scanner and the intruder are each a single press buying thousands. So
+<code>:credentials</code> adds <strong>no new gate</strong>: <code>executor.validate_request</code> runs against the equivalent <code>netexec</code>
+/ <code>hashcat</code> command before anything spawns, and the stop button is the ungated panic switch, exactly
+like <code>stop_scan</code>. The one place the intruder's shape had to change is the stop: the intruder checks a
+flag between its own requests, but a spray is one <code>netexec</code> process, so the worker holds the process
+handle and <code>stop()</code> kills it — and also enforces the operator's <code>stop_on_lockouts</code> knob by watching the
+output for <code>STATUS_ACCOUNT_LOCKED</code>. That knob, and the delay, are <em>operator inputs, not gates</em>: a slower
+spray is a quieter spray, not a safer one, and refusing to run because a number was left at zero would
+be a prohibition the tooling invented.</p>
+<p><strong>The planner executes nothing; the worker is the only thing that runs.</strong> <code>cockpit/credattack.py</code> is
+pure — it builds argv, detects the hashcat mode from a hash's shape, and correlates tool output back
+into typed state — and an AST walk over its own source (like <code>state/</code>'s) asserts it imports nothing
+that executes and calls no <code>subprocess</code>/<code>eval</code>. The execution lives in <code>cockpit/credjobs.py</code>, the gated
+job worker. <strong>Secrets never land on an argv:</strong> the user list, the password list and the hash list are
+written to files under the engagement's loot directory and the argv references only their paths — a
+password on the command line ends up in the persisted <code>RunRecord</code> that <code>report.py</code> renders verbatim,
+which is the exact leak <code>secretargs</code> was built to stop. A crack that reaches the argv would be that
+same defect wearing a hash. Both are regression-locked in <code>test_credattack_safety.py</code>.</p>
+<p><strong>A crack recovers the account, not just the plaintext.</strong> hashcat prints <code>hash:plaintext</code>, but that
+split is ambiguous for salted/Kerberos hashes whose own body contains <code>:</code>. Rather than guess, the parser
+matches each line against the hashes that were actually <em>submitted</em> — the longest known hash that
+prefixes the line wins — so the account is recovered unambiguously from state that produced the job. A
+hit emits a new <code>password</code> credential for that principal (the NT hash is kept, still usable for
+pass-the-hash), a <code>high</code> finding, and marks the principal <strong>owned</strong> in the session's AD graph, opening
+new frontier edges in <code>:ad-graph</code>. That last step is the payoff the whole loop was for: a cracked hash
+becomes a new route to Domain Admin.</p>
+<p><strong>Built, verified, and looked at.</strong> The two new test files (<code>test_credattack.py</code>, its safety twin) join
+the runner; the full hermetic safety suite is green — <strong>95 test files, every one exited 0</strong> — and the
+CSS-vocabulary lock passes against the new screen, so no class renders invisible. <code>next build</code> exits 0
+with <code>/credentials</code> compiled. The screen was then <strong>looked at</strong>, not just built (<code>frontend-class-vocabulary</code>):
+against the running stack, seeding from a synthetic lab engagement grouped three captured NTLM hashes
+under <code>-m 1000</code> and a kerberoast ticket under <code>-m 13100</code>, and the spray preview rendered the exact
+<code>netexec smb … -u /loot/…/users.txt -p /loot/…/pass.txt -d LAB</code> with the gate's verdict shown before
+anything runs — the secret lists as files, on screen, exactly as designed. No new gate, confirm,
+blocklist or allow-list narrowing.</p>
 </body>
 </html>

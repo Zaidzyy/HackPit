@@ -391,6 +391,84 @@ def parse_secretsdump(text: str, session_id: str, run_id: str | None = None) -> 
 
 
 # --------------------------------------------------------------------------- #
+# netexec / crackmapexec — the `[+]` valid-credential line
+# --------------------------------------------------------------------------- #
+# A netexec success line, after the PROTO/host/port/name columns:
+#   SMB   10.10.10.5   445   DC01   [+] CORP.local\Administrator:Passw0rd! (Pwn3d!)
+#   SSH   10.10.10.5   22    host   [+] root:toor
+# The credential half is `domain\user:secret`, domain optional, with an optional trailing
+# `(Pwn3d!)` admin marker. Informational `[+]` lines ("[+] Enumerated shares") carry a space
+# before any colon and no user token, so requiring a space-free `user:` head rejects them.
+_NXC_ADMIN_RE = re.compile(r"\s*\(Pwn3d!\)\s*$")
+_NXC_CRED_RE = re.compile(
+    r"\[\+\]\s+(?:(?P<domain>[^\\\s:]+)\\)?(?P<user>[^\\\s:]+):(?P<secret>\S.*?)\s*$"
+)
+
+
+def parse_netexec(text: str, session_id: str, run_id: str | None = None) -> Parsed:
+    """netexec/crackmapexec `[+]` hits -> validated password Credentials. Never raises.
+
+    Every parsed hit is `validated=True`: a `[+]` from netexec IS the evidence that the
+    credential authenticates. The `(Pwn3d!)` marker (local admin) is recorded in the note so a
+    later reader can tell a working login from an owning one.
+    """
+    out = Parsed()
+    for raw in (text or "").splitlines():
+        line = raw.rstrip()
+        if "[+]" not in line:
+            continue
+        admin = bool(_NXC_ADMIN_RE.search(line))
+        core = _NXC_ADMIN_RE.sub("", line)
+        m = _NXC_CRED_RE.search(core)
+        if not m:
+            continue
+        user = m.group("user").strip()
+        secret = m.group("secret").strip()
+        if not user or not secret:
+            continue
+        out.credentials.append(
+            Credential(
+                session_id=session_id, kind="password", principal=user,
+                domain=(m.group("domain") or "").strip(), secret=secret, validated=True,
+                note="netexec (Pwn3d! — local admin)" if admin else "netexec valid login",
+                source_run_id=run_id,
+            )
+        )
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# hashcat — the `hash:plaintext` cracked line
+# --------------------------------------------------------------------------- #
+def parse_hashcat_pairs(text: str, known: "set[str] | frozenset[str]") -> dict[str, str]:
+    """Map each cracked `hash:plaintext` line back to a KNOWN submitted hash. PURE, never raises.
+
+    hashcat prints `hash:plain` to stdout (and `--show` reprints it), but the split point is
+    ambiguous for salted/Kerberos hashes whose own body contains `:`. So instead of guessing,
+    each line is matched against the hashes that were actually submitted: the longest known
+    hash that is a prefix of the line (followed by `:`) wins, and the remainder is the
+    plaintext. Hex hashes are compared case-insensitively (hashcat lower-cases them); tagged
+    hashes ($krb5tgs$…) keep their case. A line matching nothing known is ignored.
+    """
+    out: dict[str, str] = {}
+    known_list = sorted((h for h in known if h), key=len, reverse=True)
+    for raw in (text or "").splitlines():
+        line = raw.rstrip("\r\n")
+        if ":" not in line:
+            continue
+        low = line.lower()
+        for h in known_list:
+            head = h + ":"
+            if line.startswith(head):
+                out[h] = line[len(head):]
+                break
+            if low.startswith(head.lower()):
+                out[h] = line[len(head):]
+                break
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # dispatch
 # --------------------------------------------------------------------------- #
 #: filename suffix -> parser, for files that appear in a run's loot directory.
@@ -409,6 +487,12 @@ STDOUT_PARSERS = {
     "nuclei": parse_nuclei,
     "secretsdump.py": parse_secretsdump,
     "secretsdump": parse_secretsdump,
+    # netexec is the spray/auth driver; `nxc` is its own short alias. A plain netexec run in
+    # the terminal ingests its `[+]` valid logins as validated credentials with no extra wiring.
+    "netexec": parse_netexec,
+    "nxc": parse_netexec,
+    "crackmapexec": parse_netexec,
+    "cme": parse_netexec,
     # Kali's zaproxy package ships ONE launcher and no scan scripts, so these are the only two
     # names a ZAP run can have. Verified against the built image, not upstream's docs — the
     # OWASP zap-baseline.py / zap-full-scan.py scripts exist only inside OWASP's own Docker

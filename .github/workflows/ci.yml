@@ -64,14 +64,16 @@ jobs:
       - name: Install backend dependencies
         # Derived from an AST scan of every third-party import the suite actually reaches, not
         # from the full pyproject: `fastapi` (+ `httpx`, which starlette's TestClient needs),
-        # `pydantic`, `pyyaml` (test_codescan_rules), `numpy` (pipeline/search's vector half).
+        # `pydantic`, `pyyaml` (test_codescan_rules), `numpy` (pipeline/search's vector half),
+        # and `cryptography` — `main.py` imports `oob.interactsh` unconditionally, which imports
+        # cryptography at module top (interact.sh RSA/AES-CTR), so `import main` fails without it.
         #
         # pywinrm is deliberately ABSENT. `cockpit/winrm_transport.py` imports it lazily inside
         # a try/except precisely so the suite stays hermetic — no VM, no network, no pywinrm.
         # Installing it here would stop CI from testing that property.
         run: |
           python -m pip install --upgrade pip
-          pip install fastapi httpx pydantic pyyaml numpy
+          pip install fastapi httpx pydantic pyyaml numpy cryptography
 
       - name: Run the hermetic safety suite
         # PY= points the runner at this job's interpreter instead of the Windows venv path it

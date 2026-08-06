@@ -10,6 +10,11 @@ dependencies = [
     # numpy powers the vector half of pipeline/search.py (hybrid + vector modes).
     # Lexical mode needs none of it, so /search still works if this is absent.
     "numpy>=2.0",
+    # cryptography is REQUIRED, not optional: oob/interactsh.py imports it at module
+    # top (RSA keygen + AES-CTR decryption of interact.sh callbacks) and main.py imports
+    # oob.interactsh unconditionally, so the app cannot start without it. Declared here
+    # after CI caught `import main` failing on a clean checkout with a bare dependency set.
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]

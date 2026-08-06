@@ -185,6 +185,17 @@ export const SURFACE_BANDS: SurfaceBand[] = [
         desc: "Spray captured creds, crack captured hashes — one approval per job.",
         needsStack: true,
       },
+      // OPERATE, and the bug-bounty staple: point nuclei's template engine at the scoped
+      // target(s) and turn matches into severity-ranked engagement findings. One approval buys
+      // the whole scan (ffuf / ZAP-active-scan shape, no new gate), with an ungated stop.
+      {
+        key: "nuclei",
+        icon: "◎",
+        label: ":nuclei",
+        href: "/nuclei",
+        desc: "Template-scan the scoped target(s) — matches become findings, one approval.",
+        needsStack: true,
+      },
     ],
   },
   {

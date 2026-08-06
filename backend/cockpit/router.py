@@ -54,6 +54,7 @@ from . import graphql_enum as graphql_enum_mod
 from . import graphql_zap as graphql_zap_mod
 from . import intercept as intercept_mod
 from . import intruder as intruder_mod
+from . import nuclei as nuclei_mod
 from . import proposals as proposals_mod
 from . import redirector as redirector_mod
 from . import session as live_session
@@ -1067,6 +1068,106 @@ def stop_cred_job(job_id: str) -> credjobs_mod.CredJob:
     job = credjobs_mod.stop(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail={"reason": f"no credential job {job_id!r}"})
+    return job
+
+
+# --- nuclei template scan (:nuclei — scoped target(s) -> templates -> Findings) ----- #
+#
+# THE BUG-BOUNTY STAPLE, WIRED. A nuclei run is ONE approved job with a working ungated stop —
+# the SAME shape ffuf / the intruder / the ZAP active scanner already are. `executor.validate_
+# request` runs BEFORE anything spawns; the sandbox is resolved per mode (isolated lab / open
+# engagement) exactly as a one-shot exec resolves it. NO new gate: one approval buys the whole
+# scan, and its results land as severity-ranked findings in the same engagement store the report
+# renders. The planning + parsing is `nuclei` (pure, executes nothing); the worker gates+spawns.
+
+
+def _nuclei_refusal(exc: nuclei_mod.NucleiRefused):
+    """One refusal shape: 403 for a SAFETY gate, 409 for AVAILABILITY/input."""
+    code = 409 if exc.gate in {"unavailable", "input"} else 403
+    raise HTTPException(status_code=code, detail={
+        "gate": exc.gate, "reason": exc.reason, "dangerous_flags": exc.dangerous_flags,
+    })
+
+
+@router.get("/nuclei/status")
+def get_nuclei_status() -> dict[str, Any]:
+    """Lab-sandbox availability + running-job count — the UI banner. Read-only."""
+    return nuclei_mod.status()
+
+
+@router.get("/nuclei/templates")
+def get_nuclei_templates() -> dict[str, Any]:
+    """The pickable severities + curated tags, plus a best-effort LIVE template count.
+
+    `nuclei -tl` lists installed templates and sends NO attack traffic — read-only, no gate, no
+    target. The count is best-effort (null when the sandbox is down); the picker always renders.
+    """
+    return nuclei_mod.template_catalogue()
+
+
+@router.post("/nuclei/preview")
+def nuclei_preview(req: nuclei_mod.NucleiRequest) -> dict[str, Any]:
+    """The EXACT nuclei argv (with the resolved target set) and the gate verdict, running nothing.
+
+    Same `resolve_targets` + `nuclei_argv` the start path uses, so the preview cannot drift from
+    the run. The gate verdict is asked before composing a scan, and answering it costs nothing.
+    """
+    targets, warnings = nuclei_mod.resolve_targets(req)
+    verdict = nuclei_mod.validate(req)
+    return {
+        "argv": nuclei_mod.nuclei_argv(targets, req),
+        "targets": targets,
+        "warnings": warnings,
+        "gate": None if verdict is None else {
+            "gate": verdict.gate, "reason": verdict.reason,
+            "dangerous_flags": list(verdict.dangerous_flags or []),
+        },
+    }
+
+
+@router.post("/nuclei/scan", response_model=nuclei_mod.NucleiJob)
+def start_nuclei_scan(req: nuclei_mod.NucleiRequest) -> nuclei_mod.NucleiJob:
+    """Run a nuclei template scan against the scoped target(s) as ONE approved job. GATED, then runs.
+
+    *** THIS SENDS REAL SCAN TRAFFIC — thousands of template checks from one approval. ***
+    `executor.validate_request` runs against the equivalent `nuclei -u <target> …` BEFORE anything
+    spawns, so an unapproved or off-scope scan fires nothing. The stop button (DELETE below) is the
+    ungated panic switch. Findings land severity-ranked in engagement state and the report.
+
+    A SAFETY refusal (approval / danger / target / engagement) is **403** naming the gate; an
+    AVAILABILITY/input problem (sandbox down, no target) is **409**. Nothing runs on either.
+    """
+    try:
+        return nuclei_mod.start(req)
+    except nuclei_mod.NucleiRefused as exc:
+        _nuclei_refusal(exc)
+
+
+@router.get("/nuclei/jobs", response_model=list[nuclei_mod.NucleiJob])
+def list_nuclei_jobs(session_id: str | None = Query(None)) -> list[nuclei_mod.NucleiJob]:
+    """Every nuclei job, newest first. Read-only, ungated — the results feed polls this."""
+    return nuclei_mod.list_jobs(session_id)
+
+
+@router.get("/nuclei/jobs/{job_id}", response_model=nuclei_mod.NucleiJob)
+def get_nuclei_job(job_id: str) -> nuclei_mod.NucleiJob:
+    """One scan with its findings. Read-only, ungated."""
+    job = nuclei_mod.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no nuclei job {job_id!r}"})
+    return job
+
+
+@router.delete("/nuclei/jobs/{job_id}", response_model=nuclei_mod.NucleiJob)
+def stop_nuclei_job(job_id: str) -> nuclei_mod.NucleiJob:
+    """Stop an in-flight scan. NOT GATED — the panic button, exactly like `stop_scan`.
+
+    Thousands of template checks may still be queued; a gate that could refuse to stop them would
+    make the system less safe. Sets the stop event and kills the process.
+    """
+    job = nuclei_mod.stop(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no nuclei job {job_id!r}"})
     return job
 
 

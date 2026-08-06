@@ -445,6 +445,7 @@ a { color: var(--accent); text-decoration: none; }
 </li>
 <li><a href="#interactsh-a-second-zero-infrastructure-oob-backend-2026-08-06">interact.sh — a second, zero-infrastructure OOB backend (2026-08-06)</a></li>
 <li><a href="#credential-attack-spray-captured-creds-crack-captured-hashes-credentials-2026-08-06">Credential attack — spray captured creds, crack captured hashes (:credentials) (2026-08-06)</a></li>
+<li><a href="#nuclei-template-scan-the-bug-bounty-staple-wired-nuclei-2026-08-06">Nuclei template scan — the bug-bounty staple, wired (:nuclei) (2026-08-06)</a></li>
 <li><a href="#documentation-housekeeping-2026-08-06">Documentation &amp; housekeeping (2026-08-06)</a></li>
 </ul>
 </li>
@@ -620,6 +621,11 @@ a { color: var(--accent); text-decoration: none; }
 <td>Credential attack (<code>:credentials</code>)</td>
 <td><strong>New (2026-08-06)</strong></td>
 <td>Spray captured/OSINT creds across a service (netexec / kerbrute / hydra) or crack captured hashes (hashcat, mode auto-detected). ONE approved job per spray/crack with an ungated stop — the intruder's shape on a long process, gated by the same <code>validate_request</code>, <strong>no new gate</strong>. Secrets go to loot files, never an argv; a hit writes a validated credential + finding into state and marks the AD node <strong>owned</strong>. Planner (<code>cockpit/credattack.py</code>) executes nothing (AST-asserted); execution is the gated worker (<code>cockpit/credjobs.py</code>).</td>
+</tr>
+<tr>
+<td>Nuclei template scan (<code>:nuclei</code>)</td>
+<td><strong>New (2026-08-06)</strong></td>
+<td>Scoped target(s) → templates → severity-ranked <code>Finding</code>s. ONE approved job with an ungated stop — the <code>ffuf</code> / ZAP-active-scan shape, gated by the same <code>validate_request</code>, <strong>no new gate</strong>; the per-mode sandbox is resolved by <code>executor.resolve_mode</code> (isolated lab / open engagement). Default targets seed from the session's in-scope endpoints; results dedupe by <code>(template-id, matched-at)</code> and upsert into the same engagement <code>Finding</code> store the report renders. Pure planner/parser (<code>cockpit/nuclei.py</code> — argv + JSONL parse, AST-asserted no-exec); the worker gates then spawns. <strong>Verified live</strong> against the lab (Prometheus-metrics medium + tech fingerprints).</td>
 </tr>
 </tbody>
 </table>
@@ -5301,6 +5307,45 @@ under <code>-m 1000</code> and a kerberoast ticket under <code>-m 13100</code>, 
 <code>netexec smb … -u /loot/…/users.txt -p /loot/…/pass.txt -d LAB</code> with the gate's verdict shown before
 anything runs — the secret lists as files, on screen, exactly as designed. No new gate, confirm,
 blocklist or allow-list narrowing.</p>
+<h2 id="nuclei-template-scan-the-bug-bounty-staple-wired-nuclei-2026-08-06">Nuclei template scan — the bug-bounty staple, wired (<code>:nuclei</code>) (2026-08-06)</h2>
+<p><code>nuclei</code> has been catalogued in the arsenal and its ~13,400 templates baked into the sandbox image
+since the start, and the state model has had a <code>Finding</code> type since Phase 2. What was missing was the
+surface that joins them: point the template engine at the scoped target(s) and turn matches into
+engagement findings. This build is that surface — the lowest-effort of the four, because the plumbing
+already existed.</p>
+<p><strong>One approval buys the whole scan — the <code>ffuf</code> / ZAP-active-scan shape, no new gate.</strong> A nuclei run
+fires thousands of template checks; it is ONE job that produces many requests, exactly the position the
+intruder and the credential surface already hold. <code>executor.validate_request</code> runs against the equivalent
+<code>nuclei -u &lt;target&gt; …</code> before anything spawns, and the stop is the ungated panic switch, like <code>stop_scan</code>.
+The one thing done <em>right</em> rather than hardcoded is the sandbox: <code>cockpit/nuclei.py</code> calls
+<code>executor.resolve_mode</code> — the same single source of truth the one-shot <code>/cockpit/exec</code> uses — so a lab
+scan runs in the isolated, egress-less lab box (which reaches the lab target on its internal network) and
+an engagement scan runs in the fully-open engagement box, and a scan can never bind to a different sandbox
+than a bare command would in the same mode. Every target rides the argv as <code>-u &lt;target&gt;</code>, so in engagement
+mode an out-of-scope host is refused at the <em>inherited</em> target handrail — not a stronger gate this build
+invented.</p>
+<p><strong>The planner/parser executes nothing; the worker is the only thing that runs.</strong> <code>cockpit/nuclei.py</code>'s
+pure half — <code>resolve_targets</code>, <code>nuclei_argv</code>, <code>parse_findings</code> — builds the argv and turns nuclei's JSONL
+into <code>Finding</code>s, and a per-function AST walk asserts it reaches no <code>subprocess</code>/<code>eval</code>. Default targets
+seed from the session's in-scope endpoints already in state (falling back to hosts); results map
+<code>info.name</code> → title, <code>matched-at</code> → target, <code>template-id</code> → reference, curl/matcher output → evidence, and
+<strong>dedupe by <code>(template-id, matched-at)</code></strong> before upserting into the same engagement <code>Finding</code> store the
+report renders. The live finding count grows as JSONL streams, so a running scan is watchable.</p>
+<p><strong>A live run caught a defect a hermetic test could not — the recurring lesson, again.</strong> The first version
+built the argv from only <code>-tags</code>/<code>-severity</code>, trusting nuclei to find its baked templates. Against the
+real lab it died instantly: <code>FTL Could not run nuclei: no templates provided for scan</code> — a <code>docker exec</code>
+resolves no default template directory under its <code>$HOME</code>. Nothing in the parse tests could see it (they
+feed the parser a string they chose). The fix points <code>-t</code> at the baked repo (<code>/usr/share/nuclei-templates</code>)
+whenever no explicit templates are named; a regression test now pins it, and <code>docker/proof/nuclei_proof.sh</code>
+checks the image's <code>nuclei</code> actually accepts the exact flag string against the lab. This is the third
+surface where "a hermetic test feeds the parser a string the test itself chose" has cost a defect.</p>
+<p><strong>Built, verified, and looked at.</strong> The two new test files (<code>test_nuclei.py</code>, its safety twin) join the
+runner; the full hermetic safety suite is green — <strong>97 test files, every one exited 0</strong> — the CSS-vocabulary
+lock passes against the new screen, and <code>next build</code> exits 0 with <code>/nuclei</code> compiled. The screen was then
+<strong>looked at</strong> against the running stack: a real scan of the lab target (Juice Shop) surfaced a <strong>medium</strong>
+Prometheus-metrics exposure plus tech-fingerprint and Swagger findings, each deduped, severity-ranked, and
+upserted into engagement state — visible in the results feed exactly as designed. No new gate, confirm,
+blocklist, or allow-list narrowing.</p>
 <h2 id="documentation-housekeeping-2026-08-06">Documentation &amp; housekeeping (2026-08-06)</h2>
 <p>Recorded here once, for completeness — these are documentation, packaging and a couple of small
 behaviour changes that landed alongside the <code>:credentials</code> build, not new capabilities of their own.</p>

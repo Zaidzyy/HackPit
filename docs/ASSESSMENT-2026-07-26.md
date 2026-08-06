@@ -76,6 +76,7 @@ Per-command approval is therefore **standing policy, not a deferred item**, and 
 | HTTP repeater | **New (Phase 4)** | Compose/send/replay/diff. Argv-only curl inside the hardcoded open box (no shell parses a request field; body on stdin), human-only + source-scan locked like `:kali`, scope-checked against a named engagement, every send run-recorded. |
 | Pivot / tunnels | **New (Phase 4)** | chisel/ligolo-ng lifecycle (human-only start/stop) + pure route resolution and a **visible** proxychains rewrite applied *before* the approval screen. A tunnel's subnet enters scope only via an explicit, audited amendment; recon expansion still cannot widen. |
 | Credential attack (`:credentials`) | **New (2026-08-06)** | Spray captured/OSINT creds across a service (netexec / kerbrute / hydra) or crack captured hashes (hashcat, mode auto-detected). ONE approved job per spray/crack with an ungated stop — the intruder's shape on a long process, gated by the same `validate_request`, **no new gate**. Secrets go to loot files, never an argv; a hit writes a validated credential + finding into state and marks the AD node **owned**. Planner (`cockpit/credattack.py`) executes nothing (AST-asserted); execution is the gated worker (`cockpit/credjobs.py`). |
+| Nuclei template scan (`:nuclei`) | **New (2026-08-06)** | Scoped target(s) → templates → severity-ranked `Finding`s. ONE approved job with an ungated stop — the `ffuf` / ZAP-active-scan shape, gated by the same `validate_request`, **no new gate**; the per-mode sandbox is resolved by `executor.resolve_mode` (isolated lab / open engagement). Default targets seed from the session's in-scope endpoints; results dedupe by `(template-id, matched-at)` and upsert into the same engagement `Finding` store the report renders. Pure planner/parser (`cockpit/nuclei.py` — argv + JSONL parse, AST-asserted no-exec); the worker gates then spawns. **Verified live** against the lab (Prometheus-metrics medium + tech fingerprints). |
 
 ### AD graph + orchestration
 
@@ -5149,6 +5150,51 @@ under `-m 1000` and a kerberoast ticket under `-m 13100`, and the spray preview 
 `netexec smb … -u /loot/…/users.txt -p /loot/…/pass.txt -d LAB` with the gate's verdict shown before
 anything runs — the secret lists as files, on screen, exactly as designed. No new gate, confirm,
 blocklist or allow-list narrowing.
+
+## Nuclei template scan — the bug-bounty staple, wired (`:nuclei`) (2026-08-06)
+
+`nuclei` has been catalogued in the arsenal and its ~13,400 templates baked into the sandbox image
+since the start, and the state model has had a `Finding` type since Phase 2. What was missing was the
+surface that joins them: point the template engine at the scoped target(s) and turn matches into
+engagement findings. This build is that surface — the lowest-effort of the four, because the plumbing
+already existed.
+
+**One approval buys the whole scan — the `ffuf` / ZAP-active-scan shape, no new gate.** A nuclei run
+fires thousands of template checks; it is ONE job that produces many requests, exactly the position the
+intruder and the credential surface already hold. `executor.validate_request` runs against the equivalent
+`nuclei -u <target> …` before anything spawns, and the stop is the ungated panic switch, like `stop_scan`.
+The one thing done *right* rather than hardcoded is the sandbox: `cockpit/nuclei.py` calls
+`executor.resolve_mode` — the same single source of truth the one-shot `/cockpit/exec` uses — so a lab
+scan runs in the isolated, egress-less lab box (which reaches the lab target on its internal network) and
+an engagement scan runs in the fully-open engagement box, and a scan can never bind to a different sandbox
+than a bare command would in the same mode. Every target rides the argv as `-u <target>`, so in engagement
+mode an out-of-scope host is refused at the *inherited* target handrail — not a stronger gate this build
+invented.
+
+**The planner/parser executes nothing; the worker is the only thing that runs.** `cockpit/nuclei.py`'s
+pure half — `resolve_targets`, `nuclei_argv`, `parse_findings` — builds the argv and turns nuclei's JSONL
+into `Finding`s, and a per-function AST walk asserts it reaches no `subprocess`/`eval`. Default targets
+seed from the session's in-scope endpoints already in state (falling back to hosts); results map
+`info.name` → title, `matched-at` → target, `template-id` → reference, curl/matcher output → evidence, and
+**dedupe by `(template-id, matched-at)`** before upserting into the same engagement `Finding` store the
+report renders. The live finding count grows as JSONL streams, so a running scan is watchable.
+
+**A live run caught a defect a hermetic test could not — the recurring lesson, again.** The first version
+built the argv from only `-tags`/`-severity`, trusting nuclei to find its baked templates. Against the
+real lab it died instantly: `FTL Could not run nuclei: no templates provided for scan` — a `docker exec`
+resolves no default template directory under its `$HOME`. Nothing in the parse tests could see it (they
+feed the parser a string they chose). The fix points `-t` at the baked repo (`/usr/share/nuclei-templates`)
+whenever no explicit templates are named; a regression test now pins it, and `docker/proof/nuclei_proof.sh`
+checks the image's `nuclei` actually accepts the exact flag string against the lab. This is the third
+surface where "a hermetic test feeds the parser a string the test itself chose" has cost a defect.
+
+**Built, verified, and looked at.** The two new test files (`test_nuclei.py`, its safety twin) join the
+runner; the full hermetic safety suite is green — **97 test files, every one exited 0** — the CSS-vocabulary
+lock passes against the new screen, and `next build` exits 0 with `/nuclei` compiled. The screen was then
+**looked at** against the running stack: a real scan of the lab target (Juice Shop) surfaced a **medium**
+Prometheus-metrics exposure plus tech-fingerprint and Swagger findings, each deduped, severity-ranked, and
+upserted into engagement state — visible in the results feed exactly as designed. No new gate, confirm,
+blocklist, or allow-list narrowing.
 
 ## Documentation & housekeeping (2026-08-06)
 

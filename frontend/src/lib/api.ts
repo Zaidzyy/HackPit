@@ -2585,6 +2585,105 @@ export const stopCredJob = (id: string, signal?: AbortSignal) =>
   delJSON<CredJob>(`/cockpit/credentials/jobs/${encodeURIComponent(id)}`, signal);
 
 /* -------------------------------------------------------------------------- */
+/* NUCLEI TEMPLATE SCAN (:nuclei) — scoped target(s) -> templates -> Findings  */
+/* -------------------------------------------------------------------------- */
+export type NucleiRequest = {
+  /** Explicit targets; EMPTY = seed from the session's in-scope endpoints/hosts. */
+  targets: string[];
+  severities: string[];
+  tags: string[];
+  templates: string[];
+  rate_limit?: number | null;
+  timeout_seconds?: number | null;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  approved: boolean;
+  dangerous_ack: boolean;
+};
+
+export type NucleiFinding = {
+  title: string;
+  severity: string;
+  target: string;
+  template_id: string;
+  tags: string[];
+  evidence: string;
+};
+
+export type NucleiJob = {
+  id: string;
+  state: string;
+  argv: string[];
+  targets: string[];
+  container: string;
+  mode: string;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  started_at: string;
+  finished_at: string;
+  findings: NucleiFinding[];
+  total: number;
+  by_severity: Record<string, number>;
+  /** Findings upserted into engagement state — visible in :cockpit and the report. */
+  new_findings: number;
+  output_tail: string;
+  warnings: string[];
+  refused: string;
+  refused_gate: string;
+};
+
+export type NucleiStatus = {
+  container: string;
+  up: boolean;
+  ready: boolean;
+  running: number;
+  detail: string;
+};
+
+export type NucleiTemplates = {
+  severities: string[];
+  tags: string[];
+  /** Best-effort live count of installed templates; null when the sandbox is down. */
+  count: number | null;
+  container: string;
+  up: boolean;
+};
+
+export type NucleiPreview = {
+  argv: string[];
+  targets: string[];
+  warnings: string[];
+  gate: CredGate;
+};
+
+export const getNucleiStatus = (signal?: AbortSignal) =>
+  getJSON<NucleiStatus>("/cockpit/nuclei/status", signal);
+
+export const getNucleiTemplates = (signal?: AbortSignal) =>
+  getJSON<NucleiTemplates>("/cockpit/nuclei/templates", signal);
+
+/** The exact argv (with resolved targets) and the gate verdict, running nothing. */
+export const nucleiPreview = (req: NucleiRequest, signal?: AbortSignal) =>
+  postJSON<NucleiPreview>("/cockpit/nuclei/preview", req, signal);
+
+export const startNucleiScan = (req: NucleiRequest, signal?: AbortSignal) =>
+  postJSON<NucleiJob>("/cockpit/nuclei/scan", req, signal);
+
+export const listNucleiJobs = (sessionId?: string, signal?: AbortSignal) =>
+  getJSON<NucleiJob[]>(
+    "/cockpit/nuclei/jobs" +
+      (sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""),
+    signal
+  );
+
+export const getNucleiJob = (id: string, signal?: AbortSignal) =>
+  getJSON<NucleiJob>(`/cockpit/nuclei/jobs/${encodeURIComponent(id)}`, signal);
+
+/** Stop an in-flight scan. NOT GATED — the panic button, like stopping a ZAP scan. */
+export const stopNucleiJob = (id: string, signal?: AbortSignal) =>
+  delJSON<NucleiJob>(`/cockpit/nuclei/jobs/${encodeURIComponent(id)}`, signal);
+
+/* -------------------------------------------------------------------------- */
 /* THE WAF-BYPASS HEADER (build #18 item 1)                                    */
 /*                                                                             */
 /* THE VALUE IS A CREDENTIAL AND ONLY TRAVELS ONE WAY. `setBypassHeader` sends  */

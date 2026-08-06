@@ -8135,6 +8135,19 @@ a.hp-card {
 }
 .hp-tn-stop:hover:not(:disabled) { color: #f0776a; border-color: rgba(240,119,106,0.4); }
 
+/* --- :nuclei filter chips (severity + tag toggles; also the results severity counts) --- */
+.hp-tn-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.hp-tn-chip {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 11px; letter-spacing: 0.5px;
+  color: var(--dim); background: transparent; border: 1px solid var(--border);
+  border-radius: 4px; padding: 2px 9px; cursor: pointer; text-transform: lowercase;
+}
+.hp-tn-chip:hover { color: var(--white); border-color: var(--accent-line); }
+.hp-tn-chip.is-on {
+  color: var(--sc, var(--accent)); border-color: var(--sc, var(--accent-line));
+  background: color-mix(in srgb, var(--sc, var(--accent)) 12%, transparent);
+}
+
 /* --- CONFIGURE vs ACT: the action row, and the button ranks inside it -------------- */
 /*
  * `.hp-tn-start` DID NOT EXIST. Nine buttons across :exposure, :oob and :windows carried

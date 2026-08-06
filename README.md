@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/Zaidzyy/HackPit/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Zaidzyy/HackPit/ci.yml?branch=main&label=CI&style=flat-square"></a>
-  <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.14-3776AB?style=flat-square&logo=python&logoColor=white">
   <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=nextdotjs&logoColor=white">
   <img alt="Tests" src="https://img.shields.io/badge/tests-93%20suites-brightgreen?style=flat-square">
@@ -406,7 +406,7 @@ Actively built. The KB, search, attack paths, engagements, reports, cockpit, web
 
 ## 📄 License
 
-**Apache-2.0.** Offensive-security tooling for **authorized testing and education only** — see the [Authorized use only](#️-authorized-use-only) notice above.
+Licensed under the **[Apache License 2.0](LICENSE)**. Offensive-security tooling for **authorized testing and education only** — see the [Authorized use only](#️-authorized-use-only) notice above.
 
 ---
 

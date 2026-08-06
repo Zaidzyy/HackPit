@@ -5192,19 +5192,26 @@ HackPit firing the payload at a target itself — was scoped, named as the rever
 central invariant it would be, and <strong>declined</strong> in favour of this (the operator's L1 choice).</p>
 <p><strong>Verification.</strong> The hermetic suite gained two files and grew the token and template locks. The
 crypto is exercised for real against an in-process interact.sh-style encryptor — a keypair is
-generated, an interaction is AES-CFB-encrypted and its AES key RSA-OAEP-wrapped to the client's
+generated, an interaction is AES-CTR-encrypted and its AES key RSA-OAEP-wrapped to the client's
 public key, and the client is asserted to decrypt → correlate → file. Coverage includes the
 containment (no redirect, no ambient proxy, response cap), the suffix correlation map, dedup by
 <code>&lt;uid&gt;|&lt;timestamp&gt;</code>, the kept-and-flagged uncorrelated hit, <code>poll_all</code> merging both backends and
 isolating a backend failure, the masked view never returning a secret, and the router rendering only
-configured backends. <strong>Live</strong>, against a public server (<code>oast.pro</code>), registration, the crypto
-handshake and polling were confirmed end to end. The one leg reported <strong>NOT-RUN here</strong> is the
-callback delivery itself: this environment's resolver blocks or synthesises answers for <code>oast.*</code>
-(a common EDR/DNS-filter behaviour — <code>oast.fun</code> did not resolve at all), so no callback reaches the
-real server from inside it. <code>docs/proof/oob_interactsh_proof.py</code> runs the full round-trip from an
-unfiltered network — the same honesty the self-hosted backend's NS-delegation check already carries,
-and, notably, the one live check that needs <strong>no infrastructure of the operator's own</strong>, only a
-network that does not filter interact.sh.</p>
+configured backends. <strong>Live, and end to end:</strong> <code>docs/proof/oob_interactsh_proof.py</code> registers with
+<code>oast.pro</code>, generates a host, resolves and requests it, then polls, decrypts, and asserts the callback
+correlated back to the step that generated it — <strong>PASS</strong>. This is the one live check that needs <strong>no
+infrastructure of the operator's own</strong>, only a network that does not blocklist interact.sh.</p>
+<p><strong>And the live proof earned its keep by catching a defect the hermetic suite could not.</strong> The first
+implementation decrypted interactions with <strong>AES-CFB</strong>; interact.sh actually uses <strong>AES-CTR</strong> (Go's
+<code>cipher.NewCTR</code>, the 16-byte IV as the initial counter). With CFB only the first 16-byte block
+decrypts and the rest is garbage, so every real callback failed to parse — and because
+<code>poll_correlated</code> skips a blob it cannot decrypt, the symptom was an empty poll that <em>looked</em> exactly
+like "no callback arrived". It was first misread as a DNS/EDR filter on <code>oast.*</code>; dumping the raw poll
+response disproved that — the host resolved to interact.sh's real IP and the server returned four
+encrypted interactions, so the traffic was arriving and the fault was ours. The hermetic test had
+passed only because it both encrypted and decrypted with the same wrong assumption; it now uses CTR,
+so it validates the real wire format, and the live round-trip passes. A self-consistent test agreeing
+with its own bug is the exact failure mode a live proof exists to break.</p>
 <p><strong>Frontend, and it was looked at, not just built.</strong> The <code>:oob</code> panel gained an interact.sh card
 (register / status / deregister), an auto-poll toggle, dual-backend mint rendering, and a per-payload
 <strong>→ repeater</strong> button — the send-to-repeater convenience, which is a frontend-only action (no backend

@@ -294,6 +294,23 @@ _MUST_NOT_FIRE = frozenset({
     # `ip route add <cidr> dev <tun>` from the ligolo templates — a LOCAL routing-table change
     # on this box. It runs nothing, reaches nothing and delivers nothing.
     "ip",
+    # web3 / smart-contract audit tooling (Queue-3 web3 build). Every catalogued invocation here
+    # reads source or runs a LOCAL test harness — none delivers a payload or runs code on a REMOTE
+    # host, which is the test this bucket is judged by:
+    #   slither / mythril(myth) / semgrep  - static analysis of a local contract file (same class
+    #                                        as ghidra/radare2 above, and as the :code-scan scanner)
+    #   echidna                            - property fuzzing in a LOCAL EVM (a fuzzer on a file)
+    #   foundry(forge, cast)               - forge builds/tests a fork PoC LOCALLY; the catalogued
+    #                                        `cast call` is a read-only on-chain getter. cast's
+    #                                        abusive `cast send` (broadcast a tx) is NOT catalogued,
+    #                                        and this table refuses names the catalog does not use —
+    #                                        the same reasoning curl-impersonate/pacu state above.
+    #   anchor(cargo, clippy)              - clippy lints Rust; `anchor test` boots a LOCAL validator
+    #   gosec(go, govet)                   - go static analysis / `go vet` on a local module
+    # Flagging a local static-analysis or local-test tool dangerous while gdb/ghidra/semgrep sit
+    # clean would be a red-confirm that fires on reading code, which stops meaning anything.
+    "slither", "mythril", "myth", "echidna", "semgrep",
+    "foundry", "forge", "cast", "anchor", "cargo", "clippy", "gosec", "go", "govet",
 })
 
 # The bare binary is deliberately CLEAN (it has a legitimate read-only mode that must not train

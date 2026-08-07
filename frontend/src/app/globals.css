@@ -7556,6 +7556,60 @@ a.hp-card {
   background: color-mix(in srgb, #7ec8a0 14%, transparent);
   color: color-mix(in srgb, #7ec8a0 90%, var(--white));
 }
+/* web3 chain badge/chip — a colored accent so the chain reads at a glance */
+.hp-cs-badge-chain {
+  border-color: color-mix(in srgb, #9a86f0 55%, transparent);
+  background: color-mix(in srgb, #9a86f0 16%, transparent);
+  color: color-mix(in srgb, #b6a7f7 92%, var(--white));
+}
+/* web3 tool pass — propose-only slither/mythril/echidna commands */
+.hp-cs-toolpass {
+  margin: 6px 0 18px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, #9a86f0 24%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, #9a86f0 6%, transparent);
+}
+.hp-cs-toolpass-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--white) 74%, transparent);
+}
+.hp-cs-toolpass-head > div {
+  flex: 1 1 320px;
+}
+.hp-cs-toollist {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.hp-cs-toolrow {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--white) 9%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--white) 2%, transparent);
+}
+.hp-cs-toolmeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 7px;
+}
+.hp-cs-toolkind {
+  font-size: 10.5px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--white) 46%, transparent);
+}
 .hp-cs-map {
   margin: 16px 0 18px;
   padding: 14px 16px;

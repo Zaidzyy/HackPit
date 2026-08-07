@@ -71,6 +71,7 @@ _CODE_EXT = frozenset({
 })
 
 _RULES_PATH = Path(__file__).parent / "ai_audit_rules.json"
+_WEB3_RULES_PATH = Path(__file__).parent / "ai_audit_web3_rules.json"
 
 AgentRunner = Callable[[str, str], str]
 
@@ -125,6 +126,11 @@ class Verdict:
     poc: str = ""                                           # propose-only PoC command
     kb_refs: list[dict[str, str]] = field(default_factory=list)
     reason: str = ""                                        # why a stub, or gate downgrade note
+    # web3 provenance — the chain/contract/function a smart-contract finding sits on. Empty for
+    # the generic web-app playbook; the frontend renders them when present.
+    chain: str = ""                                         # evm | cosmos | solana | ""
+    contract: str = ""                                      # contract / module / program name
+    function: str = ""                                      # the entrypoint function/method
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -133,6 +139,7 @@ class Verdict:
             "attacker_path": self.attacker_path, "source_refs": list(self.source_refs),
             "impact": self.impact, "confidence": self.confidence, "cwe": self.cwe,
             "poc": self.poc, "kb_refs": list(self.kb_refs), "reason": self.reason,
+            "chain": self.chain, "contract": self.contract, "function": self.function,
         }
 
 
@@ -155,6 +162,9 @@ FINDING_SCHEMA: dict[str, Any] = {
         "impact": {"type": "string"},
         "confidence": {"type": "string"},
         "poc": {"type": "string"},
+        "chain": {"type": "string"},
+        "contract": {"type": "string"},
+        "function": {"type": "string"},
     },
     # only meaningful when finding is true — checked by gate_finding, not the shape validator
     "if_finding_required": ["title", "severity", "attacker_path", "source_refs", "impact"],
@@ -222,13 +232,18 @@ def gate_finding(payload: dict[str, Any]) -> tuple[bool, str]:
 # --------------------------------------------------------------------------- #
 # repo reading (read-only)
 # --------------------------------------------------------------------------- #
-def _iter_code_files(root: Path, changed: set[str] | None) -> list[str]:
-    """Repo-relative code files, dependency/build trees skipped, optionally limited to a diff."""
+def _iter_code_files(root: Path, changed: set[str] | None,
+                     exts: frozenset[str] | None = None) -> list[str]:
+    """Repo-relative code files, dependency/build trees skipped, optionally limited to a diff.
+
+    ``exts`` (a playbook's extension set) narrows the walk to one language — a Solidity playbook
+    maps only ``.sol`` files, so the entrypoint pass is not diluted by unrelated tooling code."""
+    allowed = exts or _CODE_EXT
     out: list[str] = []
     for base, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if d not in runner.SKIP_DIRS and not d.startswith(".")]
         for name in files:
-            if Path(name).suffix.lower() not in _CODE_EXT:
+            if Path(name).suffix.lower() not in allowed:
                 continue
             rel = os.path.relpath(os.path.join(base, name), root).replace("\\", "/")
             if changed is not None and rel not in changed:
@@ -317,23 +332,156 @@ def _parse(agent_out: str) -> Any:
 
 
 # --------------------------------------------------------------------------- #
+# playbooks — the built-in audit decompositions (open·kritt's seeded workflows, ported)
+# --------------------------------------------------------------------------- #
+# Each playbook steers the SAME three-stage fan-out at a domain: it appends a framing fragment to
+# each stage prompt (LLM path), restricts the mapped file extensions, and selects the heuristic
+# sink group (no-LLM path). The generic web-app playbook keeps the original behaviour verbatim
+# (empty fragments, all code extensions, ai_audit_rules.json). The three web3 playbooks port
+# open·kritt's `external-flow-analysis` and `Cosmos ABCI Panic Halt Review` (+ an Anchor one).
+@dataclass(frozen=True)
+class Playbook:
+    key: str
+    label: str
+    description: str
+    exts: frozenset          # code extensions this playbook maps; empty -> all _CODE_EXT
+    chain: str               # evm | cosmos | solana | "" (generic)
+    rules_group: str         # "" -> ai_audit_rules.json ; else key into ai_audit_web3_rules.json
+    enum_frag: str = ""
+    flow_frag: str = ""
+    verify_frag: str = ""
+
+
+_EVM_ENUM = (
+    " FOCUS — this is a Solidity/EVM codebase. The externally-reachable entrypoints are the "
+    "external/public contract functions plus fallback()/receive(); each first receives attacker "
+    "calldata and value. Name each contract and its external/public functions."
+)
+_EVM_FLOW = (
+    " The materially-different paths through a contract function are its value transfers, "
+    "balance/accounting state changes, external calls (.call/.transfer/delegatecall), oracle "
+    "reads, and access-control branches. One flow per sink/branch."
+)
+_EVM_VERIFY = (
+    " You are auditing a SMART CONTRACT for LOSS-OF-FUNDS. Hunt, in order of payout: reentrancy "
+    "(external call before the state update), missing/incorrect access control on a privileged "
+    "function, oracle manipulation (missing staleness check, or a flash-loan-manipulatable spot "
+    "price from reserves/slot0), unchecked arithmetic, and delegatecall/selfdestruct hijack. A "
+    "finding needs a concrete on-chain attacker path. Set chain='evm' and fill contract + "
+    "function."
+)
+_COSMOS_ENUM = (
+    " FOCUS — this is a Cosmos-SDK / Go chain. The entrypoints are the WIRED ABCI methods "
+    "(BeginBlock/EndBlock/DeliverTx/CheckTx/InitChain/Commit/PrepareProposal/ProcessProposal) and "
+    "the module BeginBlocker/EndBlocker/handlers they call — the code consensus runs every block."
+)
+_COSMOS_FLOW = (
+    " For each ABCI method, enumerate the FOUR panic classes as separate flows: (1) explicit "
+    "panic(), (2) arithmetic panic (sdk.Int.Sub underflow / Quo divide-by-zero), (3) a Must*/"
+    "mustGet helper that panics instead of erroring, (4) a bounds/type panic (slice index or "
+    "type assertion without the comma-ok form). One flow per class per method."
+)
+_COSMOS_VERIFY = (
+    " You are reviewing a Cosmos chain for a CONSENSUS HALT. A panic inside an ABCI method aborts "
+    "block processing on every validator — a chain halt, not a caught error. Report ONLY panics "
+    "that are (a) production-reachable inside a consensus phase AND (b) triggerable by "
+    "attacker-controlled input (a crafted message/proposal field). A panic behind an "
+    "operator-only or genesis-only path is NOT a finding. Set chain='cosmos' and fill contract "
+    "(module) + function (the ABCI method)."
+)
+_ANCHOR_ENUM = (
+    " FOCUS — this is a Rust/Anchor Solana program. The entrypoints are the instruction handlers "
+    "(`pub fn name(ctx: Context<..>)` inside the #[program] module). Name each instruction and "
+    "its Accounts struct."
+)
+_ANCHOR_FLOW = (
+    " For each instruction, the materially-different paths are its account validation (owner / "
+    "has_one / typed Account<T> vs UncheckedAccount/AccountInfo), signer checks, CPI "
+    "(invoke/invoke_signed), and arithmetic on balances/amounts. One flow per check."
+)
+_ANCHOR_VERIFY = (
+    " You are auditing an Anchor/Solana program. Hunt: a missing owner check (UncheckedAccount/"
+    "AccountInfo used where a program-owned account is expected), a signer spoof (an authority "
+    "not typed Signer<'info> and never asserted is_signer), unchecked integer arithmetic on "
+    "lamports/amounts, and CPI confusion (invoke to a program whose id is not asserted). A "
+    "finding needs a concrete attacker path in the Solana account model. Set chain='solana' and "
+    "fill contract (program) + function (instruction)."
+)
+
+_SOL_EXTS = frozenset({".sol"})
+_GO_EXTS = frozenset({".go"})
+_RS_EXTS = frozenset({".rs"})
+
+PLAYBOOKS: dict[str, Playbook] = {
+    "external-flow-analysis": Playbook(
+        key="external-flow-analysis",
+        label="External-flow analysis (web app)",
+        description="Map externally-reachable entrypoints and their flows; one agent per flow.",
+        exts=frozenset(), chain="", rules_group="",
+    ),
+    "evm-external-flow": Playbook(
+        key="evm-external-flow",
+        label="EVM external-flow (Solidity)",
+        description="Solidity: entrypoints -> flows (value/state/external-call/oracle) -> "
+                    "loss-of-funds / reentrancy / access-control / oracle-manipulation.",
+        exts=_SOL_EXTS, chain="evm", rules_group="evm-external-flow",
+        enum_frag=_EVM_ENUM, flow_frag=_EVM_FLOW, verify_frag=_EVM_VERIFY,
+    ),
+    "cosmos-abci-halt": Playbook(
+        key="cosmos-abci-halt",
+        label="Cosmos ABCI panic-halt (Go)",
+        description="Cosmos-Go: wired ABCI methods -> four panic classes -> "
+                    "maliciously-triggerable, production-reachable consensus halts.",
+        exts=_GO_EXTS, chain="cosmos", rules_group="cosmos-abci-halt",
+        enum_frag=_COSMOS_ENUM, flow_frag=_COSMOS_FLOW, verify_frag=_COSMOS_VERIFY,
+    ),
+    "anchor-solana": Playbook(
+        key="anchor-solana",
+        label="Anchor account-model (Rust/Solana)",
+        description="Anchor: instructions -> account/signer/CPI/arithmetic checks -> "
+                    "missing-owner / signer-spoof / integer-overflow / CPI-confusion.",
+        exts=_RS_EXTS, chain="solana", rules_group="anchor-solana",
+        enum_frag=_ANCHOR_ENUM, flow_frag=_ANCHOR_FLOW, verify_frag=_ANCHOR_VERIFY,
+    ),
+}
+
+DEFAULT_PLAYBOOK = "external-flow-analysis"
+
+
+def resolve_playbook(key: str | None) -> Playbook:
+    """The Playbook for a key, defaulting to the generic web-app one for an unknown/empty key."""
+    return PLAYBOOKS.get((key or "").strip() or DEFAULT_PLAYBOOK, PLAYBOOKS[DEFAULT_PLAYBOOK])
+
+
+def list_playbooks() -> list[dict[str, str]]:
+    """The built-in playbooks, for the picker the /code-scan AI view offers."""
+    return [{"key": p.key, "label": p.label, "description": p.description, "chain": p.chain}
+            for p in PLAYBOOKS.values()]
+
+
+# --------------------------------------------------------------------------- #
 # stages (LLM path)
 # --------------------------------------------------------------------------- #
 def enumerate_entrypoints(root: Path, files: list[str], agent: AgentRunner,
-                          warnings: list[str]) -> list[Entrypoint]:
+                          warnings: list[str], pb: Playbook | None = None) -> list[Entrypoint]:
     """Stage 1 — map the externally-reachable entrypoints in ONE pass (context-cheap)."""
+    pb = pb or PLAYBOOKS[DEFAULT_PLAYBOOK]
     listing = "\n".join(files[:_LISTING_CAP])
     if len(files) > _LISTING_CAP:
         warnings.append(f"repo has {len(files)} code files; mapped the first {_LISTING_CAP} in "
                         "the entrypoint pass")
-    # a few likely entry files, read in full-ish, to anchor the map
-    anchors = [f for f in files if re.search(r"(app|main|server|routes?|urls|handler|index)\.",
-                                             f, re.I)][:6]
+    # a few likely entry files, read in full-ish, to anchor the map. A domain playbook (one
+    # language) just takes the first files; the generic one heuristically picks app/main/routes.
+    if pb.exts:
+        anchors = files[:6]
+    else:
+        anchors = [f for f in files if re.search(r"(app|main|server|routes?|urls|handler|index)\.",
+                                                 f, re.I)][:6]
     anchor_src = "\n\n".join(f"### {a}\n{_numbered(_read_snippet(root, a))}" for a in anchors)
     user = (f"FILE LISTING ({len(files)} code files):\n{listing}\n\n"
             f"ENTRY FILES:\n{anchor_src}\n\nMap the externally-reachable entrypoints.")
     try:
-        parsed = _parse(agent(_ENUM_SYS, user))
+        parsed = _parse(agent(_ENUM_SYS + pb.enum_frag, user))
     except Exception as exc:  # noqa: BLE001
         raise AuditError(f"entrypoint enumeration failed: {exc}") from exc
     raw = parsed.get("entrypoints") if isinstance(parsed, dict) else None
@@ -354,13 +502,15 @@ def enumerate_entrypoints(root: Path, files: list[str], agent: AgentRunner,
     return eps
 
 
-def trace_flows(root: Path, ep: Entrypoint, agent: AgentRunner) -> list[Flow]:
+def trace_flows(root: Path, ep: Entrypoint, agent: AgentRunner,
+                pb: Playbook | None = None) -> list[Flow]:
     """Stage 2 — the flow frontier for one entrypoint (materially-different paths)."""
+    pb = pb or PLAYBOOKS[DEFAULT_PLAYBOOK]
     src = _numbered(_read_snippet(root, ep.file)) if ep.file else ""
     user = (f"ENTRYPOINT: {ep.name}  (kind={ep.kind}, file={ep.file})\n"
             f"NOTE: {ep.note}\n\nSOURCE of {ep.file}:\n{src}\n\nEnumerate its flows.")
     try:
-        parsed = _parse(agent(_FLOW_SYS, user))
+        parsed = _parse(agent(_FLOW_SYS + pb.flow_frag, user))
     except Exception:  # noqa: BLE001 — one entrypoint failing must not sink the run
         return []
     raw = parsed.get("flows") if isinstance(parsed, dict) else None
@@ -379,7 +529,8 @@ def trace_flows(root: Path, ep: Entrypoint, agent: AgentRunner) -> list[Flow]:
 
 
 def verify_flow(root: Path, flow: Flow, ep: Entrypoint, agent: AgentRunner,
-                kb_search: Callable[[str, int, str], list[dict]] | None) -> Verdict:
+                kb_search: Callable[[str, int, str], list[dict]] | None,
+                pb: Playbook | None = None) -> Verdict:
     """Stage 3 — the fan-out. ONE agent, ONE flow: a concrete finding or an honest stub.
 
     Reuses ``reasoning.specialists`` for domain framing and the injected KB search for grounding.
@@ -388,6 +539,7 @@ def verify_flow(root: Path, flow: Flow, ep: Entrypoint, agent: AgentRunner,
     """
     from reasoning import specialists
 
+    pb = pb or PLAYBOOKS[DEFAULT_PLAYBOOK]
     spec = specialists.route(_ShimState(), last_command=f"{ep.name} {flow.title} {flow.note}")
     framing = specialists.prompt_fragment(spec)
     grounding = _ground(f"{flow.title} {flow.note}", kb_search)
@@ -399,7 +551,7 @@ def verify_flow(root: Path, flow: Flow, ep: Entrypoint, agent: AgentRunner,
     user = (f"FLOW TO VERIFY: {flow.title}\nfrom entrypoint {ep.name} ({ep.kind})\n"
             f"SINK/BRANCH: {flow.note}\n\nSOURCE of {flow.file}:\n{src}{ground_txt}")
     try:
-        parsed = _parse(agent(_VERIFY_SYS + framing, user))
+        parsed = _parse(agent(_VERIFY_SYS + pb.verify_frag + framing, user))
     except Exception as exc:  # noqa: BLE001
         return Verdict(flow_id=flow.id, finding=False, reason=f"verify failed: {exc}")
     if not isinstance(parsed, dict):
@@ -413,6 +565,12 @@ def verify_flow(root: Path, flow: Flow, ep: Entrypoint, agent: AgentRunner,
     if sev not in _IMPACT_RANK:
         sev = "medium"
     refs = [str(r).replace("\\", "/") for r in (parsed.get("source_refs") or []) if str(r).strip()]
+    # web3 provenance: prefer what the agent returned, fall back to the playbook chain + the file
+    # stem / entrypoint name so a finding always carries chain/contract/function on a web3 playbook.
+    contract = str(parsed.get("contract") or "").strip()[:120]
+    if not contract and pb.chain:
+        contract = Path(flow.file).stem if flow.file else ""
+    function = str(parsed.get("function") or "").strip()[:120] or ep.name[:120]
     return Verdict(
         flow_id=flow.id, finding=True, title=str(parsed.get("title"))[:220],
         vuln_class=str(parsed.get("vuln_class") or "").strip()[:60],
@@ -420,6 +578,8 @@ def verify_flow(root: Path, flow: Flow, ep: Entrypoint, agent: AgentRunner,
         source_refs=refs, impact=str(parsed.get("impact"))[:600],
         confidence=str(parsed.get("confidence") or "medium").lower(),
         poc=str(parsed.get("poc") or "")[:400], kb_refs=grounding,
+        chain=str(parsed.get("chain") or pb.chain).strip()[:20],
+        contract=contract, function=function if pb.chain else "",
     )
 
 
@@ -531,18 +691,22 @@ def run_audit(
         raise AuditError(f"tree has more than {runner.MAX_FILES:,} files — point the audit at a "
                          "subdirectory")
     verify_agent = verify_agent or agent
+    pb = resolve_playbook(playbook)
     warnings: list[str] = []
 
-    files = _iter_code_files(root, changed_paths)
+    files = _iter_code_files(root, changed_paths, pb.exts or None)
+    if pb.exts and not files:
+        warnings.append(f"playbook '{pb.key}' maps only {sorted(pb.exts)} files — none were "
+                        "found in this tree")
     if changed_paths is not None and not files:
         warnings.append(f"no code files changed since {patched_since or 'the ref'} — nothing to "
                         "audit in patched-since mode")
 
-    entrypoints = enumerate_entrypoints(root, files, agent, warnings) if files else []
+    entrypoints = enumerate_entrypoints(root, files, agent, warnings, pb) if files else []
 
     flows: list[Flow] = []
     for ep in entrypoints:
-        flows.extend(trace_flows(root, ep, agent))
+        flows.extend(trace_flows(root, ep, agent, pb))
         if len(flows) >= MAX_FLOWS_TOTAL:
             warnings.append(f"flow frontier capped at {MAX_FLOWS_TOTAL}")
             break
@@ -550,12 +714,13 @@ def run_audit(
 
     ep_by_id = {e.id: e for e in entrypoints}
     verdicts = [verify_flow(root, fl, ep_by_id.get(fl.entrypoint_id, Entrypoint(fl.entrypoint_id,
-                "", fl.file)), verify_agent, kb_search) for fl in flows]
+                "", fl.file)), verify_agent, kb_search, pb) for fl in flows]
 
     ranked = dedup_and_rank(verdicts)
     return {
         "repo": str(root),
-        "playbook": playbook,
+        "playbook": pb.key,
+        "chain": pb.chain,
         "mode": "ai",
         "patched_since": patched_since,
         "changed_only": changed_paths is not None,
@@ -609,7 +774,19 @@ def default_agents(cfg: dict[str, Any] | None = None) -> tuple[AgentRunner, Agen
 # --------------------------------------------------------------------------- #
 # heuristic analyst — SAME three stages, no LLM (degradation + offline demo)
 # --------------------------------------------------------------------------- #
-def _load_rules() -> dict[str, Any]:
+def _load_rules(pb: Playbook | None = None) -> dict[str, Any]:
+    """The heuristic sink/entrypoint rules for a playbook. The generic web-app playbook loads
+    ``ai_audit_rules.json``; a web3 playbook loads its group from ``ai_audit_web3_rules.json``."""
+    pb = pb or PLAYBOOKS[DEFAULT_PLAYBOOK]
+    if pb.rules_group:
+        try:
+            groups = json.loads(_WEB3_RULES_PATH.read_text(encoding="utf-8")).get("playbooks", {})
+            grp = groups.get(pb.rules_group)
+            if isinstance(grp, dict):
+                return grp
+        except (OSError, ValueError):
+            pass
+        return {"entrypoint_patterns": [], "sinks": [], "taint_sources": []}
     try:
         return json.loads(_RULES_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -631,7 +808,8 @@ def run_heuristic_audit(
     """
     started = time.monotonic()
     root = runner.resolve_target(str(repo))
-    rules = _load_rules()
+    pb = resolve_playbook(playbook)
+    rules = _load_rules(pb)
     ep_pats = [(p.get("kind", "handler"), re.compile(p["pattern"]))
                for p in rules.get("entrypoint_patterns", []) if p.get("pattern")]
     taint = re.compile("|".join(rules.get("taint_sources") or ["request"]))
@@ -643,7 +821,9 @@ def run_heuristic_audit(
             continue
 
     warnings: list[str] = []
-    files = _iter_code_files(root, changed_paths)
+    files = _iter_code_files(root, changed_paths, pb.exts or None)
+    if pb.exts and not files:
+        warnings.append(f"playbook '{pb.key}' maps only {sorted(pb.exts)} files — none found")
     if changed_paths is not None and not files:
         warnings.append(f"no code files changed since {patched_since or 'the ref'}")
 
@@ -706,7 +886,12 @@ def run_heuristic_audit(
                 flows.append(flow)
                 grounding = _ground(s["vuln_class"], kb_search)
                 base_url = ""
-                ep_ref = anchor.name if anchor.name.startswith("/") else "/<endpoint>"
+                # {ep} = the function/method for a contract playbook (a Solidity fn, an ABCI
+                # method, an Anchor instruction), else the web route or a placeholder.
+                if pb.chain:
+                    ep_ref = anchor.name
+                else:
+                    ep_ref = anchor.name if anchor.name.startswith("/") else "/<endpoint>"
                 verdicts.append(Verdict(
                     flow_id=flow.id, finding=True, title=flow.title,
                     vuln_class=s["vuln_class"], severity=s.get("severity", "medium"),
@@ -715,6 +900,8 @@ def run_heuristic_audit(
                     cwe=s.get("cwe"),
                     poc=s.get("poc", "").format(ep=ep_ref, base=base_url or "http://TARGET"),
                     kb_refs=grounding,
+                    chain=rules.get("chain", pb.chain), contract=Path(rel).stem if pb.chain else "",
+                    function=anchor.name if pb.chain else "",
                 ))
                 if len(flows) >= MAX_FLOWS_TOTAL:
                     break
@@ -728,7 +915,8 @@ def run_heuristic_audit(
     n_files, _ = runner.count_files(root)
     return {
         "repo": str(root),
-        "playbook": playbook,
+        "playbook": pb.key,
+        "chain": pb.chain,
         "mode": "heuristic",
         "patched_since": patched_since,
         "changed_only": changed_paths is not None,

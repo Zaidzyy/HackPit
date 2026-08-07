@@ -1,0 +1,216 @@
+{
+  "_note": "Per-playbook heuristic entrypoint/sink patterns for the WEB3 smart-contract audit playbooks (evm-external-flow, cosmos-abci-halt, anchor-solana). Kept as DATA (not Python) for the same reason as ai_audit_rules.json: codescan/*.py is itself source-scanned for dangerous literals, and a detector that hard-codes Solidity/Go/Rust sink tokens (delegatecall, selfdestruct, panic(, invoke_signed) would trip its own static-only lock. These drive ONLY the no-LLM heuristic analyst (graceful-degradation + the offline demo/screenshot); the LLM agents do the real KB-grounded audit. Sinks are co-designed with the fixture contract set under sample_web3/ so the deterministic analyst returns concrete, attacker-path-backed findings with no LLM and no operator input. Placeholders: {ep} = enclosing entrypoint name, {loc} = file:line of the sink.",
+  "playbooks": {
+    "evm-external-flow": {
+      "chain": "evm",
+      "entrypoint_patterns": [
+        {"kind": "contract-fn", "pattern": "function\\s+([a-zA-Z0-9_]+)\\s*\\([^;{]*\\b(?:external|public)\\b"},
+        {"kind": "fallback", "pattern": "\\b(fallback|receive)\\s*\\(\\s*\\)\\s*external"}
+      ],
+      "taint_sources": ["msg\\.sender", "msg\\.value", "msg\\.data", "calldata", "tx\\.origin", "abi\\.decode", "\\bamount\\b", "\\btokenId\\b"],
+      "sinks": [
+        {
+          "id": "evm-reentrancy",
+          "vuln_class": "reentrancy",
+          "severity": "critical",
+          "cwe": "SWC-107",
+          "title": "Reentrancy via external value call before state update",
+          "pattern": "\\.call\\{\\s*value\\s*:",
+          "needs_taint": false,
+          "attacker_path": "The external entrypoint {ep} sends value with a low-level value-bearing call at {loc} while the caller's balance/accounting is still un-zeroed (checks-effects-interactions violated). A malicious contract re-enters {ep} from its receive()/fallback() and drains the pool before the first frame writes state.",
+          "impact": "Loss of funds — the contract's entire withdrawable balance is drained in one transaction.",
+          "poc": "forge test --match-test test_reentrancy_drain -vvvv"
+        },
+        {
+          "id": "evm-access-control",
+          "vuln_class": "access-control",
+          "severity": "critical",
+          "cwe": "SWC-105",
+          "title": "Privileged operation missing an access-control modifier",
+          "pattern": "function\\s+(?:mint|burn|withdraw|setOwner|transferOwnership|initialize|upgradeTo|rescue|sweep|setPrice|pause|unpause|grantRole|_?authorizeUpgrade)\\w*\\s*\\([^;{]*\\b(?:external|public)\\b(?![^{;]*\\b(?:onlyOwner|onlyRole|onlyAdmin|_checkOwner|require\\s*\\(\\s*msg\\.sender)\\b)",
+          "needs_taint": false,
+          "attacker_path": "The state-changing function {ep} is declared external/public at {loc} with no owner/role modifier and no msg.sender check. Any address calls it directly to seize a privileged capability (mint, ownership transfer, or upgrade).",
+          "impact": "Unauthorized mint / ownership takeover / arbitrary upgrade — full protocol compromise.",
+          "poc": "cast send <contract> \"<fn>(...)\" --from <attacker> ; forge test --match-test test_missing_access_control -vvvv"
+        },
+        {
+          "id": "evm-oracle-stale",
+          "vuln_class": "oracle-manipulation",
+          "severity": "high",
+          "cwe": "SWC-manip",
+          "title": "Oracle price consumed without a staleness / round check",
+          "pattern": "\\.latestAnswer\\s*\\(|\\.latestRoundData\\s*\\(",
+          "needs_taint": false,
+          "attacker_path": "The flow through {ep} reads a Chainlink feed at {loc} and uses the returned price without checking updatedAt/answeredInRound. On a stale or frozen feed the attacker transacts against an outdated price to buy/borrow at a mispriced rate.",
+          "impact": "Mispriced trades / under-collateralized borrows draining the protocol.",
+          "poc": "forge test --match-test test_stale_oracle -vvvv --fork-url $MAINNET_RPC"
+        },
+        {
+          "id": "evm-spot-oracle",
+          "vuln_class": "flash-loan-oracle",
+          "severity": "high",
+          "cwe": "SWC-manip",
+          "title": "Spot price from reserves — flash-loan manipulatable",
+          "pattern": "getReserves\\s*\\(|\\.slot0\\s*\\(",
+          "needs_taint": false,
+          "attacker_path": "{ep} derives a price from AMM spot reserves (getReserves/slot0) at {loc}. An attacker takes a flash loan, skews the reserves in the same transaction, executes against the manipulated price, then repays — no capital at risk.",
+          "impact": "Loss of funds via flash-loan price manipulation of a single-block spot oracle.",
+          "poc": "forge test --match-test test_flashloan_oracle -vvvv --fork-url $MAINNET_RPC"
+        },
+        {
+          "id": "evm-unchecked-math",
+          "vuln_class": "arithmetic",
+          "severity": "medium",
+          "cwe": "SWC-101",
+          "title": "Arithmetic in an unchecked block",
+          "pattern": "unchecked\\s*\\{",
+          "needs_taint": false,
+          "attacker_path": "{ep} performs arithmetic inside an `unchecked` block at {loc}, disabling Solidity 0.8 overflow protection. Attacker-sized input wraps a balance or supply counter around zero.",
+          "impact": "Balance/accounting corruption — inflated balances or bypassed supply caps.",
+          "poc": "forge test --match-test test_unchecked_overflow -vvvv"
+        },
+        {
+          "id": "evm-delegatecall",
+          "vuln_class": "delegatecall",
+          "severity": "critical",
+          "cwe": "SWC-112",
+          "title": "delegatecall / selfdestruct reachable from an entrypoint",
+          "pattern": "\\.delegatecall\\s*\\(|\\bselfdestruct\\s*\\(",
+          "needs_taint": false,
+          "attacker_path": "{ep} reaches a delegatecall/selfdestruct at {loc}. If the target or calldata is attacker-influenced, the attacker runs arbitrary code in this contract's storage context (or destroys it), overwriting owner/implementation slots.",
+          "impact": "Arbitrary storage write / contract destruction — total loss of control and funds.",
+          "poc": "forge test --match-test test_delegatecall_hijack -vvvv"
+        },
+        {
+          "id": "evm-txorigin",
+          "vuln_class": "access-control",
+          "severity": "high",
+          "cwe": "SWC-115",
+          "title": "Authorization via tx.origin",
+          "pattern": "tx\\.origin\\s*==|==\\s*tx\\.origin|require\\s*\\(\\s*tx\\.origin",
+          "needs_taint": false,
+          "attacker_path": "{ep} authorizes using tx.origin at {loc}. A malicious contract the victim is tricked into calling forwards the call so tx.origin is still the victim — the check passes for the attacker.",
+          "impact": "Authorization bypass / phishing-driven privileged action.",
+          "poc": "forge test --match-test test_txorigin_bypass -vvvv"
+        }
+      ]
+    },
+    "cosmos-abci-halt": {
+      "chain": "cosmos",
+      "entrypoint_patterns": [
+        {"kind": "abci-method", "pattern": "func\\s+\\([^)]*\\)\\s+(BeginBlock|EndBlock|DeliverTx|CheckTx|InitChain|Commit|PrepareProposal|ProcessProposal|ExtendVote|VerifyVoteExtension)\\b"},
+        {"kind": "abci-handler", "pattern": "func\\s+(BeginBlocker|EndBlocker|NewHandler|InitGenesis)\\b"}
+      ],
+      "taint_sources": ["msg\\.", "req\\.", "tx\\.", "\\bproposal\\b", "\\bvote\\b", "GetSigners", "Amount", "\\bctx\\b"],
+      "sinks": [
+        {
+          "id": "cosmos-explicit-panic",
+          "vuln_class": "consensus-halt",
+          "severity": "critical",
+          "cwe": "ABCI-panic",
+          "title": "Explicit panic reachable in a production ABCI path",
+          "pattern": "\\bpanic\\s*\\(",
+          "needs_taint": false,
+          "attacker_path": "The ABCI method {ep} calls panic() at {loc} on a condition an attacker controls (a crafted message field / proposal). Because BeginBlock/EndBlock/DeliverTx run inside consensus, the panic aborts block processing on every validator — a chain halt, not a caught error.",
+          "impact": "Full consensus halt — the chain stops producing blocks until a coordinated patched restart.",
+          "poc": "go test ./... -run TestABCIPanicHalt -v   # submit the crafted message against a local node"
+        },
+        {
+          "id": "cosmos-arith-panic",
+          "vuln_class": "consensus-halt",
+          "severity": "high",
+          "cwe": "ABCI-panic",
+          "title": "sdk.Int/Dec arithmetic that panics on underflow or divide-by-zero",
+          "pattern": "\\.Sub\\s*\\(|\\.Quo\\w*\\s*\\(|\\.Mul\\w*\\s*\\(",
+          "needs_taint": true,
+          "attacker_path": "{ep} performs sdk math (.Sub/.Quo/.Mul) at {loc} on an attacker-influenced amount. cosmos-sdk Int.Sub panics on a negative result and Quo panics on divide-by-zero; a message that drives the operand negative/zero halts the block.",
+          "impact": "Consensus halt via an arithmetic panic inside a consensus-critical handler.",
+          "poc": "go test ./... -run TestArithmeticHalt -v"
+        },
+        {
+          "id": "cosmos-must-panic",
+          "vuln_class": "consensus-halt",
+          "severity": "high",
+          "cwe": "ABCI-panic",
+          "title": "Must*/mustGet helper that panics inside consensus",
+          "pattern": "\\bMust[A-Z]\\w*\\s*\\(|\\bmustGet\\w*\\s*\\(",
+          "needs_taint": true,
+          "attacker_path": "{ep} calls a Must*/mustGet helper at {loc} that panics instead of returning an error. When the looked-up key is absent or the input fails to (un)marshal for attacker-chosen data, the panic propagates out of the ABCI method and halts the chain.",
+          "impact": "Consensus halt from an unhandled Must* panic on attacker-shaped state.",
+          "poc": "go test ./... -run TestMustPanicHalt -v"
+        },
+        {
+          "id": "cosmos-nil-bounds",
+          "vuln_class": "consensus-halt",
+          "severity": "high",
+          "cwe": "ABCI-panic",
+          "title": "Slice index / type assertion without bounds or ok check",
+          "pattern": "\\]\\s*\\[[a-zA-Z_][a-zA-Z0-9_]*\\]|\\.\\(\\*?[A-Za-z][\\w.]*\\)(?!\\s*\\{)",
+          "needs_taint": true,
+          "attacker_path": "{ep} indexes a slice/map by an attacker-supplied position, or type-asserts without the comma-ok form, at {loc}. An out-of-range index or wrong dynamic type panics; inside DeliverTx/EndBlock that panic halts consensus.",
+          "impact": "Consensus halt via index-out-of-range / nil-pointer / failed type assertion.",
+          "poc": "go test ./... -run TestBoundsHalt -v"
+        }
+      ]
+    },
+    "anchor-solana": {
+      "chain": "solana",
+      "entrypoint_patterns": [
+        {"kind": "instruction", "pattern": "pub\\s+fn\\s+([a-zA-Z0-9_]+)\\s*\\(\\s*ctx\\s*:"},
+        {"kind": "instruction", "pattern": "pub\\s+fn\\s+([a-zA-Z0-9_]+)\\s*\\([^)]*Context<"},
+        {"kind": "accounts", "pattern": "pub\\s+struct\\s+([A-Za-z0-9_]+)<'info>"}
+      ],
+      "taint_sources": ["ctx\\.accounts", "amount", "data", "instruction_data", "remaining_accounts"],
+      "sinks": [
+        {
+          "id": "anchor-missing-owner",
+          "vuln_class": "missing-owner-check",
+          "severity": "critical",
+          "cwe": "SOL-owner",
+          "title": "UncheckedAccount / AccountInfo consumed without owner or constraint",
+          "pattern": "UncheckedAccount<|AccountInfo<'",
+          "needs_taint": false,
+          "attacker_path": "The account in {ep}'s context is typed UncheckedAccount/AccountInfo at {loc} with no #[account(owner = ...)] / has_one / typed Account<T> wrapper. Anchor skips owner + discriminator validation, so an attacker passes an account they control where a program-owned account is expected.",
+          "impact": "Account-substitution — attacker-owned state is treated as trusted, enabling fund theft or authority spoof.",
+          "poc": "anchor test -- --exact test_missing_owner_check"
+        },
+        {
+          "id": "anchor-missing-signer",
+          "vuln_class": "signer-spoof",
+          "severity": "critical",
+          "cwe": "SOL-signer",
+          "title": "Authority account not constrained to a Signer",
+          "pattern": "pub\\s+authority\\s*:\\s*(?:AccountInfo|UncheckedAccount)<|pub\\s+owner\\s*:\\s*(?:AccountInfo|UncheckedAccount)<",
+          "needs_taint": false,
+          "attacker_path": "{ep} treats an `authority`/`owner` account as trusted at {loc} but types it as AccountInfo/UncheckedAccount instead of Signer<'info> and never asserts is_signer. An attacker supplies the real authority's pubkey without its signature and passes the check.",
+          "impact": "Signer spoofing — privileged instructions execute on behalf of an authority who never signed.",
+          "poc": "anchor test -- --exact test_signer_spoof"
+        },
+        {
+          "id": "anchor-int-overflow",
+          "vuln_class": "integer-overflow",
+          "severity": "high",
+          "cwe": "SOL-math",
+          "title": "Unchecked lamport/token arithmetic",
+          "pattern": "\\.lamports\\(\\)\\s*[-+]|\\bamount\\b\\s*[-+*]\\s|[-+*]\\s*\\bamount\\b",
+          "needs_taint": true,
+          "attacker_path": "{ep} does raw +/-/* on a balance/amount at {loc} without checked_add/checked_sub. In release builds Rust arithmetic wraps silently, so an attacker-sized amount underflows a balance to a huge value.",
+          "impact": "Balance underflow/overflow — inflated balances and drained vaults.",
+          "poc": "anchor test -- --exact test_integer_overflow"
+        },
+        {
+          "id": "anchor-cpi-confusion",
+          "vuln_class": "cpi-confusion",
+          "severity": "high",
+          "cwe": "SOL-cpi",
+          "title": "CPI (invoke/invoke_signed) to an unverified program",
+          "pattern": "\\binvoke_signed\\s*\\(|\\binvoke\\s*\\(",
+          "needs_taint": false,
+          "attacker_path": "{ep} performs a cross-program invocation at {loc} without asserting the target program id (e.g. token_program.key == token::ID). An attacker passes a look-alike program that mimics the interface but steals or mis-credits the transferred tokens.",
+          "impact": "Arbitrary-program CPI — token theft / privilege confusion via a spoofed program account.",
+          "poc": "anchor test -- --exact test_cpi_program_confusion"
+        }
+      ]
+    }
+  }
+}

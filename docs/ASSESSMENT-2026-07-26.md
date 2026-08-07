@@ -107,6 +107,8 @@ Per-command approval is therefore **standing policy, not a deferred item**, and 
 
 **Finding pipeline (New, 2026-08-07).** The AI audit is the heaviest producer of findings, but every surface (recon/nuclei/AD/cloud/IMDS/manual) makes them — so open·kritt's finding-processing machinery is ported **cross-cutting** into a pure-data `backend/findings/` package: a **dynamic/structured schema** (`schema.py` — `FIELD_TYPE_MAP`, `normalize_output_format`, `output_schema`, `validate_payload`; base fields + an engagement-defined `extra` map), **automatic de-duplication** (`pipeline.py` — a stable key over location + type collapses two wordings of the same bug into one, worst-severity-wins, idempotent so re-ingest never multiplies, with a "merged N duplicates" note), **pluggable severity rankers** (`rankers.py` — a per-engagement rule set rescores; ships `default` / `bug-bounty-payout` / `compliance`, the last two being *different lenses over the same findings*), and **post-scripts** (`postscripts.py` — a post-finding hook: `validate`/`report` run in-process and execute nothing, `poc` returns an **approve-each** command; `postScriptLocks` refuse a concurrent double-run). The structured fields were wired through all three schema places (the `state.models.Finding` dataclass + migration-safe `store.py` columns + the frontend), and a round-trip test proves no `response_model` strips them. **No new gate** — ranking/dedup/schema are pure data (AST-locked in `test_finding_pipeline_safety.py`, which imports no cockpit/executor/state and names no gate symbol); only a **command** post-script touches the executor, and only approve-each — the coupling (dict→`Finding`, command post-script→gated executor) lives in `main.py`. See the dated section below.
 
+**Web3 / smart-contract audit (New, 2026-08-07).** Three built-in **playbooks** on the AI code-audit fan-out — `evm-external-flow` (Solidity), `cosmos-abci-halt` (Go/Cosmos-SDK), `anchor-solana` (Rust/Anchor) — ported from open·kritt's `external-flow-analysis` and `Cosmos ABCI Panic Halt Review`. A `Playbook` steers the SAME three stages: it appends a domain framing to each stage prompt (LLM path), scopes the mapped file extensions to one language, and selects a language-specific heuristic sink group (`ai_audit_web3_rules.json`, the no-LLM demo/degradation path). Findings are **chain/contract/function-tagged** and **KB-grounded** in three new authored methodology entries (external-flow analysis, the four Cosmos panic classes, the Anchor account model). A propose-only **tool pass** (`codescan/web3_tools.py`) builds `slither`/`mythril`/`echidna`/`forge` command STRINGS the operator runs **approve-each** in the :kali sandbox and parses their JSON/text output back into the same finding shape — it executes nothing (added to the `test_ai_audit_safety.py` AST no-exec lock). Web3 tooling was added to the arsenal + `Dockerfile.sandbox` + `docker/proof/web3_install_proof.sh` (**image rebuild is the operator's step**). **No new gate** — the analysis reads source and proposes, exactly like the web-app audit. See the dated section below.
+
 ### Frontend
 
 16 routes, real API wiring throughout, SSE streaming, no mocked data layer (`cockpitSample.ts` is the only sample content, explicitly labelled). New in Phases 1–3: the arsenal availability band, per-run time-budget + detach controls, the engagement-state/task-tree panel, the credential-vault "use" action, and the persistent `:kali` shell UI. **Gaps:** no global current-target/engagement context, no engagement export/import, no multi-target view, and the accepted 10-error `react-hooks` lint baseline (documented; `next build` passes exit 0).
@@ -5574,3 +5576,74 @@ cut). The `/engagements` panel runs the pipeline over a **synthetic** sample rat
 because `/engagements` is a cross-session list — the same machinery runs over real findings from within an engagement
 via `POST /sessions/{id}/findings/pipeline`. The fuzzy collapse persists destructively only on `persist: true` (the
 default is a non-destructive computed view), keeping the operator in control of when a merge is written.
+
+## Web3 / smart-contract audit — three playbooks on the fan-out (2026-08-07)
+
+The AI code-audit above shipped the `external-flow-analysis` playbook and noted the web3 playbooks would follow. This
+build adds them: real **smart-contract audit** capability, given HackPit had **no** web3 static-analysis tooling at all.
+
+**Playbooks as a decomposition, not a new engine (`codescan/ai_audit.py`).** `playbook` was a pass-through string; it is
+now a `Playbook` (label, language extensions, chain, heuristic-rules group, and a framing fragment per stage). It steers
+the SAME three-stage fan-out (enumerate → trace → verify) at a domain: it **appends a domain fragment** to each stage
+prompt on the LLM path, **scopes the mapped file extensions** to one language (a Solidity playbook maps only `.sol`), and
+**selects a language-specific heuristic sink group** on the no-LLM path. Three web3 playbooks, ported from open·kritt's
+proven decompositions (the Blockian team's $1.5M-in-bounties patterns):
+
+- **`evm-external-flow`** (Solidity) — external/public functions as entrypoints → flows over value transfers, state
+  changes, external calls, oracle reads, access-control branches → **reentrancy** (external call before state update),
+  missing/incorrect **access control** (the sibling-modifier rule), **oracle manipulation** (missing staleness /
+  flash-loan-manipulable spot price), unchecked arithmetic, delegatecall/selfdestruct hijack. The loss-of-funds classes.
+- **`cosmos-abci-halt`** (Go/Cosmos-SDK) — the wired ABCI methods (`BeginBlock`/`EndBlock`/`DeliverTx`/`ProcessProposal`/…)
+  as entrypoints → the **four panic classes** as flows (explicit `panic`, `sdk.Int.Sub` underflow / `Quo` div-zero,
+  `Must*` helpers, slice-index / type-assertion) → keep only panics that are **attacker-triggerable AND
+  production-reachable inside consensus** — a chain halt, not a caught error.
+- **`anchor-solana`** (Rust/Anchor) — instruction handlers as entrypoints (Accounts structs mapped too) → account
+  validation, signer, CPI, arithmetic → **missing-owner-check** (`UncheckedAccount`/`AccountInfo` where a typed
+  `Account<T>` was meant), **signer-spoof**, **integer-overflow**, **CPI-confusion**.
+
+Findings now carry **chain / contract / function** (added through the `Verdict`, the finding schema, and the frontend).
+The heuristic sink patterns live in `ai_audit_web3_rules.json` **as DATA, not `.py`** — the same reason as the web-app
+rules: `codescan/*.py` is itself source-scanned for dangerous literals, and a detector hard-coding `delegatecall` /
+`panic(` / `invoke_signed` would trip its own static-only lock. Sinks are co-designed with a bundled deliberately-
+vulnerable **fixture set** (`sample_web3/{evm,cosmos,anchor}`) so the deterministic analyst returns concrete,
+attacker-path-backed findings with no LLM — the offline demo and the screenshot.
+
+**Tool pass — propose-only (`codescan/web3_tools.py`).** A smart-contract audit wants real tools; the engine still must
+execute nothing. So this module **builds command strings** (`slither <file> --json -`, `myth analyze …`, `echidna …
+--format json`, `forge test …`) the operator runs **approve-each** through the gated executor + :kali sandbox, and
+**parses** the tools' JSON/text output back into the same normalized finding shape. It launches no scanner, spawns no
+process, imports no executor/sandbox — and was **added to `test_ai_audit_safety.py`'s AST no-exec lock** so the "analysis
+executes nothing, tool runs are approve-each" claim is airtight. `runner._TOOLS` is still exactly `("semgrep", "bandit")`
+and the package still spawns exactly one program.
+
+**KB grounding.** The `web3-audit` skill's DeFi/Solidity/Solana-token bug-class content is already in the KB (17 `cbb-*`
+web3 entries); triage found three genuine gaps, each grounding one playbook, authored via the committable
+`pipeline/authored/` path and ingested: **external-flow analysis** (the map-once/verify-per-flow method), the **Cosmos
+four-panic-class** consensus-halt review (ZERO before — the KB's web3 was DeFi/Solidity/Solana-token), and the **Anchor
+account-model** audit. All three rank #1 for their playbook's grounding query; a finding cites them (verified end to end).
+KB now 2750 entries; the scripts index, embeddings, corpus report and committed KB fixture were regenerated to match.
+
+**Tooling (arsenal + image, image rebuild is the operator's step).** Added `slither`, `mythril`, `echidna`, `foundry`
+(forge+cast), `semgrep`, `anchor`/`cargo`/`clippy`, `gosec`/`go` to `arsenal/tools.json` (a new `web3` category, 7 tools /
+131 total; classified `_MUST_NOT_FIRE` in the arsenal danger registry — local static-analysis / local test harnesses,
+the same class as `ghidra`/`gdb`), to `docker/Dockerfile.sandbox` (venvs for the Python analyzers, release binaries for
+echidna/foundry/gosec, rustup+clippy+anchor), and a `docker/proof/web3_install_proof.sh` that checks the names the
+catalog + `web3_tools.py` hardcode resolve in the built image. **The image rebuild** (`docker compose build
+engage-sandbox`) is the operator's step, flagged here.
+
+**Frontend (`/code-scan`).** The AI-audit view gains a **playbook picker** (from `/codescan/playbooks`), a web3-aware
+"contract folder" field, a **chain badge** + chain/contract/function chips on findings, and a **propose-only tool-pass
+panel** (`Propose tool pass` → the slither/mythril/echidna commands, approve-each). A `?demo=web3` deep link loads the
+bundled EVM fixture sample so the headless screenshot renders with no input. Screenshot: `assets/screenshots/40-code-scan-web3.png`.
+
+**Tests.** `test_web3_audit.py` (the three playbooks register + language-scope; each fans out over its fixture into the
+expected concrete findings-or-stubs tagged chain/contract/function — evm surfaces reentrancy/access-control/oracle,
+cosmos maps the four panic classes to real ABCI methods as consensus-halts, anchor surfaces missing-owner/signer-spoof/
+overflow/CPI-confusion; a slither/mythril/echidna fixture output parses into findings; the tool pass is propose-only; KB
+grounding cites a web3 entry; the router surfaces playbooks/sample/tool-pass). In `run_safety_tests.sh` (109 hermetic
+files, all exit 0). `next build` exits 0.
+
+**Assumptions (per §5), stated.** Shipped all three playbooks (not EVM-only) plus tooling + KB in one session. The
+playbooks run on the already-built code-audit-fanout engine, so nothing was stubbed. The tool pass parses `slither` /
+`mythril` / `echidna` structured output; Cosmos/Solana tools (`gosec`/`clippy`) are proposed as commands without a
+structured parser (they return text a human reads).

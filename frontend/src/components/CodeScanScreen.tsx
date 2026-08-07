@@ -6,16 +6,20 @@ import { PageShell } from "./PageShell";
 import {
   ApiError,
   getCodeAuditSample,
+  getCodePlaybooks,
   getCodeScanTools,
+  proposeToolPass,
   renderCodeScanReport,
   runCodeAudit,
   runCodeScan,
   type AuditFinding,
+  type AuditPlaybook,
   type AuditResult,
   type AuditSeverity,
   type CodeScanFinding,
   type CodeScanResult,
   type CodeScanSeverity,
+  type ToolProposal,
 } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 
@@ -67,18 +71,6 @@ type Tab = "rules" | "ai";
 export function CodeScanScreen() {
   const [tab, setTab] = useState<Tab>("rules");
 
-  // On a ?demo=ai deep link, load the bundled sample audit so the screen renders without input
-  // (used by the headless screenshot). The fetch is deferred to a microtask so no setState runs
-  // synchronously in the effect body — keeps the accepted lint baseline unchanged.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const q = new URLSearchParams(window.location.search);
-    if (q.get("demo") === "ai") {
-      void Promise.resolve().then(() => void loadSample());
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // ---- AI-audit state ---------------------------------------------------- //
   const [aiResult, setAiResult] = useState<AuditResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
@@ -86,6 +78,34 @@ export function CodeScanScreen() {
   const [auditPath, setAuditPath] = useState("");
   const [patchedSince, setPatchedSince] = useState("");
   const [openPoc, setOpenPoc] = useState<Set<number>>(new Set());
+  const [playbook, setPlaybook] = useState<string>("external-flow-analysis");
+  const [playbooks, setPlaybooks] = useState<AuditPlaybook[]>([]);
+  const [toolProposals, setToolProposals] = useState<ToolProposal[] | null>(null);
+  const [toolLoading, setToolLoading] = useState(false);
+
+  // The built-in playbooks the picker offers (web app + the three web3 ones).
+  useEffect(() => {
+    getCodePlaybooks()
+      .then((d) => setPlaybooks(d.playbooks))
+      .catch(() => setPlaybooks([]));
+  }, []);
+
+  // On a ?demo=<web3|ai|playbook-key> deep link, load the matching bundled sample so the screen
+  // renders without input (used by the headless screenshot). Deferred to a microtask so no
+  // setState runs synchronously in the effect body — keeps the accepted lint baseline unchanged.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const demo = new URLSearchParams(window.location.search).get("demo");
+    if (!demo) return;
+    const pb =
+      demo === "ai" || demo === "1"
+        ? "external-flow-analysis"
+        : demo === "web3"
+          ? "evm-external-flow"
+          : demo; // a playbook key passes through
+    void Promise.resolve().then(() => void loadSample(pb));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function runAudit() {
     const target = auditPath.trim();
@@ -93,10 +113,12 @@ export function CodeScanScreen() {
     setAiLoading(true);
     setAiError(null);
     setAiResult(null);
+    setToolProposals(null);
     try {
       const data = await runCodeAudit({
         path: target,
         patched_since: patchedSince.trim() || null,
+        playbook,
         mode: "auto",
       });
       setTab("ai");
@@ -112,12 +134,15 @@ export function CodeScanScreen() {
     }
   }
 
-  async function loadSample() {
+  async function loadSample(pbKey?: string) {
     if (aiLoading) return;
+    const pb = pbKey ?? playbook;
     setAiLoading(true);
     setAiError(null);
+    setToolProposals(null);
+    if (pbKey) setPlaybook(pbKey);
     try {
-      const data = await getCodeAuditSample();
+      const data = await getCodeAuditSample(pb);
       setTab("ai");
       setAiResult(data);
       setOpenPoc(new Set());
@@ -125,6 +150,24 @@ export function CodeScanScreen() {
       setAiError((e as ApiError)?.message ?? "Could not load the sample audit.");
     } finally {
       setAiLoading(false);
+    }
+  }
+
+  // Propose (never run) a slither/mythril/echidna tool pass over the audited contract path.
+  async function loadToolPass() {
+    if (!aiResult || toolLoading) return;
+    setToolLoading(true);
+    try {
+      const d = await proposeToolPass({
+        path: aiResult.repo,
+        chain: aiResult.chain || undefined,
+        playbook: aiResult.playbook,
+      });
+      setToolProposals(d.proposals);
+    } catch {
+      setToolProposals([]);
+    } finally {
+      setToolLoading(false);
     }
   }
 
@@ -185,10 +228,16 @@ export function CodeScanScreen() {
             setPath={setAuditPath}
             patchedSince={patchedSince}
             setPatchedSince={setPatchedSince}
+            playbook={playbook}
+            setPlaybook={setPlaybook}
+            playbooks={playbooks}
             onRun={() => void runAudit()}
             onSample={() => void loadSample()}
             openPoc={openPoc}
             togglePoc={togglePoc}
+            toolProposals={toolProposals}
+            toolLoading={toolLoading}
+            onToolPass={() => void loadToolPass()}
           />
         )}
       </div>
@@ -207,10 +256,16 @@ function AiAudit(props: {
   setPath: (v: string) => void;
   patchedSince: string;
   setPatchedSince: (v: string) => void;
+  playbook: string;
+  setPlaybook: (v: string) => void;
+  playbooks: AuditPlaybook[];
   onRun: () => void;
   onSample: () => void;
   openPoc: Set<number>;
   togglePoc: (i: number) => void;
+  toolProposals: ToolProposal[] | null;
+  toolLoading: boolean;
+  onToolPass: () => void;
 }) {
   const {
     result,
@@ -220,11 +275,20 @@ function AiAudit(props: {
     setPath,
     patchedSince,
     setPatchedSince,
+    playbook,
+    setPlaybook,
+    playbooks,
     onRun,
     onSample,
     openPoc,
     togglePoc,
+    toolProposals,
+    toolLoading,
+    onToolPass,
   } = props;
+
+  const activePb = playbooks.find((p) => p.key === playbook);
+  const isWeb3 = !!activePb?.chain;
 
   return (
     <>
@@ -238,8 +302,25 @@ function AiAudit(props: {
       </p>
 
       <div className="hp-cs-bar">
+        {playbooks.length > 0 && (
+          <label className="hp-cs-field">
+            <span>playbook</span>
+            <select
+              value={playbook}
+              onChange={(e) => setPlaybook(e.target.value)}
+              disabled={loading}
+              title={activePb?.description}
+            >
+              {playbooks.map((p) => (
+                <option key={p.key} value={p.key}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="hp-cs-field">
-          <span>repo folder</span>
+          <span>{isWeb3 ? "contract folder" : "repo folder"}</span>
           <input
             type="text"
             value={path}
@@ -247,7 +328,11 @@ function AiAudit(props: {
             onKeyDown={(e) => {
               if (e.key === "Enter") onRun();
             }}
-            placeholder="e.g. C:\\Users\\you\\projects\\my-service  (a folder, not a file)"
+            placeholder={
+              isWeb3
+                ? "e.g. C:\\Users\\you\\audits\\vault  (the contracts folder)"
+                : "e.g. C:\\Users\\you\\projects\\my-service  (a folder, not a file)"
+            }
             spellCheck={false}
             autoComplete="off"
             disabled={loading}
@@ -300,7 +385,16 @@ function AiAudit(props: {
       )}
       {error && <div className="hp-cs-error">⚠ {error}</div>}
 
-      {result && !loading && <AuditReport result={result} openPoc={openPoc} togglePoc={togglePoc} />}
+      {result && !loading && (
+        <AuditReport
+          result={result}
+          openPoc={openPoc}
+          togglePoc={togglePoc}
+          toolProposals={toolProposals}
+          toolLoading={toolLoading}
+          onToolPass={onToolPass}
+        />
+      )}
     </>
   );
 }
@@ -309,10 +403,16 @@ function AuditReport({
   result,
   openPoc,
   togglePoc,
+  toolProposals,
+  toolLoading,
+  onToolPass,
 }: {
   result: AuditResult;
   openPoc: Set<number>;
   togglePoc: (i: number) => void;
+  toolProposals: ToolProposal[] | null;
+  toolLoading: boolean;
+  onToolPass: () => void;
 }) {
   const s = result.summary;
   return (
@@ -326,6 +426,9 @@ function AuditReport({
         <div className="hp-cs-badges">
           <span className="hp-cs-badge">{result.mode === "ai" ? "LLM agents" : "heuristic analyst"}</span>
           <span className="hp-cs-badge">{result.playbook}</span>
+          {result.chain && (
+            <span className="hp-cs-badge hp-cs-badge-chain">{result.chain}</span>
+          )}
           {result.is_sample && <span className="hp-cs-badge">sample repo</span>}
           {result.grounded && <span className="hp-cs-badge">KB-grounded</span>}
           {result.changed_only && (
@@ -355,6 +458,45 @@ function AuditReport({
           </div>
         )}
       </div>
+
+      {/* web3: a slither/mythril/echidna tool pass — PROPOSE-ONLY, run approve-each */}
+      {result.chain && (
+        <div className="hp-cs-toolpass">
+          <div className="hp-cs-toolpass-head">
+            <div>
+              <b>Tool pass</b> — corroborate with slither / mythril / echidna. Propose-only:
+              nothing here runs a scanner. Each command is confirmed <b>approve-each</b> in the
+              :kali sandbox.
+            </div>
+            <button
+              type="button"
+              className="hp-cs-run"
+              onClick={onToolPass}
+              disabled={toolLoading}
+            >
+              {toolLoading ? "proposing…" : toolProposals ? "refresh tool pass" : "Propose tool pass"}
+            </button>
+          </div>
+          {toolProposals && toolProposals.length === 0 && (
+            <p className="hp-cs-hint">No tool pass is defined for this chain.</p>
+          )}
+          {toolProposals && toolProposals.length > 0 && (
+            <ul className="hp-cs-toollist">
+              {toolProposals.map((t) => (
+                <li key={t.tool} className="hp-cs-toolrow">
+                  <div className="hp-cs-toolmeta">
+                    <span className="hp-cs-tool">{t.tool}</span>
+                    <span className="hp-cs-toolkind">{t.kind}</span>
+                    {t.parseable && <span className="hp-cs-tag">parses back into findings</span>}
+                  </div>
+                  <code className="hp-cs-poc-cmd">{t.command}</code>
+                  <p className="hp-cs-poc-note">{t.purpose}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {result.warnings.length > 0 && (
         <ul className="hp-cs-warnings">
@@ -440,6 +582,14 @@ function AuditFindingRow({
       )}
 
       <div className="hp-cs-meta">
+        {f.chain && <span className="hp-cs-tag hp-cs-badge-chain">{f.chain}</span>}
+        {(f.contract || f.function) && (
+          <span className="hp-cs-tag">
+            {f.contract}
+            {f.contract && f.function ? "::" : ""}
+            {f.function}
+          </span>
+        )}
         {f.vuln_class && <span className="hp-cs-tag">{f.vuln_class}</span>}
         {f.cwe && <span className="hp-cs-tag">{f.cwe}</span>}
         {f.source_refs.map((r) => (

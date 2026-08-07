@@ -63,8 +63,9 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | 📡 **C2 & tunnels** | Sliver implants, DNS tunnels, pivots, a public redirector — all gated. |
 | 🛡️ **Purple-team view** | The defender's-eye footprint of every command, with an honest OPSEC channel. |
 | 📝 **Grounded reports** | OSCP/CPTS/H1 templates, evidence spliced from real state, CVSS computed not asserted. |
-| 🧰 **Arsenal · exploits · SAST** | 123-tool catalog, a 47k-exploit CVE index, and an 8-language code scanner. |
+| 🧰 **Arsenal · exploits · SAST** | 131-tool catalog, a 47k-exploit CVE index, and an 8-language code scanner. |
 | 🔬 **AI code-audit fan-out** | Point it at a repo → an agent maps the entrypoints & flows **once**, then verifies **one flow per agent** against source → deduped, severity-ranked findings, each with an attacker path + a propose-only PoC. `patched-since` audits only a git diff; one approved job, no new gate. |
+| ⛓️ **Web3 / smart-contract audit** | Three built-in playbooks on the same fan-out: **EVM external-flow** (reentrancy / access-control / oracle-manipulation / loss-of-funds), **Cosmos ABCI panic-halt** (four panic classes → consensus halt), **Anchor account-model** (missing-owner / signer-spoof / CPI-confusion / overflow). KB-grounded, chain/contract/function-tagged; an approve-each **slither / mythril / echidna** tool pass. |
 | ▣ **Finding pipeline** | Every producer emits one **structured schema** (attacker-path, source-refs, CVSS, custom fields) → duplicates **auto-merge** idempotently → a **pluggable severity ranker** (bug-bounty payout vs compliance) rescores per engagement → **post-scripts** validate / draft a report (in-process) or build a PoC (approve-each). Pure data; no new gate. |
 | 🔌 **MCP server** | 15 read-only tools so another AI agent can *see* your engagement — eyes, not hands. |
 
@@ -290,10 +291,10 @@ An opt-in **OPSEC channel** gives the operator's honest counterpart — why a co
 
 ## 🧰 Arsenal, exploits & code scan
 
-**121 tools / 306 invocation templates** catalogued with what each is for, its phase, and whether it actually runs in the image — so the planner proposes well-formed commands. A **CVE → exploit index** turns `vsftpd 2.3.4` into the exact exploit and CVE, version-compared over a local **47,108-exploit / 25,041-CVE** catalogue. A **code-scan** surface runs an **8-language SAST** bundle (Semgrep + Bandit) over source you point it at — deliberately isolated from the execution engine.
+**131 tools / 323 invocation templates** catalogued with what each is for, its phase, and whether it actually runs in the image — so the planner proposes well-formed commands. A **CVE → exploit index** turns `vsftpd 2.3.4` into the exact exploit and CVE, version-compared over a local **47,108-exploit / 25,041-CVE** catalogue. A **code-scan** surface runs an **8-language SAST** bundle (Semgrep + Bandit) over source you point it at — deliberately isolated from the execution engine.
 
 <p align="center">
-  <img src="assets/screenshots/16-arsenal.png" alt="The tool arsenal — 121 tools with purpose, phase, and availability" width="32%">
+  <img src="assets/screenshots/16-arsenal.png" alt="The tool arsenal — 131 tools with purpose, phase, and availability" width="32%">
   <img src="assets/screenshots/20-exploits.png" alt="The exploit index — service+version to CVE to public exploit" width="32%">
   <img src="assets/screenshots/19-code-scan.png" alt="Code scan — an 8-language SAST bundle, offline-first" width="32%">
 </p>
@@ -306,6 +307,20 @@ It is HackPit-gated the whole way: the audit **reads source and proposes** — i
 
 <p align="center">
   <img src="assets/screenshots/38-code-scan-ai-audit.png" alt="The AI code-audit fan-out — a synthetic sample repo maps 6 HTTP-route entrypoints once, fans out one agent per flow, and returns 6 deduped, severity-ranked findings (2 critical / 4 high): code-injection in /calc, OS command injection in /ping, auth bypass in /admin — each with an attacker path, source file:line, KB-grounded technique links, and an approve-each Build-PoC button" width="80%">
+</p>
+
+### ⛓️ Web3 / smart-contract audit
+
+The same fan-out ships **three built-in playbooks** — ported from open·kritt's proven `external-flow-analysis` and `Cosmos ABCI Panic Halt Review` (the decompositions the Blockian team turned into $1.5M of bounties), plus an Anchor one:
+
+- **`evm-external-flow`** (Solidity) — enumerate external/public functions → trace flows (value transfers, state changes, external calls, oracle reads, access-control branches) → per-flow: **reentrancy**, missing/incorrect **access control**, **oracle manipulation** (staleness / flash-loan-manipulable spot price), unchecked arithmetic, delegatecall hijack — the **loss-of-funds** classes.
+- **`cosmos-abci-halt`** (Go / Cosmos-SDK) — enumerate the wired ABCI methods → fan out **four panic classes** (explicit panic, arithmetic underflow/div-zero, `Must*` helpers, bounds/type) → keep only the panics that are **attacker-triggerable AND production-reachable inside consensus** — a **chain halt**.
+- **`anchor-solana`** (Rust / Anchor) — enumerate instructions → check account validation, signer, CPI and arithmetic → **missing-owner-check**, **signer-spoof**, **integer-overflow**, **CPI-confusion**.
+
+Each finding is **chain / contract / function-tagged** and **KB-grounded** in new smart-contract methodology entries, and every playbook can chain an **approve-each tool pass** — proposed **slither / mythril / echidna / forge** commands (never run from here; confirmed one-by-one in the :kali sandbox, output parsed back into the same finding shape). Adds **no new gate**: the analysis reads source and proposes, exactly like the web-app audit next to it. New tooling in the arsenal + sandbox image (`slither`, `mythril`, `echidna`, `foundry`, `semgrep`, `cargo`/`clippy`, `gosec`) — **image rebuild required** (`docker compose build engage-sandbox`, verified by `docker/proof/web3_install_proof.sh`). The shot below is the deterministic analyst on a bundled deliberately-vulnerable Solidity fixture.
+
+<p align="center">
+  <img src="assets/screenshots/40-code-scan-web3.png" alt="The web3 audit — the EVM external-flow playbook on a bundled vulnerable Vault.sol fixture: 10 ranked findings (5 critical / 4 high / 1 medium) tagged EVM and KB-grounded, a propose-only slither/mythril/echidna tool pass, the contract's 10 functions mapped as entrypoints, and findings like delegatecall/selfdestruct reachable from execute() and a missing access-control modifier on initialize() — each carrying chain·contract::function, an SWC id, a Vault.sol:line ref, and KB links to the smart-contract methodology" width="80%">
 </p>
 
 ### ▣ Finding pipeline — one schema, auto-dedup, pluggable rankers, post-scripts

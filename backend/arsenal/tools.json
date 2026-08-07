@@ -2,6 +2,7 @@
   "schema_version": "1.0",
   "note": "Curated catalog of the standard offensive toolbox. DATA ONLY — this file executes nothing. Every invocation here is a TEMPLATE the planner draws on so proposed commands are well-formed and consistent; each one still goes through the same gated executor (approve-each, heuristic red-confirm, target/scope lock, argv-only). Templates are written from each tool's own documentation and standard usage. Placeholders use <angle-brackets>; <target> is filled by the composer's substitute_target so a rendered command points at the real engagement target and nothing else.",
   "placeholders": {
+    "<contract>": "Contract / program name (e.g. Vault) — the fuzz/target name a tool needs.",
     "<target>": "Host, IP or URL under test — filled from the engagement target.",
     "<domain>": "DNS domain / AD domain name.",
     "<url>": "Full URL including scheme.",
@@ -4883,6 +4884,195 @@
           }
         ],
         "notes": "IT ONLY WORKS WHERE FIELD SUGGESTIONS ARE ON. A server with introspection off AND suggestions off (Apollo's didYouMean disabled) gives it nothing, and it reports an EMPTY SCHEMA rather than an error - read that as 'this defence is complete', not 'there is no schema'. HackPit's own schema probe deliberately does not do this: when the probe answers `disabled`, this is the tool to reach for, as a separate gated command."
-      }
+      },
+    {
+      "name": "slither",
+      "category": "web3",
+      "platform": "cross",
+      "purpose": "Solidity static analysis — 90+ detectors for reentrancy, access control, unchecked calls, and arithmetic. The default first pass over any EVM contract set; run it before hand-auditing.",
+      "phases": [
+        "enumeration",
+        "exploitation"
+      ],
+      "techniques": [
+        "reentrancy detection",
+        "access-control review",
+        "arithmetic checks",
+        "inheritance/shadowing analysis"
+      ],
+      "docs": "https://github.com/crytic/slither/wiki",
+      "templates": [
+        {
+          "label": "Full detector run (JSON)",
+          "template": "slither <file> --json -",
+          "note": "Machine-readable output; HackPit's tool-pass parser turns it into ranked findings."
+        },
+        {
+          "label": "One detector",
+          "template": "slither <file> --detect reentrancy-eth",
+          "note": "Focus a single class after the entrypoint map points at it."
+        }
+      ]
+    },
+    {
+      "name": "mythril",
+      "category": "web3",
+      "platform": "cross",
+      "aliases": [
+        "myth"
+      ],
+      "purpose": "Symbolic execution of EVM bytecode — finds SWC-classified vulnerabilities (integer bugs, unprotected calls, delegatecall) by exploring reachable states.",
+      "phases": [
+        "enumeration",
+        "exploitation"
+      ],
+      "techniques": [
+        "symbolic execution",
+        "SWC classification",
+        "state exploration"
+      ],
+      "docs": "https://mythril-classic.readthedocs.io/",
+      "templates": [
+        {
+          "label": "Analyze a contract (JSON)",
+          "template": "myth analyze <file> -o json",
+          "note": "Deeper but slower than slither; run on the contracts the flow map flagged."
+        }
+      ]
+    },
+    {
+      "name": "echidna",
+      "category": "web3",
+      "platform": "cross",
+      "purpose": "Property-based fuzzer for EVM contracts — falsifies invariants (e.g. total supply never exceeds cap) an attacker could break.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "property fuzzing",
+        "invariant falsification"
+      ],
+      "docs": "https://github.com/crytic/echidna",
+      "templates": [
+        {
+          "label": "Fuzz a contract's invariants",
+          "template": "echidna <file> --contract <contract> --format json",
+          "note": "Write echidna_* invariant functions first; a falsified one is a finding."
+        }
+      ]
+    },
+    {
+      "name": "foundry",
+      "category": "web3",
+      "platform": "cross",
+      "aliases": [
+        "forge",
+        "cast"
+      ],
+      "purpose": "Fast Solidity toolkit — forge builds/tests and runs mainnet-fork PoCs; cast reads and calls contracts from the CLI. The PoC harness that PROVES an EVM finding.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "fork PoC",
+        "unit/property testing",
+        "on-chain reads/calls"
+      ],
+      "docs": "https://book.getfoundry.sh/",
+      "templates": [
+        {
+          "label": "Run an exploit test on a fork",
+          "template": "forge test --match-test <name> -vvvv --fork-url <url>",
+          "note": "The forge PoC template lives in the web3-audit skill; approve-each in the sandbox."
+        },
+        {
+          "label": "Read a contract getter",
+          "template": "cast call <target> \"totalSupply()(uint256)\"",
+          "note": "Confirm on-chain state without a transaction."
+        }
+      ]
+    },
+    {
+      "name": "semgrep",
+      "category": "web3",
+      "platform": "cross",
+      "purpose": "Multi-language pattern static analysis. HackPit's :code-scan runs it over any tree; with smart-contract rulesets it also lints Solidity for known bug patterns.",
+      "phases": [
+        "enumeration",
+        "exploitation"
+      ],
+      "techniques": [
+        "pattern static analysis",
+        "smart-contract rulesets",
+        "taint tracking"
+      ],
+      "docs": "https://semgrep.dev/docs/",
+      "templates": [
+        {
+          "label": "Smart-contract ruleset",
+          "template": "semgrep --config p/smart-contracts <path>",
+          "note": "Registry rulesets need network; the bundled :code-scan rules do not."
+        }
+      ]
+    },
+    {
+      "name": "anchor",
+      "category": "web3",
+      "platform": "cross",
+      "aliases": [
+        "cargo",
+        "clippy"
+      ],
+      "purpose": "Anchor/Solana build + test framework (with cargo/clippy) — lints Rust programs for unchecked arithmetic and panics, and runs instruction-level PoCs against a local validator.",
+      "phases": [
+        "enumeration",
+        "exploitation"
+      ],
+      "techniques": [
+        "Rust lints",
+        "account-model review",
+        "instruction PoC"
+      ],
+      "docs": "https://www.anchor-lang.com/",
+      "templates": [
+        {
+          "label": "Clippy arithmetic lints",
+          "template": "cargo clippy --all-targets -- -W clippy::arithmetic_side_effects",
+          "note": "Surfaces unchecked lamport/amount math before the account review."
+        },
+        {
+          "label": "Run the Anchor test PoC",
+          "template": "anchor test",
+          "note": "Boots a local validator; a failing invariant test is the PoC."
+        }
+      ]
+    },
+    {
+      "name": "gosec",
+      "category": "web3",
+      "platform": "cross",
+      "aliases": [
+        "go",
+        "govet"
+      ],
+      "purpose": "Go static analysis (with go vet/go test) for Cosmos-SDK chains — surfaces unhandled errors and panic-prone code in ABCI handlers, where a panic is a consensus halt.",
+      "phases": [
+        "enumeration",
+        "exploitation"
+      ],
+      "techniques": [
+        "Go static analysis",
+        "panic-path review",
+        "ABCI halt review"
+      ],
+      "docs": "https://github.com/securego/gosec",
+      "templates": [
+        {
+          "label": "Scan a module (JSON)",
+          "template": "gosec -fmt=json <path>/...",
+          "note": "Pair with a manual ABCI-method review for maliciously-triggerable panics."
+        }
+      ]
+    }
   ]
 }

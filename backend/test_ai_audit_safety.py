@@ -30,7 +30,8 @@ from codescan import router as cs_router
 _PKG = Path(__file__).parent / "codescan"
 _ENGINE = _PKG / "ai_audit.py"
 _ROUTER = _PKG / "router.py"
-_NEW_FILES = [_ENGINE, _ROUTER]
+_TOOLS = _PKG / "web3_tools.py"  # the web3 tool-pass: propose-only, must also execute nothing
+_NEW_FILES = [_ENGINE, _ROUTER, _TOOLS]
 
 
 def _dotted(node: ast.AST) -> str:

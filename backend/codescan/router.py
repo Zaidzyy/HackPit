@@ -23,6 +23,7 @@ from . import findings as fmod
 from . import kb_link
 from . import report as report_mod
 from . import runner
+from . import web3_tools
 
 router = APIRouter(prefix="/codescan", tags=["codescan"])
 
@@ -287,7 +288,9 @@ class AiAuditIn(BaseModel):
     )
     playbook: str = Field(
         default="external-flow-analysis",
-        description="The built-in audit playbook to run.",
+        description="The built-in audit playbook: 'external-flow-analysis' (web app) or a web3 "
+        "playbook — 'evm-external-flow' (Solidity), 'cosmos-abci-halt' (Go), 'anchor-solana' "
+        "(Rust). A web3 playbook maps only its language's files and hunts its chain's bug classes.",
     )
     session_id: str | None = Field(
         default=None,
@@ -386,16 +389,89 @@ def codescan_ai_audit(req: AiAuditIn = Body(...)) -> dict[str, Any]:
     return _run_ai_audit(req)
 
 
+# the bundled synthetic sample repo for each playbook (never a real client's source). The web3
+# playbooks point at the deliberately-vulnerable fixture set under sample_web3/.
+_SAMPLE_DIRS: dict[str, str] = {
+    "external-flow-analysis": "sample_app",
+    "evm-external-flow": "sample_web3/evm",
+    "cosmos-abci-halt": "sample_web3/cosmos",
+    "anchor-solana": "sample_web3/anchor",
+}
+
+
 @router.get("/ai-audit/sample")
-def codescan_ai_audit_sample() -> dict[str, Any]:
+def codescan_ai_audit_sample(playbook: str = "external-flow-analysis") -> dict[str, Any]:
     """A deterministic audit of the BUNDLED synthetic sample repo (never a real client's source).
 
     Runs the heuristic analyst so the /code-scan AI view renders the full enumerate -> flows ->
     ranked-findings surface with no LLM and no operator input — the offline demo the screenshot
-    uses, and a live example of the pipeline's output shape."""
+    uses, and a live example of the pipeline's output shape. ``playbook`` selects which bundled
+    fixture is mapped: the web app, or one of the web3 fixtures (Solidity / Cosmos-Go / Anchor)."""
     from pathlib import Path
 
-    sample = Path(__file__).parent / "sample_app"
-    result = ai_audit.run_heuristic_audit(sample, kb_search=_KB["search"])
+    pb = ai_audit.resolve_playbook(playbook)
+    sub = _SAMPLE_DIRS.get(pb.key, "sample_app")
+    sample = Path(__file__).parent / sub
+    result = ai_audit.run_heuristic_audit(sample, kb_search=_KB["search"], playbook=pb.key)
     result["is_sample"] = True
     return result
+
+
+@router.get("/playbooks")
+def codescan_playbooks() -> dict[str, Any]:
+    """The built-in audit playbooks the /code-scan AI view offers (web app + the three web3 ones)."""
+    return {"playbooks": ai_audit.list_playbooks()}
+
+
+# --------------------------------------------------------------------------- #
+# web3 tool pass (see web3_tools.py) — PROPOSE-ONLY. Nothing here executes a scanner: the audit
+# stays static-only, and a tool pass is a command STRING the operator runs approve-each through
+# the existing gated executor, exactly like a finding's PoC. Parsing pasted output normalizes it.
+# --------------------------------------------------------------------------- #
+class ToolPassIn(BaseModel):
+    path: str = Field(min_length=1, description="Contract file or project dir the tool pass targets.")
+    chain: str | None = Field(
+        default=None, description="evm | cosmos | solana. If omitted, derived from `playbook`."
+    )
+    playbook: str | None = Field(
+        default=None, description="A web3 playbook key; its chain selects the tool set."
+    )
+    tool: str | None = Field(
+        default=None, description="A single tool to propose (slither/mythril/echidna/forge/...). "
+        "Omit to propose the whole tool pass for the chain."
+    )
+    contract: str | None = Field(
+        default=None, description="Contract name (echidna needs it to pick the fuzz target)."
+    )
+
+
+@router.post("/tool-pass")
+def codescan_tool_pass(req: ToolPassIn = Body(...)) -> dict[str, Any]:
+    """PROPOSE (never run) a slither/mythril/echidna/forge tool pass over a contract path.
+
+    Returns command STRINGS the operator confirms approve-each in the :kali sandbox. This route
+    launches nothing — it only builds the proposal, the tool-pass analogue of a finding's PoC."""
+    chain = (req.chain or "").strip()
+    if not chain and req.playbook:
+        chain = ai_audit.resolve_playbook(req.playbook).chain
+    if req.tool:
+        proposals = [web3_tools.propose(req.tool, req.path, req.contract)]
+    else:
+        proposals = web3_tools.propose_pass(chain, req.path, req.contract)
+    return {"path": req.path, "chain": chain, "proposals": proposals,
+            "approve_each": True, "static_only": True}
+
+
+class ToolParseIn(BaseModel):
+    tool: str = Field(min_length=1, description="Which tool produced the output (slither/mythril/echidna).")
+    output: str = Field(description="The tool's raw JSON/text output, pasted back after the run.")
+
+
+@router.post("/tool-pass/parse")
+def codescan_tool_pass_parse(req: ToolParseIn = Body(...)) -> dict[str, Any]:
+    """Parse a tool's pasted output into normalized findings — closes the approve-each loop.
+
+    The operator runs a proposed command in the sandbox, pastes the output here, and it is turned
+    into the same finding shape the audit uses. Pure parsing — no execution."""
+    findings = web3_tools.parse_output(req.tool, req.output)
+    return {"tool": req.tool.strip().lower(), "count": len(findings), "findings": findings}

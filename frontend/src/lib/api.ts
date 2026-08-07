@@ -4740,6 +4740,11 @@ export type AuditVerdict = {
   poc: string;
   kb_refs: { id: string; title: string }[];
   reason: string;
+  /** web3 provenance — the chain/contract/function a smart-contract finding sits on. Empty
+   *  strings for the generic web-app playbook. */
+  chain?: string;
+  contract?: string;
+  function?: string;
 };
 
 /** A deduped, severity-ranked concrete finding (verdict minus the stub bookkeeping). */
@@ -4748,6 +4753,8 @@ export type AuditFinding = Omit<AuditVerdict, "flow_id" | "finding" | "reason">;
 export type AuditResult = {
   repo: string;
   playbook: string;
+  /** The playbook's chain: "evm" | "cosmos" | "solana" | "" (generic web app). */
+  chain?: string;
   /** "ai" (LLM agents) | "heuristic" (deterministic, no LLM). */
   mode: "ai" | "heuristic";
   patched_since: string | null;
@@ -4786,9 +4793,69 @@ export const runCodeAudit = (
   signal?: AbortSignal
 ) => postJSON<AuditResult>("/codescan/ai-audit", payload, signal);
 
-/** The deterministic demo audit of the bundled synthetic sample repo. */
-export const getCodeAuditSample = (signal?: AbortSignal) =>
-  getJSON<AuditResult>("/codescan/ai-audit/sample", signal);
+/** The deterministic demo audit of the bundled synthetic sample repo for a playbook. */
+export const getCodeAuditSample = (playbook?: string, signal?: AbortSignal) =>
+  getJSON<AuditResult>(
+    `/codescan/ai-audit/sample${playbook ? `?playbook=${encodeURIComponent(playbook)}` : ""}`,
+    signal
+  );
+
+// ---- audit playbooks (built-in decompositions the AI view offers) ---------- //
+export type AuditPlaybook = {
+  key: string;
+  label: string;
+  description: string;
+  /** "" for the generic web-app playbook; "evm" | "cosmos" | "solana" for the web3 ones. */
+  chain: string;
+};
+
+export const getCodePlaybooks = (signal?: AbortSignal) =>
+  getJSON<{ playbooks: AuditPlaybook[] }>("/codescan/playbooks", signal);
+
+// ---- web3 tool pass (PROPOSE-ONLY: slither/mythril/echidna/forge) ---------- //
+// The audit executes nothing. A tool pass is a command STRING the operator runs approve-each
+// through the gated executor + kali sandbox — the tool-pass analogue of a finding's PoC.
+export type ToolProposal = {
+  tool: string;
+  chain: string;
+  kind: string;
+  purpose: string;
+  command: string;
+  install_hint: string;
+  parseable: boolean;
+  approve_each: boolean;
+  note: string;
+};
+
+export const proposeToolPass = (
+  payload: { path: string; chain?: string; playbook?: string; tool?: string; contract?: string },
+  signal?: AbortSignal
+) =>
+  postJSON<{ path: string; chain: string; proposals: ToolProposal[]; approve_each: boolean; static_only: boolean }>(
+    "/codescan/tool-pass",
+    payload,
+    signal
+  );
+
+export type ToolPassFinding = {
+  tool: string;
+  vuln_class: string;
+  severity: string;
+  confidence: string;
+  title: string;
+  source_refs: string[];
+  reference: string;
+};
+
+export const parseToolOutput = (
+  payload: { tool: string; output: string },
+  signal?: AbortSignal
+) =>
+  postJSON<{ tool: string; count: number; findings: ToolPassFinding[] }>(
+    "/codescan/tool-pass/parse",
+    payload,
+    signal
+  );
 
 // ---- tool arsenal (curated catalog + invocation templates) ---------------- //
 //

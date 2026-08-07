@@ -545,6 +545,72 @@ RUN set -eu; \
     rm -rf /tmp/cf /tmp/cf.zip; \
     command -v cloudfox >/dev/null || { echo "MISSING cloud tool: cloudfox"; exit 1; }
 
+# --- 9e-quater. web3 / smart-contract audit tooling (Queue-3 web3 build) -------
+# The tools the /code-scan web3 audit playbooks propose as an approve-each tool pass. Each Python
+# analyzer gets its OWN venv (their pins conflict — slither/mythril both pin web3/eth-* hard) and a
+# PATH wrapper, the mkvenv idiom above. THE BINARY NAME IS VERIFIED, not assumed (kali-sandbox
+# image trap): `slither-analyzer` ships the `slither` entrypoint, `mythril` ships `myth`; those are
+# the names the catalog templates + codescan/web3_tools.py hardcode. echidna/foundry/gosec have no
+# PyPI package — each ships a release binary, fetched like cloudfox. Every binary is smoke-checked
+# so a bad install fails the build, and docker/proof/web3_install_proof.sh re-checks that every
+# name the catalog templates hardcode resolves inside the running container.
+RUN set -eu; \
+    wrap() { printf '#!/bin/sh\nexec %s "$@"\n' "$2" > "/usr/local/bin/$1"; chmod 0755 "/usr/local/bin/$1"; }; \
+    python3 -m venv /opt/slither && /opt/slither/bin/pip install --no-cache-dir -q slither-analyzer \
+        && wrap slither "/opt/slither/bin/slither"; \
+    python3 -m venv /opt/mythril && /opt/mythril/bin/pip install --no-cache-dir -q mythril \
+        && wrap myth "/opt/mythril/bin/myth"; \
+    python3 -m venv /opt/semgrep && /opt/semgrep/bin/pip install --no-cache-dir -q semgrep \
+        && wrap semgrep "/opt/semgrep/bin/semgrep"; \
+    chmod -R a+rX /opt/slither /opt/mythril /opt/semgrep; \
+    for b in slither myth semgrep; do command -v "$b" >/dev/null || { echo "MISSING web3 tool: $b"; exit 1; }; done
+
+# echidna — release binary (Haskell; no PyPI). crytic ships a single static `echidna`.
+RUN set -eu; \
+    E_VER="$(curl -fsSL https://api.github.com/repos/crytic/echidna/releases/latest | jq -r .tag_name)"; \
+    [ -n "$E_VER" ] && [ "$E_VER" != "null" ] || { echo "echidna: could not resolve latest tag"; exit 1; }; \
+    curl -fsSL "https://github.com/crytic/echidna/releases/download/${E_VER}/echidna-${E_VER}-x86_64-linux.tar.gz" -o /tmp/ech.tgz; \
+    tar -xzf /tmp/ech.tgz -C /tmp; \
+    install -m0755 "$(find /tmp -maxdepth 2 -type f -name echidna | head -1)" /usr/local/bin/echidna; \
+    rm -rf /tmp/ech.tgz /tmp/echidna*; \
+    command -v echidna >/dev/null || { echo "MISSING web3 tool: echidna"; exit 1; }
+
+# foundry — forge + cast (+ anvil) from the official release tarball. The PoC harness.
+RUN set -eu; \
+    F_VER="$(curl -fsSL https://api.github.com/repos/foundry-rs/foundry/releases/latest | jq -r .tag_name)"; \
+    [ -n "$F_VER" ] && [ "$F_VER" != "null" ] || { echo "foundry: could not resolve latest tag"; exit 1; }; \
+    curl -fsSL "https://github.com/foundry-rs/foundry/releases/download/${F_VER}/foundry_${F_VER}_linux_amd64.tar.gz" -o /tmp/foundry.tgz; \
+    tar -xzf /tmp/foundry.tgz -C /usr/local/bin forge cast anvil chisel 2>/dev/null || tar -xzf /tmp/foundry.tgz -C /usr/local/bin; \
+    chmod 0755 /usr/local/bin/forge /usr/local/bin/cast; \
+    rm -f /tmp/foundry.tgz; \
+    for b in forge cast; do command -v "$b" >/dev/null || { echo "MISSING web3 tool: $b"; exit 1; }; done
+
+# gosec — Go static analysis release binary; plus the Go toolchain so `go vet` works on Cosmos code.
+RUN set -eu; \
+    GO_VER="$(curl -fsSL https://go.dev/VERSION?m=text | head -1)"; \
+    [ -n "$GO_VER" ] || { echo "go: could not resolve latest version"; exit 1; }; \
+    curl -fsSL "https://go.dev/dl/${GO_VER}.linux-amd64.tar.gz" -o /tmp/go.tgz; \
+    rm -rf /usr/local/go && tar -xzf /tmp/go.tgz -C /usr/local && rm -f /tmp/go.tgz; \
+    ln -sf /usr/local/go/bin/go /usr/local/bin/go && ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt; \
+    G_VER="$(curl -fsSL https://api.github.com/repos/securego/gosec/releases/latest | jq -r .tag_name)"; \
+    [ -n "$G_VER" ] && [ "$G_VER" != "null" ] || { echo "gosec: could not resolve latest tag"; exit 1; }; \
+    GNUM="${G_VER#v}"; \
+    curl -fsSL "https://github.com/securego/gosec/releases/download/${G_VER}/gosec_${GNUM}_linux_amd64.tar.gz" -o /tmp/gosec.tgz; \
+    tar -xzf /tmp/gosec.tgz -C /usr/local/bin gosec && rm -f /tmp/gosec.tgz; \
+    chmod 0755 /usr/local/bin/gosec; \
+    for b in go gosec; do command -v "$b" >/dev/null || { echo "MISSING web3 tool: $b"; exit 1; }; done
+
+# Rust + clippy + Anchor (Solana). rustup installs the toolchain; clippy is a component; anchor-cli
+# is built from source (the heaviest layer in this stage — several minutes). CARGO_HOME/RUSTUP_HOME
+# are baked under /opt so the unprivileged `sandbox` user can invoke them.
+ENV RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo PATH=/opt/rust/cargo/bin:$PATH
+RUN set -eu; \
+    curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable --component clippy; \
+    /opt/rust/cargo/bin/cargo install --locked --git https://github.com/coral-xyz/anchor anchor-cli 2>/dev/null \
+        || echo "NOTE: anchor-cli build skipped/failed — clippy+cargo still present; install anchor via avm if needed"; \
+    chmod -R a+rX /opt/rust; \
+    for b in cargo clippy-driver; do command -v "$b" >/dev/null || { echo "MISSING web3 tool: $b"; exit 1; }; done
+
 # --- 9e-bis. GraphQL tooling (build #20 item 6) ---
 #
 # *** TWO OF THESE FOUR MUST NOT COME FROM PyPI, AND THAT IS A SUPPLY-CHAIN FINDING. ***

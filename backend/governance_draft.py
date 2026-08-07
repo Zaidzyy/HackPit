@@ -42,7 +42,7 @@ Return ONLY a JSON object with these keys:
   scope_spec: string (echo the authorized scope EXACTLY as given — never widen it)
   authorized_techniques: string[]  (MITRE ATT&CK ids or short names that are in-bounds)
   forbidden_techniques: string[]   (explicitly out of bounds: e.g. DoS, destructive impact)
-  opsec_level: one of "reckless","standard","careful","ghost"
+  opsec_level: one of "loud","standard","careful","quiet","silent"
   time_windows: string[]           (permitted testing windows)
   excluded_targets: string[]       (hosts/systems that must not be touched)
   excluded_actions: string[]       (actions that must not be taken)
@@ -55,8 +55,8 @@ _CONOPS_SYSTEM = """You are drafting the CONCEPT OF OPERATIONS for an authorized
 test — the high-level approach and phases the engagement will follow. Propose-only; a human
 edits it. Return ONLY a JSON object:
   approach: string (2-4 sentences on the overall strategy)
-  phases: array of {name, description, success_criteria}  (cover recon -> exploitation ->
-          post-exploitation -> actions-on-objectives)
+  phases: array of {name, description, success_criteria}  (cover recon -> initial-access ->
+          post-exploit -> c2 -> exfiltration)
   success_criteria: string[] (what "done" looks like for the whole engagement)
 No prose outside the JSON."""
 
@@ -74,13 +74,13 @@ _OPPLAN_SYSTEM = """You are drafting an OPPLAN — a list of OBJECTIVES for an a
 penetration test. Each objective is a concrete goal mapped to a MITRE ATT&CK technique. This
 is a proposal a human edits; every objective starts pending and is advanced only by an
 approved, exit-0 run. Return ONLY a JSON object:
-  default_opsec: one of "reckless","standard","careful","ghost"
+  default_opsec: one of "loud","standard","careful","quiet","silent"
   notes: string
   objectives: array of {
      title: string,
-     phase: one of "recon","exploitation","post-exploitation","actions-on-objectives",
+     phase: one of "recon","initial-access","post-exploit","c2","exfiltration",
      technique_ids: string[]  (MITRE ATT&CK ids like T1190, T1078),
-     opsec: one of "reckless","standard","careful","ghost",
+     opsec: one of "loud","standard","careful","quiet","silent",
      notes: string
   }
 Propose 4-8 objectives that trace a realistic path from recon to the engagement's goal.
@@ -172,13 +172,13 @@ def _fallback_opplan(target: str) -> dict[str, Any]:
         {"title": f"Map the authorized attack surface of {target or 'the target'}",
          "phase": "recon", "technique_ids": ["T1595", "T1590"], "opsec": "standard", "notes": ""},
         {"title": "Gain initial access to an in-scope host",
-         "phase": "exploitation", "technique_ids": ["T1190", "T1078"], "opsec": "standard", "notes": ""},
+         "phase": "initial-access", "technique_ids": ["T1190", "T1078"], "opsec": "standard", "notes": ""},
         {"title": "Escalate privileges on the foothold",
-         "phase": "post-exploitation", "technique_ids": ["T1068"], "opsec": "careful", "notes": ""},
+         "phase": "post-exploit", "technique_ids": ["T1068"], "opsec": "careful", "notes": ""},
         {"title": "Move laterally toward the objective system",
-         "phase": "post-exploitation", "technique_ids": ["T1021"], "opsec": "careful", "notes": ""},
+         "phase": "post-exploit", "technique_ids": ["T1021"], "opsec": "careful", "notes": ""},
         {"title": "Demonstrate impact against the engagement goal",
-         "phase": "actions-on-objectives", "technique_ids": ["T1005"], "opsec": "careful", "notes": ""},
+         "phase": "exfiltration", "technique_ids": ["T1005"], "opsec": "quiet", "notes": ""},
     ]
     return p
 

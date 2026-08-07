@@ -23,9 +23,9 @@ import yaml
 
 _KILLCHAIN_PATH = Path(__file__).parent / "references" / "killchain.yaml"
 
-# The four ConOps phases an engagement moves through. Objectives declare one of these; the
-# reference ties each ATT&CK tactic to the phase it typically belongs to.
-PHASES = ("recon", "exploitation", "post-exploitation", "actions-on-objectives")
+# Decepticon's kill-chain phases an engagement moves through (ported from killchain.yaml).
+# Objectives declare one of these; the reference ties each ATT&CK tactic to a phase.
+PHASES = ("recon", "initial-access", "post-exploit", "c2", "exfiltration")
 
 
 @lru_cache(maxsize=1)

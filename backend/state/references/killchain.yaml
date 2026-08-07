@@ -6,8 +6,8 @@
 # OPPLAN maps objectives onto and the coverage view renders. It is READ, never executed;
 # nothing here reaches a subprocess, a socket, or the executor gate.
 #
-# The `phase` field ties each tactic to HackPit's four ConOps phases (recon / exploitation /
-# post-exploitation / actions-on-objectives) so an OPPLAN objective declared in a phase can
+# The `phase` field ties each tactic to Decepticon's kill-chain phases (recon / initial-access /
+# post-exploit / c2 / exfiltration) so an OPPLAN objective declared in a phase can
 # surface the tactics it is expected to exercise. Technique ids are the anchors — a coverage
 # view is "which of these techniques did the engagement's objectives touch", so it stays a
 # lexical id match with no ATT&CK API call at render time.
@@ -35,7 +35,7 @@ tactics:
 
   - id: TA0001
     name: Initial Access
-    phase: exploitation
+    phase: initial-access
     techniques:
       - { id: T1190, name: Exploit Public-Facing Application }
       - { id: T1133, name: External Remote Services }
@@ -45,7 +45,7 @@ tactics:
 
   - id: TA0002
     name: Execution
-    phase: exploitation
+    phase: post-exploit
     techniques:
       - { id: T1059, name: Command and Scripting Interpreter }
       - { id: T1203, name: Exploitation for Client Execution }
@@ -54,7 +54,7 @@ tactics:
 
   - id: TA0003
     name: Persistence
-    phase: post-exploitation
+    phase: post-exploit
     techniques:
       - { id: T1098, name: Account Manipulation }
       - { id: T1136, name: Create Account }
@@ -64,7 +64,7 @@ tactics:
 
   - id: TA0004
     name: Privilege Escalation
-    phase: post-exploitation
+    phase: post-exploit
     techniques:
       - { id: T1548, name: Abuse Elevation Control Mechanism }
       - { id: T1068, name: Exploitation for Privilege Escalation }
@@ -73,7 +73,7 @@ tactics:
 
   - id: TA0005
     name: Defense Evasion
-    phase: post-exploitation
+    phase: post-exploit
     techniques:
       - { id: T1070, name: Indicator Removal }
       - { id: T1027, name: Obfuscated Files or Information }
@@ -82,7 +82,7 @@ tactics:
 
   - id: TA0006
     name: Credential Access
-    phase: post-exploitation
+    phase: post-exploit
     techniques:
       - { id: T1110, name: Brute Force }
       - { id: T1003, name: OS Credential Dumping }
@@ -92,7 +92,7 @@ tactics:
 
   - id: TA0007
     name: Discovery
-    phase: post-exploitation
+    phase: post-exploit
     techniques:
       - { id: T1087, name: Account Discovery }
       - { id: T1046, name: Network Service Discovery }
@@ -101,7 +101,7 @@ tactics:
 
   - id: TA0008
     name: Lateral Movement
-    phase: post-exploitation
+    phase: post-exploit
     techniques:
       - { id: T1021, name: Remote Services }
       - { id: T1550, name: Use Alternate Authentication Material }
@@ -110,7 +110,7 @@ tactics:
 
   - id: TA0009
     name: Collection
-    phase: actions-on-objectives
+    phase: exfiltration
     techniques:
       - { id: T1005, name: Data from Local System }
       - { id: T1039, name: Data from Network Shared Drive }
@@ -119,7 +119,7 @@ tactics:
 
   - id: TA0011
     name: Command and Control
-    phase: post-exploitation
+    phase: c2
     techniques:
       - { id: T1071, name: Application Layer Protocol }
       - { id: T1572, name: Protocol Tunneling }
@@ -128,7 +128,7 @@ tactics:
 
   - id: TA0010
     name: Exfiltration
-    phase: actions-on-objectives
+    phase: exfiltration
     techniques:
       - { id: T1041, name: Exfiltration Over C2 Channel }
       - { id: T1048, name: Exfiltration Over Alternative Protocol }
@@ -136,7 +136,7 @@ tactics:
 
   - id: TA0040
     name: Impact
-    phase: actions-on-objectives
+    phase: exfiltration
     techniques:
       - { id: T1486, name: Data Encrypted for Impact }
       - { id: T1490, name: Inhibit System Recovery }

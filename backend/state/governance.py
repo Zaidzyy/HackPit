@@ -55,33 +55,40 @@ OBJECTIVE_STATUSES = (
     STATUS_PENDING, STATUS_IN_PROGRESS, STATUS_COMPLETED, STATUS_BLOCKED, STATUS_CANCELLED,
 )
 
-# The ported status state machine. completed and cancelled are TERMINAL — no transition out.
-# A blocked objective can be unblocked (back to in-progress) or cancelled. This is opplan.py's
-# ``_VALID_TRANSITIONS`` verbatim in intent: pending -> in-progress -> completed/blocked/cancelled.
+# The ported status state machine — Decepticon's opplan.py ``_VALID_TRANSITIONS`` verbatim:
+#   pending     -> in-progress, cancelled
+#   in-progress -> completed, blocked, cancelled
+#   blocked     -> in-progress (retry), completed (abandon), cancelled (drop)
+# completed and cancelled are TERMINAL — no transition out. NOTE: there is deliberately NO
+# pending -> blocked edge (a pending objective has not been attempted, so it cannot be blocked),
+# and blocked -> completed IS legal (mark an abandoned-but-good-enough objective done).
 _VALID_TRANSITIONS: dict[str, frozenset[str]] = {
-    STATUS_PENDING: frozenset({STATUS_IN_PROGRESS, STATUS_CANCELLED, STATUS_BLOCKED}),
+    STATUS_PENDING: frozenset({STATUS_IN_PROGRESS, STATUS_CANCELLED}),
     STATUS_IN_PROGRESS: frozenset({STATUS_COMPLETED, STATUS_BLOCKED, STATUS_CANCELLED}),
-    STATUS_BLOCKED: frozenset({STATUS_IN_PROGRESS, STATUS_CANCELLED}),
+    STATUS_BLOCKED: frozenset({STATUS_IN_PROGRESS, STATUS_COMPLETED, STATUS_CANCELLED}),
     STATUS_COMPLETED: frozenset(),   # terminal
     STATUS_CANCELLED: frozenset(),   # terminal
 }
 
-# ObjectivePhase — HackPit's four ConOps phases (see killchain.PHASES).
-OBJECTIVE_PHASES = killchain.PHASES  # recon / exploitation / post-exploitation / actions-on-objectives
+# ObjectivePhase — Decepticon's kill-chain phases (see killchain.PHASES), ported verbatim:
+# recon / initial-access / post-exploit / c2 / exfiltration.
+OBJECTIVE_PHASES = killchain.PHASES
 
-# OpsecLevel — how loud an objective is allowed to be, quietest last.
-OPSEC_RECKLESS = "reckless"
-OPSEC_STANDARD = "standard"
-OPSEC_CAREFUL = "careful"
-OPSEC_GHOST = "ghost"
-OPSEC_LEVELS = (OPSEC_RECKLESS, OPSEC_STANDARD, OPSEC_CAREFUL, OPSEC_GHOST)
+# OpsecLevel — how loud an objective is allowed to be, quietest last. Decepticon's values.
+OPSEC_LOUD = "loud"          # no evasion; testing detection capability
+OPSEC_STANDARD = "standard"  # basic OPSEC; modify default signatures
+OPSEC_CAREFUL = "careful"    # active evasion; avoid known signatures
+OPSEC_QUIET = "quiet"        # minimal footprint; blend with normal traffic
+OPSEC_SILENT = "silent"      # zero detection tolerance; abort if burned
+OPSEC_LEVELS = (OPSEC_LOUD, OPSEC_STANDARD, OPSEC_CAREFUL, OPSEC_QUIET, OPSEC_SILENT)
 
-# C2Tier — the C2 posture an objective assumes (none = no implant/callback involved).
+# C2Tier — the C2 posture an objective assumes. Decepticon's three tiers, plus a HackPit
+# ``none`` for objectives with no C2 involved (the spec's "optional C2 tier"); default none.
 C2_NONE = "none"
-C2_TIER1 = "tier1-interactive"
-C2_TIER2 = "tier2-short-haul"
-C2_TIER3 = "tier3-long-haul"
-C2_TIERS = (C2_NONE, C2_TIER1, C2_TIER2, C2_TIER3)
+C2_INTERACTIVE = "interactive"  # direct operator control, seconds callback
+C2_SHORT_HAUL = "short-haul"    # reliable access, minutes-hours callback
+C2_LONG_HAUL = "long-haul"      # persistent fallback, hours-days callback
+C2_TIERS = (C2_NONE, C2_INTERACTIVE, C2_SHORT_HAUL, C2_LONG_HAUL)
 
 # The four governance document kinds.
 DOC_ROE = "roe"

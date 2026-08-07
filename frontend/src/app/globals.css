@@ -9447,13 +9447,15 @@ button.hp-tn-start:disabled, button.hp-tn-destroy:disabled { opacity: 0.45; curs
   border: 1px solid var(--border-2); color: var(--grey);
 }
 .hp-gov-phase-recon { color: #6cb6ff; border-color: rgba(108,182,255,0.4); }
-.hp-gov-phase-exploitation { color: var(--accent); border-color: var(--accent-line); }
-.hp-gov-phase-post-exploitation { color: #c58cff; border-color: rgba(197,140,255,0.4); }
-.hp-gov-phase-actions-on-objectives { color: #ff8f8f; border-color: rgba(255,143,143,0.4); }
-.hp-gov-opsec-reckless { color: #ff8f8f; }
+.hp-gov-phase-initial-access { color: var(--accent); border-color: var(--accent-line); }
+.hp-gov-phase-post-exploit { color: #c58cff; border-color: rgba(197,140,255,0.4); }
+.hp-gov-phase-c2 { color: #ff8f8f; border-color: rgba(255,143,143,0.4); }
+.hp-gov-phase-exfiltration { color: #ffd27f; border-color: rgba(255,210,127,0.4); }
+.hp-gov-opsec-loud { color: #ff8f8f; }
 .hp-gov-opsec-standard { color: var(--grey); }
 .hp-gov-opsec-careful { color: #6cb6ff; }
-.hp-gov-opsec-ghost { color: #c58cff; }
+.hp-gov-opsec-quiet { color: #7fe0a6; }
+.hp-gov-opsec-silent { color: #c58cff; }
 
 /* document tabs (RoE / ConOps / Deconfliction) */
 .hp-gov-doc-bar {

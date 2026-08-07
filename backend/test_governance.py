@@ -23,7 +23,7 @@ def _reset() -> None:
 # --------------------------------------------------------------------------- #
 def test_state_machine_rejects_illegal_transitions() -> None:
     _reset()
-    o = gov.add_objective(_S, "Gain a foothold", phase="exploitation", technique_ids=["T1190"])
+    o = gov.add_objective(_S, "Gain a foothold", phase="initial-access", technique_ids=["T1190"])
     assert o.status == gov.STATUS_PENDING, "a new objective starts pending"
 
     # legal path pending -> in-progress -> completed
@@ -40,31 +40,42 @@ def test_state_machine_rejects_illegal_transitions() -> None:
             pass
     assert gov.get_objective(_S, o.obj_id).status == gov.STATUS_COMPLETED, "state unchanged after a rejected transition"
 
-    # a skip (pending -> completed) is rejected; cancelled is terminal too
-    o2 = gov.add_objective(_S, "Escalate", phase="post-exploitation")
-    try:
-        gov.update_objective(_S, o2.obj_id, status="completed")
-        raise AssertionError("pending -> completed should be rejected (skips in-progress)")
-    except gov.TransitionError:
-        pass
+    # a skip (pending -> completed) is rejected; and pending -> blocked is NOT a Decepticon edge
+    # (a pending objective has not been attempted, so it cannot be blocked)
+    o2 = gov.add_objective(_S, "Escalate", phase="post-exploit")
+    for bad in ("completed", "blocked"):
+        try:
+            gov.update_objective(_S, o2.obj_id, status=bad)
+            raise AssertionError(f"pending -> {bad} should be rejected")
+        except gov.TransitionError:
+            pass
     gov.update_objective(_S, o2.obj_id, status="cancelled")
     try:
         gov.update_objective(_S, o2.obj_id, status="in-progress")
         raise AssertionError("cancelled -> in-progress should be rejected (terminal)")
     except gov.TransitionError:
         pass
-    print("  state machine: pending->in-progress->completed legal; terminal exits + skips rejected: PASS")
+
+    # blocked -> completed IS legal (abandon-but-good-enough) — the Decepticon edge I first missed
+    o3 = gov.add_objective(_S, "Kerberoast", phase="post-exploit")
+    gov.update_objective(_S, o3.obj_id, status="in-progress")
+    gov.update_objective(_S, o3.obj_id, status="blocked")
+    gov.update_objective(_S, o3.obj_id, status="completed")
+    assert gov.get_objective(_S, o3.obj_id).status == gov.STATUS_COMPLETED
+    print("  state machine: legal path + terminal exits + pending->blocked/skip rejected + blocked->completed allowed: PASS")
 
 
 def test_can_transition_table() -> None:
     assert gov.can_transition("pending", "in-progress")
     assert gov.can_transition("in-progress", "completed")
     assert gov.can_transition("blocked", "in-progress")
+    assert gov.can_transition("blocked", "completed"), "blocked -> completed (abandon) is legal (Decepticon)"
     assert gov.can_transition("pending", "pending"), "a no-op re-save is always legal"
+    assert not gov.can_transition("pending", "blocked"), "pending -> blocked is NOT a Decepticon edge"
     assert not gov.can_transition("completed", "in-progress")
     assert not gov.can_transition("cancelled", "pending")
     assert not gov.can_transition("pending", "bogus-status")
-    print("  can_transition matches the state machine (incl. terminal states + no-op re-save): PASS")
+    print("  can_transition matches Decepticon's table (blocked->completed legal, pending->blocked not): PASS")
 
 
 def test_illegal_transition_writes_nothing() -> None:
@@ -123,7 +134,7 @@ def test_approval_records_a_human_and_edit_resets_it() -> None:
 # --------------------------------------------------------------------------- #
 def test_objective_crud_and_expand_collapse() -> None:
     _reset()
-    root = gov.add_objective(_S, "Compromise the domain", phase="post-exploitation")
+    root = gov.add_objective(_S, "Compromise the domain", phase="post-exploit")
     kids = gov.expand_objective(_S, root.obj_id, ["Kerberoast a service account", "DCSync"])
     assert [k.obj_id for k in kids] == [f"{root.obj_id}.1", f"{root.obj_id}.2"], "expand makes dotted children"
     assert len(gov.load_objectives(_S)) == 3
@@ -154,7 +165,7 @@ def test_technique_ids_are_cleaned_not_invented() -> None:
 def test_attack_coverage_renders_from_objectives() -> None:
     _reset()
     gov.add_objective(_S, "recon", phase="recon", technique_ids=["T1595"])
-    gov.add_objective(_S, "access", phase="exploitation", technique_ids=["T1190", "T9999"])  # T9999 unmapped
+    gov.add_objective(_S, "access", phase="initial-access", technique_ids=["T1190", "T9999"])  # T9999 unmapped
     cov = gov.attack_coverage(_S)
     counts = cov["counts"]
     assert counts["techniques_covered"] == 2, counts  # T1595 + T1190 are in the reference

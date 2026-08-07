@@ -47,9 +47,9 @@ const STATUS_COLUMNS: { key: Objective["status"]; label: string }[] = [
 // The OPPLAN status state machine, mirrored on the client so the board only offers legal
 // next states. The backend re-validates — this is a convenience, not the control.
 const NEXT_STATES: Record<string, Objective["status"][]> = {
-  pending: ["in-progress", "blocked", "cancelled"],
+  pending: ["in-progress", "cancelled"],
   "in-progress": ["completed", "blocked", "cancelled"],
-  blocked: ["in-progress", "cancelled"],
+  blocked: ["in-progress", "completed", "cancelled"],
   completed: [],
   cancelled: [],
 };

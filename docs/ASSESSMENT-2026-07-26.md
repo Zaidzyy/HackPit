@@ -5671,13 +5671,26 @@ per-engagement signature/tag, source markers, notification contacts, traffic ide
 **OPPLAN**: the objectives, each with a `phase`, a `status` (the state machine), MITRE ATT&CK technique id(s), an OPSEC
 level and an optional C2 tier.
 
-**The state machine (ported wholesale).** `_VALID_TRANSITIONS`: `pending → {in-progress, blocked, cancelled}`,
-`in-progress → {completed, blocked, cancelled}`, `blocked → {in-progress, cancelled}`; **`completed` and `cancelled` are
-terminal**. `update_objective` is the only place a status changes and it validates against the table — an illegal
-transition raises `TransitionError`, **nothing is written**, and the OPPLAN version does not move. Objectives are a
-dotted-id tree (`1`, `1.2`) so `expand` adds sub-objectives and `collapse` removes them, mirroring `opplan.py`'s tool set
-(add / update / get / list / expand / collapse). An approved, exit-0 run is recorded as an objective's
+**The state machine (ported wholesale — then reconciled against the real Decepticon source).**
+`_VALID_TRANSITIONS`: `pending → {in-progress, cancelled}`, `in-progress → {completed, blocked, cancelled}`,
+`blocked → {in-progress, completed, cancelled}` (retry / abandon-but-done / drop); **`completed` and `cancelled` are
+terminal**. Note there is deliberately **no `pending → blocked`** edge (a pending objective has not been attempted, so it
+cannot be blocked) and **`blocked → completed` IS legal**. The build's first cut had those two edges wrong; when the
+actual `tools/opplan.py` became available it was diffed and the table corrected to Decepticon's verbatim (locked in
+`test_governance.py`). `update_objective` is the only place a status changes and it validates against the table — an
+illegal transition raises `TransitionError`, **nothing is written**, and the OPPLAN version does not move. Objectives are
+a dotted-id tree (`1`, `1.2`) so `expand` adds sub-objectives and `collapse` removes them, mirroring `opplan.py`'s tool
+set (add / update / get / list / expand / collapse). An approved, exit-0 run is recorded as an objective's
 `evidence_run_id` — the same `advance`-evidence model the AD/cloud graphs use.
+
+**Enum values are Decepticon's, verbatim.** `ObjectiveStatus` = pending / in-progress / completed / blocked / cancelled;
+`ObjectivePhase` = **recon / initial-access / post-exploit / c2 / exfiltration**; `OpsecLevel` = **loud / standard /
+careful / quiet / silent**; `C2Tier` = **interactive / short-haul / long-haul** (plus a HackPit `none` for the spec's
+"optional C2 tier", the default). The reference `killchain.yaml` maps its 14 ATT&CK tactics onto those five kill-chain
+phases. (Two source files the spec named turned out to differ from its description: Decepticon's `conops.py` is a SIEM
+target-resolver, not the ConOps generator — HackPit's ConOps doc shape is its own; and `roe.py` is a middleware that in
+`enforce` mode *can* machine-veto, which HackPit deliberately does **not** adopt — its own docstring calls the parse
+layer "a guardrail, not the sole gate", matching HackPit's handrail framing.)
 
 **MITRE ATT&CK coverage (`backend/state/killchain.py` + `references/killchain.yaml`).** The reference maps 14 ATT&CK
 tactics (Reconnaissance → Impact) to representative techniques, each tied to a ConOps phase. `attack_coverage` answers

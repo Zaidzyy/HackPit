@@ -5789,13 +5789,25 @@ phases (recon → exploitation → post-exploitation → actions-on-objectives) 
 per-engagement signature/tag, source markers, notification contacts, traffic identification, blue-team notes.
 <strong>OPPLAN</strong>: the objectives, each with a <code>phase</code>, a <code>status</code> (the state machine), MITRE ATT&amp;CK technique id(s), an OPSEC
 level and an optional C2 tier.</p>
-<p><strong>The state machine (ported wholesale).</strong> <code>_VALID_TRANSITIONS</code>: <code>pending → {in-progress, blocked, cancelled}</code>,
-<code>in-progress → {completed, blocked, cancelled}</code>, <code>blocked → {in-progress, cancelled}</code>; <strong><code>completed</code> and <code>cancelled</code> are
-terminal</strong>. <code>update_objective</code> is the only place a status changes and it validates against the table — an illegal
-transition raises <code>TransitionError</code>, <strong>nothing is written</strong>, and the OPPLAN version does not move. Objectives are a
-dotted-id tree (<code>1</code>, <code>1.2</code>) so <code>expand</code> adds sub-objectives and <code>collapse</code> removes them, mirroring <code>opplan.py</code>'s tool set
-(add / update / get / list / expand / collapse). An approved, exit-0 run is recorded as an objective's
+<p><strong>The state machine (ported wholesale — then reconciled against the real Decepticon source).</strong>
+<code>_VALID_TRANSITIONS</code>: <code>pending → {in-progress, cancelled}</code>, <code>in-progress → {completed, blocked, cancelled}</code>,
+<code>blocked → {in-progress, completed, cancelled}</code> (retry / abandon-but-done / drop); <strong><code>completed</code> and <code>cancelled</code> are
+terminal</strong>. Note there is deliberately <strong>no <code>pending → blocked</code></strong> edge (a pending objective has not been attempted, so it
+cannot be blocked) and <strong><code>blocked → completed</code> IS legal</strong>. The build's first cut had those two edges wrong; when the
+actual <code>tools/opplan.py</code> became available it was diffed and the table corrected to Decepticon's verbatim (locked in
+<code>test_governance.py</code>). <code>update_objective</code> is the only place a status changes and it validates against the table — an
+illegal transition raises <code>TransitionError</code>, <strong>nothing is written</strong>, and the OPPLAN version does not move. Objectives are
+a dotted-id tree (<code>1</code>, <code>1.2</code>) so <code>expand</code> adds sub-objectives and <code>collapse</code> removes them, mirroring <code>opplan.py</code>'s tool
+set (add / update / get / list / expand / collapse). An approved, exit-0 run is recorded as an objective's
 <code>evidence_run_id</code> — the same <code>advance</code>-evidence model the AD/cloud graphs use.</p>
+<p><strong>Enum values are Decepticon's, verbatim.</strong> <code>ObjectiveStatus</code> = pending / in-progress / completed / blocked / cancelled;
+<code>ObjectivePhase</code> = <strong>recon / initial-access / post-exploit / c2 / exfiltration</strong>; <code>OpsecLevel</code> = <strong>loud / standard /
+careful / quiet / silent</strong>; <code>C2Tier</code> = <strong>interactive / short-haul / long-haul</strong> (plus a HackPit <code>none</code> for the spec's
+"optional C2 tier", the default). The reference <code>killchain.yaml</code> maps its 14 ATT&amp;CK tactics onto those five kill-chain
+phases. (Two source files the spec named turned out to differ from its description: Decepticon's <code>conops.py</code> is a SIEM
+target-resolver, not the ConOps generator — HackPit's ConOps doc shape is its own; and <code>roe.py</code> is a middleware that in
+<code>enforce</code> mode <em>can</em> machine-veto, which HackPit deliberately does <strong>not</strong> adopt — its own docstring calls the parse
+layer "a guardrail, not the sole gate", matching HackPit's handrail framing.)</p>
 <p><strong>MITRE ATT&amp;CK coverage (<code>backend/state/killchain.py</code> + <code>references/killchain.yaml</code>).</strong> The reference maps 14 ATT&amp;CK
 tactics (Reconnaissance → Impact) to representative techniques, each tied to a ConOps phase. <code>attack_coverage</code> answers
 <em>"which techniques did this engagement's objectives exercise"</em> as a per-tactic grid + roll-up counts — a lexical id

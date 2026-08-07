@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { CockpitADOrchestrator } from "./CockpitADOrchestrator";
+import { CockpitADPersistence } from "./CockpitADPersistence";
 import { DetectionDisclosure } from "./DetectionPanel";
 import {
   ApiError,
@@ -98,7 +99,7 @@ export function CockpitADGraph({
 
   const path = result?.found ? result.path : null;
 
-  const ingestSample = useCallback(async (startOverride?: string) => {
+  const ingestSample = useCallback(async (startOverride?: string, ownedOverride?: string[]) => {
     const start = startOverride ?? SAMPLE_START;
     setLoading(true);
     setError(null);
@@ -111,7 +112,10 @@ export function CockpitADGraph({
       const ing = await adIngest({ use_sample: true, session_id: sessionId });
       setGraphId(ing.graph_id);
       setDomain(ing.domain);
-      setOwned([start]);
+      // ownedOverride lets the unconstrained-delegation demo pre-own the delegation host + the DA
+      // objective so the persistence panel renders golden + silver UNLOCKED. The route is still
+      // computed from `start`, so the TrustedForDelegation chain shows regardless.
+      setOwned(ownedOverride ?? [start]);
       setTraversed([]);
       setWarnings(ing.warnings);
       // compute the route to DA from the owned start (TYWIN = ACL chain; HODOR = ESC chain) +
@@ -143,8 +147,13 @@ export function CockpitADGraph({
     if (typeof window === "undefined") return;
     const demo = new URLSearchParams(window.location.search).get("demo");
     if (!demo) return;
-    const start = demo === "esc" ? ESC_SAMPLE_START : SAMPLE_START;
-    const id = window.setTimeout(() => void ingestSample(start), 0);
+    // ?demo=deleg → the unconstrained-delegation route (PODRICK → AdminTo → APP01 →
+    // TrustedForDelegation → Domain Admins) with golden/silver persistence unlocked;
+    // ?demo=esc → the AD CS ESC route; ?demo=1 → the classic ACL chain.
+    const start =
+      demo === "esc" ? ESC_SAMPLE_START : demo === "deleg" ? DELEG_SAMPLE_START : SAMPLE_START;
+    const ownedOverride = demo === "deleg" ? DELEG_DEMO_OWNED : undefined;
+    const id = window.setTimeout(() => void ingestSample(start, ownedOverride), 0);
     return () => window.clearTimeout(id);
   }, [ingestSample]);
 
@@ -399,6 +408,18 @@ export function CockpitADGraph({
           </div>
         </section>
       )}
+
+      {/* POST-COMPROMISE PERSISTENCE — golden / silver ticket forging. A distinct panel, not a
+          route hop: it is offered only once you hold the secret (krbtgt / a service hash) and is
+          never part of the path search or the orchestrator frontier. */}
+      {graphId && (
+        <CockpitADPersistence
+          graphId={graphId}
+          owned={owned}
+          traversed={traversed}
+          engagement={!!engagementId}
+        />
+      )}
     </div>
   );
 }
@@ -408,6 +429,17 @@ const SAMPLE_START = "S-1-5-21-1111111111-2222222222-3333333333-1104";
 // The AD CS demo's owned start (HODOR's SID) — a low-priv enrollee who reaches DA via the ESC
 // chain (ESC4 rewrite → ESC1). Matches sample_data.ESC_SAMPLE_START.
 const ESC_SAMPLE_START = "S-1-5-21-1111111111-2222222222-3333333333-1110";
+// The unconstrained-delegation demo's owned start (PODRICK's SID) — local admin on APP01, which is
+// trusted for delegation. Matches sample_data.DELEG_SAMPLE_START.
+const DELEG_SAMPLE_START = "S-1-5-21-1111111111-2222222222-3333333333-1112";
+// PODRICK + APP01 (the delegation host) + Domain Admins — pre-owned in the deleg demo so the
+// persistence panel renders golden (krbtgt held) + silver (APP01's hash held) unlocked. Matches
+// sample_data.DELEG_DEMO_OWNED.
+const DELEG_DEMO_OWNED = [
+  "S-1-5-21-1111111111-2222222222-3333333333-1112",
+  "S-1-5-21-1111111111-2222222222-3333333333-1131",
+  "S-1-5-21-1111111111-2222222222-3333333333-512",
+];
 
 /** Split a one-line command into argv tokens (quote-aware). Multi-line commands use the first
  *  runnable line. Not a shell — the executor runs argv-only. */

@@ -34,10 +34,14 @@ SVC_SQL = _u("1109", "svc_sql")
 # AD CS enrollees — low-priv principals whose ESC route to DA the certipy sample adds.
 HODOR = _u("1110", "hodor")   # can WRITE a template (ESC4) -> reconfigure -> ESC1
 BRAN = _u("1111", "bran")     # a direct ESC1 enrollee + a CA officer (ESC7)
+# Unconstrained-delegation demo: PODRICK is local admin on APP01, a member server trusted for
+# (unconstrained) delegation. owned PODRICK --AdminTo--> APP01 --TrustedForDelegation--> DA.
+PODRICK = _u("1112", "podrick")
 SMALL_COUNCIL = _u("1120", "small council")
 DOMAIN_ADMINS = f"{DOMAIN_SID}-512"
 DC01 = _u("1001", "dc01")
 WKSTN01 = _u("1130", "wkstn01")  # the coerced/relayed machine for ESC8
+APP01 = _u("1131", "app01")      # a member server TRUSTED FOR (unconstrained) DELEGATION
 
 
 def _user(sid: str, short: str, **props) -> dict:
@@ -84,8 +88,11 @@ def sample_collection() -> dict:
     # certipy sample synthesizes (so the BloodHound-only graph is byte-identical for the old tests).
     hodor = _user(HODOR, "hodor")
     bran = _user(BRAN, "bran")
+    # PODRICK — low-priv; his only route to DA is via APP01's unconstrained delegation (he is
+    # local admin on APP01, so the walk reaches the host, then the synthesized edge does the rest).
+    podrick = _user(PODRICK, "podrick")
 
-    users = [tywin, jaime, joffrey, tyrion, cersei, svc_sql, hodor, bran]
+    users = [tywin, jaime, joffrey, tyrion, cersei, svc_sql, hodor, bran, podrick]
 
     # --- groups ------------------------------------------------------------- #
     small_council = {
@@ -154,6 +161,26 @@ def sample_collection() -> dict:
         "IsDeleted": False,
     }
 
+    # APP01 — a member server TRUSTED FOR (unconstrained) DELEGATION. PODRICK is local admin on it
+    # (an AdminTo edge), and the `unconstraineddelegation` flag makes the parser synthesize the
+    # routable APP01 --TrustedForDelegation--> Domain Admins edge (own it, coerce a DC, capture its
+    # TGT, DCSync). Not high-value — it is an ordinary app server, which is exactly the vuln.
+    app01 = {
+        "ObjectIdentifier": APP01,
+        "Properties": {"name": "APP01.SEVENKINGDOMS.LOCAL", "domain": "SEVENKINGDOMS.LOCAL",
+                       "operatingsystem": "Windows Server 2022", "highvalue": False,
+                       "unconstraineddelegation": True},
+        "Aces": [], "AllowedToDelegate": [], "AllowedToAct": [],
+        "Sessions": {"Results": [], "Collected": True},
+        "LocalAdmins": {"Results": [{"ObjectIdentifier": PODRICK, "ObjectType": "User"}],
+                        "Collected": True},
+        "RemoteDesktopUsers": {"Results": [], "Collected": True},
+        "PSRemoteUsers": {"Results": [], "Collected": True},
+        "DcomUsers": {"Results": [], "Collected": True},
+        "PrimaryGroupSID": f"{DOMAIN_SID}-515",
+        "IsDeleted": False,
+    }
+
     def _file(mtype: str, data: list[dict]) -> dict:
         return {"data": data, "meta": {"methods": 46, "type": mtype, "count": len(data),
                                        "version": 5}}
@@ -161,7 +188,7 @@ def sample_collection() -> dict:
     return {
         "users": _file("users", users),
         "groups": _file("groups", [small_council, domain_admins]),
-        "computers": _file("computers", [dc01, wkstn01]),
+        "computers": _file("computers", [dc01, wkstn01, app01]),
         "domains": _file("domains", [domain]),
         "gpos": _file("gpos", []),
         "ous": _file("ous", []),
@@ -261,3 +288,9 @@ OWNED_START = TYWIN
 HIGH_VALUE_TARGET = DOMAIN_ADMINS
 # The AD CS demo's owned start — a low-priv user who reaches DA via the ESC chain (ESC4 -> ESC1).
 ESC_SAMPLE_START = HODOR
+# The unconstrained-delegation demo's owned start — a low-priv user who reaches DA through APP01's
+# unconstrained delegation (AdminTo APP01 -> TrustedForDelegation -> Domain Admins).
+DELEG_SAMPLE_START = PODRICK
+# The unconstrained-delegation host + the DA objective — pre-owned in the demo so the persistence
+# panel renders GOLDEN (krbtgt held) + SILVER (APP01's hash held) unlocked in the screenshot.
+DELEG_DEMO_OWNED = (PODRICK, APP01, DOMAIN_ADMINS)

@@ -3610,6 +3610,39 @@ export const adTechnique = (
   signal?: AbortSignal
 ) => postJSON<ADTechnique>("/cockpit/ad/technique", body, signal);
 
+// ---- Post-compromise PERSISTENCE: golden / silver ticket forging ---------- //
+// NOT a routing edge — forging presupposes you already hold the secret (krbtgt for golden, a
+// service hash for silver), so it is never part of the route-to-DA search or the orchestrator
+// frontier. This endpoint just surfaces which forging actions are OFFERED given what is held.
+export type ADPersistenceAction = {
+  kind: "GoldenTicket" | "SilverTicket";
+  node_id: string;
+  node_label: string;
+  node_type: "domain" | "computer";
+  title: string;
+  summary: string;
+  tool: string;
+  /** The secret you must already hold for this to be offered (krbtgt / a service hash). */
+  requires: string;
+  destructive: boolean;
+  persistence: boolean;
+  commands: ADCommand[];
+  windows_commands: ADCommand[];
+  available: boolean;
+};
+
+/** The golden/silver ticket-forging actions offered NOW, gated on the held secret. Only
+ *  AVAILABLE actions come back — a forging action is never offered before its secret is held. */
+export const adPersistenceActions = (
+  body: { graph_id: string; owned: string[]; traversed: string[]; dc?: string | null },
+  signal?: AbortSignal
+) =>
+  postJSON<{ actions: ADPersistenceAction[]; note: string }>(
+    "/cockpit/ad/persistence",
+    body,
+    signal
+  );
+
 // ---- AD orchestration: the agent PROPOSES the next edge ------------------- //
 
 /**

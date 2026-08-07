@@ -245,6 +245,11 @@ def parse_collection(source: Any, certipy: Any | None = None) -> Graph:
         for obj in items:
             _emit_edges(g, mtype, obj)
 
+    # Unconstrained delegation: synthesize the routable TrustedForDelegation edge from the
+    # `unconstraineddelegation` flag — the parallel to the RBCD / DCSync synthesis (a composite
+    # abuse edge emitted when a predicate over collected facts holds), needs all nodes present.
+    _synthesize_unconstrained_delegation(g)
+
     # collection-method coverage warnings (so a thin graph explains itself).
     _acl_kinds = set(_ACE_MAP.values()) | {"DCSync"}
     if not any(e.kind in _acl_kinds for e in g.edges):
@@ -384,6 +389,39 @@ def _emit_aces(g: Graph, target_oid: str, aces: Any) -> None:
         if _GETCHANGES in rights and _GETCHANGES_ALL in rights:
             g.add_edge(Edge(source=psid, target=target_oid, kind="DCSync",
                             props={"via": "GetChanges+GetChangesAll"}))
+
+
+def _synthesize_unconstrained_delegation(g: Graph) -> None:
+    """Synthesize the routable ``TrustedForDelegation`` edge from BloodHound's
+    ``unconstraineddelegation`` flag — the unconstrained-delegation parallel to the RBCD /
+    DCSync synthesis.
+
+    A host TRUSTED FOR (unconstrained) DELEGATION caches the full TGT of every principal that
+    authenticates to it. So for each such non-DC computer/user we emit one composite edge
+    ``host --TrustedForDelegation--> <Domain Admins objective>``: own that host (the walk reaches
+    it via AdminTo), coerce a DC to authenticate to it (printerbug / PetitPotam), capture the DC's
+    TGT, and DCSync ⇒ krbtgt ⇒ full compromise. The abuse REQUIRES owning the host first, which
+    the BFS supplies via the inbound AdminTo edge — the composite edge itself only encodes the
+    win. Idempotent (``Graph.add_edge`` de-dups). Uses the same objective terminus as the ESC
+    synthesis so the enrollee lands on the real Domain Admins node the path engine picks.
+    """
+    objective = _esc_objective(g)
+    if not objective:
+        return
+    for node in list(g.nodes.values()):
+        if node.type not in ("computer", "user") or node.id == objective:
+            continue
+        if not _truthy(node.props.get("unconstraineddelegation")):
+            continue
+        # A DC is unconstrained by design and already domain-controlling — that is game over,
+        # not a route to it. We still emit the edge (owning a DC IS the win) but flag it so the
+        # UI/technique can say so rather than proposing a coerce-a-DC dance you don't need.
+        is_dc = node.type == "computer" and node.high_value
+        g.add_edge(Edge(source=node.id, target=objective, kind="TrustedForDelegation", props={
+            "is_dc": is_dc,
+            "requires_owned_host": True,      # the BFS supplies this via the inbound AdminTo edge
+            "coerce": "printerbug / PetitPotam / Coercer",
+        }))
 
 
 # =========================================================================== #

@@ -31,6 +31,7 @@ from pathlib import Path
 
 from adgraph import orchestrator as O
 from adgraph import parser as P
+from adgraph import persistence as PERS
 from adgraph import router as R
 from adgraph import sample_data as S
 from adgraph import schema as SC
@@ -340,6 +341,69 @@ def test_a_proposed_esc_step_runs_nothing_unapproved() -> None:
         E.engagement.get_active = orig
 
 
+def test_a_proposed_delegation_step_runs_nothing_unapproved() -> None:
+    """THE claim, for unconstrained delegation. The synthesized TrustedForDelegation edge (an
+    owned host -> Domain Admins) resolves to a real destructive command; submitted unapproved it
+    must be refused, and even approved it must demand the red confirm (it captures a DC's TGT and
+    DCSyncs) — the same load-bearing invariant as any other AD abuse."""
+    g = P.parse_collection(S.sample_collection())
+    edge = next(e for e in g.edges if e.kind == "TrustedForDelegation")
+    prop = O.proposal_for_edge(g, edge, "own the host, coerce a DC, capture its TGT, DCSync")
+    assert prop["command"] == "krbrelayx.py", prop["command"]
+    assert prop["destructive_technique"], "capturing a DC TGT then DCSyncing is destructive"
+
+    eng = _eng("sevenkingdoms.local, dc01.sevenkingdoms.local", "dc01.sevenkingdoms.local")
+    orig = _patch(eng)
+    try:
+        rej = E.validate_request(ExecRequest(
+            command=prop["command"], args=prop["args"], approved=False,
+            engagement_id=eng.engagement_id))
+        assert rej is not None, "an unapproved delegation abuse step must be REFUSED"
+        assert rej.gate in ("approval", "danger", "target"), rej
+        rej2 = E.validate_request(ExecRequest(
+            command=prop["command"], args=prop["args"], approved=True,
+            engagement_id=eng.engagement_id))
+        assert rej2 is not None and rej2.gate == "danger", rej2
+        print("  a proposed unconstrained-delegation step is refused unapproved, and demands the "
+              "red confirm even when approved: PASS")
+    finally:
+        E.engagement.get_active = orig
+
+
+def test_ticket_forging_is_never_in_the_route_to_da_search() -> None:
+    """Golden/silver forging is POST-compromise persistence, not a routing edge. It must never be
+    an abusable edge, never enter the orchestrator frontier (even with everything owned), and never
+    appear as a graph edge — so the path engine cannot 'reach DA' by assuming the very krbtgt the
+    route exists to obtain."""
+    for kind in PERS.KINDS:
+        assert kind not in SC.ABUSABLE_EDGES, f"{kind} must not be an abusable edge"
+        assert not SC.is_abusable(kind), f"{kind} must not be traversable"
+    g = P.parse_collection(S.sample_collection())
+    everything = O.AdState(owned=tuple(g.nodes.keys()))
+    for e in O.frontier(g, everything):
+        assert not PERS.is_persistence(e.kind), f"a forging action reached the frontier: {e.kind}"
+    assert not any(PERS.is_persistence(e.kind) for e in g.edges), (
+        "no GoldenTicket/SilverTicket edge may exist in the graph"
+    )
+    # and it IS offered as persistence once the secret is held (positive control)
+    held = PERS.persistence_actions(g, O.AdState(owned=S.DELEG_DEMO_OWNED))
+    assert any(a["kind"] == "GoldenTicket" for a in held), "golden should be offered once DA owned"
+    assert any(a["kind"] == "SilverTicket" for a in held), "silver should be offered once a host owned"
+    print("  ticket forging is offered as persistence, never as a routing edge or a frontier "
+          "candidate: PASS")
+
+
+def test_persistence_module_executes_nothing() -> None:
+    """The forging catalog is DATA — rendering a command string must never spawn a process."""
+    from adgraph import persistence as PMOD
+    src = Path(PMOD.__file__).read_text(encoding="utf-8")
+    banned = ["subprocess", "Popen", "os.system", "os.exec", "pty.spawn", "docker exec",
+              "run_kali", "iter_run(", "check_output"]
+    for tok in banned:
+        assert tok not in src, f"adgraph.persistence must not reference {tok!r}"
+    print("  the golden/silver persistence catalog executes nothing (source-scanned): PASS")
+
+
 def test_adcs_ingest_and_techniques_execute_nothing() -> None:
     """The certipy ingest + the ESC technique templates are DATA. Source-scan the modules that
     gained AD CS code for any execution path — parsing captured `certipy find` output and
@@ -503,6 +567,9 @@ if __name__ == "__main__":
     test_windows_variant_runs_through_the_same_gates()
     test_a_destructive_abuse_never_renders_as_benign()
     test_a_proposed_esc_step_runs_nothing_unapproved()
+    test_a_proposed_delegation_step_runs_nothing_unapproved()
+    test_ticket_forging_is_never_in_the_route_to_da_search()
+    test_persistence_module_executes_nothing()
     test_adcs_ingest_and_techniques_execute_nothing()
     test_read_only_ad_enumeration_stays_clean()
     test_off_scope_ad_host_is_refused()

@@ -67,6 +67,14 @@ ABUSABLE_EDGES: tuple[str, ...] = (
     "ReadGMSAPassword",      # read a gMSA's managed password
     "AllowedToDelegate",     # constrained delegation (S4U) to a target service
     "AllowedToAct",          # resource-based constrained delegation on the target
+    # Unconstrained delegation — the last routable delegation primitive. A host TRUSTED FOR
+    # DELEGATION caches the full TGT of anyone who authenticates to it; own that host, coerce a
+    # DC to authenticate to it (printerbug / PetitPotam), capture the DC's TGT, and DCSync. It is
+    # synthesized from BloodHound's `unconstraineddelegation: true` flag (parser) exactly like
+    # RBCD is synthesized from msDS-AllowedToActOnBehalfOfOtherIdentity, and it targets the
+    # Domain Admins objective (capturing a DC TGT ⇒ krbtgt ⇒ full compromise). It sits just below
+    # the constrained/RBCD edges because it needs the host owned first (the walk supplies AdminTo).
+    "TrustedForDelegation",  # unconstrained delegation host -> DA (coerce a DC, capture its TGT)
     "HasSIDHistory",         # SID history grants the referenced principal's access
     "AdminTo",               # local admin on a computer
     "CanRDP",                # interactive logon via RDP

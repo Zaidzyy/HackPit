@@ -344,6 +344,10 @@ _AD_DIR_WRITE = frozenset({
     "targetedkerberoast", "ticketer", "goldenpac", "raisechild", "ntlmrelayx",
     "mitm6", "responder", "petitpotam", "coercer", "printerbug", "dfscoerce",
     "shadowcoerce", "certipy-relay",
+    # SpoolSample / SharpSpoolTrigger — the .NET printerbug used to coerce a DC to authenticate
+    # to an owned unconstrained-delegation host (the CRTP Windows path). Coerces authentication
+    # exactly like printerbug/PetitPotam above, so it earns the same red-confirm.
+    "spoolsample", "sharpspooltrigger",
 })
 # Argument shapes that turn an otherwise-general tool into a credential dump.
 _AD_DUMP_MARKERS = (
@@ -360,7 +364,12 @@ _AD_WRITE_SUBCOMMANDS: dict[str, tuple[str, ...]] = {
     # certificate as a chosen principal and `download` pulls an issued one, so both mutate/mint.
     "certify": ("request", "download"),
     "net": ("password", "/add", "/delete", "/active:"),
-    "rubeus": ("ptt", "golden", "silver", "s4u", "asktgt", "changepw", "tgtdeleg", "dump"),
+    # `monitor` harvests Kerberos tickets from the host in real time — the capture half of an
+    # unconstrained-delegation attack (it pockets the coerced DC's TGT). It mints/captures a
+    # credential, so it trips the confirm alongside the ticket-forging verbs. (`Rubeus find` /
+    # `triage` stay clean — read-only, like `certipy find`.)
+    "rubeus": ("ptt", "golden", "silver", "s4u", "asktgt", "changepw", "tgtdeleg", "dump",
+               "monitor"),
     "bloodhound-ce": (),
 }
 

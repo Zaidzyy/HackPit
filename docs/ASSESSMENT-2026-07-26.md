@@ -5377,3 +5377,65 @@ green**. `next build` exits 0 with `/cockpit/ad` in the route table.
 would fold in the same way but is not wired. Synthesized ESC edges target the Domain Admins group (RID 512) when
 collected, else the domain node — reaching it is the win, matching the existing objective model. ESC9–11 are
 deferred (catalog-cited), as noted above.
+
+## Unconstrained delegation edge + golden/silver ticket forging — the delegation-family closer (`:ad-graph`) (2026-08-07)
+
+The AD graph modeled RBCD (`AddAllowedToAct` / `AllowedToAct`) and constrained/S4U delegation (`AllowedToDelegate`)
+as full routable edges, but the third Kerberos-delegation primitive — **unconstrained delegation** — was not routable,
+and ticket forging existed only as a mimikatz arsenal capability with no technique node. This build closes both. It
+adds the **`TrustedForDelegation`** abusable edge and adds **golden / silver ticket forging** as post-compromise
+persistence. **No new gate; per-command human approval is the only bound** — the guiding constraint held.
+
+**Unconstrained delegation is now a routable edge, synthesized from the flag exactly like RBCD.** BloodHound emits
+`unconstraineddelegation: true` on a computer/user; `parser._synthesize_unconstrained_delegation` folds that into one
+composite `host --TrustedForDelegation--> Domain Admins` edge — the same shape as the DCSync synthesis (a composite
+abuse edge emitted when a predicate over collected facts holds) and the ESC synthesis before it. The edge encodes the
+win (own the host, coerce a DC to authenticate to it, capture its TGT, DCSync ⇒ krbtgt ⇒ full compromise); owning the
+host first is supplied by the BFS via the inbound `AdminTo` edge, so the demo routes `PODRICK --AdminTo--> APP01
+--TrustedForDelegation--> DOMAIN ADMINS`. It targets the Domain Admins objective the path engine already picks (RID
+512), matching the ESC objective model. A DC — unconstrained by design, already domain-controlling — is flagged
+`is_dc` rather than treated as a novel route.
+
+**The technique demands the red-confirm on both transports, and the oracle proves it.** The catalog entry is
+`destructive`, with a Linux `krbrelayx + printerbug → secretsdump -k` chain and a native `Rubeus monitor +
+SpoolSample → mimikatz lsadump::dcsync` variant for the CRTP on-host path. The AD-orchestration oracle
+(`test_adorch_safety.py`) requires every edge the catalog calls destructive to resolve to a command the danger
+heuristic flags, on **both** Linux and Windows. The Linux first-runnable line (`krbrelayx`) already tripped as a
+credential-capture tool; the Windows first-runnable line (`Rubeus.exe monitor`) did **not** until `monitor` was added
+to the rubeus subcommand map — `Rubeus monitor` harvests the coerced DC's TGT, so it mints/captures a credential, and
+`SpoolSample` (the .NET printerbug) joined the coercion set beside printerbug/PetitPotam. `Rubeus find`/`triage` stay
+clean, like `certipy find`, so the confirm keeps its meaning.
+
+**Golden and silver forging are persistence, deliberately NOT routing edges.** Forging a ticket presupposes you
+already hold the secret it would otherwise be used to obtain — krbtgt for golden, a service hash for silver — so an
+edge for it would let the path engine "reach DA" by assuming the very thing the route exists to achieve. The two live
+in a separate `adgraph/persistence.py` catalog keyed by node type, surfaced by a read-only `POST /cockpit/ad/persistence`
+endpoint that only OFFERS an action once its secret is held: **golden** on the domain node once krbtgt is held (a
+traversed DCSync / a captured DC TGT / the objective owned), **silver** on each owned computer/service node. They are
+never in `schema.ABUSABLE_EDGES`, never a graph edge, and never enter the orchestrator frontier — regression-locked in
+`test_deleg_tickets.py` and `test_adorch_safety.py` even with every node owned. Each renders both an impacket
+(`ticketer`) and a mimikatz command; both trip the danger gate. (The lighter of the two spec options — a persistence
+catalog rather than non-traversable self-edges — was chosen because `Graph.add_edge` drops self-loops outright, which
+would have made self-edges the heavier, more invasive path.)
+
+**Frontend `/cockpit/ad`** renders `TrustedForDelegation` as a normal abusable edge on the route, and a **distinct,
+violet-keyed persistence panel** (`CockpitADPersistence`, new `hp-adg-persist-*` vocabulary) below it — golden/silver
+cards with a GOLDEN/SILVER badge, the requirement, and both commands, styled so they never read as a routing step. A
+`?demo=deleg` deep-link auto-ingests the synthetic member-server sample and pre-owns the host + objective so the panel
+renders the forging actions unlocked. **The screen was looked at** (`frontend-class-vocabulary`): the sample renders a
+real 2-hop route — `PODRICK` (owned) —AdminTo→ `APP01` —TrustedForDelegation→ `DOMAIN ADMINS` — with the persistence
+panel below, no AD lab (see screenshot 37).
+
+**Verification.** `test_deleg_tickets.py` (the flag synthesizes a routable edge and a low-priv admin routes
+`AdminTo → TrustedForDelegation → DA`; the technique carries both transports, both destructive and both tripping the
+gate; krbrelayx/printerbug/PetitPotam/SpoolSample/Rubeus-monitor all trip while Rubeus-triage stays clean; golden
+gated on krbtgt-held and silver on a held service hash; neither forging kind is ever an abusable edge, a graph edge,
+or a frontier candidate) plus the extended `test_adorch_safety.py` (a proposed delegation step refused unapproved and
+demanding the red-confirm even when approved; forging never in the route-to-DA search; `adgraph/persistence.py`
+executes nothing by source-scan). Added to `run_safety_tests.sh`.
+
+**Assumptions (per §5), stated.** Unconstrained delegation is the must-have (the missing routable edge); golden/silver
+are persistence, explicitly not routing edges, because a route-to-DA graph should not search through post-DA
+persistence. Coercion tooling (petitpotam/printerbug/coercer/dfscoerce/shadowcoerce) was already gated in
+`allowlist.py`; no allowlist policy change beyond classifying `Rubeus monitor` and `SpoolSample`. No new tools —
+mimikatz, Rubeus, impacket (`ticketer`), printerbug and PetitPotam are all already present.

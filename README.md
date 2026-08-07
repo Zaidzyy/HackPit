@@ -56,6 +56,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | ◎ **Nuclei template scan** | Scoped target(s) → templates → severity-ranked findings, one approval; results flow into engagement state. |
 | 🪟 **Windows / AD** | BloodHound graph → route to Domain Admin → walk it live over WinRM. |
 | 📄 **AD CS (ESC1–8)** | `certipy find` → certtemplate/certauthority nodes + synthesized `ESC1…ESC8` edges → a low-priv enrollee → vulnerable template → Domain Admin, routed in the same graph; the agent picks an edge, you approve every command. |
+| 🎫 **Unconstrained delegation + tickets** | `unconstraineddelegation` → a routable `TrustedForDelegation` edge (own the host, coerce a DC, capture its TGT, DCSync) → Domain Admin; **golden / silver ticket forging** as propose-only persistence, offered only once you hold the secret and never a step on the route. |
 | ☁️ **Cloud IAM privesc** | ScoutSuite/Prowler/pacu/cloudfox → typed IAM graph → route to an admin/owner identity across AWS/Azure/GCP; the agent picks an edge, you approve every command. |
 | 🌉 **Web SSRF → cloud creds** | A captured IMDS response (from the repeater, a nuclei hit, or an OOB callback) → an **owned** cloud principal seeded into the IAM graph → the privesc walk starts from the identity you just stole. |
 | 🔑 **Credential attack** | Spray captured/OSINT creds, crack captured hashes — one approval per job; secrets stay in loot files, a hit lights the AD graph. |
@@ -229,6 +230,18 @@ The same graph now **routes certificate-services abuse**. Feed it **`certipy fin
 </p>
 
 > No AD lab needed: the sample is a **synthetic vulnerable CA** (no real domain, CA, or account names) with a real ESC route — a low-priv user who can rewrite a template's config reconfigures it to be SAN-abusable (ESC4), then enrols a Domain Admin certificate (ESC1). A live `certipy find` wires in the same way, through the gated executor, when a domain is in scope.
+
+### 🎫 Unconstrained delegation + golden/silver ticket forging
+
+The same graph now finishes the **Kerberos-delegation family**. RBCD and constrained (S4U) delegation were already routable edges; the last one — **unconstrained delegation** — is now too. A host flagged `unconstraineddelegation` synthesizes a routable **`TrustedForDelegation`** edge to Domain Admins (synthesized from the flag exactly like RBCD is from `msDS-AllowedToActOnBehalfOfOtherIdentity`): own the host — the walk reaches it via `AdminTo` — **coerce a DC** to authenticate to it (printerbug / PetitPotam), **capture its TGT**, and **DCSync**. Its abuse is grounded in the KB and resolves to a real `krbrelayx + printerbug → secretsdump` chain, with a native `Rubeus monitor + SpoolSample → mimikatz dcsync` variant for the on-host CRTP path — and, like every abuse in the graph, it demands the destructive red-confirm and runs **only** through the gated executor, approve-each.
+
+**Golden and silver ticket forging** ride alongside as **post-compromise persistence**, not routing edges: forging a ticket presupposes the very compromise the route exists to reach, so it is never walked by the path search or the orchestrator frontier. A **golden** ticket is offered on the domain node **only once krbtgt is held** (a DCSync / a captured DC TGT); a **silver** ticket on a service node **only once its account hash is held**. They surface in a distinct persistence panel with both an impacket (`ticketer`) and a mimikatz command — propose-only, gated behind the held secret.
+
+<p align="center">
+  <img src="assets/screenshots/37-cockpit-ad-deleg.png" alt="The unconstrained-delegation route — a synthetic member server renders a 2-hop route from an owned low-priv user to Domain Admins: PODRICK (owned) —AdminTo→ APP01 —TrustedForDelegation→ DOMAIN ADMINS — with a distinct post-compromise persistence panel below offering golden and silver ticket forging once the required secret is held" width="90%">
+</p>
+
+> No AD lab needed: the sample is a **synthetic member server** trusted for delegation (no real domain or host names). A low-priv user who is local admin on it routes `AdminTo → TrustedForDelegation → Domain Admins`, and the persistence panel offers golden/silver forging once you hold krbtgt / the host's hash. A live BloodHound collection wires in the same way, through the gated executor, when a domain is in scope.
 
 ---
 

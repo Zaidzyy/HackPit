@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from . import orchestrator as ad_orch
+from . import persistence as ad_persistence
 from . import store
 from .collector import (
     CollectorParams,
@@ -444,6 +445,45 @@ def ad_orchestrate_advance(req: AdvanceIn) -> dict[str, Any]:
         "owned_label": (graph.node(req.target).label if graph.node(req.target) else req.target),
         "objective_reached": bool(goal and new_state.is_owned(goal)),
         "remaining_frontier": len(ad_orch.frontier(graph, new_state)),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# PERSISTENCE — golden / silver ticket forging (post-compromise, propose-only)
+#
+# NOT a route-to-DA edge: forging a ticket presupposes you already hold the secret (krbtgt for
+# golden, a service hash for silver), so it is never part of the path search or the orchestrator
+# frontier. This read-only endpoint just surfaces which forging actions are OFFERED given what
+# the operator already holds. Nothing runs here — a chosen command goes to POST /cockpit/exec,
+# approve-each, exactly like an abusable edge's abuse.
+# --------------------------------------------------------------------------- #
+class PersistenceIn(BaseModel):
+    graph_id: str
+    owned: list[str] = Field(
+        default_factory=list, description="Node ids of principals/hosts the operator controls."
+    )
+    traversed: list[str] = Field(
+        default_factory=list, description="Edge keys ('source|target|kind') already walked."
+    )
+    dc: str | None = Field(None, description="Domain controller host, for command templating.")
+
+
+@router.post("/persistence")
+def ad_persistence_actions(req: PersistenceIn) -> dict[str, Any]:
+    """The golden / silver ticket-forging actions offered NOW, gated on the held secret.
+
+    Golden is offered on the domain node once krbtgt is held (a DCSync / captured DC TGT); silver
+    on each owned computer/service node (its account hash is held). Executes nothing — the actions
+    are display data + a command the human may later approve through the gated executor. These are
+    never routing edges: the path engine and the orchestrator frontier never see them.
+    """
+    graph = _rebuild_graph(_load_graph_obj(req.graph_id))
+    state = ad_orch.AdState.from_dict({"owned": req.owned, "traversed": req.traversed})
+    actions = ad_persistence.persistence_actions(graph, state, req.dc)
+    return {
+        "actions": actions,
+        "note": "PROPOSE-ONLY persistence — nothing has run, and none of these are part of the "
+                "route-to-DA search. Approve a command to send it to POST /cockpit/exec.",
     }
 
 

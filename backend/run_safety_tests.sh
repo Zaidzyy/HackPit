@@ -126,6 +126,8 @@ run_test test_adorch.py "AD orchestration tests (frontier / proposals / syntheti
 
 run_test test_adorch_safety.py "AD ORCHESTRATION safety (agent proposes only / never-auto-run / destructive red-confirm)"
 
+run_test test_deleg_tickets.py "UNCONSTRAINED DELEGATION + TICKET FORGING (an unconstrained-delegation host synthesizes a routable TrustedForDelegation edge to Domain Admins and an owned low-priv admin routes AdminTo->host->TrustedForDelegation->DA / its technique carries a Linux krbrelayx path AND a native Rubeus/SpoolSample path, both destructive and both tripping the danger gate / krbrelayx+printerbug+PetitPotam+SpoolSample+Rubeus monitor all trip while Rubeus triage stays clean / GOLDEN is offered on the domain node ONLY once krbtgt is held (DCSync or captured DC TGT) and SILVER on a service node ONLY once its hash is held / NEITHER forging kind is an abusable edge, a graph edge, or a frontier candidate even with everything owned — persistence is never in the route-to-DA search)"
+
 run_test test_adgraph_safety.py "AD graph SAFETY invariants (no exec in adgraph / zero :kali / collector+abuse gated / lab unchanged)"
 
 run_test test_cloudgraph.py "cloud IAM graph tests (ScoutSuite/Prowler JSON -> privesc graph / BFS route to an admin principal / orchestrator edge-index proposal / advance requires an approved exit-0 run)"

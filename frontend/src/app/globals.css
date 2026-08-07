@@ -6406,6 +6406,92 @@ a.hp-card {
 .hp-adg-drawer-foot { font-size: 11px; color: var(--dim); opacity: 0.85; margin: 2px 0 0; }
 .hp-adg-out { margin-top: 4px; }
 
+/* --- post-compromise PERSISTENCE (golden / silver ticket forging) -------------
+ * A DELIBERATELY distinct panel — a violet-keyed card grid, NOT the route's edge/node
+ * vocabulary — so ticket forging never reads as a hop on the way to Domain Admin. It is
+ * offered only once the required secret is held; the panel is empty until then. */
+.hp-adg-persist {
+  margin-top: 8px;
+  border: 1px solid rgba(201, 138, 240, 0.28);
+  border-radius: 12px;
+  padding: 16px;
+  background: rgba(201, 138, 240, 0.05);
+}
+.hp-adg-persist-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.hp-adg-persist-kicker {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: #c98af0;
+}
+.hp-adg-persist-title { font-size: 15px; font-weight: 700; margin: 0; }
+.hp-adg-persist-sub { font-size: 12.5px; line-height: 1.55; color: var(--dim); margin: 4px 0 10px; }
+.hp-adg-persist-empty {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--dim);
+  border: 1px dashed rgba(201, 138, 240, 0.3);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.hp-adg-persist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+}
+.hp-adg-persist-card {
+  border: 1px solid rgba(201, 138, 240, 0.32);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hp-adg-persist-cardhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hp-adg-persist-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--dim);
+}
+.hp-adg-persist-badge.is-golden { color: #f0c674; border-color: rgba(240, 198, 116, 0.5); }
+.hp-adg-persist-badge.is-silver { color: #c7d0dd; border-color: rgba(199, 208, 221, 0.45); }
+.hp-adg-persist-cardtitle { font-size: 13.5px; font-weight: 700; }
+.hp-adg-persist-on {
+  margin-left: auto;
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 11px;
+  color: var(--dim);
+}
+.hp-adg-persist-summary { font-size: 12.5px; line-height: 1.5; color: var(--dim); margin: 0; }
+.hp-adg-persist-requires {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 11px;
+  color: #c98af0;
+  margin: 0;
+}
+.hp-adg-persist-cmd {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #d7e0ff;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 9px 11px;
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre;
+}
+.hp-adg-persist-cmd.is-win { border-color: rgba(143, 180, 255, 0.25); }
+.hp-adg-persist-foot { font-size: 10.5px; color: var(--dim); opacity: 0.85; margin: 2px 0 0; }
+
 /* --- live session panel (:session) -------------------------------------------
    Reuses the :kali / cockpit terminal chrome (.hp-ck-out*, .hp-kali-input*). Only
    the session-specific chrome lives here: the mode banner, the start form, the

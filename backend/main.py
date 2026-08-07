@@ -78,6 +78,14 @@ from findings import rankers as finding_rankers  # noqa: E402
 from findings import schema as finding_schema  # noqa: E402
 from state import tasks as state_tasks  # noqa: E402
 from state import credvault  # noqa: E402
+# Formal engagement governance (RoE / ConOps / Deconfliction / OPPLAN). The data model + the
+# OPPLAN status state machine live in the executes-nothing state package (state/governance.py);
+# the propose-only drafter (governance_draft.py) is the generative layer, like attack_path.py.
+# The RoE-vs-scope ADVISORY check is wired HERE in the app layer — that is the only place
+# cockpit.scope may be imported from — and it flags, it never blocks. Governance adds NO gate.
+from state import governance as gov  # noqa: E402
+import governance_draft  # noqa: E402
+from cockpit import scope as cockpit_scope  # noqa: E402
 from cockpit.router import router as cockpit_router  # noqa: E402
 from adgraph import store as ad_store  # noqa: E402  (backend/adgraph — AD attack-path graph)
 from adgraph.router import (  # noqa: E402
@@ -2197,6 +2205,391 @@ def delete_session(session_id: str) -> None:
         raise HTTPException(status_code=404, detail="session not found")
 
 
+# ---- engagement governance: RoE / ConOps / Deconfliction / OPPLAN -------- #
+# The formal governance package. Everything here is authored + human-approved documentation
+# plus a formalised scope frame; it EXECUTES NOTHING and adds NO gate. Generation is
+# propose-only (the drafter drafts, the human edits + approves). The RoE FORMALISES the scope
+# handrail — it is advisory to the human, never a machine veto. Per-command human approval
+# stays THE bound (matching the standing "target lock is a handrail" decision).
+
+def _require_session(session_id: str) -> dict[str, Any]:
+    s = sessions_db.get_session(session_id)
+    if s is None:
+        raise HTTPException(status_code=404, detail="engagement not found")
+    return s
+
+
+def _live_scope_spec(session_id: str) -> str:
+    """The program scope of any ACTIVE engagement bound to this session, or '' when the
+    session is a plain saved engagement with no live scope. Read-only lookup — used to seed
+    the RoE draft and to compute the (advisory) RoE-vs-scope flag."""
+    try:
+        for rec in cockpit_engagement.list_active():
+            if getattr(rec, "session_id", None) == session_id:
+                return (getattr(rec, "scope_spec", "") or "").strip()
+    except Exception:  # pragma: no cover - a registry read must never break governance
+        return ""
+    return ""
+
+
+def _roe_scope_advisory(session_id: str, roe_payload: dict[str, Any]) -> dict[str, Any]:
+    """The RoE-vs-scope check. ADVISORY ONLY — it describes, it never blocks. Surfaces whether
+    the RoE's declared scope parses, whether it is unbounded ('*'), and whether it MATCHES the
+    live engagement scope the executor's handrail actually uses. A mismatch is flagged in the
+    UI so the operator reconciles it; the human gate remains the real bound either way."""
+    declared = (roe_payload.get("scope_spec") or "").strip()
+    live = _live_scope_spec(session_id)
+    out: dict[str, Any] = {
+        "declared_scope": declared,
+        "live_scope": live,
+        "status": "ok",
+        "notes": [],
+        "unbounded": False,
+        "advisory": True,   # this can only advise; it never machine-blocks a command
+    }
+    if not declared:
+        out["status"] = "undeclared"
+        out["notes"].append("The RoE declares no scope — set it to formalise the handrail.")
+        return out
+    try:
+        resolved = cockpit_scope.parse_scope(declared, resolve=False)
+    except ValueError as exc:
+        out["status"] = "invalid"
+        out["notes"].append(f"RoE scope does not parse: {exc}")
+        return out
+    out["describe"] = resolved.describe()
+    out["unbounded"] = resolved.unbounded()
+    if resolved.unbounded():
+        out["notes"].append("The RoE scope is '*' (unbounded) — every host is authorized by choice.")
+    if live and _norm_scope(live) != _norm_scope(declared):
+        out["status"] = "mismatch"
+        out["notes"].append(
+            "The RoE scope differs from the live engagement scope the handrail uses — reconcile "
+            "them. This is flagged, not enforced; human approval stays the bound."
+        )
+    return out
+
+
+def _norm_scope(spec: str) -> frozenset[str]:
+    return frozenset(t for t in re.split(r"[\s,;]+", (spec or "").strip().lower()) if t)
+
+
+class GovDraftIn(BaseModel):
+    """Optional overrides for a propose-only draft. When omitted, the drafter seeds from the
+    session's goal + the live engagement scope."""
+
+    model_config = ConfigDict(extra="forbid")
+    scope_spec: str | None = None
+    target: str | None = None
+    target_type: str | None = None
+
+
+class GovDocIn(BaseModel):
+    """An edited governance-document body. The shape depends on the doc type; stored verbatim
+    as versioned JSON. Saving RESETS approval — an edited frame must be re-approved."""
+
+    model_config = ConfigDict(extra="allow")
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class GovApproveIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approved_by: str | None = Field(default="operator")
+
+
+class ObjectiveIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1)
+    parent_id: str | None = None
+    phase: str | None = None
+    technique_ids: list[str] | None = None
+    opsec: str | None = None
+    c2_tier: str | None = None
+    notes: str | None = None
+
+
+class ObjectiveUpdateIn(BaseModel):
+    """A partial update. A ``status`` change is validated against the OPPLAN state machine —
+    an illegal transition is a 400, and NOTHING is written."""
+
+    model_config = ConfigDict(extra="forbid")
+    status: str | None = None
+    title: str | None = None
+    phase: str | None = None
+    technique_ids: list[str] | None = None
+    opsec: str | None = None
+    c2_tier: str | None = None
+    notes: str | None = None
+    evidence_run_id: str | None = None
+    finding_fingerprints: list[str] | None = None
+
+
+class ExpandIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    child_titles: list[str] = Field(default_factory=list)
+
+
+class OpplanSeedIn(BaseModel):
+    """Create objectives from a drafted OPPLAN's proposed list. Every objective lands PENDING
+    for the human to edit — this is the propose-only draft becoming editable rows, not a run."""
+
+    model_config = ConfigDict(extra="forbid")
+    objectives: list[dict[str, Any]] = Field(default_factory=list)
+
+
+def _governance_view(session_id: str) -> dict[str, Any]:
+    pkg = gov.package(session_id)
+    pkg["scope_check"] = _roe_scope_advisory(session_id, pkg["roe"]["payload"])
+    pkg["phases"] = list(gov.OBJECTIVE_PHASES)
+    pkg["opsec_levels"] = list(gov.OPSEC_LEVELS)
+    pkg["c2_tiers"] = list(gov.C2_TIERS)
+    pkg["statuses"] = list(gov.OBJECTIVE_STATUSES)
+    return pkg
+
+
+@app.get("/engagement/{session_id}/governance")
+def get_governance(session_id: str) -> dict[str, Any]:
+    """The whole governance package — RoE / ConOps / Deconfliction / OPPLAN + objectives +
+    ATT&CK coverage + the advisory RoE-vs-scope check. Read-only; executes nothing."""
+    _require_session(session_id)
+    return _governance_view(session_id)
+
+
+@app.get("/governance/techniques")
+def governance_techniques() -> dict[str, Any]:
+    """The MITRE ATT&CK techniques the reference knows about — an objective/RoE picker. Pure
+    reference data; not a whitelist (an operator may map an objective to any technique)."""
+    return {"techniques": governance_draft.known_techniques()}
+
+
+@app.post("/engagement/{session_id}/governance/{doc_type}/draft")
+def draft_governance_doc(
+    session_id: str, doc_type: str, req: GovDraftIn = Body(default=GovDraftIn())
+) -> dict[str, Any]:
+    """PROPOSE-ONLY: draft one governance document from the scope + target. Returns the drafted
+    payload (and whether it came from the LLM or the deterministic fallback) for the human to
+    review and PUT. It saves NOTHING and runs NOTHING — the human edits then approves."""
+    session = _require_session(session_id)
+    dt = (doc_type or "").strip().lower()
+    if dt not in gov.DOC_TYPES:
+        raise HTTPException(status_code=404, detail=f"unknown governance document '{doc_type}'")
+    scope_spec = (req.scope_spec or _live_scope_spec(session_id) or "").strip()
+    target = (req.target or session.get("goal") or "").strip()
+    target_type = (req.target_type or session.get("target_type") or "").strip()
+    # Ground the draft in what the engagement already knows (hosts/services) when available —
+    # read-only, and truncated so a huge state cannot blow the prompt budget.
+    try:
+        state_block = state_store.load(session_id).to_dict().__str__()[:1500]
+    except Exception:  # pragma: no cover
+        state_block = ""
+    if dt == gov.DOC_ROE:
+        return draft_governance_doc_result(governance_draft.draft_roe(scope_spec, target, target_type, state_block))
+    if dt == gov.DOC_CONOPS:
+        return draft_governance_doc_result(governance_draft.draft_conops(scope_spec, target, target_type, state_block))
+    if dt == gov.DOC_DECONFLICTION:
+        return draft_governance_doc_result(
+            governance_draft.draft_deconfliction(session_id, scope_spec, target, target_type, state_block))
+    return draft_governance_doc_result(governance_draft.draft_opplan(scope_spec, target, target_type, state_block))
+
+
+def draft_governance_doc_result(drafted: dict[str, Any]) -> dict[str, Any]:
+    return {"payload": drafted.get("payload", {}), "source": drafted.get("source", "fallback")}
+
+
+@app.patch("/engagement/{session_id}/governance/{doc_type}")
+def save_governance_doc(
+    session_id: str, doc_type: str, req: GovDocIn = Body(...)
+) -> dict[str, Any]:
+    """Save an edited document body (versioned; resets approval). Executes nothing.
+
+    PATCH, not PUT — the CORS allow-list is GET/POST/PATCH/DELETE, and a PUT preflight fails so
+    the browser cannot call the route at all (the same lesson set_submission learned). The verb
+    is what did not fit, not the policy."""
+    _require_session(session_id)
+    try:
+        gov.save_doc(session_id, doc_type, req.payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _governance_view(session_id)
+
+
+@app.post("/engagement/{session_id}/governance/{doc_type}/approve")
+def approve_governance_doc(
+    session_id: str, doc_type: str, req: GovApproveIn = Body(default=GovApproveIn())
+) -> dict[str, Any]:
+    """The human sign-off on a document version. Records a decision — grants no capability,
+    gates nothing, runs nothing. This is what turns the scope handrail into a written RoE the
+    operator agreed to, without making it a machine veto."""
+    _require_session(session_id)
+    try:
+        gov.approve_doc(session_id, doc_type, req.approved_by or "operator")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _governance_view(session_id)
+
+
+@app.get("/engagement/{session_id}/objectives")
+def list_objectives(session_id: str) -> dict[str, Any]:
+    """The OPPLAN — versioned objectives + summary + ATT&CK coverage. Read-only."""
+    _require_session(session_id)
+    return gov.opplan_payload(session_id)
+
+
+@app.post("/engagement/{session_id}/objectives")
+def add_objective(session_id: str, req: ObjectiveIn = Body(...)) -> dict[str, Any]:
+    """Add an OPPLAN objective (or a sub-objective under ``parent_id``). Starts PENDING."""
+    _require_session(session_id)
+    try:
+        obj = gov.add_objective(
+            session_id, req.title, parent_id=req.parent_id,
+            phase=req.phase or gov.OBJECTIVE_PHASES[0],
+            technique_ids=req.technique_ids or [],
+            opsec=req.opsec or gov.OPSEC_STANDARD, c2_tier=req.c2_tier or gov.C2_NONE,
+            notes=req.notes or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"objective": obj.to_dict(), "opplan": gov.opplan_payload(session_id)}
+
+
+@app.patch("/engagement/{session_id}/objectives/{obj_id}")
+def update_objective(session_id: str, obj_id: str, req: ObjectiveUpdateIn = Body(...)) -> dict[str, Any]:
+    """Update an objective. A ``status`` change is validated against the OPPLAN state machine —
+    an illegal transition (e.g. out of the terminal ``completed`` state) is a 400 and nothing
+    is written. ``evidence_run_id`` records the approved, exit-0 run that advanced it (the same
+    advance-evidence model the graph orchestrator uses)."""
+    _require_session(session_id)
+    try:
+        obj = gov.update_objective(
+            session_id, obj_id, status=req.status, title=req.title, phase=req.phase,
+            technique_ids=req.technique_ids, opsec=req.opsec, c2_tier=req.c2_tier,
+            notes=req.notes, evidence_run_id=req.evidence_run_id,
+            finding_fingerprints=req.finding_fingerprints,
+        )
+    except gov.TransitionError as exc:
+        raise HTTPException(status_code=400, detail={"gate": "state-machine", "reason": str(exc)})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"objective": obj.to_dict(), "opplan": gov.opplan_payload(session_id)}
+
+
+@app.post("/engagement/{session_id}/objectives/{obj_id}/expand")
+def expand_objective(session_id: str, obj_id: str, req: ExpandIn = Body(...)) -> dict[str, Any]:
+    """Expand an objective into sub-objectives (opplan expand)."""
+    _require_session(session_id)
+    made = gov.expand_objective(session_id, obj_id, req.child_titles)
+    return {"created": [o.to_dict() for o in made], "opplan": gov.opplan_payload(session_id)}
+
+
+@app.post("/engagement/{session_id}/objectives/{obj_id}/collapse")
+def collapse_objective(session_id: str, obj_id: str) -> dict[str, Any]:
+    """Collapse an objective (opplan collapse): delete its sub-objectives, keep the objective."""
+    _require_session(session_id)
+    removed = gov.collapse_objective(session_id, obj_id)
+    return {"removed": removed, "opplan": gov.opplan_payload(session_id)}
+
+
+@app.delete("/engagement/{session_id}/objectives/{obj_id}")
+def delete_objective(session_id: str, obj_id: str) -> dict[str, Any]:
+    """Delete an objective and its sub-objectives."""
+    _require_session(session_id)
+    removed = gov.delete_objective(session_id, obj_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="objective not found")
+    return {"removed": removed, "opplan": gov.opplan_payload(session_id)}
+
+
+@app.post("/engagement/{session_id}/opplan/seed")
+def seed_opplan(session_id: str, req: OpplanSeedIn = Body(...)) -> dict[str, Any]:
+    """Create objectives from a drafted OPPLAN's proposed list. Each becomes a PENDING
+    objective for the human to edit — the propose-only draft turning into editable rows."""
+    _require_session(session_id)
+    created = []
+    for spec in req.objectives:
+        title = str(spec.get("title") or "").strip()
+        if not title:
+            continue
+        try:
+            obj = gov.add_objective(
+                session_id, title, phase=spec.get("phase") or gov.OBJECTIVE_PHASES[0],
+                technique_ids=spec.get("technique_ids") or [],
+                opsec=spec.get("opsec") or gov.OPSEC_STANDARD,
+                c2_tier=spec.get("c2_tier") or gov.C2_NONE, notes=spec.get("notes") or "",
+            )
+            created.append(obj.to_dict())
+        except ValueError:
+            break  # OPPLAN full — keep what landed
+    return {"created": created, "opplan": gov.opplan_payload(session_id)}
+
+
+def _governance_report_md(session_id: str) -> str:
+    """Render the engagement's governance package as a Markdown appendix for the report. Pure
+    string building over the governance records — executes nothing. Returns '' when there is
+    no governance to report, so a report on an engagement without one is byte-identical."""
+    pkg = gov.package(session_id)
+    objectives = pkg["opplan"]["objectives"]
+    roe, conops, decon = pkg["roe"], pkg["conops"], pkg["deconfliction"]
+    coverage = pkg["opplan"]["attack_coverage"]
+    has_docs = any(d["version"] > 0 for d in (roe, conops, decon))
+    if not objectives and not has_docs:
+        return ""
+    out: list[str] = ["\n\n---\n\n## Engagement Governance\n"]
+
+    def _doc_status(d: dict[str, Any]) -> str:
+        if d["approved"]:
+            return f"**approved**{(' · ' + d['approved_by']) if d['approved_by'] else ''} (v{d['version']})"
+        if d["version"] > 0:
+            return f"drafted, awaiting approval (v{d['version']})"
+        return "not drafted"
+
+    if has_docs:
+        out.append("\n### Rules of Engagement\n")
+        out.append(f"- Status: {_doc_status(roe)}\n")
+        rp = roe["payload"]
+        if rp.get("scope_spec"):
+            out.append(f"- Authorized scope: `{rp['scope_spec']}`\n")
+        if rp.get("opsec_level"):
+            out.append(f"- OPSEC level: {rp['opsec_level']}\n")
+        for label, key in (("Forbidden techniques", "forbidden_techniques"),
+                           ("Stop conditions", "stop_conditions")):
+            vals = rp.get(key) or []
+            if vals:
+                out.append(f"- {label}: {', '.join(str(v) for v in vals)}\n")
+        out.append(f"\n### Concept of Operations\n- Status: {_doc_status(conops)}\n")
+        if conops["payload"].get("approach"):
+            out.append(f"- Approach: {conops['payload']['approach']}\n")
+        out.append(f"\n### Deconfliction Plan\n- Status: {_doc_status(decon)}\n")
+        if decon["payload"].get("engagement_signature"):
+            out.append(f"- Engagement signature: `{decon['payload']['engagement_signature']}`\n")
+
+    if objectives:
+        s = pkg["opplan"]["summary"]
+        out.append(
+            f"\n### OPPLAN — Objectives ({s['completed']}/{s['total']} completed)\n\n"
+            "| # | Objective | Phase | Status | ATT&CK | Evidence |\n"
+            "|---|-----------|-------|--------|--------|----------|\n"
+        )
+        for o in objectives:
+            techs = ", ".join(o["technique_ids"]) or "—"
+            out.append(
+                f"| {o['obj_id']} | {o['title']} | {o['phase']} | {o['status']} | "
+                f"{techs} | {o['evidence_run_id'] or '—'} |\n"
+            )
+        c = coverage["counts"]
+        out.append(
+            f"\n### MITRE ATT&CK Coverage\n\n"
+            f"- Tactics exercised: {c['tactics_touched']} / {c['tactics_total']}\n"
+            f"- Techniques exercised: {c['techniques_covered']} / {c['techniques_total']}\n"
+        )
+        covered = [
+            f"{t['tactic_name']} ({', '.join(x['id'] for x in t['techniques'] if x['covered'])})"
+            for t in coverage["grid"] if t["covered"]
+        ]
+        if covered:
+            out.append("- " + "; ".join(covered) + "\n")
+    return "".join(out)
+
+
 @app.post("/sessions/{session_id}/report", response_model=ReportOut)
 def generate_report(
     session_id: str,
@@ -2236,6 +2629,12 @@ def generate_report(
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:  # unknown template
         raise HTTPException(status_code=422, detail=str(e))
+
+    # Fold the governance package into the report — the approved RoE/ConOps/Deconfliction, the
+    # OPPLAN objectives with their final status, and the ATT&CK coverage view are a professional
+    # deliverable. Appended AFTER composition (a pure string build over the governance records),
+    # so it needs no change to report_gen and nothing here executes.
+    report_md += _governance_report_md(session_id)
 
     ts = sessions_db.save_report(session_id, report_md, model_used)
     if ts is None:  # deleted between fetch and save — unlikely

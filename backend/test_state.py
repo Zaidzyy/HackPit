@@ -40,7 +40,10 @@ def _reset() -> None:
 # --------------------------------------------------------------------------- #
 # safety
 # --------------------------------------------------------------------------- #
-_STATE_MODULES = ("models.py", "store.py", "parsers.py", "ingest.py", "tasks.py", "render.py")
+_STATE_MODULES = (
+    "models.py", "store.py", "parsers.py", "ingest.py", "tasks.py", "render.py",
+    "governance.py", "killchain.py",
+)
 
 
 _BANNED_IMPORTS = {

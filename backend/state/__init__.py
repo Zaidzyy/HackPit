@@ -19,12 +19,26 @@ the approval gate. A safety test enforces this.
 
 from __future__ import annotations
 
-from . import credvault, ingest, models, parsers, render, store, tasks
+from . import (
+    credvault,
+    governance,
+    ingest,
+    killchain,
+    models,
+    parsers,
+    render,
+    store,
+    tasks,
+)
 
-__all__ = ["credvault", "ingest", "models", "parsers", "render", "store", "tasks"]
+__all__ = [
+    "credvault", "governance", "ingest", "killchain", "models", "parsers",
+    "render", "store", "tasks",
+]
 
 
 def init_db() -> None:
     """Create every state table. Idempotent; called once at startup."""
     store.init_db()
     tasks.init_db()
+    governance.init_db()

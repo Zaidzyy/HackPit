@@ -1,0 +1,56 @@
+THIRD-PARTY LICENSES
+====================
+
+HackPit itself is licensed under the Apache License, Version 2.0 (see LICENSE).
+This file records third-party source that HackPit derives from, together with the
+license under which that source is used. Each entry names what was ported and how
+it was adapted.
+
+--------------------------------------------------------------------------------
+Decepticon
+--------------------------------------------------------------------------------
+Project:   Decepticon — an autonomous red-team agent framework
+Source:    https://github.com/vitalii-honchar/decepticon
+License:   Apache License, Version 2.0
+           https://www.apache.org/licenses/LICENSE-2.0
+
+Used by:   backend/state/governance.py
+           backend/state/killchain.py
+           backend/state/references/killchain.yaml
+           backend/governance_draft.py
+
+Derived from the following Decepticon source:
+
+  tools/opplan.py
+      The OPPLAN data model — Objective, OPPLAN, ObjectivePhase, ObjectiveStatus,
+      C2Tier, OpsecLevel — and the objective status STATE MACHINE
+      (pending -> in-progress -> completed / blocked / cancelled, with completed
+      and cancelled terminal), plus the versioned-payload builder and summary.
+
+  tools/defense/conops.py
+      The Concept of Operations document structure and generator shape.
+
+  middleware/roe.py
+      The Rules of Engagement structure and the way an RoE frames authorized
+      actions.
+
+  tools/references/killchain.yaml
+      The MITRE ATT&CK kill-chain reference used to map objectives to techniques
+      and to render the coverage view.
+
+Adaptation notes:
+  * The data model and state machine were reconstructed from the above and
+    reshaped onto HackPit's persistence: a shared, upsert-only SQLite store keyed
+    by engagement session_id, rather than Decepticon's versioned JSON files.
+  * The RoE is treated as a written frame the human approves against — advisory,
+    NOT a machine veto. HackPit's standing model keeps per-command human approval
+    as the actual bound; governance executes nothing and adds no gate.
+  * Generation is propose-only: the drafter (backend/governance_draft.py) drafts
+    the four documents from the scope + target for a human to edit and approve; it
+    executes nothing an engagement acts on.
+
+The Apache License, Version 2.0 requires that this attribution and the license
+notice be retained. The full text of the license is reproduced in LICENSE (which
+is the same license HackPit is distributed under). A copy is also available at
+https://www.apache.org/licenses/LICENSE-2.0 and its NOTICE is preserved in the
+top-level NOTICE file.

@@ -116,6 +116,10 @@ run_test test_scope.py "program-SCOPE model tests (parse / fail-closed / wildcar
 
 run_test test_engagement_scope.py "engagement SCOPE tests (in-scope passes / out-of-scope refused / expansion never widens)"
 
+run_test test_governance.py "engagement GOVERNANCE (RoE/ConOps/Deconfliction/OPPLAN: the OPPLAN status STATE MACHINE rejects illegal transitions -- completed+cancelled are terminal, a pending->completed skip is refused, and a rejected transition writes nothing and does not bump the version / documents version on every save and RESET approval on edit, a v0 doc cannot be approved / objective add/expand-to-dotted-children/collapse/delete-with-descendants / technique ids are cleaned not invented / ATT&CK coverage renders a per-tactic grid and counts unmapped ids never dropping them / the RoE-vs-scope check is ADVISORY: an invalid/undeclared scope is FLAGGED and objectives keep mutating -- human approval stays the bound)"
+
+run_test test_governance_safety.py "GOVERNANCE SAFETY (§0: governance.py + killchain.py + governance_draft.py make NO eval/exec/subprocess/socket/HTTP call by AST WITH A CONTROL / the pure data modules import nothing that executes or reaches the network / the drafter's only power is the LLM call (llm.chat/extract_json), never a command it runs / NO NEW GATE: no cockpit/executor/sandbox/orchestrator import and no gate symbol anywhere / GENERATION IS PROPOSE-ONLY: the drafter persists nothing and advances no objective by AST / THE RoE IS A FRAME NOT A VETO: the state machine governs objective status only, governance exposes no command/execute/gate symbol, and the advisory check flags every malformed scope without ever raising)"
+
 run_test test_adgraph.py "AD graph parser + path tests (BloodHound -> graph -> route to Domain Admin)"
 
 run_test test_adcs_graph.py "AD CS ESC1-8 graph tests (certipy find -> certtemplate/certauthority nodes + synthesized composite ESC edges / a low-priv enrollee reaches DA via ESC1 / ESC4+ESC7 two-hop reconfigure-then-abuse / every ESC edge runnable Linux + Windows + carries props / non-vulnerable template is CanEnroll context / BloodHound-only graph unchanged)"

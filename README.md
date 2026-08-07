@@ -67,6 +67,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | 🔬 **AI code-audit fan-out** | Point it at a repo → an agent maps the entrypoints & flows **once**, then verifies **one flow per agent** against source → deduped, severity-ranked findings, each with an attacker path + a propose-only PoC. `patched-since` audits only a git diff; one approved job, no new gate. |
 | ⛓️ **Web3 / smart-contract audit** | Three built-in playbooks on the same fan-out: **EVM external-flow** (reentrancy / access-control / oracle-manipulation / loss-of-funds), **Cosmos ABCI panic-halt** (four panic classes → consensus halt), **Anchor account-model** (missing-owner / signer-spoof / CPI-confusion / overflow). KB-grounded, chain/contract/function-tagged; an approve-each **slither / mythril / echidna** tool pass. |
 | ▣ **Finding pipeline** | Every producer emits one **structured schema** (attacker-path, source-refs, CVSS, custom fields) → duplicates **auto-merge** idempotently → a **pluggable severity ranker** (bug-bounty payout vs compliance) rescores per engagement → **post-scripts** validate / draft a report (in-process) or build a PoC (approve-each). Pure data; no new gate. |
+| ⚖️ **Engagement governance** | Before an engagement goes live, draft + approve a formal **RoE / ConOps / Deconfliction / OPPLAN** package: objectives carry a status **state machine** + **MITRE ATT&CK** ids + OPSEC level, an objectives board + coverage matrix render it, and it flows into the report. The RoE **formalises** the scope handrail — advisory, not a machine veto; per-command human approval stays the bound. Generation is propose-only; no new gate. |
 | 🔌 **MCP server** | 15 read-only tools so another AI agent can *see* your engagement — eyes, not hands. |
 
 ---
@@ -116,6 +117,20 @@ Open one and it's a working engagement; finish it and the report writes itself f
 <p align="center">
   <img src="assets/screenshots/08-assistant-drawer.png" alt="The engagement assistant mid-conversation, citing real techniques" width="49%">
   <img src="assets/screenshots/06b-attack-path-branches.jpg" alt="A grounded step with copy-ready commands and conditional branches" width="49%">
+</p>
+
+### ⚖️ Engagement governance — RoE / ConOps / Deconfliction / OPPLAN
+
+The most on-brand addition: it turns *"human approves each command"* into *"human approves each command **inside a written, agreed operating frame**."* Before an engagement goes live, the operator drafts (LLM-assisted, **propose-only**) and approves four governance documents — **Rules of Engagement**, **Concept of Operations**, a **Deconfliction Plan** (how your traffic is told apart from a real incident), and an **OPPLAN**: a list of **objectives**, each with a status **state machine** (`pending → in-progress → completed / blocked / cancelled`, with `completed`/`cancelled` terminal), one or more **MITRE ATT&CK** technique ids, an OPSEC level and an optional C2 tier. Objectives drive the orchestrator's targeting — the proposer aims *toward an active objective*, each step still human-approved, and an approved exit-0 run records itself as the objective's advance evidence. A **MITRE ATT&CK coverage matrix** shows which tactics/techniques the engagement exercised, and the whole package flows into the report.
+
+The RoE **formalises** the scope handrail — it references the same scope model, and an out-of-RoE scope is **flagged in the UI, not machine-blocked**. It is advisory to the human; per-command approval stays the actual bound, and governance **executes nothing and adds no gate**. Ported from [Decepticon](https://github.com/vitalii-honchar/decepticon) (Apache-2.0 — see [`NOTICE`](NOTICE) / [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES)).
+
+<p align="center">
+  <img src="assets/screenshots/41-engagement-governance.png" alt="The engagement governance view on /engagement/[id] — the Governance tab open on a synthetic 'acme-demo' engagement: a scope banner reading 'RoE scope formalises the handrail' with the spec *.example.com, 10.10.20.0/24, !prod.example.com and 'advisory — human approval remains the bound'; tabs for OPPLAN (12), RoE ✓, ConOps ✓, Deconfliction (draft) and ATT&CK (19); a summary of 12 objectives (5 pending / 2 in-progress / 3 completed / 1 blocked / 1 cancelled) at OPPLAN v23; and an objectives board with status columns whose cards carry a phase chip, an OPSEC chip, ATT&CK id chips, legal next-state transition buttons, and 'advanced by run …' evidence" width="80%">
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/42-attack-coverage.png" alt="The MITRE ATT&CK coverage matrix for the same engagement — 10 / 14 tactics and 19 / 60 techniques exercised across 18 unique mapped ids, rendered as a grid of all 14 ATT&CK tactics from Reconnaissance to Impact with the objectives' techniques highlighted in the accent colour: T1595/T1590/T1589 under Reconnaissance, T1190/T1078 under Initial Access, T1059/T1203 under Execution, T1548/T1068 under Privilege Escalation, T1110/T1003/T1558/T1555 under Credential Access, T1021/T1550 under Lateral Movement, T1005 under Collection, T1041 under Exfiltration and T1486 under Impact" width="80%">
 </p>
 
 ### Scripts arsenal

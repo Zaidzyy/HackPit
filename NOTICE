@@ -1,0 +1,22 @@
+HackPit
+Copyright (c) 2026 HackPit contributors
+
+This product includes software developed as part of the Decepticon project
+(https://github.com/vitalii-honchar/decepticon), licensed under the Apache
+License, Version 2.0.
+
+The engagement-governance subsystem (Rules of Engagement, Concept of Operations,
+Deconfliction Plan, and the OPPLAN — Objective / OPPLAN data model, the objective
+status state machine, C2Tier / OpsecLevel, and the MITRE ATT&CK kill-chain
+reference) is derived from Decepticon's:
+
+  - tools/opplan.py            (Objective, OPPLAN, ObjectivePhase, ObjectiveStatus,
+                                C2Tier, OpsecLevel, and the status state machine)
+  - tools/defense/conops.py    (the Concept of Operations generator)
+  - middleware/roe.py          (the Rules of Engagement structure)
+  - tools/references/killchain.yaml  (the ATT&CK kill-chain reference)
+
+The data model and state machine were reconstructed and reshaped onto HackPit's
+own persistence (SQLite, upsert-only, engagement-scoped) and its propose-only,
+human-approval-is-the-bound execution model. See THIRD_PARTY_LICENSES for the
+full attribution and license terms.

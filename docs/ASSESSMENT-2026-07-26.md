@@ -107,6 +107,8 @@ Per-command approval is therefore **standing policy, not a deferred item**, and 
 
 **Finding pipeline (New, 2026-08-07).** The AI audit is the heaviest producer of findings, but every surface (recon/nuclei/AD/cloud/IMDS/manual) makes them — so open·kritt's finding-processing machinery is ported **cross-cutting** into a pure-data `backend/findings/` package: a **dynamic/structured schema** (`schema.py` — `FIELD_TYPE_MAP`, `normalize_output_format`, `output_schema`, `validate_payload`; base fields + an engagement-defined `extra` map), **automatic de-duplication** (`pipeline.py` — a stable key over location + type collapses two wordings of the same bug into one, worst-severity-wins, idempotent so re-ingest never multiplies, with a "merged N duplicates" note), **pluggable severity rankers** (`rankers.py` — a per-engagement rule set rescores; ships `default` / `bug-bounty-payout` / `compliance`, the last two being *different lenses over the same findings*), and **post-scripts** (`postscripts.py` — a post-finding hook: `validate`/`report` run in-process and execute nothing, `poc` returns an **approve-each** command; `postScriptLocks` refuse a concurrent double-run). The structured fields were wired through all three schema places (the `state.models.Finding` dataclass + migration-safe `store.py` columns + the frontend), and a round-trip test proves no `response_model` strips them. **No new gate** — ranking/dedup/schema are pure data (AST-locked in `test_finding_pipeline_safety.py`, which imports no cockpit/executor/state and names no gate symbol); only a **command** post-script touches the executor, and only approve-each — the coupling (dict→`Finding`, command post-script→gated executor) lives in `main.py`. See the dated section below.
 
+**Engagement governance — RoE / ConOps / Deconfliction / OPPLAN (New, 2026-08-07).** The single most on-brand addition: it turns *"human approves each command"* into *"human approves each command **inside a written, agreed operating frame**."* Before an engagement goes live, the operator drafts (LLM-assisted, **propose-only**) and approves four governance documents — **Rules of Engagement**, **Concept of Operations**, a **Deconfliction Plan**, and an **OPPLAN** (a list of **objectives**, each with a status **state machine** — `pending → in-progress → completed / blocked / cancelled`, `completed`/`cancelled` terminal — one or more **MITRE ATT&CK** technique ids, an OPSEC level and an optional C2 tier). The data model + state machine are ported wholesale from **Decepticon** (`tools/opplan.py` / `conops.py` / `roe.py` / `killchain.yaml`, Apache-2.0 — attribution in `NOTICE` / `THIRD_PARTY_LICENSES`) and reshaped onto HackPit's upsert-only SQLite (`backend/state/governance.py` + `killchain.py`). Objectives drive the orchestrator's targeting (the proposer aims *toward an active objective*; an approved exit-0 run records itself as the objective's advance evidence, the same `advance` model the graphs use), a **MITRE ATT&CK coverage matrix** renders which tactics/techniques the engagement exercised, and the whole package flows into the report. The RoE **formalises** the scope handrail — it references the same scope model (`cockpit/scope.py`), and an out-of-RoE scope is **flagged in the UI, not machine-blocked** (the advisory check lives in `main.py`, the only place `state/governance.py` lets scope be imported from). **No new gate** — the whole package is authored + human-approved documentation plus a formalised scope frame; it is **advisory to the human**, never a machine veto, and per-command human approval stays the actual bound (matching the standing "target lock is a handrail" decision). Generation is **propose-only** (`backend/governance_draft.py`, the generative layer like `attack_path.py` — degrades to a deterministic scope-derived skeleton with no LLM). AST-locked in `test_governance_safety.py` (governance + killchain + the drafter make no eval/exec/subprocess/socket/HTTP call, import no cockpit/executor/sandbox and name no gate symbol; the drafter persists nothing and advances no objective; the state machine governs objective status only). See the dated section below.
+
 **Web3 / smart-contract audit (New, 2026-08-07).** Three built-in **playbooks** on the AI code-audit fan-out — `evm-external-flow` (Solidity), `cosmos-abci-halt` (Go/Cosmos-SDK), `anchor-solana` (Rust/Anchor) — ported from open·kritt's `external-flow-analysis` and `Cosmos ABCI Panic Halt Review`. A `Playbook` steers the SAME three stages: it appends a domain framing to each stage prompt (LLM path), scopes the mapped file extensions to one language, and selects a language-specific heuristic sink group (`ai_audit_web3_rules.json`, the no-LLM demo/degradation path). Findings are **chain/contract/function-tagged** and **KB-grounded** in three new authored methodology entries (external-flow analysis, the four Cosmos panic classes, the Anchor account model). A propose-only **tool pass** (`codescan/web3_tools.py`) builds `slither`/`mythril`/`echidna`/`forge` command STRINGS the operator runs **approve-each** in the :kali sandbox and parses their JSON/text output back into the same finding shape — it executes nothing (added to the `test_ai_audit_safety.py` AST no-exec lock). Web3 tooling was added to the arsenal + `Dockerfile.sandbox` + `docker/proof/web3_install_proof.sh` (**image rebuild is the operator's step**). **No new gate** — the analysis reads source and proposes, exactly like the web-app audit. See the dated section below.
 
 ### Frontend
@@ -5647,3 +5649,81 @@ files, all exit 0). `next build` exits 0.
 playbooks run on the already-built code-audit-fanout engine, so nothing was stubbed. The tool pass parses `slither` /
 `mythril` / `echidna` structured output; Cosmos/Solana tools (`gosec`/`clippy`) are proposed as commands without a
 structured parser (they return text a human reads).
+
+## Formal engagement governance — RoE / ConOps / Deconfliction / OPPLAN (2026-08-07)
+
+**The idea.** HackPit's bound on a real-target run has always been *human approval of every command* — the wall. What
+it lacked was the written frame a professional engagement approves *inside*. This build adds that frame: before an
+engagement goes live, the operator drafts and approves four governance documents, and the OPPLAN's objectives become the
+thing the orchestrator proposes *toward*. It turns *"human approves each command"* into *"human approves each command
+**inside a written, agreed operating frame**."* Ported from **Decepticon** (Apache-2.0 — attribution in `NOTICE` /
+`THIRD_PARTY_LICENSES`): the `Objective` / `OPPLAN` data model, `ObjectivePhase` / `ObjectiveStatus` / `C2Tier` /
+`OpsecLevel`, the objective **status state machine**, the ConOps generator, the RoE structure, and the ATT&CK
+`killchain.yaml` reference.
+
+**The four documents (`backend/state/governance.py`).** Each persists as a **versioned JSON record**, engagement-scoped
+by `session_id` in the shared `sessions.db` (upsert-only, like the rest of `state/`). Every save bumps the version and
+**resets approval** — an edited frame must be re-approved, because the thing the human signed off changed. **RoE**:
+authorized scope (references the scope model, never replaces it), authorized/forbidden techniques, OPSEC level, time
+windows, excluded targets/actions, sensitive-data handling, stop conditions, emergency contacts. **ConOps**: approach +
+phases (recon → exploitation → post-exploitation → actions-on-objectives) with success criteria. **Deconfliction**: a
+per-engagement signature/tag, source markers, notification contacts, traffic identification, blue-team notes.
+**OPPLAN**: the objectives, each with a `phase`, a `status` (the state machine), MITRE ATT&CK technique id(s), an OPSEC
+level and an optional C2 tier.
+
+**The state machine (ported wholesale).** `_VALID_TRANSITIONS`: `pending → {in-progress, blocked, cancelled}`,
+`in-progress → {completed, blocked, cancelled}`, `blocked → {in-progress, cancelled}`; **`completed` and `cancelled` are
+terminal**. `update_objective` is the only place a status changes and it validates against the table — an illegal
+transition raises `TransitionError`, **nothing is written**, and the OPPLAN version does not move. Objectives are a
+dotted-id tree (`1`, `1.2`) so `expand` adds sub-objectives and `collapse` removes them, mirroring `opplan.py`'s tool set
+(add / update / get / list / expand / collapse). An approved, exit-0 run is recorded as an objective's
+`evidence_run_id` — the same `advance`-evidence model the AD/cloud graphs use.
+
+**MITRE ATT&CK coverage (`backend/state/killchain.py` + `references/killchain.yaml`).** The reference maps 14 ATT&CK
+tactics (Reconnaissance → Impact) to representative techniques, each tied to a ConOps phase. `attack_coverage` answers
+*"which techniques did this engagement's objectives exercise"* as a per-tactic grid + roll-up counts — a lexical id
+match, no ATT&CK API call at render time. An objective mapped to a technique the reference does not know is counted as
+`unmapped`, never dropped. The coverage view is a professional deliverable and a report input.
+
+**Propose-only generation (`backend/governance_draft.py`).** The generative layer, like `attack_path.py`: from the
+scope + target it drafts all four documents via `llm.chat` for the human to edit and approve. Nothing is "live" until
+approved. It **degrades to a deterministic, scope-derived skeleton** when no LLM is reachable, so the operator always
+gets an editable starting point. It persists nothing and advances no objective — those are the human-driven route's job.
+
+**The RoE is a FRAME, not a veto.** The RoE **formalises** the scope handrail; it does not replace it and it is **not a
+machine veto**. The RoE-vs-scope check (`main._roe_scope_advisory`) parses the RoE's declared scope with the same
+`cockpit/scope.py` and flags an *invalid*, *undeclared*, *unbounded* (`*`), or *mismatched-with-the-live-handrail* scope
+in the UI — **advisory only, it never blocks a command or an objective**. `state/governance.py` imports nothing from
+`cockpit` (the scope import lives in the app layer, `main.py`, the one place allowed), so the executes-nothing/no-gate
+property holds by construction.
+
+**Routes + frontend.** Ten routes in `main.py` (get the package; draft / save / approve each doc; objective CRUD +
+expand / collapse / delete; seed an OPPLAN from a draft; the ATT&CK-technique picker) — the save route is **PATCH not
+PUT** (the CORS allow-list is GET/POST/PATCH/DELETE; a PUT preflight fails, the lesson `set_submission` already learned,
+which the `/attack-path` response-contract test caught here on the first suite run). `/engagement/[id]` gains a
+**Governance** view (`GovernancePanel.tsx`) with RoE / ConOps / Deconfliction / OPPLAN / ATT&CK tabs, an **objectives
+board** with status columns (each card carrying phase + OPSEC + ATT&CK chips and only the *legal* next-state transition
+buttons), a scope advisory banner, and an **ATT&CK coverage matrix**. A `?view=governance&tab=<tab>` deep-link opens it
+directly (used for the headless screenshot). The governance package also flows into the generated report as a Markdown
+appendix (approved docs + an objectives table + the coverage roll-up), appended after composition so `report_gen` is
+unchanged and an engagement without governance yields a byte-identical report.
+
+**No new gate — as designed.** The whole subsystem is authored + human-approved documentation plus a formalised scope
+frame. It executes nothing an engagement acts on, and per-command human approval remains the actual bound.
+
+**Tests.** `test_governance.py` (the state machine rejects illegal transitions — terminal exits + the pending→completed
+skip — and a rejected transition writes nothing / documents version and reset approval on edit, a v0 doc cannot be
+approved / objective add + expand-to-dotted-children + collapse + delete-with-descendants / technique ids cleaned not
+invented / ATT&CK coverage renders and counts unmapped ids / the RoE-vs-scope check is advisory and objectives keep
+mutating). `test_governance_safety.py` (§0: governance + killchain + the drafter make no eval/exec/subprocess/socket/HTTP
+call by AST with a control; no cockpit/executor/sandbox import and no gate symbol; the drafter is propose-only by AST;
+the state machine governs objective status only and the advisory check never raises). `state/governance.py` +
+`killchain.py` were added to `test_state.py`'s executes-nothing scan. **`run_safety_tests.sh`: 111 hermetic files, all
+exit 0. `next build` exits 0.** Screens LOOKED AT: `41-engagement-governance.png` (the objectives board) +
+`42-attack-coverage.png` (the ATT&CK matrix), both on a synthetic `acme-demo` engagement — no real client/scope.
+
+**Assumptions (per §5), stated.** Shipped all four documents + objectives + ATT&CK + the frontend + the report feed in
+one session (the spec's fallback was OPPLAN-first). Decepticon's source was not present in the tree, so the data model +
+state machine were **reconstructed from the spec's description** rather than copied file-for-file; the attribution stands
+regardless (`NOTICE` / `THIRD_PARTY_LICENSES`). Document editing in the UI is currently draft-then-approve (the drafter
+proposes the whole body; per-field inline editing is a follow-up); the substantive fields render read-structured.

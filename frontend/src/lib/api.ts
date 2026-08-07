@@ -5550,3 +5550,183 @@ export const deployRedirector = (approved: boolean, signal?: AbortSignal) =>
 
 export const stopRedirector = (approved: boolean, signal?: AbortSignal) =>
   postJSON<RedirectorDeployResult>("/cockpit/exposure/remote/stop", { approved }, signal);
+
+// ---- engagement governance: RoE / ConOps / Deconfliction / OPPLAN -------- //
+// Authored + human-approved documentation plus a formalised scope frame. Generation is
+// propose-only (draft → the human edits → approve). Nothing here runs a command or gates one.
+
+export type GovDocType = "roe" | "conops" | "deconfliction" | "opplan";
+
+export type GovDoc = {
+  doc_type: GovDocType;
+  version: number;
+  payload: Record<string, unknown>;
+  approved: boolean;
+  approved_by: string;
+  approved_at: string;
+  updated_at: string;
+};
+
+export type ObjectiveTechnique = { id: string; name: string; known: boolean };
+
+export type Objective = {
+  obj_id: string;
+  title: string;
+  phase: string;
+  status: "pending" | "in-progress" | "completed" | "blocked" | "cancelled";
+  technique_ids: string[];
+  techniques: ObjectiveTechnique[];
+  opsec: string;
+  c2_tier: string;
+  notes: string;
+  evidence_run_id: string | null;
+  finding_fingerprints: string[];
+  depth: number;
+  parent_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AttackCoverage = {
+  grid: {
+    tactic_id: string;
+    tactic_name: string;
+    phase: string;
+    covered: boolean;
+    techniques: { id: string; name: string; covered: boolean }[];
+  }[];
+  counts: {
+    tactics_total: number;
+    tactics_touched: number;
+    techniques_total: number;
+    techniques_covered: number;
+    exercised_unique: number;
+    unmapped: string[];
+  };
+};
+
+export type OpplanSummary = {
+  total: number;
+  pending: number;
+  in_progress: number;
+  completed: number;
+  blocked: number;
+  cancelled: number;
+};
+
+export type OpplanView = GovDoc & {
+  version: number;
+  settings: Record<string, unknown>;
+  objectives: Objective[];
+  summary: OpplanSummary;
+  attack_coverage: AttackCoverage;
+};
+
+export type ScopeCheck = {
+  declared_scope: string;
+  live_scope: string;
+  status: "ok" | "undeclared" | "invalid" | "mismatch";
+  notes: string[];
+  unbounded: boolean;
+  advisory: boolean;
+  describe?: string;
+};
+
+export type GovernancePackage = {
+  session_id: string;
+  roe: GovDoc;
+  conops: GovDoc;
+  deconfliction: GovDoc;
+  opplan: OpplanView;
+  scope_check: ScopeCheck;
+  phases: string[];
+  opsec_levels: string[];
+  c2_tiers: string[];
+  statuses: string[];
+};
+
+export type DraftResult = { payload: Record<string, unknown>; source: "llm" | "fallback" };
+
+export const getGovernance = (id: string, signal?: AbortSignal) =>
+  getJSON<GovernancePackage>(`/engagement/${encodeURIComponent(id)}/governance`, signal);
+
+export const draftGovernanceDoc = (
+  id: string,
+  docType: GovDocType,
+  overrides?: { scope_spec?: string; target?: string; target_type?: string }
+) =>
+  postJSON<DraftResult>(
+    `/engagement/${encodeURIComponent(id)}/governance/${docType}/draft`,
+    overrides ?? {}
+  );
+
+export const saveGovernanceDoc = (
+  id: string,
+  docType: GovDocType,
+  payload: Record<string, unknown>
+) =>
+  sendJSON<GovernancePackage>(
+    "PATCH",
+    `/engagement/${encodeURIComponent(id)}/governance/${docType}`,
+    { payload }
+  );
+
+export const approveGovernanceDoc = (id: string, docType: GovDocType, approvedBy: string) =>
+  postJSON<GovernancePackage>(
+    `/engagement/${encodeURIComponent(id)}/governance/${docType}/approve`,
+    { approved_by: approvedBy }
+  );
+
+export type ObjectiveMutation = { objective: Objective; opplan: OpplanView };
+
+export const addObjective = (
+  id: string,
+  body: {
+    title: string;
+    parent_id?: string | null;
+    phase?: string;
+    technique_ids?: string[];
+    opsec?: string;
+    c2_tier?: string;
+    notes?: string;
+  }
+) => postJSON<ObjectiveMutation>(`/engagement/${encodeURIComponent(id)}/objectives`, body);
+
+export const updateObjective = (
+  id: string,
+  objId: string,
+  body: Partial<{
+    status: string;
+    title: string;
+    phase: string;
+    technique_ids: string[];
+    opsec: string;
+    c2_tier: string;
+    notes: string;
+    evidence_run_id: string;
+    finding_fingerprints: string[];
+  }>
+) =>
+  sendJSON<ObjectiveMutation>(
+    "PATCH",
+    `/engagement/${encodeURIComponent(id)}/objectives/${encodeURIComponent(objId)}`,
+    body
+  );
+
+export const expandObjective = (id: string, objId: string, childTitles: string[]) =>
+  postJSON<{ created: Objective[]; opplan: OpplanView }>(
+    `/engagement/${encodeURIComponent(id)}/objectives/${encodeURIComponent(objId)}/expand`,
+    { child_titles: childTitles }
+  );
+
+export const deleteObjective = (id: string, objId: string) =>
+  sendJSON<{ removed: number; opplan: OpplanView }>(
+    "DELETE",
+    `/engagement/${encodeURIComponent(id)}/objectives/${encodeURIComponent(objId)}`
+  );
+
+export const seedOpplan = (id: string, objectives: Record<string, unknown>[]) =>
+  postJSON<{ created: Objective[]; opplan: OpplanView }>(
+    `/engagement/${encodeURIComponent(id)}/opplan/seed`,
+    { objectives }
+  );

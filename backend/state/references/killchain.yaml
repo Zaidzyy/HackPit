@@ -1,0 +1,144 @@
+# MITRE ATT&CK kill-chain reference — the tactics an engagement moves through and a
+# representative set of techniques under each, keyed by ATT&CK id.
+#
+# PORTED FROM Decepticon (tools/references/killchain.yaml), Apache-2.0 — see
+# THIRD_PARTY_LICENSES and NOTICE. Reshaped for HackPit: this is a PURE DATA reference the
+# OPPLAN maps objectives onto and the coverage view renders. It is READ, never executed;
+# nothing here reaches a subprocess, a socket, or the executor gate.
+#
+# The `phase` field ties each tactic to HackPit's four ConOps phases (recon / exploitation /
+# post-exploitation / actions-on-objectives) so an OPPLAN objective declared in a phase can
+# surface the tactics it is expected to exercise. Technique ids are the anchors — a coverage
+# view is "which of these techniques did the engagement's objectives touch", so it stays a
+# lexical id match with no ATT&CK API call at render time.
+
+tactics:
+  - id: TA0043
+    name: Reconnaissance
+    phase: recon
+    techniques:
+      - { id: T1595, name: Active Scanning }
+      - { id: T1592, name: Gather Victim Host Information }
+      - { id: T1590, name: Gather Victim Network Information }
+      - { id: T1589, name: Gather Victim Identity Information }
+      - { id: T1596, name: Search Open Technical Databases }
+      - { id: T1598, name: Phishing for Information }
+
+  - id: TA0042
+    name: Resource Development
+    phase: recon
+    techniques:
+      - { id: T1583, name: Acquire Infrastructure }
+      - { id: T1587, name: Develop Capabilities }
+      - { id: T1588, name: Obtain Capabilities }
+      - { id: T1608, name: Stage Capabilities }
+
+  - id: TA0001
+    name: Initial Access
+    phase: exploitation
+    techniques:
+      - { id: T1190, name: Exploit Public-Facing Application }
+      - { id: T1133, name: External Remote Services }
+      - { id: T1566, name: Phishing }
+      - { id: T1078, name: Valid Accounts }
+      - { id: T1195, name: Supply Chain Compromise }
+
+  - id: TA0002
+    name: Execution
+    phase: exploitation
+    techniques:
+      - { id: T1059, name: Command and Scripting Interpreter }
+      - { id: T1203, name: Exploitation for Client Execution }
+      - { id: T1053, name: Scheduled Task/Job }
+      - { id: T1204, name: User Execution }
+
+  - id: TA0003
+    name: Persistence
+    phase: post-exploitation
+    techniques:
+      - { id: T1098, name: Account Manipulation }
+      - { id: T1136, name: Create Account }
+      - { id: T1543, name: Create or Modify System Process }
+      - { id: T1547, name: Boot or Logon Autostart Execution }
+      - { id: T1505, name: Server Software Component }
+
+  - id: TA0004
+    name: Privilege Escalation
+    phase: post-exploitation
+    techniques:
+      - { id: T1548, name: Abuse Elevation Control Mechanism }
+      - { id: T1068, name: Exploitation for Privilege Escalation }
+      - { id: T1134, name: Access Token Manipulation }
+      - { id: T1484, name: Domain Policy Modification }
+
+  - id: TA0005
+    name: Defense Evasion
+    phase: post-exploitation
+    techniques:
+      - { id: T1070, name: Indicator Removal }
+      - { id: T1027, name: Obfuscated Files or Information }
+      - { id: T1562, name: Impair Defenses }
+      - { id: T1550, name: Use Alternate Authentication Material }
+
+  - id: TA0006
+    name: Credential Access
+    phase: post-exploitation
+    techniques:
+      - { id: T1110, name: Brute Force }
+      - { id: T1003, name: OS Credential Dumping }
+      - { id: T1558, name: Steal or Forge Kerberos Tickets }
+      - { id: T1555, name: Credentials from Password Stores }
+      - { id: T1552, name: Unsecured Credentials }
+
+  - id: TA0007
+    name: Discovery
+    phase: post-exploitation
+    techniques:
+      - { id: T1087, name: Account Discovery }
+      - { id: T1046, name: Network Service Discovery }
+      - { id: T1018, name: Remote System Discovery }
+      - { id: T1482, name: Domain Trust Discovery }
+
+  - id: TA0008
+    name: Lateral Movement
+    phase: post-exploitation
+    techniques:
+      - { id: T1021, name: Remote Services }
+      - { id: T1550, name: Use Alternate Authentication Material }
+      - { id: T1210, name: Exploitation of Remote Services }
+      - { id: T1570, name: Lateral Tool Transfer }
+
+  - id: TA0009
+    name: Collection
+    phase: actions-on-objectives
+    techniques:
+      - { id: T1005, name: Data from Local System }
+      - { id: T1039, name: Data from Network Shared Drive }
+      - { id: T1213, name: Data from Information Repositories }
+      - { id: T1114, name: Email Collection }
+
+  - id: TA0011
+    name: Command and Control
+    phase: post-exploitation
+    techniques:
+      - { id: T1071, name: Application Layer Protocol }
+      - { id: T1572, name: Protocol Tunneling }
+      - { id: T1090, name: Proxy }
+      - { id: T1573, name: Encrypted Channel }
+
+  - id: TA0010
+    name: Exfiltration
+    phase: actions-on-objectives
+    techniques:
+      - { id: T1041, name: Exfiltration Over C2 Channel }
+      - { id: T1048, name: Exfiltration Over Alternative Protocol }
+      - { id: T1567, name: Exfiltration Over Web Service }
+
+  - id: TA0040
+    name: Impact
+    phase: actions-on-objectives
+    techniques:
+      - { id: T1486, name: Data Encrypted for Impact }
+      - { id: T1490, name: Inhibit System Recovery }
+      - { id: T1489, name: Service Stop }
+      - { id: T1531, name: Account Access Removal }

@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PageShell } from "./PageShell";
 import { CopyButton } from "./CopyButton";
 import { EngagementAssistant } from "./EngagementAssistant";
+import { GovernancePanel } from "./GovernancePanel";
 import { SubmissionPanel } from "./SubmissionPanel";
 import {
   getSession,
@@ -29,8 +31,26 @@ function crumbText(label: string): string {
  * Per-step checked + pasted results persist to the backend (SQLite), so the
  * whole thing survives a reload — on mount it re-fetches the merged state.
  */
+type GovTab = "opplan" | "roe" | "conops" | "deconfliction" | "attack";
+const GOV_TABS: GovTab[] = ["opplan", "roe", "conops", "deconfliction", "attack"];
+
 export function EngagementScreen({ id }: { id: string }) {
   const fetched = useApi((s) => getSession(id, s), [id]);
+
+  // Playbook (the attack-path stepper) vs Governance (RoE/ConOps/Deconfliction/OPPLAN). A
+  // ?view=governance / ?tab=<gov-tab> deep-link opens governance directly — used so the
+  // headless screenshot lands on the objectives board without a click.
+  const search = useSearchParams();
+  const govTabParam = search.get("tab");
+  const wantsGov =
+    search.get("view") === "governance" ||
+    (govTabParam !== null && (GOV_TABS as string[]).includes(govTabParam));
+  const [view, setView] = useState<"playbook" | "governance">(
+    wantsGov ? "governance" : "playbook"
+  );
+  const initialGovTab = (
+    govTabParam && (GOV_TABS as string[]).includes(govTabParam) ? govTabParam : "opplan"
+  ) as GovTab;
 
   // Local, optimistic per-step state keyed by the stable {phase}-{n} id. The
   // path structure itself comes from the (immutable) fetched session.
@@ -183,40 +203,67 @@ export function EngagementScreen({ id }: { id: string }) {
                 : "draft a structured pentest report from your checked steps & pasted evidence"}
             </span>
           </div>
+
+          {/* PLAYBOOK vs GOVERNANCE. Governance is the RoE/ConOps/Deconfliction/OPPLAN frame
+              the human approves against — it adds no gate; per-command approval stays the bound. */}
+          <div className="hp-eng-views" role="tablist" aria-label="Engagement view">
+            <button
+              role="tab"
+              aria-selected={view === "playbook"}
+              className={`hp-eng-viewtab${view === "playbook" ? " is-active" : ""}`}
+              onClick={() => setView("playbook")}
+            >
+              Playbook
+            </button>
+            <button
+              role="tab"
+              aria-selected={view === "governance"}
+              className={`hp-eng-viewtab${view === "governance" ? " is-active" : ""}`}
+              onClick={() => setView("governance")}
+            >
+              Governance
+            </button>
+          </div>
         </header>
 
-        {/* SUBMISSION DETAILS — engagement facts (CVSS vector, VRT category, the program's
-            known-issues list), so they are set once here and merely echoed on the report
-            screen. Collapsed by default: optional, and eight dropdowns open by default would
-            push the actual engagement below the fold. */}
-        <SubmissionPanel session={session} onSaved={setSaved} />
+        {view === "governance" ? (
+          <GovernancePanel id={id} initialTab={initialGovTab} />
+        ) : (
+          <>
+            {/* SUBMISSION DETAILS — engagement facts (CVSS vector, VRT category, the program's
+                known-issues list), so they are set once here and merely echoed on the report
+                screen. Collapsed by default: optional, and eight dropdowns open by default would
+                push the actual engagement below the fold. */}
+            <SubmissionPanel session={session} onSaved={setSaved} />
 
-        <ol className="hp-ap-phases hp-eng-phases">
-          {session.path.phases.map((ph, pi) => (
-            <li className="hp-ap-phase" key={ph.phase}>
-              <div className="hp-ap-phase-head">
-                <span className="hp-ap-phase-n">{pi + 1}</span>
-                <h2 className="hp-ap-phase-label">{ph.label}</h2>
-                <span className="hp-ap-phase-count">
-                  {ph.steps.filter((s) => state[s.id]?.checked).length}/
-                  {ph.steps.length}
-                </span>
-              </div>
-              <div className="hp-ap-steps">
-                {ph.steps.map((step) => (
-                  <StepCard
-                    key={step.id}
-                    step={step}
-                    checked={state[step.id]?.checked ?? false}
-                    initialResult={state[step.id]?.result_text ?? ""}
-                    onToggle={() => toggle(step.id)}
-                    onSaveResult={(text) => saveResult(step.id, text)}
-                  />
-                ))}
-              </div>
-            </li>
-          ))}
-        </ol>
+            <ol className="hp-ap-phases hp-eng-phases">
+              {session.path.phases.map((ph, pi) => (
+                <li className="hp-ap-phase" key={ph.phase}>
+                  <div className="hp-ap-phase-head">
+                    <span className="hp-ap-phase-n">{pi + 1}</span>
+                    <h2 className="hp-ap-phase-label">{ph.label}</h2>
+                    <span className="hp-ap-phase-count">
+                      {ph.steps.filter((s) => state[s.id]?.checked).length}/
+                      {ph.steps.length}
+                    </span>
+                  </div>
+                  <div className="hp-ap-steps">
+                    {ph.steps.map((step) => (
+                      <StepCard
+                        key={step.id}
+                        step={step}
+                        checked={state[step.id]?.checked ?? false}
+                        initialResult={state[step.id]?.result_text ?? ""}
+                        onToggle={() => toggle(step.id)}
+                        onSaveResult={(text) => saveResult(step.id, text)}
+                      />
+                    ))}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </>
+        )}
       </div>
 
       <EngagementAssistant

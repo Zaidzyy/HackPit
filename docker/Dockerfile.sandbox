@@ -613,6 +613,15 @@ RUN set -eu; \
     chmod -R a+rX /opt/rust; \
     for b in cargo clippy-driver; do command -v "$b" >/dev/null || { echo "MISSING web3 tool: $b"; exit 1; }; done
 
+# mythril's eth/py-evm dependency does `import pkg_resources`, which (a) a Python 3.13 `venv` no
+# longer ships and (b) setuptools >=81 has REMOVED — so `myth` cannot even start without a
+# `setuptools<81` pinned into its venv. slither's venv does not touch pkg_resources, which is why
+# only myth needs this. Kept as its OWN late layer so an incremental rebuild reuses the cached
+# (expensive) anchor-cli compile above instead of re-running it.
+RUN set -eu; \
+    /opt/mythril/bin/pip install --no-cache-dir -q "setuptools<81"; \
+    /opt/mythril/bin/myth version >/dev/null 2>&1 || { echo "MISSING web3 tool: myth cannot start"; exit 1; }
+
 # --- 9e-bis. GraphQL tooling (build #20 item 6) ---
 #
 # *** TWO OF THESE FOUR MUST NOT COME FROM PyPI, AND THAT IS A SUPPLY-CHAIN FINDING. ***

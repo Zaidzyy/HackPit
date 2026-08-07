@@ -104,6 +104,13 @@ export const SURFACE_BANDS: SurfaceBand[] = [
         href: "/code-scan",
         desc: "Static application-security review of a source tree.",
       },
+      {
+        key: "workflows",
+        icon: "⧉",
+        label: ":workflows",
+        href: "/workflows",
+        desc: "Compose reusable prompt-step playbooks over the code-audit fan-out.",
+      },
     ],
   },
   {

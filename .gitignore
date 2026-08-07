@@ -98,3 +98,6 @@ docker/listener-profile.yml
 # Generated redirector profile (build #13 part 4). Same reasoning, one step worse: it names
 # which ports are live on the operator's own public VPS right now. NEVER commit.
 docker/redirector-profile.json
+
+# :workflows operator store (runtime; built-ins seed from code)
+/backend/data/workflows.json

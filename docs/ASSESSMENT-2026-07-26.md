@@ -5740,3 +5740,87 @@ one session (the spec's fallback was OPPLAN-first). Decepticon's source was not 
 state machine were **reconstructed from the spec's description** rather than copied file-for-file; the attribution stands
 regardless (`NOTICE` / `THIRD_PARTY_LICENSES`). Document editing in the UI is currently draft-then-approve (the drafter
 proposes the whole body; per-field inline editing is a follow-up); the substantive fields render read-structured.
+
+## Reusable prompt-workflow builder — author your own playbooks over the fan-out (`:workflows`) (2026-08-07)
+
+**The idea.** The AI code-audit fan-out ships two hard-coded decompositions (the web-app playbook and the three web3
+ones). The **workflow builder** is the authoring layer on top of that engine: an operator composes their *own* ordered
+set of prompt **steps** — each with variables, an output schema and a batch / depth / siblings fan-out shape — saves it,
+exports/imports it as a portable JSON, and runs it. Ported from **open·kritt**'s workflow builder (`workflows.js` /
+`steps.js` / `defaultWorkflows.js` and the `{{var}}` / `resolve_ref` / `render_prompt` variable model in
+`prompting.py`), adapted to HackPit's stack. It is the most product-polish of the Kritt-derived specs — the built-ins
+already deliver the core value — so it deliberately adds **nothing to the trust surface**.
+
+**The model (`backend/codescan/workflows.py`, a pure module).** A `Workflow` is an ordered list of `Step`s; a `Step`
+is a focused prompt + a `kind` (`analyze` / `batch` / `command`) + fan-out controls + an optional `output_format`
+schema. The variable model is ported verbatim: `resolve_ref(context, "a.b.0.c")` walks a nested dict/list and returns
+`None` on any missing hop (never raises); `render_prompt` substitutes every `{{ ref }}` and renders an **unresolved ref
+as the empty string** — a step never emits a literal `{{x}}` to an agent. Built-in variables are `repo`, `ref`,
+`playbook`, the per-item `item`, the sibling `branch`, and any prior step's parsed output by dotted ref
+(`steps.<id>.output`); operator-defined and per-run **extra** variables land in the same flat namespace (and under
+`extra.*`). **Batches** fan out one agent per item of a list variable; **siblings** run parallel branches per task;
+**depth** re-expands a batch step's list output into child generations. Every knob is **bounded** — `MAX_STEPS=24`,
+`MAX_SIBLINGS=8`, `MAX_DEPTH=4`, `MAX_BATCH_ITEMS=64`, and a total `MAX_TASKS=400` ceiling decremented across the whole
+run — so a fan-out can never run away. A batch step that references a *later* step is refused at build time.
+
+**Import / export, inspect-before-run.** `to_portable` serialises a workflow to `{"kritt_workflow_schema": 1,
+"workflow": {…}}` (dropping the store-local version/updated_at so a re-import is a fresh authored copy);
+`from_portable` parses it back, **flagged `imported=True`**, and rejects a wrong/absent schema version loudly. The store's
+`import_workflow` stores it and returns it — it **never runs it**; the id is suffixed on collision so an import can never
+overwrite an existing workflow. Two proven built-ins are seeded from code and visible on first load: **external-flow**
+(web-app, mirrors the `external-flow-analysis` playbook) and **evm-external-flow** (Solidity), each a 3-step
+enumerate → trace (batch) → verify (batch) decomposition.
+
+**The runner — compile onto the same engine, execute nothing new.** `run_workflow` renders each step's prompt with the
+resolved variables, runs it (single, batched over a list variable, or — for a `command` step — a *proposal* only),
+validates each output against the step's schema (a declared `output_format`, else the audit's concrete-or-stub finding
+schema), and publishes the step's outputs into `steps.<id>.output` so downstream steps reference them. Concrete findings
+across all steps are de-duplicated and severity-ranked by the **shared `ai_audit.dedup_and_rank`** pass. The runner
+reuses the audit's injected LLM agent (`default_agents`) and KB search; it imports no state / git / executor of its own.
+A **command step never calls the agent** — its rendered string comes back under `proposals` with `executed:false,
+approve_each:true`, run one-by-one through the existing gated executor in the :kali sandbox. `plan()` computes the
+static fan-out shape (steps × items × siblings × depth) with **no run at all** — the builder's preview.
+
+**Routes + store (`codescan/router.py`).** CRUD (`GET/POST /workflows`, `GET/PATCH/DELETE /workflows/{id}` — **PATCH not
+PUT**, the CORS lesson governance already learned), `POST /workflows/import` (inspect-before-run), `GET
+…/export`, `POST …/plan`, `POST …/run`, and `GET …/sample` (a deterministic no-LLM run of a built-in over its bundled
+fixture — the offline demo). The store is one JSON file under `backend/data/` (gitignored runtime data; the built-ins
+always seed from code) with an **optimistic version lock** (open·kritt's `workflowLocks`): a save carrying a stale
+version is refused, so two editors cannot silently clobber each other, and a built-in is read-only (clone to edit).
+
+**No new gate — by construction.** Authoring (create / edit / import / export / delete) touches no agent and no target;
+running is the **same one approved job** the AI audit is (the fan-out justification), reaching the same seam with no new
+approval / danger / target field. `codescan/workflows.py` + the routes make no eval/exec/subprocess/socket/HTTP call by
+AST, import no cockpit/executor/state/sandbox and name no gate symbol — the only launchable program in the whole codescan
+package is still `runner._spawn`'s semgrep/bandit, exactly once. The wider `test_codescan_safety.py` source-scan (which
+sweeps *every* `codescan/*.py`) passes unchanged with the new file in the package.
+
+**Frontend (`/workflows`, in the PLAN band — "proposes · never executes").** A two-column builder: the workflow list +
+an inspect-before-run import box on the left; the step editor on the right — name / playbook / description, a **variable
+palette** that inserts `{{var}}` (built-ins + each prior step's dotted output ref) into the focused step's prompt, then
+per-step prompt editors with a kind selector, the batch/depth/siblings fan-out controls, a KB-ground toggle and an
+**output-schema editor**. A fan-out **plan preview**, JSON **export/import**, and a **run** panel (repo path + session +
+auto/heuristic mode, plus "Load sample" for the built-ins) that shows step task counts, deduped findings and approve-each
+proposals, with a hand-off to `:code-scan`. New `hp-wf-*` classes added to `globals.css` (the CSS-vocabulary test
+enforces every class exists).
+
+**Tests.** `test_workflows.py` (variable resolution incl. dotted step-output refs + extra vars, a miss renders empty / a
+batch fans out one task per item and siblings multiply, an empty list no-ops / depth=2 over a 2→2 expansion produces the
+2/4/8 child shape, all bounded / export→import round-trips with only the provenance flag flipping to inspect-before-run /
+a step output validates against both the default and a custom schema / the runner threads a step's output downstream and
+same-bug siblings dedup+rank to one / a command step proposes and calls no agent / `plan()` is static / a forward batch
+ref is refused). `test_workflows_safety.py` (§0: authoring executes nothing — proven with a recording agent that fires
+only on a real run / no eval/exec/subprocess/socket/HTTP by AST with a planted control / no gate/executor/state import or
+symbol, still exactly one spawn site / a command step is approve-each, executed:false / an imported workflow is never
+auto-run, with a control / built-ins read-only + the version lock refuses a stale edit). Both registered in
+`run_safety_tests.sh`. **`run_safety_tests.sh`: 113 hermetic files, all exit 0. `next build` exits 0.** Screen LOOKED AT:
+`43-workflows.png` (the builder rendering the EVM built-in — variable palette, three steps, the batch/depth/siblings
+controls and output schema, on the seeded built-ins, no real client source).
+
+**Assumptions (per §5), stated.** Depends on the code-audit fan-out engine (present) and pairs with the finding-pipeline
+schema (also present); a step's default output schema reuses the audit's concrete-or-stub finding shape, so the
+finding-pipeline dependency is satisfied without `codescan` importing the `findings/` package (orthogonality kept).
+open·kritt's source was not vendored in the tree, so the step/batch/depth-sibling/variable **semantics were
+reconstructed from the spec's description** and reproduced faithfully; the attribution stands regardless. Depth is
+modelled as a batch step re-expanding its own list output for `depth` generations (bounded); the "child steps" of the
+docs are that self-expansion plus downstream batch-over-prior-step chaining.

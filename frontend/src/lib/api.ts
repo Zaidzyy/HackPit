@@ -5730,3 +5730,177 @@ export const seedOpplan = (id: string, objectives: Record<string, unknown>[]) =>
     `/engagement/${encodeURIComponent(id)}/opplan/seed`,
     { objectives }
   );
+
+// -------------------------------------------------------------------------- //
+// reusable prompt-workflow builder (see backend/codescan/workflows.py).
+// AUTHORING EXECUTES NOTHING; a run is the AI-audit "one approved job", no new gate; command
+// steps are approve-each; an imported workflow is inspect-before-run and never auto-run.
+// -------------------------------------------------------------------------- //
+export type WfOutputField = {
+  name: string;
+  type: string; // string | text | list | refs | number | bool | severity
+  required: boolean;
+  label: string;
+};
+
+export type WfStep = {
+  id: string;
+  title: string;
+  prompt: string;
+  kind: string; // analyze | batch | command
+  batch_over: string;
+  item_var: string;
+  siblings: number;
+  depth: number;
+  output_format: WfOutputField[];
+  grounded: boolean;
+  note: string;
+};
+
+export type Workflow = {
+  id: string;
+  name: string;
+  description: string;
+  steps: WfStep[];
+  playbook: string;
+  builtin: boolean;
+  imported: boolean;
+  version: number;
+  updated_at: number;
+};
+
+export type WorkflowVariable = { name: string; desc: string };
+
+export type WorkflowBounds = {
+  max_steps: number;
+  max_siblings: number;
+  max_depth: number;
+  max_batch_items: number;
+  max_tasks: number;
+};
+
+export type WorkflowIndex = {
+  workflows: Workflow[];
+  builtin_variables: WorkflowVariable[];
+  field_types: string[];
+  step_kinds: string[];
+  bounds: WorkflowBounds;
+};
+
+export type WorkflowPlanRow = {
+  step_id: string;
+  title: string;
+  kind: string;
+  batch_over: string;
+  items: number | string;
+  siblings: number;
+  depth: number;
+  tasks: number | string;
+};
+
+export type WorkflowPlan = {
+  workflow: string;
+  steps: WorkflowPlanRow[];
+  static_tasks: number;
+  task_ceiling: number;
+};
+
+export type WorkflowFinding = {
+  title: string;
+  vuln_class: string;
+  severity: string;
+  attacker_path: string;
+  source_refs: string[];
+  impact: string;
+  cwe: string | null;
+  chain: string;
+  contract: string;
+  function: string;
+};
+
+export type WorkflowProposal = {
+  step: string;
+  command: string;
+  approve_each: boolean;
+  executed: boolean;
+};
+
+export type WorkflowStepResult = {
+  step_id: string;
+  kind: string;
+  tasks: number;
+  outputs: unknown[];
+  proposals: string[];
+  warnings: string[];
+};
+
+export type WorkflowRun = {
+  workflow: string;
+  name: string;
+  repo: string | null;
+  ref: string | null;
+  mode: string;
+  imported?: boolean;
+  via_playbook?: string;
+  steps: WorkflowStepResult[];
+  proposals: WorkflowProposal[];
+  findings: WorkflowFinding[];
+  tasks_run: number;
+  duration_s: number;
+  summary: Record<string, unknown>;
+  warnings: string[];
+  persisted?: number;
+};
+
+export type WorkflowRunInput = {
+  path: string;
+  session_id?: string | null;
+  ref?: string | null;
+  mode?: string;
+  extra_vars?: Record<string, unknown>;
+};
+
+export const listWorkflows = (signal?: AbortSignal) =>
+  getJSON<WorkflowIndex>("/codescan/workflows", signal);
+
+export const getWorkflow = (wid: string, signal?: AbortSignal) =>
+  getJSON<Workflow>(`/codescan/workflows/${encodeURIComponent(wid)}`, signal);
+
+export const createWorkflow = (body: Partial<Workflow>, signal?: AbortSignal) =>
+  postJSON<Workflow>("/codescan/workflows", body, signal);
+
+export const updateWorkflow = (
+  wid: string,
+  body: Partial<Workflow> & { expected_version?: number },
+  signal?: AbortSignal
+) => sendJSON<Workflow>("PATCH", `/codescan/workflows/${encodeURIComponent(wid)}`, body, signal);
+
+export const deleteWorkflow = (wid: string, signal?: AbortSignal) =>
+  sendJSON<{ deleted: string }>("DELETE", `/codescan/workflows/${encodeURIComponent(wid)}`, undefined, signal);
+
+export const exportWorkflow = (wid: string, signal?: AbortSignal) =>
+  getJSON<Record<string, unknown>>(`/codescan/workflows/${encodeURIComponent(wid)}/export`, signal);
+
+export const importWorkflow = (body: Record<string, unknown>, signal?: AbortSignal) =>
+  postJSON<{ workflow: Workflow; imported: boolean; inspect_before_run: boolean; note: string }>(
+    "/codescan/workflows/import",
+    body,
+    signal
+  );
+
+export const planWorkflow = (
+  wid: string,
+  extra_vars?: Record<string, unknown>,
+  signal?: AbortSignal
+) =>
+  postJSON<WorkflowPlan>(
+    `/codescan/workflows/${encodeURIComponent(wid)}/plan`,
+    { extra_vars: extra_vars ?? {} },
+    signal
+  );
+
+export const runWorkflow = (wid: string, input: WorkflowRunInput, signal?: AbortSignal) =>
+  postJSON<WorkflowRun>(`/codescan/workflows/${encodeURIComponent(wid)}/run`, input, signal);
+
+export const sampleWorkflow = (wid: string, signal?: AbortSignal) =>
+  getJSON<WorkflowRun>(`/codescan/workflows/${encodeURIComponent(wid)}/sample`, signal);

@@ -13,6 +13,7 @@ keeps no import cycle with the app layer and works with no KB at all.
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import APIRouter, Body, HTTPException
@@ -24,6 +25,7 @@ from . import kb_link
 from . import report as report_mod
 from . import runner
 from . import web3_tools
+from . import workflows as wfmod
 
 router = APIRouter(prefix="/codescan", tags=["codescan"])
 
@@ -475,3 +477,249 @@ def codescan_tool_pass_parse(req: ToolParseIn = Body(...)) -> dict[str, Any]:
     into the same finding shape the audit uses. Pure parsing — no execution."""
     findings = web3_tools.parse_output(req.tool, req.output)
     return {"tool": req.tool.strip().lower(), "count": len(findings), "findings": findings}
+
+
+# --------------------------------------------------------------------------- #
+# reusable prompt-workflow builder (see workflows.py) — AUTHORING EXECUTES NOTHING.
+#
+# CRUD/import/export only read and write a JSON store; they launch no agent and touch no target.
+# RUNNING a workflow is the SAME "one approved job" the AI audit is — the fan-out justification —
+# and it adds NO new gate: it renders each step's prompt, calls the injected LLM agent (the audit's
+# ``default_agents``), threads outputs downstream, and persists ranked findings through the same
+# injected sink. A ``command`` step is a proposal (approve-each), never run. An IMPORTED workflow
+# is stored + surfaced for inspection and is never auto-run.
+# --------------------------------------------------------------------------- #
+# The operator's authored/imported workflows persist here (gitignored runtime data); the built-ins
+# are always seeded from code. One store per process is enough — authoring is low-volume.
+_WF_STORE = wfmod.WorkflowStore(Path(__file__).parent.parent / "data" / "workflows.json")
+
+
+def _wf_bounds() -> dict[str, int]:
+    return {
+        "max_steps": wfmod.MAX_STEPS, "max_siblings": wfmod.MAX_SIBLINGS,
+        "max_depth": wfmod.MAX_DEPTH, "max_batch_items": wfmod.MAX_BATCH_ITEMS,
+        "max_tasks": wfmod.MAX_TASKS,
+    }
+
+
+@router.get("/workflows")
+def codescan_workflows_list() -> dict[str, Any]:
+    """Every workflow the operator can compose from: the seeded built-ins first, then their own
+    authored/imported ones. Also returns the built-in variable catalog (for the editor's
+    autocomplete) and the fan-out bounds. Reads the store — executes nothing."""
+    return {
+        "workflows": [w.to_dict() for w in _WF_STORE.list()],
+        "builtin_variables": wfmod.BUILTIN_VARIABLES,
+        "field_types": list(wfmod.FIELD_TYPES),
+        "step_kinds": list(wfmod.STEP_KINDS),
+        "bounds": _wf_bounds(),
+    }
+
+
+@router.post("/workflows")
+def codescan_workflows_create(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Create a workflow from an authored definition. Persists it and returns it — it runs
+    nothing. Authoring is orthogonal to any target or gate."""
+    try:
+        wf = _WF_STORE.create(body)
+    except wfmod.WorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return wf.to_dict()
+
+
+@router.get("/workflows/{wid}")
+def codescan_workflows_get(wid: str) -> dict[str, Any]:
+    try:
+        return _WF_STORE.get(wid).to_dict()
+    except wfmod.WorkflowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.patch("/workflows/{wid}")
+def codescan_workflows_update(wid: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Edit a workflow (PATCH, not PUT — the governance panel hit a CORS wall on PUT). Carries an
+    optional ``expected_version`` optimistic lock so two editors cannot silently clobber each
+    other. Built-ins are read-only. Executes nothing."""
+    expected = body.pop("expected_version", None)
+    try:
+        wf = _WF_STORE.update(wid, body, expected_version=expected)
+    except wfmod.WorkflowError as exc:
+        code = 404 if "no workflow" in str(exc) else 409 if "stale" in str(exc) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return wf.to_dict()
+
+
+@router.delete("/workflows/{wid}")
+def codescan_workflows_delete(wid: str) -> dict[str, Any]:
+    try:
+        _WF_STORE.delete(wid)
+    except wfmod.WorkflowError as exc:
+        code = 404 if "no workflow" in str(exc) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return {"deleted": wid}
+
+
+@router.get("/workflows/{wid}/export")
+def codescan_workflows_export(wid: str) -> dict[str, Any]:
+    """Serialize a workflow to the portable JSON an operator shares. Pure serialization."""
+    try:
+        return wfmod.to_portable(_WF_STORE.get(wid))
+    except wfmod.WorkflowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/workflows/import")
+def codescan_workflows_import(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Import a portable workflow JSON. It is PARSED and STORED, flagged inspect-before-run — it is
+    NEVER auto-run. The response carries the parsed steps so the operator reviews the prompt text
+    before choosing to run it."""
+    try:
+        wf = _WF_STORE.import_workflow(body)
+    except wfmod.WorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"workflow": wf.to_dict(), "imported": True, "inspect_before_run": True,
+            "note": "Imported workflow stored, not run. Review the step prompts, then run it."}
+
+
+@router.post("/workflows/{wid}/plan")
+def codescan_workflows_plan(wid: str, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """The STATIC fan-out shape of a workflow (steps × items × siblings × depth), computed without
+    running anything — the builder's preview."""
+    try:
+        wf = _WF_STORE.get(wid)
+    except wfmod.WorkflowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return wfmod.plan(wf, (body or {}).get("extra_vars"))
+
+
+class WorkflowRunIn(BaseModel):
+    path: str = Field(min_length=1, description="Codebase FOLDER the workflow runs over (read-only).")
+    session_id: str | None = Field(
+        default=None, description="Engagement session to persist ranked findings into (optional).")
+    ref: str | None = Field(
+        default=None, description="Git ref for the {{ref}} variable / patched-since on a "
+        "playbook-backed heuristic run.")
+    mode: str = Field(
+        default="auto", description="'auto' (LLM agents, degrading to a playbook heuristic if the "
+        "LLM layer is down and the workflow declares one) | 'heuristic' (no LLM; requires a "
+        "playbook-backed workflow).")
+    extra_vars: dict[str, Any] = Field(
+        default_factory=dict, description="Per-run 'extra' variables the prompts can reference.")
+
+
+def _heuristic_wf_result(wf: "wfmod.Workflow", root: Any, req: WorkflowRunIn,
+                         changed: set | None) -> dict[str, Any]:
+    """Run a playbook-backed workflow with NO LLM by delegating to the audit's deterministic
+    analyst for its playbook — the offline demo path and the graceful-degradation path. A workflow
+    with no playbook has no offline decomposition, so this refuses rather than faking one."""
+    if not wf.playbook:
+        raise HTTPException(
+            status_code=400,
+            detail="this workflow declares no playbook, so it has no offline (no-LLM) run — "
+                   "wire an LLM and run it in 'auto' mode")
+    audit = ai_audit.run_heuristic_audit(
+        root, kb_search=_KB["search"], changed_paths=changed,
+        patched_since=req.ref, playbook=wf.playbook)
+    steps = [{"step_id": s.id, "title": s.title, "kind": s.kind, "tasks": 0, "outputs": [],
+              "proposals": [], "warnings": []} for s in wf.steps]
+    return {
+        "workflow": wf.id, "name": wf.name, "repo": audit.get("repo"), "ref": req.ref,
+        "mode": "heuristic", "imported": wf.imported, "via_playbook": wf.playbook,
+        "steps": steps, "proposals": [], "findings": audit.get("findings", []),
+        "tasks_run": 0, "duration_s": audit.get("duration_s", 0.0),
+        "summary": audit.get("summary", {}),
+        "warnings": (audit.get("warnings", []) or []) + [
+            "ran the deterministic analyst for this workflow's playbook (no LLM) — the per-step "
+            "prompts are not exercised in heuristic mode"],
+    }
+
+
+def _persist_wf_findings(session_id: str, result: dict[str, Any]) -> int:
+    """Upsert a run's ranked findings through the injected sink (best-effort), exactly as the AI
+    audit does — codescan never imports state; the sink builds the records."""
+    if not (session_id and _FINDINGS_SINK is not None and result.get("findings")):
+        return 0
+    verdicts = [
+        ai_audit.Verdict(
+            flow_id="", finding=True, title=f["title"], vuln_class=f.get("vuln_class", ""),
+            severity=f.get("severity", "medium"), attacker_path=f.get("attacker_path", ""),
+            source_refs=f.get("source_refs", []), impact=f.get("impact", ""), cwe=f.get("cwe"))
+        for f in result["findings"]
+    ]
+    payload = ai_audit.to_state_findings(session_id, verdicts, str(result.get("repo") or ""))
+    try:
+        return int(_FINDINGS_SINK(session_id, payload) or 0)
+    except Exception as exc:  # noqa: BLE001 — persistence is best-effort
+        result.setdefault("warnings", []).append(
+            f"could not persist findings to engagement state ({exc})")
+        return 0
+
+
+@router.post("/workflows/{wid}/run")
+def codescan_workflows_run(wid: str, req: WorkflowRunIn = Body(...)) -> dict[str, Any]:
+    """Run a workflow over a source tree — the "one approved job" (the AI-audit justification, NO
+    new gate). Renders each step, calls the injected LLM agent, threads outputs downstream, and
+    de-dups + severity-ranks the findings. Command steps come back as approve-each proposals; they
+    are never executed here. Persists ranked findings if a session is named."""
+    try:
+        wf = _WF_STORE.get(wid)
+    except wfmod.WorkflowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        root = runner.resolve_target(req.path)
+    except runner.ScanError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # patched-since scope (only meaningful on the playbook-backed heuristic delegation)
+    changed: set | None = None
+    if req.ref and _DIFF_PROVIDER is not None:
+        try:
+            changed = _DIFF_PROVIDER(root, req.ref)
+        except Exception:  # noqa: BLE001 — a git miss degrades to a full run
+            changed = None
+
+    mode = (req.mode or "auto").lower()
+    if mode == "heuristic":
+        result = _heuristic_wf_result(wf, root, req, changed)
+    else:
+        try:
+            _routine, hard = ai_audit.default_agents()
+            result = wfmod.run_workflow(
+                wf, repo=str(root), agent=hard, kb_search=_KB["search"],
+                ref=req.ref or "", extra_vars=req.extra_vars)
+        except ai_audit.AuditError as exc:
+            # no LLM reachable -> a playbook-backed workflow still demos deterministically
+            result = _heuristic_wf_result(wf, root, req, changed)
+            result.setdefault("warnings", []).insert(
+                0, f"LLM agents unavailable ({exc}) — ran the playbook heuristic instead")
+
+    result["persisted"] = _persist_wf_findings(req.session_id or "", result)
+    return result
+
+
+@router.get("/workflows/{wid}/sample")
+def codescan_workflows_sample(wid: str) -> dict[str, Any]:
+    """A deterministic, no-LLM run of a BUILT-IN workflow over its bundled synthetic fixture — the
+    offline example the builder shows and the screenshot uses. Uses the playbook heuristic, so a
+    non-playbook workflow returns an empty example."""
+    try:
+        wf = _WF_STORE.get(wid)
+    except wfmod.WorkflowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not wf.playbook:
+        return {"workflow": wf.id, "name": wf.name, "mode": "heuristic", "findings": [],
+                "steps": [{"step_id": s.id, "title": s.title, "kind": s.kind} for s in wf.steps],
+                "note": "no offline sample — this workflow declares no playbook"}
+    pb = ai_audit.resolve_playbook(wf.playbook)
+    sub = _SAMPLE_DIRS.get(pb.key, "sample_app")
+    sample = Path(__file__).parent / sub
+    audit = ai_audit.run_heuristic_audit(sample, kb_search=_KB["search"], playbook=pb.key)
+    return {
+        "workflow": wf.id, "name": wf.name, "mode": "heuristic", "via_playbook": pb.key,
+        "is_sample": True, "repo": audit.get("repo"),
+        "steps": [{"step_id": s.id, "title": s.title, "kind": s.kind,
+                   "batch_over": s.batch_over, "siblings": s.siblings, "depth": s.depth}
+                  for s in wf.steps],
+        "findings": audit.get("findings", []), "summary": audit.get("summary", {}),
+        "proposals": [],
+    }

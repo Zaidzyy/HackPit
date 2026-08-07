@@ -67,6 +67,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | 🔬 **AI code-audit fan-out** | Point it at a repo → an agent maps the entrypoints & flows **once**, then verifies **one flow per agent** against source → deduped, severity-ranked findings, each with an attacker path + a propose-only PoC. `patched-since` audits only a git diff; one approved job, no new gate. |
 | ⛓️ **Web3 / smart-contract audit** | Three built-in playbooks on the same fan-out: **EVM external-flow** (reentrancy / access-control / oracle-manipulation / loss-of-funds), **Cosmos ABCI panic-halt** (four panic classes → consensus halt), **Anchor account-model** (missing-owner / signer-spoof / CPI-confusion / overflow). KB-grounded, chain/contract/function-tagged; an approve-each **slither / mythril / echidna** tool pass. |
 | ▣ **Finding pipeline** | Every producer emits one **structured schema** (attacker-path, source-refs, CVSS, custom fields) → duplicates **auto-merge** idempotently → a **pluggable severity ranker** (bug-bounty payout vs compliance) rescores per engagement → **post-scripts** validate / draft a report (in-process) or build a PoC (approve-each). Pure data; no new gate. |
+| ⧉ **Workflow builder** | Compose your own **reusable prompt-step playbooks** over the code-audit fan-out: each step is a focused prompt with **variables** (`{{repo}}`, dotted `{{steps.…output}}`, per-run extras), an output schema, and a **batch / depth / siblings** fan-out shape. Export / import them as portable JSON — imported ones are **inspected before they ever run** — and two proven built-ins ship visible on first load. Authoring executes nothing; a run is the audit's one approved job, no new gate. |
 | ⚖️ **Engagement governance** | Before an engagement goes live, draft + approve a formal **RoE / ConOps / Deconfliction / OPPLAN** package: objectives carry a status **state machine** + **MITRE ATT&CK** ids + OPSEC level, an objectives board + coverage matrix render it, and it flows into the report. The RoE **formalises** the scope handrail — advisory, not a machine veto; per-command human approval stays the bound. Generation is propose-only; no new gate. |
 | 🔌 **MCP server** | 15 read-only tools so another AI agent can *see* your engagement — eyes, not hands. |
 
@@ -351,6 +352,21 @@ Ranking, dedup and schema are **pure data operations** — they add **no gate**;
 
 <p align="center">
   <img src="assets/screenshots/39-finding-pipeline.png" alt="The finding pipeline preview on /engagements — a severity-ranker picker (Producer severity / Bug-bounty payout / Compliment-audit) with Bug-bounty payout selected, a 'merged 1 duplicate' badge and a 1-critical / 2-high / 2-info roll-up, then five synthetic findings: two orders-endpoint SQLi collapsed into one critical carrying a 'merged 1' badge, a CVSS vector and a source file:line, reflected XSS and SSRF at high, two missing-header findings at info — each row offering validate / report / PoC post-scripts, the two PoC buttons tagged approve-each" width="80%">
+</p>
+
+### ⧉ Workflow builder — author your own playbooks over the fan-out
+
+The three built-in playbooks are hard-coded decompositions. The **workflow builder** (`/workflows`, ported from open·kritt's workflow authoring UI) is the layer that lets an operator compose their *own*. A **workflow** is an ordered set of **steps**; each step is a focused prompt plus an output schema plus a fan-out shape:
+
+- **Variables** — `{{repo}}`, `{{ref}}`, `{{playbook}}`, the per-item `{{item}}`, and any **prior step's output** by dotted ref (`{{steps.enumerate.output.0.entrypoints}}`), plus operator-defined and per-run **extra** variables. `render_prompt` / `resolve_ref` are ported verbatim; an unresolved ref renders empty, never a literal `{{x}}`.
+- **Batches** — a step fans out **one agent per item** of a list variable (the map-once / verify-each primitive, generalised).
+- **Depth & siblings** — `depth` re-expands a step's list output into child generations; `siblings` runs parallel branches per task. Both are **bounded** (`MAX_SIBLINGS`, `MAX_DEPTH`, and a total-task ceiling), so a fan-out can never run away.
+- **Import / export** — serialise a workflow to a portable JSON and load one back. An imported workflow is **stored and surfaced for inspection — never auto-run**: you read every step prompt, then choose to run it.
+
+Compose a workflow, preview its **static fan-out plan**, export it, re-import it, and run it. **Authoring executes nothing** — create / edit / import / export only read and write a store. **Running** is the audit's **one approved job** (no new gate): each step renders its prompt, calls the same injected LLM agent, threads outputs downstream, and the concrete findings are deduped + severity-ranked by the shared pass. A **command** step is a *proposal* — a rendered command string the operator runs approve-each in the :kali sandbox — never fired from here. The two proven built-ins (**external-flow** web-app + **evm-external-flow** Solidity) ship visible on first load and run offline via their playbook's deterministic analyst.
+
+<p align="center">
+  <img src="assets/screenshots/43-workflows.png" alt="The workflow builder at /workflows — a left rail listing two built-in workflows (EVM external-flow · External-flow analysis, each 3 steps, BUILT-IN) plus an inspect-before-run import box, and the read-only editor for the EVM playbook: name / playbook / description fields, a variable palette of clickable {{repo}} {{ref}} {{playbook}} {{item}} {{branch}} and dotted prior-step {{steps.…output}} chips, then the three steps — enumerate (analyze, output schema entrypoints:list), trace (batch over steps.enumerate.output, item var fn, depth/siblings controls, flows:list) and verify (batch) — with per-step prompt editors and a Clone-to-edit button" width="80%">
 </p>
 
 ---

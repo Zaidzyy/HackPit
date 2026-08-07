@@ -9527,3 +9527,212 @@ button.hp-tn-start:disabled, button.hp-tn-destroy:disabled { opacity: 0.45; curs
   .hp-gov-board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hp-gov-field { grid-template-columns: 1fr; gap: 4px; }
 }
+
+/* --------------------------------------------------------------------------
+   :workflows — the reusable prompt-workflow builder. A two-column layout: the
+   workflow list + import on the left, the step editor + fan-out plan + run on
+   the right. Reuses the hp-tn-* card/list/form vocabulary; these are the extras.
+   -------------------------------------------------------------------------- */
+.hp-wf-grid {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  margin-top: 8px;
+}
+.hp-wf-aside { display: flex; flex-direction: column; gap: 14px; }
+.hp-wf-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.hp-wf-empty { color: var(--dim); padding: 40px 0; text-align: center; }
+
+/* form controls inside the builder inherit the tn look */
+.hp-wf-main input,
+.hp-wf-main select,
+.hp-wf-main textarea,
+.hp-wf-aside input,
+.hp-wf-aside select,
+.hp-wf-aside textarea {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--white);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 7px 9px;
+}
+.hp-wf-main textarea, .hp-wf-aside textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font-jetbrains-mono), monospace;
+  line-height: 1.5;
+}
+.hp-wf-main input:focus,
+.hp-wf-main select:focus,
+.hp-wf-main textarea:focus,
+.hp-wf-aside input:focus,
+.hp-wf-aside textarea:focus {
+  outline: none;
+  border-color: var(--accent-line);
+}
+.hp-wf-main input:disabled,
+.hp-wf-main select:disabled,
+.hp-wf-main textarea:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* workflow list items */
+.hp-wf-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: var(--white);
+  cursor: pointer;
+}
+.hp-wf-item:hover { border-color: var(--accent-line); }
+.hp-wf-item.is-active { border-color: var(--accent); background: var(--accent-soft); }
+.hp-wf-itemname { font-weight: 600; font-size: 13px; }
+.hp-wf-meta {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 11px; color: var(--dim);
+}
+.hp-wf-badge {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+  padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border);
+}
+.hp-wf-badge.is-builtin { color: #7ec8a0; border-color: rgba(126, 200, 160, 0.4); }
+.hp-wf-badge.is-imported { color: #f0a24a; border-color: rgba(240, 162, 74, 0.4); }
+
+/* buttons */
+.hp-wf-btn {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--white);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.hp-wf-btn:hover:not(:disabled) { border-color: var(--accent-line); }
+.hp-wf-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.hp-wf-btn.is-primary { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+.hp-wf-btn.is-danger { color: #f0776a; border-color: rgba(240, 119, 106, 0.35); }
+.hp-wf-btnrow { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+
+/* name/description column layout */
+.hp-wf-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.hp-wf-col { display: flex; flex-direction: column; gap: 4px; }
+.hp-wf-col > span { font-size: 11px; color: var(--dim); }
+
+/* inspect-before-run banner */
+.hp-wf-banner {
+  border: 1px solid rgba(240, 162, 74, 0.4);
+  background: rgba(240, 162, 74, 0.08);
+  color: #f0b45a;
+  border-radius: 6px;
+  padding: 8px 11px;
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+/* variable palette */
+.hp-wf-varbar { display: flex; flex-wrap: wrap; gap: 6px; }
+.hp-wf-var {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--accent);
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.hp-wf-var:hover:not(:disabled) { border-color: var(--accent-line); }
+.hp-wf-var:disabled { opacity: 0.5; cursor: not-allowed; }
+.hp-wf-var.is-step { color: #8ab4f0; }
+
+/* a step card */
+.hp-wf-step {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.015);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.hp-wf-steptop { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hp-wf-stepnum {
+  width: 22px; height: 22px; flex: 0 0 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; background: var(--accent-soft); color: var(--accent);
+  font-size: 12px; font-weight: 600;
+}
+.hp-wf-title { flex: 1 1 200px; font-weight: 600; }
+.hp-wf-stepid {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 11px; color: var(--dim); max-width: 220px;
+}
+
+/* fan-out controls */
+.hp-wf-fanout { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.hp-wf-fld { display: flex; flex-direction: column; gap: 3px; }
+.hp-wf-fld > span { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.4px; }
+.hp-wf-fld input[type="number"] { width: 90px; }
+.hp-wf-fld-check { flex-direction: row; align-items: center; gap: 6px; }
+.hp-wf-fld-check input[type="checkbox"] { width: auto; min-width: 0; flex: 0 0 auto; }
+
+/* output schema field editor */
+.hp-wf-fields { display: flex; flex-direction: column; gap: 6px; }
+.hp-wf-fld-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hp-wf-fld-row input:first-child { flex: 1 1 160px; }
+
+/* fan-out plan table */
+.hp-wf-plan { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+.hp-wf-plan th, .hp-wf-plan td {
+  text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border);
+}
+.hp-wf-plan th { color: var(--dim); font-weight: 500; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; }
+.hp-wf-plan td { font-family: var(--font-jetbrains-mono), monospace; }
+
+/* export/import JSON boxes */
+.hp-wf-json {
+  width: 100%;
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+/* run results */
+.hp-wf-run { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.hp-wf-finding {
+  display: flex; gap: 10px; align-items: flex-start;
+  border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px;
+}
+.hp-wf-sev {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+  font-weight: 700; flex: 0 0 auto; padding-top: 2px; min-width: 64px;
+}
+.hp-wf-proposal {
+  border: 1px solid rgba(240, 162, 74, 0.3); border-radius: 8px; padding: 8px 11px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.hp-wf-proposal code {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12px; color: var(--white);
+  word-break: break-all;
+}
+.hp-wf-tag {
+  display: inline-block;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px;
+  color: var(--dim); border: 1px solid var(--border); border-radius: 4px;
+  padding: 1px 6px; margin-left: 6px; text-decoration: none;
+}
+.hp-wf-tag:hover { color: var(--accent); border-color: var(--accent-line); }
+
+@media (max-width: 900px) {
+  .hp-wf-grid { grid-template-columns: 1fr; }
+  .hp-wf-cols { grid-template-columns: 1fr; }
+}

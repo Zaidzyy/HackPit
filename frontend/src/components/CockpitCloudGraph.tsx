@@ -3,17 +3,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { CockpitCloudOrchestrator } from "./CockpitCloudOrchestrator";
+import { CockpitCloudSeed } from "./CockpitCloudSeed";
 import { DetectionDisclosure } from "./DetectionPanel";
 import {
   ApiError,
   cloudComputePath,
   cloudGetGraph,
   cloudIngest,
+  cloudSeedImds,
   execCockpitStream,
   type CloudNode,
   type CloudPathEdge,
   type CloudPathResult,
   type CloudProvider,
+  type CloudSeedResult,
   type CloudTechnique,
   type ExecEvent,
 } from "@/lib/api";
@@ -100,6 +103,7 @@ export function CockpitCloudGraph({
   const outRef = useRef<HTMLDivElement | null>(null);
 
   const autoloaded = useRef(false);
+  const [autoSeed, setAutoSeed] = useState(false);
 
   useEffect(() => () => ctrlRef.current?.abort(), []);
   useEffect(() => {
@@ -108,6 +112,10 @@ export function CockpitCloudGraph({
 
   const path = result?.found ? result.path : null;
 
+  // Seeding + the sample share ONE session so a seeded identity merges into the enumerated graph.
+  // When no session is supplied (the standalone /cockpit/cloud demo), a stable local id is used.
+  const effectiveSession = sessionId ?? "cloud-demo";
+
   const ingestSample = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -115,7 +123,7 @@ export function CockpitCloudGraph({
     setWalked(new Set());
     setOpenEdge(null);
     try {
-      const ing = await cloudIngest({ use_sample: true, session_id: sessionId });
+      const ing = await cloudIngest({ use_sample: true, session_id: effectiveSession });
       setGraphId(ing.graph_id);
       setAccount(ing.account);
       setGraphProvider(ing.provider);
@@ -139,14 +147,81 @@ export function CockpitCloudGraph({
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [effectiveSession]);
 
-  // Deep-link auto-load: /cockpit/cloud?demo=1 ingests the synthetic sample on mount, so the
-  // headless-Edge screenshot renders the route rather than the empty state. The setState lives
-  // inside ingestSample's async body (not this effect), so it stays at the lint baseline.
+  // SSRF→IMDS seed: parse a captured IMDS body into an OWNED principal, seed it into this session's
+  // graph, then refresh the graph and route FROM the seeded identity toward an admin principal. The
+  // POST runs nothing — the IMDS fetch already went through the human-approved executor. Returns the
+  // seed result so the panel can show the parsed identity / expiry / warnings.
+  const handleSeed = useCallback(
+    async (
+      prov: CloudProvider,
+      responseBody: string,
+      src: "repeater" | "oob" | "paste",
+      roleHint: string
+    ): Promise<CloudSeedResult> => {
+      const res = await cloudSeedImds({
+        session_id: effectiveSession,
+        provider: prov,
+        response_body: responseBody,
+        source: src,
+        role_hint: roleHint || null,
+        engagement_id: engagementId ?? undefined,
+      });
+      const g = await cloudGetGraph(res.graph_id);
+      const nm = new Map<string, CloudNode>();
+      for (const n of g.nodes) nm.set(n.id, n);
+      setNodes(nm);
+      setGraphId(res.graph_id);
+      setAccount(g.account);
+      setGraphProvider(g.provider);
+      setProvider((g.provider as CloudProvider) || prov);
+      setOwned([res.node_id]);
+      setTraversed([]);
+      setWarnings(g.warnings);
+      setWalked(new Set());
+      setOpenEdge(null);
+      try {
+        const pathRes = await cloudComputePath({
+          graph_id: res.graph_id,
+          start: res.node_id,
+          with_techniques: true,
+        });
+        setResult(pathRes);
+      } catch {
+        // A freshly-seeded standalone identity may have no route yet — keep the graph, show why.
+        setResult({
+          found: false,
+          path: null,
+          alternatives: [],
+          reason:
+            "seeded identity has no route to an admin principal yet — enumerate as it (gated) to " +
+            "expand the graph, or seed onto an enumerated node",
+          target: "",
+          target_label: "",
+        });
+      }
+      return res;
+    },
+    [effectiveSession, engagementId]
+  );
+
+  // Deep-link auto-load, so the headless-Edge screenshot renders content, not the empty state.
+  //   ?demo=1 → ingest the synthetic sample (route from dev-alice).
+  //   ?seed=1 → ingest the sample AND seed a synthetic SSRF/IMDS identity (ci-deployer), so the
+  //             screenshot shows the seed panel with a parsed result + the owned node routing.
+  // The setState all lives inside the async bodies (not this effect), so it stays at the lint
+  // baseline (frontend/AGENTS.md).
   useEffect(() => {
     if (autoloaded.current) return;
-    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).has("demo")) {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("seed")) {
+      autoloaded.current = true;
+      // Ingest the sample first (so the seed merges onto the enumerated ci-deployer node), then let
+      // the seed panel auto-seed the synthetic identity — its result renders in the panel.
+      void ingestSample().then(() => setAutoSeed(true));
+    } else if (params.has("demo")) {
       autoloaded.current = true;
       void ingestSample();
     }
@@ -245,10 +320,16 @@ export function CockpitCloudGraph({
     </div>
   );
 
+  // The SSRF→IMDS seed panel — the web↔cloud seam, shown above the graph in every state.
+  const seedPanel = (
+    <CockpitCloudSeed onSeed={handleSeed} engagement={!!engagementId} autoSeed={autoSeed} />
+  );
+
   // ---- empty state ---------------------------------------------------------- //
   if (!result) {
     return (
       <div className="hp-adg">
+        {seedPanel}
         <section className="hp-tn-card">
           <div className="hp-tn-cardhead">load an enumeration</div>
           <div className="hp-tn-cardsub">
@@ -285,6 +366,7 @@ export function CockpitCloudGraph({
   if (!path) {
     return (
       <div className="hp-adg">
+        {seedPanel}
         <section className="hp-tn-card">
           <div className="hp-tn-cardhead">no path found</div>
           <div className="hp-tn-cardsub">{result.reason}</div>
@@ -304,6 +386,7 @@ export function CockpitCloudGraph({
 
   return (
     <div className="hp-adg">
+      {seedPanel}
       <header className="hp-adg-head">
         <div>
           <h2 className="hp-ck-title hp-ck-title-sm">

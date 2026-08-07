@@ -147,6 +147,102 @@ def mark_owned(session_id: str, principals: list[str]) -> list[str]:
     return marked
 
 
+def seed_owned_node(
+    session_id: str,
+    node_dict: dict[str, Any],
+    aliases: list[str],
+    provider: str | None = None,
+    account: str | None = None,
+    engagement_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Seed an OWNED principal (an SSRF/IMDS-captured identity) into a session's graph.
+
+    The web↔cloud seam's persistence half. If the session already has a graph, the seed MERGES:
+    when the captured identity matches an already-enumerated node (by id, label, or a role/email
+    ``alias`` — the same matching ``mark_owned`` uses), that node is marked ``owned`` so the privesc
+    walk can start from it; otherwise the owned node is added standalone. If the session has no graph
+    yet, a fresh one is created holding the account root + the owned identity.
+
+    Pure persistence — no execution, no network. Returns ``{graph_id, node_id, created,
+    matched_existing, stats}`` or ``None`` when there is nothing to seed (no session / no node).
+    """
+    if not session_id or not isinstance(node_dict, dict) or not node_dict.get("id"):
+        return None
+
+    # local import keeps store.py free of a schema import at module load (it stores plain dicts)
+    from .schema import Edge, Graph, Node
+
+    want = {a.strip().lower() for a in ([*aliases, node_dict.get("id", ""),
+                                         node_dict.get("label", "")]) if a and a.strip()}
+
+    latest = latest_for_session(session_id)
+    if latest and isinstance(latest.get("graph"), dict) and latest.get("graph_id"):
+        graph_dict = latest["graph"]
+        graph_id = latest["graph_id"]
+        g = Graph(provider=graph_dict.get("provider"), account=graph_dict.get("account"))
+        for n in graph_dict.get("nodes", []):
+            g.add_node(Node(id=n["id"], type=n.get("type", "resource"), label=n.get("label", ""),
+                            provider=n.get("provider") or "", props=n.get("props") or {},
+                            high_value=bool(n.get("high_value")), owned=bool(n.get("owned"))))
+        for e in graph_dict.get("edges", []):
+            g.add_edge(Edge(source=e["source"], target=e["target"], kind=e["kind"],
+                            props=e.get("props") or {}))
+
+        matched = _match_existing(g, want)
+        if matched is not None:
+            matched.owned = True
+            matched.props.update({k: v for k, v in (node_dict.get("props") or {}).items()
+                                  if v not in (None, "")})
+            node_id = matched.id
+            matched_existing = True
+        else:
+            seed = Node(id=node_dict["id"], type=node_dict.get("type", "role"),
+                        label=node_dict.get("label") or node_dict["id"],
+                        provider=node_dict.get("provider") or (provider or ""), owned=True,
+                        props=node_dict.get("props") or {})
+            g.add_node(seed)
+            node_id = seed.id
+            matched_existing = False
+
+        new_dict = g.to_dict()
+        with _write_lock, _connect() as conn:
+            conn.execute(
+                "UPDATE cloud_graphs SET graph_json = ?, node_count = ?, edge_count = ? "
+                "WHERE graph_id = ?",
+                (json.dumps(new_dict), len(g.nodes), len(g.edges), graph_id),
+            )
+        return {"graph_id": graph_id, "node_id": node_id, "created": False,
+                "matched_existing": matched_existing, "stats": new_dict.get("stats", {})}
+
+    # no graph yet — create a minimal one: the account root (context) + the owned identity.
+    prov = node_dict.get("provider") or (provider or "")
+    g = Graph(provider=prov or None, account=account or None)
+    seed = Node(id=node_dict["id"], type=node_dict.get("type", "role"),
+                label=node_dict.get("label") or node_dict["id"], provider=prov, owned=True,
+                props=node_dict.get("props") or {})
+    g.add_node(seed)
+    if account:
+        acct_id = f"arn:aws:iam::{account}:account" if prov == "aws" else f"account:{account}"
+        g.add_node(Node(id=acct_id, type="account", label=account, provider=prov))
+        g.add_edge(Edge(source=acct_id, target=seed.id, kind="Contains"))
+    graph_dict = g.to_dict()
+    graph_id = save_graph(graph_dict, session_id, engagement_id, source="seed-imds")
+    return {"graph_id": graph_id, "node_id": seed.id, "created": True,
+            "matched_existing": False, "stats": graph_dict.get("stats", {})}
+
+
+def _match_existing(graph, want: set[str]):
+    """The first graph node whose id, label, or label tail matches any wanted alias, or None.
+    Mirrors ``mark_owned``'s case-insensitive id/label/tail matching."""
+    for node in graph.nodes.values():
+        nid = (node.id or "").strip().lower()
+        label = (node.label or "")
+        tail = label.rsplit(":", 1)[-1].rsplit("/", 1)[-1].strip().lower()
+        if nid in want or label.strip().lower() in want or (tail and tail in want):
+            return node
+    return None
+
+
 def _row(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     try:

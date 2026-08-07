@@ -29,6 +29,7 @@ import inspect
 from pathlib import Path
 
 from cloudgraph import enumerate as EN
+from cloudgraph import imds as IM
 from cloudgraph import orchestrator as O
 from cloudgraph import parser as P
 from cloudgraph import router as R
@@ -42,6 +43,7 @@ from cockpit.models import EngagementRecord, ExecRequest
 _SRC = Path(O.__file__).read_text(encoding="utf-8")
 _ROUTER_SRC = Path(R.__file__).read_text(encoding="utf-8")
 _ENUM_SRC = Path(EN.__file__).read_text(encoding="utf-8")
+_IMDS_SRC = Path(IM.__file__).read_text(encoding="utf-8")
 _LAB = "hackpit-lab-target"
 
 
@@ -285,6 +287,61 @@ def test_enumerate_is_engagement_bound_and_stop_is_ungated() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 8. the SSRF->IMDS bridge is a PURE PARSER — it executes nothing and touches no network
+# --------------------------------------------------------------------------- #
+def test_imds_bridge_executes_nothing_and_is_network_free() -> None:
+    """The bridge only parses a captured response body; the request that hit 169.254.169.254 ran
+    through the human-approved repeater/executor. So ``cloudgraph/imds.py`` must import no network /
+    exec module and make no exec-shaped or network call — asserted by AST, not prose."""
+    banned_imports = {
+        "subprocess", "socket", "requests", "urllib", "http", "httpx", "ftplib", "telnetlib",
+        "asyncio", "os",  # no os at all — no os.system / os.popen / os.exec* path
+    }
+    banned_call_tokens = ("subprocess", "system", "Popen", "urlopen", "socket", "connect",
+                          "request", "os.exec", "os.popen", "run_kali")
+    tree = ast.parse(_IMDS_SRC)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                root = a.name.split(".")[0]
+                assert root not in banned_imports, f"imds.py must not import {a.name!r}"
+        elif isinstance(node, ast.ImportFrom):
+            root = (node.module or "").split(".")[0]
+            assert root not in banned_imports, f"imds.py must not import from {node.module!r}"
+        elif isinstance(node, ast.Call):
+            dump = ast.dump(node.func)
+            for tok in banned_call_tokens:
+                assert tok not in dump, f"imds.py must make no {tok!r}-shaped call: {dump}"
+    # behavioural: a captured body yields an OWNED node with the secret kept OUT of the finding
+    import json as _json
+
+    body = _json.dumps({"AccessKeyId": "ASIAFAKE", "SecretAccessKey": "wFAKEsecretMATERIAL",
+                        "Token": "FAKEtok==", "Expiration": "2026-01-01T00:00:00Z"})
+    r = IM.parse(body, "aws", role_hint="ci-deployer")
+    assert r.node is not None and r.node.owned is True and r.node.provider == "aws"
+    assert "wFAKEsecretMATERIAL" not in r.finding_evidence, "the secret must never reach the finding"
+    assert "wFAKEsecretMATERIAL" not in _json.dumps(r.to_response()), "secret must not reach the API"
+    print("  the SSRF->IMDS bridge imports no network/exec module, makes no such call, and keeps the "
+          "secret out of the finding + API response (AST + behaviour): PASS")
+
+
+def test_seed_route_has_no_gate_and_no_execution() -> None:
+    """The seed route lives in main.py (cross-cutting) and executes nothing. It is not a cloudgraph
+    router route (the decoupling rule keeps cloudgraph free of cockpit.loot), so the cloudgraph
+    router source must not grow a seed/exec path either."""
+    for tok in ("seed-imds", "seed_imds"):
+        # if a seed route ever appears in the cloudgraph router, it must not carry an exec path
+        if tok in _ROUTER_SRC:
+            assert "/run" not in _ROUTER_SRC and "subprocess" not in _ROUTER_SRC
+    # the bridge module exposes only parse + catalog data — no start/run/spawn entrypoint.
+    # (network/exec CALLS and IMPORTS are covered by the AST test above; here we forbid an
+    # execution ENTRYPOINT def, since the word may appear legitimately in the module docstring.)
+    for tok in ("def start", "def run(", "def _spawn", "def execute"):
+        assert tok not in _IMDS_SRC, f"the imds bridge must expose no {tok!r}"
+    print("  the seed bridge exposes only parse + catalog data; no run/start/spawn entrypoint: PASS")
+
+
+# --------------------------------------------------------------------------- #
 # 7. lab unchanged
 # --------------------------------------------------------------------------- #
 def test_lab_mode_unchanged() -> None:
@@ -313,5 +370,7 @@ if __name__ == "__main__":
     test_enumerate_argv_builders_execute_nothing()
     test_enumerate_gates_before_any_spawn()
     test_enumerate_is_engagement_bound_and_stop_is_ungated()
+    test_imds_bridge_executes_nothing_and_is_network_free()
+    test_seed_route_has_no_gate_and_no_execution()
     test_lab_mode_unchanged()
     print("ALL cloud-graph safety-invariant tests pass")

@@ -56,6 +56,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | ◎ **Nuclei template scan** | Scoped target(s) → templates → severity-ranked findings, one approval; results flow into engagement state. |
 | 🪟 **Windows / AD** | BloodHound graph → route to Domain Admin → walk it live over WinRM. |
 | ☁️ **Cloud IAM privesc** | ScoutSuite/Prowler/pacu/cloudfox → typed IAM graph → route to an admin/owner identity across AWS/Azure/GCP; the agent picks an edge, you approve every command. |
+| 🌉 **Web SSRF → cloud creds** | A captured IMDS response (from the repeater, a nuclei hit, or an OOB callback) → an **owned** cloud principal seeded into the IAM graph → the privesc walk starts from the identity you just stole. |
 | 🔑 **Credential attack** | Spray captured/OSINT creds, crack captured hashes — one approval per job; secrets stay in loot files, a hit lights the AD graph. |
 | 📡 **C2 & tunnels** | Sliver implants, DNS tunnels, pivots, a public redirector — all gated. |
 | 🛡️ **Purple-team view** | The defender's-eye footprint of every command, with an honest OPSEC channel. |
@@ -229,6 +230,18 @@ The cloud parallel to the AD graph. Point **`:cloud-graph`** at an account and i
 </p>
 
 > No cloud credentials needed to see it work: the sample is a **synthetic AWS account** (no real account id, ARN or tenant) with a real 3-hop IAM privilege-escalation route to an admin role. A live enumeration wires in the same way — a gated job in the open engagement sandbox — when a real account is in scope.
+
+### 🌉 Web SSRF → cloud credentials (the IMDS bridge)
+
+The seam between the web/cockpit half and the cloud graph. A web-side **SSRF or RCE** that can reach the instance metadata service (`169.254.169.254`, or `metadata.google.internal` on GCP) hands back the instance's temporary role/identity token — the classic pivot from a web bug into the cloud control plane. The **"Seed from SSRF / IMDS"** panel on `:cloud-graph` takes that **captured response** — pasted, pulled from a **repeater** exchange, or arriving in an **OOB callback** body — parses the credentials + the identity behind them, and seeds them as an **owned** principal in the IAM graph, so the privesc walk begins from the identity you just stole. It covers **AWS** (IMDSv1 and the IMDSv2 token-PUT + creds-GET two-step, plus the role listing and instance-identity doc), **Azure** managed-identity JWTs (decoded for `oid`/`appid`/tenant), and **GCP** service-account tokens (with the `Metadata-Flavor: Google` header requirement flagged).
+
+The bridge **executes nothing** — the request that actually touched IMDS ran through the human-approved repeater/nuclei/executor (or was an OOB callback); the module only parses a captured string and seeds the graph. When the stolen identity matches an already-enumerated node it marks that node **owned** (so a route to admin lights up immediately); otherwise it adds the owned principal standalone. The captured secret goes to the engagement **vault/loot**, and a high-severity **finding** is recorded with the provider, identity and token expiry — **never the secret itself**. A per-provider IMDS request cheat-set (curl/gopher, incl. the IMDSv2 two-step) sits next to the seed box as templates to approve-and-send through the repeater.
+
+<p align="center">
+  <img src="assets/screenshots/35-cloud-imds.png" alt="The Seed-from-SSRF/IMDS panel on the cloud graph: a captured synthetic AWS IMDS credentials body is pasted in, and the parsed result shows an OWNED ci-deployer principal tagged 'via ssrf-imds', matched onto an enumerated node, with the secret sent to the vault and a high-severity finding recorded; below it the route now runs 1 hop from the seeded ci-deployer to the break-glass-admin role" width="90%">
+</p>
+
+> All demo data is **synthetic** — the pasted IMDS body carries a fake account id, ARN and token, and the seeded `ci-deployer` role matches the synthetic sample account so the 1-hop route to the admin role lights up. Real SSRF captures wire in exactly the same way.
 
 ---
 

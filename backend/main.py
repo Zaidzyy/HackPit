@@ -77,6 +77,7 @@ from adgraph.router import (  # noqa: E402
     set_scope_resolver as set_ad_scope_resolver,
 )
 from cloudgraph import store as cloud_store  # noqa: E402  (backend/cloudgraph — cloud IAM graph)
+from cloudgraph import imds as cloud_imds  # noqa: E402  (SSRF→IMDS bridge: pure parser, seeds owned)
 from cloudgraph.router import (  # noqa: E402
     router as cloud_router,
     set_grounder as set_cloud_grounder,
@@ -524,6 +525,138 @@ def _cloud_kb_grounder(seeds: str) -> dict | None:
 
 # Wire the cloud KB grounder into the cloud graph router.
 set_cloud_grounder(_cloud_kb_grounder)
+
+
+# --------------------------------------------------------------------------- #
+# The web ↔ cloud SEAM: SSRF/RCE → IMDS → seed an OWNED cloud principal.
+#
+# CROSS-CUTTING, so it lives here and not in cloudgraph/router.py: it joins the cloud IAM graph
+# (cloud_store) to the pure IMDS parser (cloudgraph.imds), to engagement state (findings + the
+# credential vault), and to the loot mount (cockpit.loot) — and cloudgraph must not import cockpit
+# (the decoupling rule). The bridge EXECUTES NOTHING: the request that actually touched
+# 169.254.169.254 already ran through the human-approved repeater / nuclei / executor (or arrived as
+# an OOB callback); this route only PARSES a captured response and SEEDS the graph. There is no gate
+# because there is nothing to gate — no command, no spawn, no network. The captured secret goes to
+# the vault/loot and never into the Finding text.
+# --------------------------------------------------------------------------- #
+class SeedImdsIn(BaseModel):
+    session_id: str = Field(..., description="Session whose cloud graph the identity seeds into.")
+    provider: str = Field("aws", description="aws | azure | gcp.")
+    response_body: str = Field(..., description="The captured IMDS response body (paste / repeater "
+                                                "exchange / OOB callback body).")
+    source: str = Field("paste", description="Where the body came from: repeater | oob | paste.")
+    role_hint: str | None = Field(None, description="The <role> from the IMDS URL (AWS) or the SA "
+                                                    "email (GCP), so the identity matches its "
+                                                    "enumerated node.")
+    engagement_id: str | None = Field(None, description="Engagement, when captured in engagement "
+                                                        "mode (enables a loot-file copy of the "
+                                                        "secret).")
+
+
+@app.post("/cockpit/cloud/seed-imds")
+def cloud_seed_imds(req: SeedImdsIn) -> dict[str, Any]:
+    """Parse a captured IMDS response into an OWNED cloud principal and seed it into the session's
+    :cloud graph. Records a high-severity Finding (no secret in it) and stores the secret in the
+    engagement credential vault (+ a loot file in engagement mode). Executes nothing — the IMDS
+    fetch already went through the human-approved repeater/executor. Returns the seeded node id and
+    a suggested next step (enumerate AS this identity), which is NOT auto-run."""
+    import re
+
+    from state.models import Credential, Finding
+
+    src = (req.source or "paste").strip().lower()
+    if src not in {"repeater", "oob", "paste"}:
+        src = "paste"
+    try:
+        result = cloud_imds.parse(req.response_body, req.provider, req.role_hint)
+    except cloud_imds.ImdsParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    if result.node is None:
+        # A role listing / bare IMDSv2 token / identity doc — no credential to own yet. Return the
+        # guidance (warnings) so the operator fetches the actual creds next, but seed nothing.
+        raise HTTPException(status_code=422, detail={
+            "reason": "the body carried no credential to own — "
+                      + (result.warnings[0] if result.warnings else "nothing recognised"),
+            "imds_version": result.imds_version, "warnings": result.warnings,
+        })
+
+    node_dict = result.node.to_dict()
+    node_dict.setdefault("props", {})["source"] = src
+    seeded = cloud_store.seed_owned_node(
+        req.session_id, node_dict, result.aliases, provider=result.provider,
+        account=result.account or None, engagement_id=req.engagement_id,
+    )
+    if seeded is None:
+        raise HTTPException(status_code=422, detail="could not seed — a session_id is required")
+
+    # SECRET → vault (the gitignored sessions.db credential store, like every captured credential).
+    secret_blob = json.dumps(result.creds, sort_keys=True)
+    try:
+        state_store.upsert_credentials([Credential(
+            session_id=req.session_id, kind=result.cred_kind,
+            principal=result.cred_principal or result.identity or seeded["node_id"],
+            secret=secret_blob, domain=result.provider, note=result.cred_note,
+            source_run_id=seeded["graph_id"],
+        )])
+        vault = "vault"
+    except Exception:  # noqa: BLE001 — vault write is best-effort; the finding still records it
+        vault = "none"
+
+    # SECRET → loot file too, when captured in an engagement (mirrors :credentials → loot).
+    loot_path = None
+    if req.engagement_id:
+        try:
+            host_dir = cockpit_loot.host_dir(req.engagement_id)
+            host_dir.mkdir(parents=True, exist_ok=True)
+            safe = re.sub(r"[^A-Za-z0-9_.-]", "_", seeded["node_id"])[:80]
+            fp = host_dir / f"imds-{result.provider}-{safe}.json"
+            fp.write_text(secret_blob, encoding="utf-8")
+            loot_path = cockpit_loot.container_dir(req.engagement_id) + "/" + fp.name
+            vault = "loot"
+        except Exception:  # noqa: BLE001 — loot is a convenience, never a gate
+            loot_path = None
+
+    # FINDING → engagement state. Built ONLY from the non-secret fields (finding_evidence excludes
+    # the key/token by construction). High severity: stolen cloud credentials.
+    finding_recorded = False
+    try:
+        state_store.upsert_findings([Finding(
+            session_id=req.session_id, title=result.finding_title, severity="high",
+            target=result.identity or seeded["node_id"], evidence=result.finding_evidence,
+            tool="cloudgraph-imds", reference="ssrf-imds", source_run_id=seeded["graph_id"],
+        )])
+        finding_recorded = True
+    except Exception:  # noqa: BLE001 — finding is best-effort
+        finding_recorded = False
+
+    return {
+        **result.to_response(),
+        "graph_id": seeded["graph_id"],
+        "node_id": seeded["node_id"],
+        "matched_existing": seeded["matched_existing"],
+        "graph_created": seeded["created"],
+        "source": src,
+        "secret_stored": vault,
+        "loot_path": loot_path,
+        "finding_recorded": finding_recorded,
+        "next_step": {
+            "action": "enumerate as this identity",
+            "endpoint": "POST /cockpit/cloud/enumerate",
+            "note": "Optional and GATED — run a cloud enumeration AS the stolen identity to expand "
+                    "the graph. Not auto-run; you approve it like every command.",
+        },
+        "note": "SEEDED ONLY — nothing was executed. The IMDS fetch went through the human-approved "
+                "repeater/executor; this parsed the captured body and marked the principal owned.",
+    }
+
+
+@app.get("/cockpit/cloud/imds-catalog")
+def cloud_imds_catalog(provider: str = Query("aws")) -> dict[str, Any]:
+    """The per-provider IMDS request cheat-set — curl / gopher templates the operator copies into
+    the repeater and approves-and-sends. Read-only data; the bridge never fires these."""
+    return {"provider": (provider or "aws").strip().lower(),
+            "requests": cloud_imds.request_catalog(provider)}
 
 
 def _detection_run_lookup(run_id: str) -> dict | None:

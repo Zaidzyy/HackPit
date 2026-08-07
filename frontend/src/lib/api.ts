@@ -3926,6 +3926,57 @@ export type CloudEnumStatus = {
 export const cloudEnumStatus = (signal?: AbortSignal) =>
   getJSON<CloudEnumStatus>("/cockpit/cloud/enumerate/status", signal);
 
+// ---- SSRF → IMDS bridge: seed an OWNED cloud principal from a captured metadata response ---- //
+// The web↔cloud seam. A captured IMDS response (from the repeater / nuclei / an OOB callback) is
+// parsed into an owned identity and seeded into the session's :cloud graph. The bridge executes
+// nothing — the request that hit 169.254.169.254 already ran through the human-approved executor.
+
+export type CloudSeedResult = {
+  provider: string;
+  imds_version: string;
+  identity: string;
+  account: string;
+  expiration: string;
+  has_secret: boolean;
+  node: CloudNode | null;
+  aliases: string[];
+  warnings: string[];
+  graph_id: string;
+  node_id: string;
+  matched_existing: boolean;
+  graph_created: boolean;
+  source: string;
+  secret_stored: "vault" | "loot" | "none";
+  loot_path: string | null;
+  finding_recorded: boolean;
+  next_step: { action: string; endpoint: string; note: string };
+  note: string;
+};
+
+/** Parse a captured IMDS response body and seed the identity (owned) into the session's graph.
+ *  Records a high-severity finding; the secret goes to the vault/loot, never the response. */
+export const cloudSeedImds = (
+  body: {
+    session_id: string;
+    provider: CloudProvider;
+    response_body: string;
+    source?: "repeater" | "oob" | "paste";
+    role_hint?: string | null;
+    engagement_id?: string | null;
+  },
+  signal?: AbortSignal
+) => postJSON<CloudSeedResult>("/cockpit/cloud/seed-imds", body, signal);
+
+export type ImdsCatalogEntry = { label: string; cmd: string };
+
+/** The per-provider IMDS request cheat-set (curl / gopher templates) shown next to the seed box.
+ *  Read-only data — these are templates to approve-and-send via the repeater, never fired here. */
+export const cloudImdsCatalog = (provider: CloudProvider, signal?: AbortSignal) =>
+  getJSON<{ provider: string; requests: ImdsCatalogEntry[] }>(
+    `/cockpit/cloud/imds-catalog?provider=${encodeURIComponent(provider)}`,
+    signal
+  );
+
 /** Build (do NOT run) the collector ExecRequest. The returned `request` is sent to
  *  execCockpitStream to run through the gated executor (approve-each, scope-locked DC). */
 export type ADCollectPreview = {

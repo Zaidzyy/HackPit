@@ -211,6 +211,12 @@ _MUST_FIRE = frozenset({
     # which is the same claim the dnscat2/iodine entries above are here for. socat is the
     # return path in a multi-hop chain and carries a reverse shell just as readily.
     "chisel", "ligolo-ng", "ligolo-proxy", "ligolo-agent", "socat", "sshuttle",
+    # a `python3 -c '...'` skeleton IS arbitrary code execution. The pwntools and angr binary-re
+    # entries template exactly that (through their venv's python3), so `python3` reaches the
+    # executor as argv[0] and must demand the red-confirm — allowlist._INTERPRETERS already fires
+    # on it. The pwntools/angr NAMES themselves stay in _MUST_NOT_FIRE below: reading an ELF with
+    # `pwn checksec` is not the interpreter; the `-c` skeleton is.
+    "python3",
 })
 
 # Clean by binary identity, and clean across every template the catalog ships for it. A confirm
@@ -311,6 +317,31 @@ _MUST_NOT_FIRE = frozenset({
     # clean would be a red-confirm that fires on reading code, which stops meaning anything.
     "slither", "mythril", "myth", "echidna", "semgrep",
     "foundry", "forge", "cast", "anchor", "cargo", "clippy", "gosec", "go", "govet",
+    # binary-RE / exploit-dev (binary-ctf-arsenal build). Local analysis of a <binary>/<libc> —
+    # no network, and (bar patchelf) no file mutation. Same class as ghidra/radare2/gdb/strings
+    # already above: flagging a disassembler / ROP-finder / symbol-lister dangerous while those
+    # sit clean would be a red-confirm that fires on reading a file, which stops meaning anything.
+    #   checksec/objdump/readelf/nm/xxd/nasm/rizin  - read or assemble a local file
+    #   ROPgadget/ropper/one_gadget                 - gadget / one-shot search over a binary/libc
+    #   pwntools(pwn)/angr                          - the CLI + framework NAMES; the arbitrary-code
+    #                                                 path is their `python3 -c` skeleton, pinned
+    #                                                 in _MUST_FIRE as `python3`, never here
+    #   libc-database(find)/pwninit                 - libc identification / challenge setup
+    #   patchelf                                    - the one that WRITES: it rewrites a local
+    #                                                 ELF's interpreter/rpath. It delivers no
+    #                                                 payload, opens no shell and touches no remote
+    #                                                 host, so it does not meet the _MUST_FIRE bar
+    #                                                 (remote / payload / shell); the operator
+    #                                                 still approves it, like binwalk -e below.
+    "checksec", "objdump", "readelf", "nm", "xxd", "nasm", "rizin",
+    "ROPgadget", "ropper", "one_gadget", "pwntools", "pwn", "angr",
+    "libc-database", "find", "pwninit", "patchelf",
+    # forensics / CTF (same build). Memory-image, carving, stego and metadata analysis of a local
+    # <file>. binwalk -e / foremost / scalpel / bulk_extractor / photorec WRITE carved output to a
+    # local dir (a local write, like patchelf — not a remote/payload capability); the rest are
+    # read-only. None runs code on a remote host, so none earns the red-confirm.
+    "volatility3", "vol", "vol.py", "binwalk", "foremost", "scalpel", "steghide",
+    "zsteg", "stegseek", "exiftool", "bulk_extractor", "testdisk", "photorec",
 })
 
 # The bare binary is deliberately CLEAN (it has a legitimate read-only mode that must not train

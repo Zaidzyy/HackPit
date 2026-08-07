@@ -64,7 +64,8 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | 📡 **C2 & tunnels** | Sliver implants, DNS tunnels, pivots, a public redirector — all gated. |
 | 🛡️ **Purple-team view** | The defender's-eye footprint of every command, with an honest OPSEC channel. |
 | 📝 **Grounded reports** | OSCP/CPTS/H1 templates, evidence spliced from real state, CVSS computed not asserted. |
-| 🧰 **Arsenal · exploits · SAST** | 131-tool catalog, a 47k-exploit CVE index, and an 8-language code scanner. |
+| 🧰 **Arsenal · exploits · SAST** | 155-tool catalog, a 47k-exploit CVE index, and an 8-language code scanner. |
+| 🧩 **Binary/RE, pwn & forensics** | Ghidra / radare2 / gdb / pwntools / ROPgadget / ropper / one_gadget / angr / pwninit / checksec / patchelf for reversing & exploit-dev, plus volatility3 / binwalk / foremost / steghide / zsteg / stegseek / exiftool / bulk_extractor for forensics & CTF — proposable templates over `<binary>`/`<file>`, gated approve-each like every tool (no auto-exec). |
 | 🔬 **AI code-audit fan-out** | Point it at a repo → an agent maps the entrypoints & flows **once**, then verifies **one flow per agent** against source → deduped, severity-ranked findings, each with an attacker path + a propose-only PoC. `patched-since` audits only a git diff; one approved job, no new gate. |
 | ⛓️ **Web3 / smart-contract audit** | Three built-in playbooks on the same fan-out: **EVM external-flow** (reentrancy / access-control / oracle-manipulation / loss-of-funds), **Cosmos ABCI panic-halt** (four panic classes → consensus halt), **Anchor account-model** (missing-owner / signer-spoof / CPI-confusion / overflow). KB-grounded, chain/contract/function-tagged; an approve-each **slither / mythril / echidna** tool pass. |
 | ▣ **Finding pipeline** | Every producer emits one **structured schema** (attacker-path, source-refs, CVSS, custom fields) → duplicates **auto-merge** idempotently → a **pluggable severity ranker** (bug-bounty payout vs compliance) rescores per engagement → **post-scripts** validate / draft a report (in-process) or build a PoC (approve-each). Pure data; no new gate. |
@@ -307,12 +308,18 @@ An opt-in **OPSEC channel** gives the operator's honest counterpart — why a co
 
 ## 🧰 Arsenal, exploits & code scan
 
-**131 tools / 323 invocation templates** catalogued with what each is for, its phase, and whether it actually runs in the image — so the planner proposes well-formed commands. A **CVE → exploit index** turns `vsftpd 2.3.4` into the exact exploit and CVE, version-compared over a local **47,108-exploit / 25,041-CVE** catalogue. A **code-scan** surface runs an **8-language SAST** bundle (Semgrep + Bandit) over source you point it at — deliberately isolated from the execution engine.
+**155 tools / 361 invocation templates** catalogued with what each is for, its phase, and whether it actually runs in the image — so the planner proposes well-formed commands. A **CVE → exploit index** turns `vsftpd 2.3.4` into the exact exploit and CVE, version-compared over a local **47,108-exploit / 25,041-CVE** catalogue. A **code-scan** surface runs an **8-language SAST** bundle (Semgrep + Bandit) over source you point it at — deliberately isolated from the execution engine.
+
+Two new categories close the binary/RE gap. **`binary-re`** — reversing & exploit-dev: Ghidra (`analyzeHeadless`), radare2, gdb, `checksec`, `objdump`/`readelf`/`nm`/`nasm`/`xxd`, `ROPgadget`/`ropper`, `one_gadget`, `pwntools`, `angr`, `libc-database`, `pwninit`, `patchelf`. **`forensics-ctf`** — memory / carving / stego: `volatility3`, `binwalk`, `foremost`, `scalpel`, `steghide`, `zsteg`, `stegseek`, `exiftool`, `bulk_extractor`, `testdisk`/`photorec`. Every entry is a **template over `<binary>`/`<file>`/`<libc>`** the planner can propose — **data + templates only, no auto-exec and no new gate**; a proposed `pwntools`/`angr` `-c` skeleton is arbitrary code, so it trips the same red-confirm every interpreter does, and runs only through the gated executor / `:kali` / `:terminal`, approved one at a time. New tooling is baked into the sandbox image (`docker/Dockerfile.sandbox`, verified by `docker/proof/binre_install_proof.sh` + `forensics_install_proof.sh`) — **image rebuild required** (`docker compose -f docker/docker-compose.yml build engage-sandbox`).
 
 <p align="center">
-  <img src="assets/screenshots/16-arsenal.png" alt="The tool arsenal — 131 tools with purpose, phase, and availability" width="32%">
+  <img src="assets/screenshots/16-arsenal.png" alt="The tool arsenal — 155 tools with purpose, phase, and availability" width="32%">
   <img src="assets/screenshots/20-exploits.png" alt="The exploit index — service+version to CVE to public exploit" width="32%">
   <img src="assets/screenshots/19-code-scan.png" alt="Code scan — an 8-language SAST bundle, offline-first" width="32%">
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/40-arsenal-binre-forensics.png" alt="The arsenal's new binary-RE / pwn and forensics / CTF categories" width="64%">
 </p>
 
 ### 🔬 AI code-audit fan-out

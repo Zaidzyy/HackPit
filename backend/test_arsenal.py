@@ -66,8 +66,8 @@ def test_catalog_is_well_formed() -> None:
 
 def test_every_category_and_phase_is_covered() -> None:
     ars = _load()
-    for category in ("recon", "web", "network-ad", "credentials", "cloud", "binary",
-                     "c2", "evasion"):
+    for category in ("recon", "web", "network-ad", "credentials", "cloud", "binary-re",
+                     "forensics-ctf", "c2", "evasion"):
         assert ars.by_category(category), f"no tools in category {category}"
     for phase in ("recon", "enumeration", "exploitation"):
         assert ars.by_phase(phase), f"no tools for phase {phase}"

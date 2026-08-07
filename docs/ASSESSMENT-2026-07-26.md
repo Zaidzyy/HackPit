@@ -5881,3 +5881,60 @@ two-sandbox separation intact (5.3). Decepticon's `tools/bash` source was not ve
 semantics were **reconstructed from the spec's description** (the same path the governance port took) and reproduced
 faithfully; the attribution stands regardless. The engine needs `tmux` inside `hackpit-kali-open` (Kali ships it); the
 availability check refuses cleanly when the sandbox is down, and the hermetic suite fakes the one `_tmux` boundary.
+
+---
+
+## Binary-RE / pwn + forensics / CTF arsenal expansion — the HexStrike coverage gap (2026-08-08)
+
+**The gap.** The catalog carried a thin `binary` category (ghidra / radare2 / gdb / strings) and nothing at all for
+memory forensics, carving or stego — the whole binary-reversing, exploit-dev and forensics/CTF surface a tool like
+HexStrike exposes. This build fills it as **DATA + TEMPLATES**, gated identically to everything else. It adds **NO new
+gate and NO execution path** (the `test_arsenal_safety.py` invariants #1/#2 hold): every new tool is a template the
+planner PROPOSES, and it runs only through the existing approve-each executor / `:kali` / `:terminal`. HexStrike's
+*autonomous* execution model was deliberately **not** adopted.
+
+**The catalog (`backend/arsenal/tools.json`) — +24 tools, 131 → 155 (361 templates).** Two new categories. **`binary-re`**
+(the old `binary` category renamed and expanded): the four existing entries plus `checksec`, `objdump`, `readelf`, `nm`,
+`xxd`, `nasm`, `patchelf`, `ROPgadget`, `ropper`, `one_gadget`, `pwntools`, `angr`, `libc-database`, `pwninit` — with
+binary-name aliases where the package name differs (`ghidra`→`analyzeHeadless`, `radare2`→`r2`/`rizin`, `pwntools`→`pwn`).
+**`forensics-ctf`**: `volatility3` (`vol`/`vol.py`), `binwalk`, `foremost`, `scalpel`, `steghide`, `zsteg`, `stegseek`,
+`exiftool`, `bulk_extractor`, `testdisk`/`photorec`. Templates use the existing local-artifact placeholders
+(`<binary>`/`<file>`/`<output>`) plus three new ones (`<libc>`/`<symbol>`/`<offset>`); none carries a host, and `<lhost>`-style
+names were avoided by construction.
+
+**Classification — 100% coverage held, and honestly.** These are local-artifact tools (analyze a `<binary>`/`<file>`), not
+network-target tools, so the `<target>`/scope-lock substitution mostly does not apply — but every one is still pinned.
+`test_arsenal_safety.py` now covers **247 catalogued invocation names** with a verdict each: **54 must-fire, 177 benign**.
+All the new reversing/forensics binaries are read-only local analysis (or, for `patchelf`/`binwalk -e`/`foremost`/`scalpel`/
+`bulk_extractor`/`photorec`, a *local file write* — which is not the `_MUST_FIRE` bar of remote/payload/shell), so they sit
+in `_MUST_NOT_FIRE`. The one exception is exactly the one that earns it: the `pwntools`/`angr` exploit-skeleton templates
+run `python3 -c '…'`, i.e. arbitrary code, so `python3` reaches the executor as `argv[0]` and is pinned in `_MUST_FIRE` —
+`allowlist._INTERPRETERS` already fires on it, so **`allowlist.py` needed no change**. `pwntools`/`angr` the *names* stay
+clean; the interpreter is the tell, not the framework.
+
+**Image + proofs (`docker/Dockerfile.sandbox`).** New install layers baking the binaries the way each ships — apt
+(radare2/rizin/binutils/nasm/patchelf/checksec/ropper/xxd/python3-ropgadget, and the forensics apt set), a Ghidra layer
+that discovers `analyzeHeadless` under `support/` and symlinks it onto PATH, per-tool venvs for `pwntools`/`angr`/
+`volatility3` (heavy, conflicting pins) with the catalog invoking each venv's `python3` directly, Ruby gems
+(`one_gadget`/`zsteg`), a `libc-database` git clone invoked by absolute path (its `find` basename collides with coreutils,
+so it is deliberately NOT on PATH), and release binaries for `pwninit`/`stegseek` — each smoke-tested so a wrong name fails
+the build, not analysis time. `docker/proof/binre_install_proof.sh` + `forensics_install_proof.sh` re-check that every
+template head the catalog hardcodes (including the absolute venv/repo heads) resolves in the built image and the running
+engage container. **The `docker compose build engage-sandbox` rebuild is the operator's manual step** (flagged).
+
+**Substrate probe.** `substrate_probe.py`/`reconcile.py` are catalog-driven, so the new tools are covered automatically;
+`test_substrate.py` gains an explicit assertion that all 24 `binary-re`/`forensics-ctf` tools are **probed and reported**
+(present-or-report — a not-yet-baked tool surfaces as `not-installed` with a reason, never silently skipped).
+
+**Frontend (`/arsenal`).** The browsable arsenal renders the two new categories (`Binary, RE & pwn` / `Forensics & CTF`)
+with the new tools — categories are data-driven, so only the `CATEGORY_LABEL` map changed.
+
+**Tests.** `test_arsenal.py` + `test_arsenal_safety.py` green at 155 tools / 361 templates / 247 pinned verdicts;
+`test_substrate.py` green with the new coverage assertion. **`run_safety_tests.sh`: 115 hermetic files, all exit 0.
+`next build` exits 0.** Screen LOOKED AT: `40-arsenal-binre-forensics.png` (the `/arsenal` surface filtered to the two new
+categories, rendering the new tools with their templates — not blank/error).
+
+**Assumptions (per §5), stated.** Scope = the user's named list plus the obvious siblings (gef/pwndbg noted as gdb plugins
+not separate binaries; `ropper` alongside `ROPgadget`; `zsteg`/`stegseek` for stego; `bulk_extractor`). These are
+proposable tools, **not** a new surface or a CTF-solver agent — that would be HexStrike's autonomy, and a dedicated `/ctf`
+surface, if ever wanted, is a separate build. `hashcat`/`john` were already catalogued (cracking) and are not duplicated.

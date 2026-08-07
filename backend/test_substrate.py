@@ -69,6 +69,33 @@ def test_pipeline_over_real_catalog() -> None:
     print(f"  Task 1 pipeline: {summ['runs']}/{summ['linux_catalogued']} classify as runs over the real catalog: PASS")
 
 
+def test_binre_and_forensics_tools_are_probed() -> None:
+    """Every binary-RE and forensics-CTF tool is EXERCISED by the probe — present-or-report.
+
+    The image install for these is the operator's manual rebuild step, so the honest claim this
+    build can make without Docker is narrower: each catalogued tool reaches the probe and lands in
+    a tier (runs / installed-no-run / not-installed), never silently skipped. A tool the image has
+    not baked yet surfaces as `not-installed` in the live report rather than vanishing — which is
+    exactly what drives docs/substrate-coverage.md after the rebuild.
+    """
+    arsenal = loader.load()
+    new = [t for t in arsenal.tools if t.category in ("binary-re", "forensics-ctf")]
+    assert len(new) >= 24, f"expected the binary-RE + forensics-CTF set, got {len(new)}"
+
+    # A fake container that resolves nothing — the point is that every tool is still REPORTED,
+    # each with a not-installed tier and a reason, not dropped.
+    absent = lambda container, candidates: ("", "", None, "")  # noqa: E731
+    results = {r.name: r for r in sp.probe_all(arsenal, container="fake", probe=absent)}
+    for tool in new:
+        r = results[tool.name]
+        assert r.tier() in ("runs", "installed-no-run", "not-installed"), (tool.name, r.tier())
+        assert r.reason, f"{tool.name}: an unresolved tool must carry a reason, not pass silently"
+        # candidates the probe would try = the tool's own names+aliases, as invoked
+        assert r.candidates == list(dict.fromkeys(tool.names())), tool.name
+    print(f"  Task 1: all {len(new)} binary-RE + forensics-CTF tools are probed "
+          "(present-or-report), none skipped: PASS")
+
+
 def test_static_coverage() -> None:
     arsenal = loader.load()
     dockerfile = sp.DOCKERFILE.read_text(encoding="utf-8")
@@ -86,5 +113,6 @@ def test_static_coverage() -> None:
 if __name__ == "__main__":
     test_classify_verdicts()
     test_pipeline_over_real_catalog()
+    test_binre_and_forensics_tools_are_probed()
     test_static_coverage()
     print("ALL substrate-coverage tests pass")

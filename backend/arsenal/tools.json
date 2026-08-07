@@ -24,6 +24,9 @@
     "<base-dn>": "LDAP base DN, e.g. DC=corp,DC=local.",
     "<project>": "Local analysis project name.",
     "<pattern>": "A literal string or regex to search for.",
+    "<libc>": "Path to a libc shared object (e.g. libc.so.6) matching the target binary.",
+    "<symbol>": "A libc symbol name whose leaked address is known (e.g. printf).",
+    "<offset>": "The known low bits / offset of a leaked address, used to identify a libc.",
     "<listener>": "The ATTACKER-side callback address. Deliberately not named <lhost>/<ip>: those spell a keyword the composer's target substitution rewrites, and the callback host is yours, not the target's.",
     "<listener-port>": "The attacker-side callback port.",
     "<ntlm-hash>": "An NTLM hash for pass-the-hash, LM:NT or bare NT.",
@@ -1564,7 +1567,10 @@
     },
     {
       "name": "ghidra",
-      "category": "binary",
+      "aliases": [
+        "analyzeHeadless"
+      ],
+      "category": "binary-re",
       "purpose": "Full reverse-engineering suite with a decompiler — static analysis of binaries across many architectures.",
       "phases": [
         "exploitation"
@@ -1600,9 +1606,10 @@
     {
       "name": "radare2",
       "aliases": [
-        "r2"
+        "r2",
+        "rizin"
       ],
-      "category": "binary",
+      "category": "binary-re",
       "purpose": "Command-line reverse-engineering framework — disassembly, analysis, patching and debugging.",
       "phases": [
         "exploitation"
@@ -1647,7 +1654,7 @@
     },
     {
       "name": "gdb",
-      "category": "binary",
+      "category": "binary-re",
       "purpose": "The GNU debugger — dynamic analysis, crash triage and exploit development, usually with a plugin like pwndbg or GEF.",
       "phases": [
         "exploitation"
@@ -1687,7 +1694,7 @@
     },
     {
       "name": "strings",
-      "category": "binary",
+      "category": "binary-re",
       "purpose": "Extracts printable strings from a binary — the cheapest first look for URLs, paths, keys and version markers.",
       "phases": [
         "recon",
@@ -5071,6 +5078,571 @@
           "label": "Scan a module (JSON)",
           "template": "gosec -fmt=json <path>/...",
           "note": "Pair with a manual ABCI-method review for maliciously-triggerable panics."
+        }
+      ]
+    },
+    {
+      "name": "checksec",
+      "category": "binary-re",
+      "purpose": "Reports a binary's exploit-mitigation posture — NX, PIE, stack canary, RELRO, Fortify — the first thing that decides the exploitation route.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "mitigation enumeration",
+        "binary hardening review"
+      ],
+      "docs": "https://github.com/slimm609/checksec",
+      "templates": [
+        {
+          "label": "Check one binary",
+          "template": "checksec --file=<binary>",
+          "note": "Read-only: parses the ELF header, never runs the binary."
+        }
+      ]
+    },
+    {
+      "name": "objdump",
+      "category": "binary-re",
+      "purpose": "Disassembler / object inspector from binutils — sections, symbols and Intel or AT&T disassembly of a local object.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "disassembly",
+        "static binary analysis"
+      ],
+      "docs": "https://sourceware.org/binutils/docs/binutils/objdump.html",
+      "templates": [
+        {
+          "label": "Disassemble (Intel)",
+          "template": "objdump -d -M intel <binary>",
+          "note": "Static disassembly; the file is read, never executed."
+        },
+        {
+          "label": "All headers & sections",
+          "template": "objdump -x <binary>",
+          "note": "Segments, dynamic symbols and relocations in one view."
+        }
+      ]
+    },
+    {
+      "name": "readelf",
+      "category": "binary-re",
+      "purpose": "ELF structure inspector — program and section headers, dynamic entries, relocations and the GOT/PLT layout an exploit needs.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "ELF header analysis",
+        "relocation review"
+      ],
+      "docs": "https://sourceware.org/binutils/docs/binutils/readelf.html",
+      "templates": [
+        {
+          "label": "All ELF headers",
+          "template": "readelf -a <binary>",
+          "note": "Static: dumps the ELF metadata, does not run the file."
+        },
+        {
+          "label": "Dynamic relocations",
+          "template": "readelf -r <binary>",
+          "note": "GOT/PLT entries for a ret2plt or GOT-overwrite route."
+        }
+      ]
+    },
+    {
+      "name": "nm",
+      "category": "binary-re",
+      "purpose": "Lists the symbols in an object or binary — quickly finds functions like system/win and any un-stripped locals.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "symbol enumeration"
+      ],
+      "docs": "https://sourceware.org/binutils/docs/binutils/nm.html",
+      "templates": [
+        {
+          "label": "List symbols",
+          "template": "nm <binary>",
+          "note": "Static; empty on a stripped binary — try the dynamic table instead."
+        },
+        {
+          "label": "Dynamic symbols",
+          "template": "nm -D <binary>",
+          "note": "Dynamic symbol table — resolves even when locals are stripped."
+        }
+      ]
+    },
+    {
+      "name": "xxd",
+      "category": "binary-re",
+      "purpose": "Hex dump and reverse hex dump — inspect a file's raw bytes and craft or patch binary blobs by hand.",
+      "phases": [
+        "recon",
+        "exploitation"
+      ],
+      "techniques": [
+        "hex inspection",
+        "binary crafting"
+      ],
+      "docs": "https://linux.die.net/man/1/xxd",
+      "templates": [
+        {
+          "label": "Hex dump",
+          "template": "xxd <file>",
+          "note": "Read-only view of the file's raw bytes."
+        },
+        {
+          "label": "Dump a header slice",
+          "template": "xxd -l 64 <file>",
+          "note": "First 64 bytes — magic bytes / file-type identification."
+        }
+      ]
+    },
+    {
+      "name": "nasm",
+      "category": "binary-re",
+      "purpose": "The Netwide Assembler — assemble hand-written shellcode or stubs to raw bytes for a pwn payload.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "shellcode assembly"
+      ],
+      "docs": "https://www.nasm.us/docs.php",
+      "templates": [
+        {
+          "label": "Assemble to an ELF64 object",
+          "template": "nasm -f elf64 <file> -o <output>",
+          "note": "Assembles a local .asm source into an object; runs nothing."
+        },
+        {
+          "label": "Flat binary (raw shellcode)",
+          "template": "nasm -f bin <file> -o <output>",
+          "note": "Raw opcodes — pair with objdump -d to read them back."
+        }
+      ]
+    },
+    {
+      "name": "patchelf",
+      "category": "binary-re",
+      "purpose": "Reads and REWRITES an ELF's interpreter and RPATH — set a challenge binary's loader and libc so a supplied local libc matches the target's at run time.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "ELF interpreter patching",
+        "libc swapping"
+      ],
+      "docs": "https://github.com/NixOS/patchelf",
+      "templates": [
+        {
+          "label": "Show the interpreter",
+          "template": "patchelf --print-interpreter <binary>",
+          "note": "Read-only: reports the ELF's dynamic loader path."
+        },
+        {
+          "label": "Set loader and rpath",
+          "template": "patchelf --set-interpreter <file> --set-rpath <output> <binary>",
+          "note": "MUTATES the local <binary> in place (writes the file). Runs nothing; still approve-each like any command."
+        }
+      ]
+    },
+    {
+      "name": "ROPgadget",
+      "category": "binary-re",
+      "purpose": "Finds ROP/JOP gadgets in a binary or libc — the building blocks of a return-oriented payload.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "ROP gadget discovery",
+        "return-oriented programming"
+      ],
+      "docs": "https://github.com/JonathanSalwan/ROPgadget",
+      "templates": [
+        {
+          "label": "All gadgets",
+          "template": "ROPgadget --binary <binary>",
+          "note": "Static: parses the binary's executable segments."
+        },
+        {
+          "label": "Search a gadget",
+          "template": "ROPgadget --binary <binary> --re '<pattern>'",
+          "note": "e.g. 'pop rdi' to control the first argument register."
+        }
+      ]
+    },
+    {
+      "name": "ropper",
+      "category": "binary-re",
+      "purpose": "ROP-gadget finder and chain builder across architectures — an alternative to ROPgadget with gadget-quality filters.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "ROP gadget discovery",
+        "gadget chaining"
+      ],
+      "docs": "https://github.com/sashs/Ropper",
+      "templates": [
+        {
+          "label": "List gadgets",
+          "template": "ropper --file <binary>",
+          "note": "Static analysis of the binary's code."
+        },
+        {
+          "label": "Search a gadget",
+          "template": "ropper --file <binary> --search '<pattern>'",
+          "note": "e.g. 'pop rdi; ret' — the classic arg-loading gadget."
+        }
+      ]
+    },
+    {
+      "name": "one_gadget",
+      "category": "binary-re",
+      "purpose": "Finds the one-shot execve(/bin/sh) gadgets in a libc — a single address that pops a shell when its constraints hold.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "one-gadget discovery",
+        "libc exploitation"
+      ],
+      "docs": "https://github.com/david942j/one_gadget",
+      "templates": [
+        {
+          "label": "Find one-gadgets in a libc",
+          "template": "one_gadget <libc>",
+          "note": "Static scan of the supplied libc.so; prints each address with its register/stack constraints."
+        }
+      ]
+    },
+    {
+      "name": "pwntools",
+      "aliases": [
+        "pwn"
+      ],
+      "category": "binary-re",
+      "purpose": "The CTF exploitation framework — process/remote I/O, ELF and ROP helpers, shellcode and cyclic patterns. Drive it from a python3 script.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "exploit development",
+        "ROP",
+        "overflow / format-string exploitation"
+      ],
+      "docs": "https://docs.pwntools.com/",
+      "templates": [
+        {
+          "label": "Check protections (pwn CLI)",
+          "template": "pwn checksec <binary>",
+          "note": "The pwn command-line wrapper — reads the ELF, runs nothing."
+        },
+        {
+          "label": "Exploit skeleton (local process)",
+          "template": "/opt/pwntools/venv/bin/python3 -c 'from pwn import *; e = ELF(\"<binary>\"); io = process(e.path); io.interactive()'",
+          "note": "A python3 -c skeleton — arbitrary code, so it trips the red-confirm. Swap process() for remote() to hit a challenge host, through the executor."
+        }
+      ]
+    },
+    {
+      "name": "angr",
+      "category": "binary-re",
+      "purpose": "Symbolic-execution and binary-analysis framework — solve for the inputs that reach a target state (license checks, crackmes, path constraints).",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "symbolic execution",
+        "constraint solving",
+        "automated input discovery"
+      ],
+      "docs": "https://docs.angr.io/",
+      "templates": [
+        {
+          "label": "Symbolic-exec skeleton",
+          "template": "/opt/angr/venv/bin/python3 -c 'import angr; p = angr.Project(\"<binary>\"); sm = p.factory.simulation_manager(); sm.explore(find=lambda s: b\"flag\" in s.posix.dumps(1))'",
+          "note": "A python3 -c skeleton — arbitrary code, so it trips the red-confirm. Loads the binary and explores paths; it does not run the file natively."
+        }
+      ]
+    },
+    {
+      "name": "libc-database",
+      "category": "binary-re",
+      "purpose": "Identifies an unknown libc from a few leaked symbol addresses and looks up other symbol offsets — the bridge from one leak to a full libc base.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "libc identification",
+        "offset lookup"
+      ],
+      "docs": "https://github.com/niklasb/libc-database",
+      "templates": [
+        {
+          "label": "Identify a libc from a leaked symbol",
+          "template": "/opt/libc-database/find <symbol> <offset>",
+          "note": "Needs a built local DB (run ./get in an egress-enabled sandbox first). Matches on the low bits of the leaked address."
+        }
+      ]
+    },
+    {
+      "name": "pwninit",
+      "category": "binary-re",
+      "purpose": "Automates CTF pwn setup — patches the challenge binary to use a provided libc and loader and writes an exploit template.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "challenge setup",
+        "libc patching"
+      ],
+      "docs": "https://github.com/io12/pwninit",
+      "templates": [
+        {
+          "label": "Patch a binary to a supplied libc",
+          "template": "pwninit --bin <binary> --libc <libc>",
+          "note": "Writes a patched copy of the local binary; runs nothing."
+        }
+      ]
+    },
+    {
+      "name": "volatility3",
+      "aliases": [
+        "vol",
+        "vol.py"
+      ],
+      "category": "forensics-ctf",
+      "purpose": "Memory-forensics framework — process lists, network artefacts, credentials and injected code from a RAM image or crash dump.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "memory forensics",
+        "process enumeration",
+        "artifact extraction"
+      ],
+      "docs": "https://volatility3.readthedocs.io/",
+      "templates": [
+        {
+          "label": "Windows process list",
+          "template": "vol -f <file> windows.pslist",
+          "note": "Reads the memory image; v3 auto-detects the symbol set."
+        },
+        {
+          "label": "Process command lines",
+          "template": "vol -f <file> windows.cmdline",
+          "note": "What each process was launched with — a fast triage view."
+        },
+        {
+          "label": "File objects in memory",
+          "template": "vol -f <file> windows.filescan",
+          "note": "File objects present in the dump; pair with dumpfiles to extract."
+        }
+      ]
+    },
+    {
+      "name": "binwalk",
+      "category": "forensics-ctf",
+      "purpose": "Firmware / blob analyzer — finds and extracts embedded files, filesystems and compressed streams inside a larger file.",
+      "phases": [
+        "recon",
+        "exploitation"
+      ],
+      "techniques": [
+        "firmware analysis",
+        "file carving",
+        "entropy analysis"
+      ],
+      "docs": "https://github.com/ReFirmLabs/binwalk",
+      "templates": [
+        {
+          "label": "Signature scan",
+          "template": "binwalk <file>",
+          "note": "Read-only: reports embedded file signatures and their offsets."
+        },
+        {
+          "label": "Extract embedded files",
+          "template": "binwalk -e <file>",
+          "note": "Carves recognised streams into a local extraction dir (writes files)."
+        }
+      ]
+    },
+    {
+      "name": "foremost",
+      "category": "forensics-ctf",
+      "purpose": "Header/footer file carver — recovers files (images, archives, documents) from a disk image or arbitrary blob.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "file carving",
+        "data recovery"
+      ],
+      "docs": "https://foremost.sourceforge.net/",
+      "templates": [
+        {
+          "label": "Carve into an output dir",
+          "template": "foremost -i <file> -o <output>",
+          "note": "Writes recovered files under <output>; the input is read read-only."
+        }
+      ]
+    },
+    {
+      "name": "scalpel",
+      "category": "forensics-ctf",
+      "purpose": "Fast, configuration-driven file carver — a foremost descendant that carves by patterns defined in scalpel.conf.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "file carving",
+        "data recovery"
+      ],
+      "docs": "https://github.com/sleuthkit/scalpel",
+      "templates": [
+        {
+          "label": "Carve into an output dir",
+          "template": "scalpel <file> -o <output>",
+          "note": "Enable the wanted patterns in /etc/scalpel/scalpel.conf first; writes to <output>."
+        }
+      ]
+    },
+    {
+      "name": "steghide",
+      "category": "forensics-ctf",
+      "purpose": "Classic steganography tool — hides and EXTRACTS data embedded in JPEG/BMP/WAV/AU carriers, optionally passphrase-protected.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "steganography",
+        "data extraction"
+      ],
+      "docs": "https://steghide.sourceforge.net/",
+      "templates": [
+        {
+          "label": "Extract hidden data",
+          "template": "steghide extract -sf <file>",
+          "note": "Prompts for a passphrase; add -p <password> when it is known."
+        },
+        {
+          "label": "Show carrier info",
+          "template": "steghide info <file>",
+          "note": "Reports capacity and whether an embedded object is present."
+        }
+      ]
+    },
+    {
+      "name": "zsteg",
+      "category": "forensics-ctf",
+      "purpose": "Detects LSB and other steganography in PNG and BMP images — the go-to for CTF image stego.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "LSB steganography",
+        "image analysis"
+      ],
+      "docs": "https://github.com/zed-0xff/zsteg",
+      "templates": [
+        {
+          "label": "Scan all channels",
+          "template": "zsteg -a <file>",
+          "note": "Read-only: tries every bit-plane and channel ordering."
+        }
+      ]
+    },
+    {
+      "name": "stegseek",
+      "category": "forensics-ctf",
+      "purpose": "Ultra-fast steghide brute-forcer — recovers a steghide passphrase and the embedded payload from a wordlist in seconds.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "steganography",
+        "passphrase cracking"
+      ],
+      "docs": "https://github.com/RickdeJager/stegseek",
+      "templates": [
+        {
+          "label": "Crack with a wordlist",
+          "template": "stegseek <file> <wordlist>",
+          "note": "Reads the carrier; on success writes the extracted payload beside it. Offline, like hashcat."
+        }
+      ]
+    },
+    {
+      "name": "exiftool",
+      "category": "forensics-ctf",
+      "purpose": "Reads and writes metadata in images, documents and media — EXIF/IPTC/XMP GPS, timestamps, comments and hidden fields.",
+      "phases": [
+        "recon",
+        "exploitation"
+      ],
+      "techniques": [
+        "metadata extraction",
+        "EXIF analysis"
+      ],
+      "docs": "https://exiftool.org/",
+      "templates": [
+        {
+          "label": "All metadata",
+          "template": "exiftool <file>",
+          "note": "Read-only: dumps every tag, including GPS and embedded comments."
+        }
+      ]
+    },
+    {
+      "name": "bulk_extractor",
+      "category": "forensics-ctf",
+      "purpose": "Scans a disk image or file for features — emails, URLs, card numbers, crypto keys — without parsing the filesystem.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "feature extraction",
+        "artifact carving"
+      ],
+      "docs": "https://github.com/simsong/bulk_extractor",
+      "templates": [
+        {
+          "label": "Extract features to a dir",
+          "template": "bulk_extractor -o <output> <file>",
+          "note": "Writes per-feature text files under <output>; the input is read read-only."
+        }
+      ]
+    },
+    {
+      "name": "testdisk",
+      "aliases": [
+        "photorec"
+      ],
+      "category": "forensics-ctf",
+      "purpose": "Partition-recovery and file-carving suite — TestDisk repairs partition tables; PhotoRec carves files by signature from a disk image.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "partition recovery",
+        "file carving"
+      ],
+      "docs": "https://www.cgsecurity.org/wiki/TestDisk",
+      "templates": [
+        {
+          "label": "Analyse an image (TestDisk)",
+          "template": "testdisk /log <file>",
+          "note": "Partition analysis of the image; writes only its own log."
+        },
+        {
+          "label": "Carve files (PhotoRec)",
+          "template": "photorec /log /d <output> <file>",
+          "note": "Signature-based recovery into <output>; the input is read read-only."
         }
       ]
     }

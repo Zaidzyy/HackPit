@@ -23,7 +23,8 @@ const CATEGORY_LABEL: Record<string, string> = {
   "network-ad": "Network & Active Directory",
   credentials: "Credentials",
   cloud: "Cloud & containers",
-  binary: "Binary & RE",
+  "binary-re": "Binary, RE & pwn",
+  "forensics-ctf": "Forensics & CTF",
 };
 
 /**
@@ -39,8 +40,17 @@ export function ArsenalScreen() {
   // What the sandbox actually has (D7). Independent of the catalog load: an unreachable
   // backend or a down Docker leaves this null and the catalog renders exactly as before.
   const recon = useApi(getToolReconciliation, []);
-  const [q, setQ] = useState("");
-  const [cat, setCat] = useState<string>("all");
+  // Initial filter can be deep-linked via ?cat=<category>&q=<text> — read ONCE in a lazy state
+  // initializer (never a setState-in-effect), so the react-hooks lint baseline stays put. This is
+  // the same headless-screenshot / shareable-view pattern the governance (?view=&tab=) and
+  // code-scan (?demo=) screens already use.
+  const initialFilters = () => {
+    if (typeof window === "undefined") return { cat: "all", q: "" };
+    const p = new URLSearchParams(window.location.search);
+    return { cat: p.get("cat") ?? "all", q: p.get("q") ?? "" };
+  };
+  const [q, setQ] = useState(() => initialFilters().q);
+  const [cat, setCat] = useState<string>(() => initialFilters().cat);
   // The target every template is rendered against. Empty = show the raw <placeholder> form.
   const [target, setTarget] = useState("");
   // Server-rendered invocations, keyed by tool. Fetched on demand — rendering all ~115

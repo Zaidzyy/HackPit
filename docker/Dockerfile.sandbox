@@ -893,6 +893,132 @@ RUN set -eux; \
     ls /usr/local/bin/curl_ff* >/dev/null; \
     echo "curl-impersonate ${CURL_IMPERSONATE_VERSION}: binaries AND browser wrappers present"
 
+# --- 9h. binary-RE / exploit-dev tooling (binary-ctf-arsenal build) -----------
+# The reversing / pwn toolset the binary-re catalog entries propose as approve-each tools. apt
+# covers most; pwntools + angr get their OWN venvs (heavy, conflicting pins) and the catalog
+# templates invoke that venv's python3 directly — which is why `python3` is the tell the
+# red-confirm fires on, not the tool name. one_gadget is a Ruby gem; libc-database is a git repo
+# (no package, invoked by absolute path); pwninit ships a static release binary.
+#
+# THE BINARY NAME IS VERIFIED, not assumed (kali-sandbox image trap): `python3-ropgadget` ships
+# the `ROPgadget` entrypoint, and Ghidra's headless launcher is `analyzeHeadless` under
+# /usr/share/ghidra/support — NOT `ghidra` — so it is symlinked onto PATH for the catalog's
+# `analyzeHeadless <...>` template. Each binary is smoke-tested (command -v alone is not a smoke
+# test — build #4's lesson), so a bad package name fails HERE, not at analysis time.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        radare2 rizin binutils nasm patchelf checksec ropper \
+        xxd python3-ropgadget \
+    && rm -rf /var/lib/apt/lists/* \
+    && for b in r2 rizin objdump readelf nm nasm patchelf checksec ropper xxd ROPgadget; do \
+           command -v "$b" >/dev/null || { echo "MISSING binary-re tool: $b"; exit 1; }; \
+       done
+
+# Ghidra — the headless decompiler. Its own layer: the apt package is large (pulls a JDK) and
+# stable, so an edit to the tools around it must not force it to rebuild. The launcher the
+# catalog names lives under support/, not on PATH, so it is discovered and symlinked.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ghidra \
+    && rm -rf /var/lib/apt/lists/* \
+    && HL="$(find /usr /opt -name analyzeHeadless -type f 2>/dev/null | head -1)" \
+    && [ -n "$HL" ] || { echo "MISSING binary-re tool: analyzeHeadless (ghidra layout changed)"; exit 1; } \
+    && ln -sfn "$HL" /usr/local/bin/analyzeHeadless \
+    && command -v analyzeHeadless >/dev/null
+
+# one_gadget — Ruby gem (ruby is already in the image). Installs the `one_gadget` executable.
+RUN gem install --no-document one_gadget \
+    && command -v one_gadget >/dev/null \
+    && one_gadget --help 2>&1 | grep -qi gadget
+
+# pwntools — its own venv; symlink the framework's `pwn` CLI onto PATH as `pwn` and `pwntools`
+# (so startup reconciliation resolves the catalog name). The exploit-skeleton template calls
+# /opt/pwntools/venv/bin/python3 directly.
+RUN set -eu; \
+    python3 -m venv /opt/pwntools/venv; \
+    /opt/pwntools/venv/bin/pip install --no-cache-dir -q pwntools; \
+    ln -sf /opt/pwntools/venv/bin/pwn /usr/local/bin/pwn; \
+    ln -sf /opt/pwntools/venv/bin/pwn /usr/local/bin/pwntools; \
+    chmod -R a+rX /opt/pwntools; \
+    /opt/pwntools/venv/bin/python3 -c 'import pwnlib; print(pwnlib.__version__)' >/dev/null; \
+    command -v pwn >/dev/null && command -v pwntools >/dev/null
+
+# angr — its own venv (heavy: z3, unicorn, capstone). The catalog template calls the venv python3
+# directly; a tiny `angr` PATH wrapper exists only so startup reconciliation can resolve the name
+# and prove the module imports.
+RUN set -eu; \
+    python3 -m venv /opt/angr/venv; \
+    /opt/angr/venv/bin/pip install --no-cache-dir -q angr; \
+    printf 'import angr\nprint("angr", angr.__version__)\n' > /opt/angr/version.py; \
+    printf '#!/bin/sh\nexec /opt/angr/venv/bin/python3 /opt/angr/version.py\n' > /usr/local/bin/angr; \
+    chmod 0755 /usr/local/bin/angr; \
+    chmod -R a+rX /opt/angr; \
+    /opt/angr/venv/bin/python3 -c 'import angr; print(angr.__version__)' >/dev/null; \
+    command -v angr >/dev/null
+
+# libc-database — git repo, invoked by absolute path (the catalog template is /opt/libc-database/
+# find). NOT symlinked onto PATH: the basename would collide with coreutils `find`. The symbol DB
+# is built with ./get, which needs egress — do it in the engagement / :kali sandbox, never the
+# airgapped lab.
+RUN git clone --depth 1 https://github.com/niklasb/libc-database /opt/libc-database \
+    && chmod -R a+rX /opt/libc-database \
+    && test -x /opt/libc-database/find
+
+# pwninit — static release binary (Rust; the asset is a bare `pwninit`).
+RUN set -eu; \
+    P_VER="$(curl -fsSL https://api.github.com/repos/io12/pwninit/releases/latest | jq -r .tag_name)"; \
+    [ -n "$P_VER" ] && [ "$P_VER" != "null" ] || { echo "pwninit: could not resolve latest tag"; exit 1; }; \
+    curl -fsSL "https://github.com/io12/pwninit/releases/download/${P_VER}/pwninit" -o /usr/local/bin/pwninit; \
+    chmod 0755 /usr/local/bin/pwninit; \
+    command -v pwninit >/dev/null; \
+    pwninit --version 2>&1 | grep -qi pwninit
+
+# --- 9i. forensics / CTF tooling (binary-ctf-arsenal build) -------------------
+# Memory-forensics, carving, stego and metadata analysis of a local <file>. apt covers most;
+# volatility3 gets its own venv (the `vol` entrypoint is symlinked, plus `vol.py` for the
+# catalog alias); zsteg is a Ruby gem; stegseek is taken from apt when present, otherwise its
+# release .deb. THE BINARY NAME IS VERIFIED (image trap): the `bulk-extractor` package ships
+# `bulk_extractor`, `testdisk` ships both `testdisk` and `photorec`, and
+# `libimage-exiftool-perl` ships `exiftool`.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        binwalk foremost scalpel steghide bulk-extractor testdisk \
+        libimage-exiftool-perl \
+    && rm -rf /var/lib/apt/lists/* \
+    && for b in binwalk foremost scalpel steghide bulk_extractor testdisk photorec exiftool; do \
+           command -v "$b" >/dev/null || { echo "MISSING forensics tool: $b"; exit 1; }; \
+       done
+
+# volatility3 — own venv; `vol` + `vol.py` onto PATH (the catalog templates + aliases).
+RUN set -eu; \
+    python3 -m venv /opt/volatility3/venv; \
+    /opt/volatility3/venv/bin/pip install --no-cache-dir -q volatility3; \
+    ln -sf /opt/volatility3/venv/bin/vol /usr/local/bin/vol; \
+    ln -sf /opt/volatility3/venv/bin/vol /usr/local/bin/vol.py; \
+    chmod -R a+rX /opt/volatility3; \
+    command -v vol >/dev/null; \
+    /opt/volatility3/venv/bin/vol -h >/dev/null 2>&1
+
+# zsteg — Ruby gem; installs the `zsteg` executable.
+RUN gem install --no-document zsteg \
+    && command -v zsteg >/dev/null \
+    && zsteg --help 2>&1 | grep -qi zsteg
+
+# stegseek — apt where the snapshot ships it, else the upstream release .deb (pinned to latest).
+RUN set -eu; \
+    apt-get update; \
+    if apt-get install -y --no-install-recommends stegseek 2>/dev/null; then \
+        echo "stegseek: from apt"; \
+    else \
+        S_VER="$(curl -fsSL https://api.github.com/repos/RickdeJager/stegseek/releases/latest | jq -r .tag_name)"; \
+        [ -n "$S_VER" ] && [ "$S_VER" != "null" ] || { echo "stegseek: could not resolve latest tag"; exit 1; }; \
+        curl -fsSL "https://github.com/RickdeJager/stegseek/releases/download/${S_VER}/stegseek_${S_VER#v}-1.deb" -o /tmp/stegseek.deb; \
+        apt-get install -y --no-install-recommends /tmp/stegseek.deb; \
+        rm -f /tmp/stegseek.deb; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*; \
+    command -v stegseek >/dev/null; \
+    stegseek 2>&1 | grep -qi stegseek
+
 # --- 10. Strip file capabilities (REQUIRED — do not remove) -------------------
 # Kali ships a few binaries with FILE capabilities so unprivileged desktop users get raw
 # sockets: /usr/lib/nmap/nmap (cap_net_raw,cap_net_admin,cap_net_bind_service) and

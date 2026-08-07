@@ -780,6 +780,109 @@ export const renameSession = (
 export const deleteSession = (id: string, signal?: AbortSignal) =>
   sendJSON<null>("DELETE", `/sessions/${encodeURIComponent(id)}`, undefined, signal);
 
+// ---- finding pipeline (dynamic schema · dedup · rankers · post-scripts) ---- //
+export type PipelineFinding = {
+  fingerprint?: string;
+  title: string;
+  severity: string;
+  target: string;
+  evidence: string;
+  tool: string;
+  reference: string;
+  attacker_path: string;
+  source_refs: string[];
+  cvss: string;
+  vuln_class: string;
+  extra: Record<string, unknown>;
+  merged_count: number;
+  ranker: string;
+};
+
+export type FindingRanker = {
+  id: string;
+  label: string;
+  description: string;
+  rules: number;
+  clamp: string | null;
+};
+
+export type PostScriptMeta = {
+  id: string;
+  label: string;
+  kind: "validate" | "report" | "poc" | string;
+  mode: "data" | "command" | string;
+  description: string;
+  needs_approval: boolean;
+};
+
+export type PipelineResult = {
+  findings: PipelineFinding[];
+  merged: number;
+  merged_note: string;
+  ranker: string;
+  ranker_label: string;
+  total: number;
+  by_severity: Record<string, number>;
+  sample?: boolean;
+  session_id?: string;
+  persisted?: boolean;
+  removed_duplicates?: number;
+};
+
+/** A post-script's output. Data post-scripts fill ok/problems (validate) or markdown (report);
+ *  a command post-script fills command + needs_approval + executed:false (approve-each). */
+export type PostScriptResult = {
+  kind: string;
+  mode: string;
+  summary?: string;
+  ok?: boolean;
+  problems?: string[];
+  markdown?: string;
+  command?: string;
+  needs_approval?: boolean;
+  executed?: boolean;
+};
+
+export type PostScriptRun = { postscript: PostScriptMeta; result: PostScriptResult };
+
+export const getFindingRankers = (signal?: AbortSignal) =>
+  getJSON<{ rankers: FindingRanker[]; default: string }>("/findings/rankers", signal);
+
+export const getPostScripts = (signal?: AbortSignal) =>
+  getJSON<{ postscripts: PostScriptMeta[] }>("/findings/postscripts", signal);
+
+/** The synthetic pipeline demo the /engagements panel renders (no engagement, no DB write). */
+export const getPipelineSample = (ranker: string, signal?: AbortSignal) =>
+  getJSON<PipelineResult>(
+    `/findings/pipeline/sample?ranker=${encodeURIComponent(ranker)}`,
+    signal
+  );
+
+/** Run dedup + ranking over one engagement's findings; persist to collapse + rescore in place. */
+export const runSessionPipeline = (
+  sessionId: string,
+  body: { ranker_id?: string; persist?: boolean },
+  signal?: AbortSignal
+) =>
+  postJSON<PipelineResult>(
+    `/sessions/${encodeURIComponent(sessionId)}/findings/pipeline`,
+    body,
+    signal
+  );
+
+/** Run a post-script over a finding. Command post-scripts return an approve-each proposal —
+ *  nothing is executed by this call. */
+export const runFindingPostScript = (
+  sessionId: string,
+  body: { postscript_id: string; finding?: PipelineFinding; fingerprint?: string },
+  signal?: AbortSignal
+) =>
+  postJSON<PostScriptRun>(
+    `/sessions/${encodeURIComponent(sessionId)}/findings/postscript`,
+    body,
+    signal
+  );
+
 // ---- submission fields (bug-bounty report) -------------------------------- //
 
 /** One Bugcrowd VRT category HackPit can map to a P1–P5 priority (GET /vrt-categories). */

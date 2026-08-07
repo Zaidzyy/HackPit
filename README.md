@@ -65,6 +65,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | 📝 **Grounded reports** | OSCP/CPTS/H1 templates, evidence spliced from real state, CVSS computed not asserted. |
 | 🧰 **Arsenal · exploits · SAST** | 123-tool catalog, a 47k-exploit CVE index, and an 8-language code scanner. |
 | 🔬 **AI code-audit fan-out** | Point it at a repo → an agent maps the entrypoints & flows **once**, then verifies **one flow per agent** against source → deduped, severity-ranked findings, each with an attacker path + a propose-only PoC. `patched-since` audits only a git diff; one approved job, no new gate. |
+| ▣ **Finding pipeline** | Every producer emits one **structured schema** (attacker-path, source-refs, CVSS, custom fields) → duplicates **auto-merge** idempotently → a **pluggable severity ranker** (bug-bounty payout vs compliance) rescores per engagement → **post-scripts** validate / draft a report (in-process) or build a PoC (approve-each). Pure data; no new gate. |
 | 🔌 **MCP server** | 15 read-only tools so another AI agent can *see* your engagement — eyes, not hands. |
 
 ---
@@ -305,6 +306,21 @@ It is HackPit-gated the whole way: the audit **reads source and proposes** — i
 
 <p align="center">
   <img src="assets/screenshots/38-code-scan-ai-audit.png" alt="The AI code-audit fan-out — a synthetic sample repo maps 6 HTTP-route entrypoints once, fans out one agent per flow, and returns 6 deduped, severity-ranked findings (2 critical / 4 high): code-injection in /calc, OS command injection in /ping, auth bypass in /admin — each with an attacker path, source file:line, KB-grounded technique links, and an approve-each Build-PoC button" width="80%">
+</p>
+
+### ▣ Finding pipeline — one schema, auto-dedup, pluggable rankers, post-scripts
+
+The fan-out above is the heaviest producer of findings, but **every** surface makes them — recon, nuclei, AD, cloud, the SSRF→IMDS bridge, the manual paste box. Borrowing open·kritt's finding-processing machinery, the pipeline gives them all one spine:
+
+- **Dynamic / structured schema.** Every finding carries a consistent, machine-checkable shape — title, severity, **attacker-path**, **source-refs**, **CVSS**, vuln-class — plus an `extra` map for **engagement-defined custom fields**. Malformed findings are rejected; unknown fields are preserved, not dropped.
+- **Automatic de-duplication.** The same defect found via two flows, or reported by two tools worded differently, **collapses by a stable key** (location + type) into one finding that keeps the worst severity and the union of source-refs — idempotently, so re-ingesting never multiplies. A **"merged N duplicates"** note surfaces what was folded.
+- **Pluggable severity rankers.** A per-engagement rule set rescopes severity into `critical…info`. Ship two lenses over the *same* findings: **bug-bounty payout** (RCE / loss-of-funds / auth-bypass to the top, best-practice noise to info) and **compliance** (header & crypto control gaps rise to medium, raw exploitation criticals capped) — the missing-header one view discards as noise is a real control gap in the other.
+- **Post-scripts.** An operator step that runs **after a finding lands**: **validate** (re-check it is actionable — composes with the validation gates) and **draft a report** (feed report-writer) run **in-process and execute nothing**; **build a PoC** returns an **approve-each** command the operator fires through the gated executor + :kali sandbox. A lock refuses a concurrent double-run.
+
+Ranking, dedup and schema are **pure data operations** — they add **no gate**; only a command post-script touches the executor, and only approve-each. The live preview below (on `/engagements`, over a synthetic finding set) shows the ranker picker, the merged badges and the post-scripts panel.
+
+<p align="center">
+  <img src="assets/screenshots/39-finding-pipeline.png" alt="The finding pipeline preview on /engagements — a severity-ranker picker (Producer severity / Bug-bounty payout / Compliment-audit) with Bug-bounty payout selected, a 'merged 1 duplicate' badge and a 1-critical / 2-high / 2-info roll-up, then five synthetic findings: two orders-endpoint SQLi collapsed into one critical carrying a 'merged 1' badge, a CVSS vector and a source file:line, reflected XSS and SSRF at high, two missing-header findings at info — each row offering validate / report / PoC post-scripts, the two PoC buttons tagged approve-each" width="80%">
 </p>
 
 ---

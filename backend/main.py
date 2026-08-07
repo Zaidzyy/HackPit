@@ -20,6 +20,7 @@ Design notes
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -67,6 +68,14 @@ from cockpit import obfuscation as cockpit_obfuscation  # noqa: E402  (DNS tunne
 from evasion import engine as evasion_engine  # noqa: E402  (generate-only artifact producer)
 import state as engagement_state  # noqa: E402
 from state import store as state_store  # noqa: E402
+# backend/findings/ — the finding pipeline (dynamic schema, dedup, pluggable rankers,
+# post-scripts). PURE DATA: it executes nothing and imports no cockpit/executor/state, so the
+# coupling (dict -> state.Finding, command post-script -> gated executor) lives HERE in the app
+# layer, exactly like the codescan sink. See backend/findings/__init__.py.
+from findings import pipeline as finding_pipeline  # noqa: E402
+from findings import postscripts as finding_postscripts  # noqa: E402
+from findings import rankers as finding_rankers  # noqa: E402
+from findings import schema as finding_schema  # noqa: E402
 from state import tasks as state_tasks  # noqa: E402
 from state import credvault  # noqa: E402
 from cockpit.router import router as cockpit_router  # noqa: E402
@@ -1444,6 +1453,203 @@ def session_state(session_id: str) -> dict[str, Any]:
         "tasks": [t.to_dict() for t in state_tasks.load(session_id)],
         "task_progress": state_tasks.progress(session_id),
     }
+
+
+# --------------------------------------------------------------------------- #
+# finding pipeline — dynamic schema, de-dup, pluggable rankers, post-scripts
+# (backend/findings/). Pure data operations execute nothing; a command post-script
+# is an approve-each PROPOSAL the operator fires through the already-gated executor,
+# exactly like a drafted web exploit. NO new gate — spec §0.
+# --------------------------------------------------------------------------- #
+def _finding_to_payload(f: Any) -> dict[str, Any]:
+    """A state.Finding -> the pipeline's finding dict (carrying its fingerprint)."""
+    return {
+        "fingerprint": f.fingerprint(),
+        "title": f.title, "severity": f.severity, "target": f.target,
+        "evidence": f.evidence, "tool": f.tool, "reference": f.reference,
+        "attacker_path": f.attacker_path, "source_refs": list(f.source_refs or []),
+        "cvss": f.cvss, "vuln_class": f.vuln_class, "extra": dict(f.extra or {}),
+        "merged_count": f.merged_count,
+    }
+
+
+def _payload_to_finding(session_id: str, d: dict[str, Any], run_id: str | None = None) -> Any:
+    """A validated/ranked pipeline dict -> a state.Finding, ready to upsert."""
+    from state.models import Finding
+
+    return Finding(
+        session_id=session_id, title=str(d.get("title") or "")[:300],
+        severity=finding_schema.normalize_severity(d.get("severity")),
+        target=str(d.get("target") or ""), evidence=str(d.get("evidence") or ""),
+        tool=str(d.get("tool") or ""), reference=str(d.get("reference") or ""),
+        attacker_path=str(d.get("attacker_path") or ""),
+        source_refs=[str(x) for x in (d.get("source_refs") or [])],
+        cvss=str(d.get("cvss") or ""), vuln_class=str(d.get("vuln_class") or ""),
+        extra=dict(d.get("extra") or {}), merged_count=int(d.get("merged_count") or 0),
+        ranker=str(d.get("ranker") or ""), source_run_id=run_id,
+    )
+
+
+@app.get("/findings/rankers")
+def finding_rankers_list() -> dict[str, Any]:
+    """The pluggable severity rankers available to any engagement (data only)."""
+    return {"rankers": finding_rankers.list_rankers(),
+            "default": finding_rankers.DEFAULT_RANKER_ID}
+
+
+@app.get("/findings/postscripts")
+def finding_postscripts_list() -> dict[str, Any]:
+    """The built-in post-finding scripts. ``needs_approval`` marks the command ones."""
+    return {"postscripts": finding_postscripts.list_postscripts()}
+
+
+@app.get("/findings/schema")
+def finding_schema_view() -> dict[str, Any]:
+    """The structured finding schema (base field set) — what every producer emits."""
+    return {"fields": finding_schema.DEFAULT_FIELDS, "schema": finding_schema.output_schema()}
+
+
+class PipelineIn(BaseModel):
+    """Run the finding pipeline over an engagement's findings."""
+
+    ranker_id: str | None = Field(None, description="Severity ranker id; null/blank = default.")
+    persist: bool = Field(
+        False,
+        description="When true, WRITE the collapsed + rescored findings back to engagement "
+        "state (absorbed duplicates are removed, survivors keep the worst severity and the "
+        "ranker's score) and remember the ranker choice. A pure data operation — nothing runs.",
+    )
+
+
+@app.post("/sessions/{session_id}/findings/pipeline")
+def run_finding_pipeline(session_id: str, req: PipelineIn = Body(...)) -> dict[str, Any]:
+    """De-duplicate + rank an engagement's findings, optionally persisting the collapse.
+
+    Returns the assembled view (ranked findings, the "merged N duplicates" note, severity
+    counts). Executes nothing. Deliberately returns a plain dict (no response_model) so the
+    structured-schema fields survive the round-trip — the 3-schema-places rule.
+    """
+    ranker_id = (req.ranker_id or "").strip() or state_store.get_finding_ranker(session_id) \
+        or finding_rankers.DEFAULT_RANKER_ID
+    findings = state_store.load(session_id).findings
+    payloads = [_finding_to_payload(f) for f in findings]
+    result = finding_pipeline.run_pipeline(payloads, ranker_id)
+
+    if req.persist:
+        # collapse in the store: for each dedup group keep one representative fingerprint,
+        # delete the others, and write the survivor's rescored severity/rank/merge count.
+        state_store.set_finding_ranker(session_id, ranker_id)
+        groups: dict[tuple, list[Any]] = {}
+        for f in findings:
+            groups.setdefault(finding_pipeline.dedup_key(_finding_to_payload(f)), []).append(f)
+        survivor_by_key = {finding_pipeline.dedup_key(d): d for d in result["findings"]}
+        absorbed: list[str] = []
+        keepers: list[Any] = []
+        for key, members in groups.items():
+            surv = survivor_by_key.get(key)
+            if surv is None:
+                continue
+            members_sorted = sorted(
+                members, key=lambda m: finding_pipeline._IMPACT_RANK.get(m.severity, 99))
+            keep_fp = members_sorted[0].fingerprint()
+            absorbed += [m.fingerprint() for m in members_sorted[1:]]
+            rec = _payload_to_finding(session_id, surv)
+            # pin the representative identity so the upsert updates in place, not inserts anew
+            rec.title = members_sorted[0].title
+            rec.target = members_sorted[0].target
+            rec.reference = members_sorted[0].reference
+            keepers.append(rec)
+        if absorbed:
+            state_store.delete_findings(session_id, absorbed)
+        if keepers:
+            state_store.upsert_findings(keepers)
+        result["persisted"] = True
+        result["removed_duplicates"] = len(absorbed)
+
+    result["session_id"] = session_id
+    return result
+
+
+@app.get("/findings/pipeline/sample")
+def finding_pipeline_sample(ranker: str | None = None) -> dict[str, Any]:
+    """A deterministic SYNTHETIC run of the pipeline — the offline demo the /engagements panel
+    renders (and the screenshot uses). No engagement, no DB write: pure data over a fixed set of
+    fabricated findings so the ranker picker + merged badges + post-scripts panel have content."""
+    samples = [
+        {"title": "SQL injection in /api/orders?id=1", "severity": "high", "vuln_class": "sqli",
+         "target": "https://shop.example.com/api/orders?id=1",
+         "attacker_path": "Send id=1 OR 1=1-- ; the ORDER BY clause concatenates it unescaped, "
+         "dumping every customer's orders.", "source_refs": ["api/orders.py:88"],
+         "cvss": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N", "reference": "CWE-89",
+         "tool": "ai-audit"},
+        {"title": "SQL Injection in the orders endpoint", "severity": "critical",
+         "vuln_class": "sqli", "target": "https://shop.example.com/api/orders",
+         "attacker_path": "Same ORDER BY sink, reached via the sort= parameter.",
+         "source_refs": ["api/orders.py:88"], "reference": "CWE-89", "tool": "nuclei"},
+        {"title": "SSRF in the avatar image proxy", "severity": "medium", "vuln_class": "ssrf",
+         "target": "https://shop.example.com/proxy?url=",
+         "attacker_path": "url=http://169.254.169.254/latest/meta-data/ reaches the cloud IMDS; "
+         "the response is returned to the attacker.", "source_refs": ["proxy/fetch.py:34"],
+         "reference": "CWE-918", "tool": "ai-audit"},
+        {"title": "Reflected XSS in search", "severity": "medium", "vuln_class": "stored-xss",
+         "target": "https://shop.example.com/search?q=",
+         "attacker_path": "q= is echoed into the results title unencoded.",
+         "source_refs": ["web/search.tsx:12"], "reference": "CWE-79", "tool": "dalfox"},
+        {"title": "Missing Strict-Transport-Security header", "severity": "info",
+         "vuln_class": "missing-header", "target": "https://shop.example.com/",
+         "attacker_path": "", "source_refs": [], "reference": "best-practice", "tool": "nuclei"},
+        {"title": "Missing security header (HSTS) on the API host", "severity": "low",
+         "vuln_class": "missing-header", "target": "https://api.example.com/",
+         "attacker_path": "", "source_refs": [], "reference": "missing-header", "tool": "nuclei"},
+    ]
+    ranker_id = (ranker or "").strip() or finding_rankers.DEFAULT_RANKER_ID
+    result = finding_pipeline.run_pipeline(samples, ranker_id)
+    result["sample"] = True
+    return result
+
+
+class PostScriptRunIn(BaseModel):
+    """Run a post-script over a finding. Pass a session + fingerprint to run against a stored
+    finding, or an inline finding (the /engagements demo does the latter with synthetic data)."""
+
+    postscript_id: str = Field(..., description="Which post-script (see GET /findings/postscripts).")
+    fingerprint: str | None = Field(None, description="A finding already in engagement state.")
+    finding: dict[str, Any] | None = Field(
+        None, description="An inline finding dict when not persisting (preview / demo).")
+
+
+@app.post("/sessions/{session_id}/findings/postscript")
+def run_finding_postscript(session_id: str, req: PostScriptRunIn = Body(...)) -> dict[str, Any]:
+    """Run a post-finding script. DATA post-scripts (validate / report) run in-process and
+    return their result; the COMMAND post-script (PoC) returns an APPROVE-EACH proposal — a
+    command string with ``needs_approval: true`` that the operator fires through the gated
+    executor. Nothing is executed here. A per-(session, finding, script) lock refuses a
+    concurrent double-run.
+    """
+    script = finding_postscripts.get_postscript(req.postscript_id)
+    if script is None:
+        raise HTTPException(status_code=404, detail="no such post-script")
+
+    finding = req.finding
+    fingerprint = (req.fingerprint or "").strip()
+    if finding is None and fingerprint:
+        finding = next(
+            (_finding_to_payload(f) for f in state_store.load(session_id).findings
+             if f.fingerprint() == fingerprint),
+            None,
+        )
+    if not finding:
+        raise HTTPException(
+            status_code=404,
+            detail="no such finding (pass a fingerprint in state or an inline finding)")
+    lock_fp = fingerprint or hashlib.sha256(
+        str(finding.get("title") or "").encode("utf-8")).hexdigest()[:16]
+    try:
+        with finding_postscripts.LOCKS.guard(session_id, lock_fp, script.id):
+            result = finding_postscripts.run(script, finding)
+    except finding_postscripts.PostScriptLocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"postscript": script.meta(), "result": result}
 
 
 class CredFillIn(BaseModel):

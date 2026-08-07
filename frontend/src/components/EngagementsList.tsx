@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { PageShell } from "./PageShell";
+import { FindingPipelinePanel } from "./FindingPipelinePanel";
 import {
   deleteSession,
   listSessions,
@@ -130,6 +131,8 @@ export function EngagementsList() {
             })}
           </ul>
         )}
+
+        <FindingPipelinePanel />
       </div>
     </PageShell>
   );

@@ -451,6 +451,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#ad-cs-esc18-routed-in-the-graph-the-ad-parallel-to-dcsync-synthesis-ad-graph-2026-08-07">AD CS ESC1–8 routed in the graph — the AD parallel to DCSync synthesis (:ad-graph) (2026-08-07)</a></li>
 <li><a href="#unconstrained-delegation-edge-goldensilver-ticket-forging-the-delegation-family-closer-ad-graph-2026-08-07">Unconstrained delegation edge + golden/silver ticket forging — the delegation-family closer (:ad-graph) (2026-08-07)</a></li>
 <li><a href="#ai-code-audit-fan-out-openkritts-decomposition-hackpit-gated-code-scan-ai-mode-2026-08-07">AI code-audit fan-out — open·kritt's decomposition, HackPit-gated (:code-scan AI mode) (2026-08-07)</a></li>
+<li><a href="#finding-pipeline-dynamic-schema-auto-dedup-pluggable-rankers-post-scripts-cross-cutting-2026-08-07">Finding pipeline — dynamic schema · auto-dedup · pluggable rankers · post-scripts (cross-cutting) (2026-08-07)</a></li>
 </ul>
 </li>
 </ul>
@@ -701,6 +702,7 @@ a { color: var(--accent); text-decoration: none; }
 <h3 id="code-scan-sast">Code scan (SAST)</h3>
 <p><strong>Well-built and genuinely safe.</strong> Static-only invariant asserted at every <code>_spawn()</code> and again by <code>test_codescan_safety.py</code>. Deliberately orthogonal — imports nothing from the engagement/executor/scope model. <strong>Limits — now widened (post-assessment):</strong> the offline bundle grew from 19 rules (Python/JS/TS) to <strong>34 across 8 languages</strong> — Java/Go/PHP/Ruby/C# added (<code>rules/hackpit-languages.yaml</code>: command injection, SQLi, unsafe deserialization, code-eval, file-inclusion, SSRF), plus a <strong>ruleset picker</strong> (bundled / per-language / a registry pack for the full online catalogue). Still offline-first. See "Post-assessment refinements".</p>
 <p><strong>AI code-audit fan-out (New, 2026-08-07).</strong> A second mode alongside the rule scan (<code>codescan/ai_audit.py</code>), porting open·kritt's context-saving decomposition onto the <code>reasoning/</code> substrate: <strong>map the repo's externally-reachable entrypoints and their flows once, then hand each downstream agent exactly one flow to verify against source</strong> — a concrete vuln-with-attacker-path or an honest no-finding stub — then dedup + severity-rank by <code>IMPACT_LEVELS</code>. A non-concrete claim is downranked to a stub by the concrete-or-stub gate; specialists are KB-grounded (<code>reasoning.retrieval</code>), the verify step is model-tiered (<code>reasoning.tiering</code>), and <code>patched-since</code> restricts the whole audit to a git diff. <strong>No new gate</strong> — the proposer reads source and calls the LLM layer, it <strong>executes nothing</strong> (AST-locked in <code>test_ai_audit_safety.py</code>): it is one approved job (the ZAP/nuclei justification), any PoC a finding offers is a <strong>string to run approve-each</strong> through the existing executor, and the diff provider + engagement-state sink are <strong>injected from <code>main.py</code></strong> so codescan stays orthogonal (no <code>state</code>/git import of its own). Degrades to a deterministic heuristic analyst when no LLM is reachable. See the dated section below.</p>
+<p><strong>Finding pipeline (New, 2026-08-07).</strong> The AI audit is the heaviest producer of findings, but every surface (recon/nuclei/AD/cloud/IMDS/manual) makes them — so open·kritt's finding-processing machinery is ported <strong>cross-cutting</strong> into a pure-data <code>backend/findings/</code> package: a <strong>dynamic/structured schema</strong> (<code>schema.py</code> — <code>FIELD_TYPE_MAP</code>, <code>normalize_output_format</code>, <code>output_schema</code>, <code>validate_payload</code>; base fields + an engagement-defined <code>extra</code> map), <strong>automatic de-duplication</strong> (<code>pipeline.py</code> — a stable key over location + type collapses two wordings of the same bug into one, worst-severity-wins, idempotent so re-ingest never multiplies, with a "merged N duplicates" note), <strong>pluggable severity rankers</strong> (<code>rankers.py</code> — a per-engagement rule set rescores; ships <code>default</code> / <code>bug-bounty-payout</code> / <code>compliance</code>, the last two being <em>different lenses over the same findings</em>), and <strong>post-scripts</strong> (<code>postscripts.py</code> — a post-finding hook: <code>validate</code>/<code>report</code> run in-process and execute nothing, <code>poc</code> returns an <strong>approve-each</strong> command; <code>postScriptLocks</code> refuse a concurrent double-run). The structured fields were wired through all three schema places (the <code>state.models.Finding</code> dataclass + migration-safe <code>store.py</code> columns + the frontend), and a round-trip test proves no <code>response_model</code> strips them. <strong>No new gate</strong> — ranking/dedup/schema are pure data (AST-locked in <code>test_finding_pipeline_safety.py</code>, which imports no cockpit/executor/state and names no gate symbol); only a <strong>command</strong> post-script touches the executor, and only approve-each — the coupling (dict→<code>Finding</code>, command post-script→gated executor) lives in <code>main.py</code>. See the dated section below.</p>
 <h3 id="frontend">Frontend</h3>
 <p>16 routes, real API wiring throughout, SSE streaming, no mocked data layer (<code>cockpitSample.ts</code> is the only sample content, explicitly labelled). New in Phases 1–3: the arsenal availability band, per-run time-budget + detach controls, the engagement-state/task-tree panel, the credential-vault "use" action, and the persistent <code>:kali</code> shell UI. <strong>Gaps:</strong> no global current-target/engagement context, no engagement export/import, no multi-target view, and the accepted 10-error <code>react-hooks</code> lint baseline (documented; <code>next build</code> passes exit 0).</p>
 <hr />
@@ -5643,5 +5645,65 @@ than a new engine; the flow frontier is modeled in-process rather than forced th
 SQLite lead-queue is shaped for executable leads (a lead with an empty command is dropped) not source flows — noted
 here rather than bent. Shipped the <code>external-flow-analysis</code> playbook as the built-in (the web3 playbooks come with the
 web3 spec). Agent runs use <code>backend/llm.py</code> (Codex-login/OpenAI/Anthropic/OpenRouter), not open·kritt's harness.</p>
+<h2 id="finding-pipeline-dynamic-schema-auto-dedup-pluggable-rankers-post-scripts-cross-cutting-2026-08-07">Finding pipeline — dynamic schema · auto-dedup · pluggable rankers · post-scripts (cross-cutting) (2026-08-07)</h2>
+<p>HackPit already had findings, validation gates and a report-writer; what every producer lacked was a <strong>common spine</strong>.
+The AI code-audit above ports open·kritt's decomposition; this build ports the other half of open·kritt — its
+<strong>finding-processing machinery</strong> — and makes it <strong>cross-cutting</strong>, strengthening findings from <em>every</em> surface (recon,
+nuclei, AD, cloud, the SSRF→IMDS bridge, the manual paste box), not one producer. It lives in a new <strong>pure-data</strong>
+package <code>backend/findings/</code> that imports no cockpit/executor/engagement/sandbox/state module and executes nothing.</p>
+<p><strong>Dynamic / structured schema (<code>findings/schema.py</code>, open·kritt's <code>schema.py</code>).</strong> A configurable, jsonschema-free
+finding shape: <code>FIELD_TYPE_MAP</code> (string/severity/cvss/refs/number/bool/map with never-raising coercers),
+<code>normalize_output_format</code> (accepts <code>name:type!</code> shorthand or dicts — so an engagement can <strong>define custom fields at
+runtime</strong>), <code>output_schema</code> (generates the schema descriptor), <code>validate_payload</code> (type + required + enum, ported from
+open·kritt), and <code>coerce_finding</code> (declared fields coerced to type; <strong>unknown keys preserved under <code>extra</code></strong> — the
+dynamic part). The base field set adds <code>attacker_path</code>, <code>source_refs</code>, <code>cvss</code> and <code>vuln_class</code> to the finding — the
+concreteness a report actually needs.</p>
+<p><strong>Automatic de-duplication (<code>findings/pipeline.py</code>, open·kritt's <code>post_processing.py</code>).</strong> Fan-out producers report the
+same defect more than once. A <strong>stable dedup key</strong> — normalized title <em>or</em>, when both are present, the concrete
+<strong>location + type</strong> — collapses two wordings of the same bug (or two tools' takes on it) into one finding that keeps the
+<strong>worst severity</strong> and the <strong>union of source-refs</strong>. It is <strong>idempotent</strong> three ways: exact re-ingest is caught by the
+existing fingerprint upsert; the fuzzy collapse carries a <code>merged_count</code> that is <em>added</em> from the inputs, never
+re-inflated; and re-running the pipeline over its own output is a fixed point. The result surfaces a <strong>"merged N
+duplicates"</strong> note. <code>IMPACT_LEVELS</code> (open·kritt's) drives the worst-first sort.</p>
+<p><strong>Pluggable severity rankers (<code>findings/rankers.py</code>, open·kritt's <code>severityRankers.js</code> + <code>defaultSeverityRankers.js</code>).</strong>
+A <strong>ranker</strong> is an ordered rule set that rescopes a finding's severity for the operator's engagement. Ships three:
+<code>default</code> (keep the producer's severity), <strong><code>bug-bounty-payout</code></strong> (RCE / loss-of-funds / auth-bypass to critical,
+exploitable web classes high, best-practice noise to info), and <strong><code>compliance</code></strong> (crypto &amp; header control gaps rise to
+medium, raw exploitation criticals capped at high). The last two are the demonstration that this is <em>pluggable, not
+cosmetic</em>: the missing-header one lens discards to info is a real medium control gap in the other — same findings,
+different lens, selectable per engagement (persisted in <code>state_finding_pipeline</code>).</p>
+<p><strong>Post-scripts (<code>findings/postscripts.py</code>, open·kritt's <code>postScripts.js</code> + <code>postScriptLocks.js</code>).</strong> An operator step
+that runs <strong>after a finding lands</strong>: <strong>validate</strong> (re-check it is actionable — composes with the existing validation
+gates) and <strong>report</strong> (draft a Markdown writeup for report-writer) run <strong>in-process and execute nothing</strong>; <strong>PoC</strong>
+(<code>poc-curl</code>, <code>poc-nuclei-retest</code>) builds a command and returns it as an <strong>approve-each proposal</strong> (<code>needs_approval:
+true</code>, <code>executed: false</code>) that the operator fires through the gated executor + :kali sandbox — exactly the drafted-web-
+exploit pattern, never auto-run. A <code>PostScriptLocks</code> table refuses a concurrent double-run of the same script on the
+same finding.</p>
+<p><strong>§0 held — no new gate.</strong> Ranking, dedup and schema are pure data operations. The only thing that can execute is a
+command post-script, and it never does from here — it returns a string the operator approves-each. The coupling
+(dict→<code>state.models.Finding</code>, command post-script→gated executor route) lives in <code>main.py</code>, so the package stays
+orthogonal, mirroring the codescan sink. The <strong>3-schema-places rule</strong> was respected: the structured fields were wired
+through the <code>Finding</code> dataclass, migration-safe <code>store.py</code> columns (<code>attacker_path</code>/<code>source_refs</code>/<code>cvss</code>/<code>vuln_class</code>/
+<code>extra</code>/<code>merged_count</code>/<code>ranker</code>), and the frontend — with a round-trip test proving neither the <code>/sessions/{id}/state</code>
+route nor the new pipeline route strips them under any <code>response_model</code>.</p>
+<p><strong>Surfaces &amp; routes.</strong> <code>GET /findings/rankers</code> · <code>GET /findings/postscripts</code> · <code>GET /findings/schema</code> (the base field
+set) · <code>POST /sessions/{id}/findings/pipeline</code> (dedup + rank an engagement's findings; <code>persist: true</code> collapses
+absorbed duplicates and rescores in place — a pure data op that never grows the count) · <code>GET /findings/pipeline/sample</code>
+(a deterministic <strong>synthetic</strong> demo) · <code>POST /sessions/{id}/findings/postscript</code> (run a post-script over a stored or
+inline finding). The frontend adds a <strong>finding-pipeline panel to <code>/engagements</code></strong> — a ranker picker, the merged badges,
+severity roll-up, and per-finding post-scripts (the two PoC buttons tagged <strong>approve-each</strong>), rendered over the
+synthetic sample so the screenshot uses no real target.</p>
+<p><strong>Tests.</strong> <code>test_finding_pipeline.py</code> (schema validates + rejects + is dynamic; dedup is idempotent — same finding twice
+→ one "merged 1", re-run a fixed point; the two default rankers rescore the same fixture differently and in order; data
+post-scripts run in-process; the PoC is approve-each; the lock refuses a double-run) and <code>test_finding_pipeline_safety.py</code>
+(the package executes nothing by AST <strong>with a planted control</strong>; imports no attack-surface module and names no gate
+symbol; a command post-script never auto-fires end to end; the structured fields survive both routes; persisting the
+pipeline collapses duplicates and stays idempotent). Both are in <code>run_safety_tests.sh</code> (now 108 hermetic files, all
+exit 0). <code>next build</code> exits 0.</p>
+<p><strong>Assumptions (per §5), stated.</strong> Shipped schema + dedup + rankers <strong>and</strong> post-scripts in one session (no short-session
+cut). The <code>/engagements</code> panel runs the pipeline over a <strong>synthetic</strong> sample rather than a live engagement's findings,
+because <code>/engagements</code> is a cross-session list — the same machinery runs over real findings from within an engagement
+via <code>POST /sessions/{id}/findings/pipeline</code>. The fuzzy collapse persists destructively only on <code>persist: true</code> (the
+default is a non-destructive computed view), keeping the operator in control of when a merge is written.</p>
 </body>
 </html>

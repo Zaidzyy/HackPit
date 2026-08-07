@@ -162,6 +162,15 @@ class Finding:
 
     Fingerprinting rather than a running id means the same issue re-detected by a later
     scan updates in place instead of appearing three times in the report.
+
+    STRUCTURED SCHEMA (finding-pipeline upgrade). The first six fields are the base shape
+    every producer has always emitted; the fields below them are the structured schema that
+    the finding pipeline (backend/findings/) validates and enriches — the attacker path, the
+    concrete source references, a CVSS vector, a normalized vuln class, and an ``extra`` map
+    for engagement-defined custom fields (the "dynamic" part of open·kritt's schema). They
+    are all optional and default-empty, so every existing producer and every existing row
+    keeps working unchanged. ``merged_count`` and ``ranker`` are pipeline annotations: how
+    many duplicates collapsed into this finding, and which severity ranker last scored it.
     """
 
     session_id: str
@@ -171,6 +180,14 @@ class Finding:
     evidence: str = ""
     tool: str = ""
     reference: str = ""      # CVE, template id, technique id
+    # --- structured schema (finding pipeline) --- #
+    attacker_path: str = ""                              # concrete steps an attacker takes
+    source_refs: list[str] = field(default_factory=list)  # ["file.py:42", "https://…", …]
+    cvss: str = ""                                       # CVSS vector string, when known
+    vuln_class: str = ""                                 # normalized class (ssrf, idor, rce…)
+    extra: dict[str, Any] = field(default_factory=dict)  # engagement-defined custom fields
+    merged_count: int = 0                                # duplicates collapsed into this one
+    ranker: str = ""                                     # id of the ranker that last scored it
     source_run_id: str | None = None
     first_seen: str = ""
     last_seen: str = ""

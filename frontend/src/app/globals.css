@@ -9056,3 +9056,184 @@ button.hp-tn-start:disabled, button.hp-tn-destroy:disabled { opacity: 0.45; curs
 }
 .hp-gql-fieldname { color: var(--white); }
 .hp-gql-fieldtype { color: var(--dim); }
+
+/* ========================================================================== *
+ * FINDING PIPELINE panel (/engagements) — dynamic schema · dedup · rankers ·
+ * post-scripts. Reuses the codescan severity chips (.hp-cs-sev-*) and the base
+ * .hp-chip / .hp-badge vocabulary; everything panel-specific is hp-fp-*.
+ * ========================================================================== */
+.hp-fp {
+  margin-top: 34px;
+  padding-top: 22px;
+  border-top: 1px solid var(--border);
+}
+.hp-fp-head { margin-bottom: 16px; }
+.hp-fp-title {
+  font-size: 17px; color: var(--white); font-weight: 600; margin: 0 0 4px;
+}
+.hp-fp-sub {
+  font-size: 12.5px; color: var(--dim); max-width: 70ch; line-height: 1.5; margin: 0;
+}
+
+.hp-fp-block { margin: 14px 0; }
+.hp-fp-block-label {
+  font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim);
+  margin-bottom: 7px;
+}
+.hp-fp-rankers { display: flex; flex-wrap: wrap; gap: 8px; }
+.hp-fp-ranker {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12px;
+  color: var(--dim); background: rgba(0,0,0,0.3); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 12px; cursor: pointer; transition: all 0.12s ease;
+}
+.hp-fp-ranker:hover { color: var(--white); border-color: var(--accent-line, var(--accent)); }
+.hp-fp-ranker.is-on {
+  color: var(--accent); border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.hp-fp-ranker-desc {
+  font-size: 12px; color: color-mix(in srgb, var(--white) 55%, transparent);
+  margin: 8px 0 0; max-width: 78ch; line-height: 1.5;
+}
+
+.hp-fp-rollup {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 0 10px;
+}
+.hp-fp-merged {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 11px;
+  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: 999px; padding: 2px 10px;
+}
+.hp-fp-count { text-transform: none; }
+.hp-fp-total {
+  font-size: 11px; color: var(--dim); margin-left: auto;
+  font-family: var(--font-jetbrains-mono), monospace;
+}
+
+.hp-fp-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.hp-fp-row {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 9px;
+  padding: 12px 14px;
+}
+.hp-fp-row-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.hp-fp-sev { text-transform: uppercase; }
+.hp-fp-mergebadge {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 10.5px;
+  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-radius: 5px; padding: 1px 7px;
+}
+.hp-fp-row-title {
+  font-family: inherit; font-size: 13.5px; color: var(--white); font-weight: 500;
+  background: none; border: none; padding: 0; cursor: pointer; text-align: left;
+}
+.hp-fp-row-title:hover { color: var(--accent); }
+.hp-fp-row-meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 6px;
+}
+.hp-fp-target {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 11px;
+  color: color-mix(in srgb, var(--white) 50%, transparent);
+}
+.hp-fp-cvss {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 10.5px;
+  color: color-mix(in srgb, var(--white) 45%, transparent);
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
+}
+.hp-fp-ref {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 10.5px;
+  color: color-mix(in srgb, var(--white) 40%, transparent);
+  background: rgba(0,0,0,0.3); border-radius: 4px; padding: 1px 6px;
+}
+.hp-fp-path {
+  font-size: 12px; color: color-mix(in srgb, var(--white) 62%, transparent);
+  line-height: 1.55; margin: 9px 0 0; padding: 9px 11px; border-radius: 7px;
+  background: rgba(0,0,0,0.25); border: 1px solid var(--border);
+}
+
+.hp-fp-scripts { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 11px; }
+.hp-fp-scripts-label {
+  font-size: 9.5px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim);
+  margin-right: 2px;
+}
+.hp-fp-ps {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 11.5px;
+  color: color-mix(in srgb, var(--white) 75%, transparent);
+  background: rgba(0,0,0,0.3); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 10px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.hp-fp-ps:hover:not(:disabled) { color: var(--white); border-color: var(--accent-line, var(--accent)); }
+.hp-fp-ps:disabled { opacity: 0.5; cursor: wait; }
+/* command post-scripts read as PROPOSALS: bordered in the offensive green, never as a
+   safe "run" button — the tag says the gate will still ask. */
+.hp-fp-ps.is-cmd {
+  border-color: color-mix(in srgb, #b8f24a 40%, transparent);
+  color: color-mix(in srgb, #b8f24a 90%, var(--white));
+}
+.hp-fp-ps.is-cmd:hover:not(:disabled) { background: color-mix(in srgb, #b8f24a 12%, transparent); }
+.hp-fp-ps-tag {
+  font-size: 9px; letter-spacing: 0.5px; text-transform: uppercase;
+  color: color-mix(in srgb, #b8f24a 90%, var(--white));
+  border: 1px solid color-mix(in srgb, #b8f24a 45%, transparent);
+  border-radius: 4px; padding: 0 5px;
+}
+
+.hp-fp-out {
+  margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--white) 10%, transparent);
+  background: color-mix(in srgb, var(--white) 3%, transparent);
+}
+.hp-fp-out.is-cmd {
+  border-color: color-mix(in srgb, #b8f24a 35%, transparent);
+  background: color-mix(in srgb, #b8f24a 6%, transparent);
+}
+.hp-fp-out-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.hp-fp-out-name {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12px; color: var(--white);
+}
+.hp-fp-out-flag {
+  font-size: 9.5px; letter-spacing: 0.5px; text-transform: uppercase;
+  color: color-mix(in srgb, #b8f24a 90%, var(--white));
+  border: 1px solid color-mix(in srgb, #b8f24a 40%, transparent);
+  border-radius: 4px; padding: 1px 6px;
+}
+.hp-fp-out-flag.is-data {
+  color: color-mix(in srgb, var(--white) 55%, transparent);
+  border-color: var(--border);
+}
+.hp-fp-out-x {
+  margin-left: auto; background: none; border: none; color: var(--dim);
+  font-size: 16px; line-height: 1; cursor: pointer; padding: 0 2px;
+}
+.hp-fp-out-x:hover { color: var(--white); }
+.hp-fp-out-summary {
+  font-size: 12px; color: color-mix(in srgb, var(--white) 62%, transparent);
+  margin: 0 0 8px; line-height: 1.5;
+}
+.hp-fp-out-cmd, .hp-fp-out-md {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 11.5px;
+  color: var(--white); background: rgba(0,0,0,0.4); border-radius: 6px;
+  padding: 9px 11px; margin: 0; overflow-x: auto; white-space: pre-wrap; word-break: break-word;
+}
+.hp-fp-out-md { color: color-mix(in srgb, var(--white) 78%, transparent); max-height: 260px; overflow-y: auto; }
+.hp-fp-out-validate { display: flex; flex-direction: column; gap: 6px; }
+.hp-fp-out-verdict {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12px; width: fit-content;
+  border-radius: 5px; padding: 2px 9px;
+}
+.hp-fp-out-verdict.is-ok {
+  color: #9ad9a0; background: color-mix(in srgb, #5ae07a 14%, transparent);
+}
+.hp-fp-out-verdict.is-warn {
+  color: #ecd68f; background: color-mix(in srgb, #e0c15a 16%, transparent);
+}
+.hp-fp-out-problems {
+  margin: 0; padding-left: 18px; font-size: 11.5px;
+  color: color-mix(in srgb, var(--white) 58%, transparent);
+}
+
+.hp-fp-foot {
+  font-size: 11.5px; color: var(--dim); margin: 16px 0 0; line-height: 1.55; max-width: 78ch;
+}

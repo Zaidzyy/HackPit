@@ -127,10 +127,29 @@ def init_db() -> None:
                 evidence      TEXT NOT NULL DEFAULT '',
                 tool          TEXT NOT NULL DEFAULT '',
                 reference     TEXT NOT NULL DEFAULT '',
+                attacker_path TEXT NOT NULL DEFAULT '',
+                source_refs   TEXT NOT NULL DEFAULT '[]',
+                cvss          TEXT NOT NULL DEFAULT '',
+                vuln_class    TEXT NOT NULL DEFAULT '',
+                extra         TEXT NOT NULL DEFAULT '{}',
+                merged_count  INTEGER NOT NULL DEFAULT 0,
+                ranker        TEXT NOT NULL DEFAULT '',
                 source_run_id TEXT,
                 first_seen    TEXT NOT NULL,
                 last_seen     TEXT NOT NULL,
                 PRIMARY KEY (session_id, fingerprint)
+            )
+            """
+        )
+        # per-session finding-pipeline settings — the selected severity ranker. One row per
+        # session; a session without a row uses the default ranker.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS state_finding_pipeline (
+                session_id TEXT NOT NULL,
+                ranker_id  TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (session_id)
             )
             """
         )
@@ -140,6 +159,20 @@ def init_db() -> None:
             conn.execute("ALTER TABLE state_hosts ADD COLUMN local_txt TEXT NOT NULL DEFAULT ''")
         if "proof_txt" not in have:
             conn.execute("ALTER TABLE state_hosts ADD COLUMN proof_txt TEXT NOT NULL DEFAULT ''")
+        # MIGRATION-SAFE: the structured-schema finding fields (finding-pipeline upgrade),
+        # added to an existing findings table. Each is optional, so an old row reads as empty.
+        fhave = {r[1] for r in conn.execute("PRAGMA table_info(state_findings)")}
+        for col, ddl in (
+            ("attacker_path", "TEXT NOT NULL DEFAULT ''"),
+            ("source_refs", "TEXT NOT NULL DEFAULT '[]'"),
+            ("cvss", "TEXT NOT NULL DEFAULT ''"),
+            ("vuln_class", "TEXT NOT NULL DEFAULT ''"),
+            ("extra", "TEXT NOT NULL DEFAULT '{}'"),
+            ("merged_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("ranker", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            if col not in fhave:
+                conn.execute(f"ALTER TABLE state_findings ADD COLUMN {col} {ddl}")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_state_services_session "
             "ON state_services(session_id, address)"
@@ -303,21 +336,90 @@ def upsert_findings(items: Iterable[Finding]) -> int:
                 """
                 INSERT INTO state_findings
                     (session_id, fingerprint, title, severity, target, evidence, tool,
-                     reference, source_run_id, first_seen, last_seen)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                     reference, attacker_path, source_refs, cvss, vuln_class, extra,
+                     merged_count, ranker, source_run_id, first_seen, last_seen)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(session_id, fingerprint) DO UPDATE SET
                     severity  = excluded.severity,
                     evidence  = CASE WHEN excluded.evidence != '' THEN excluded.evidence
                                      ELSE state_findings.evidence END,
+                    -- structured schema: only overwrite when the new record actually carries
+                    -- the field, so a bare re-detection never blanks an enriched finding.
+                    attacker_path = CASE WHEN excluded.attacker_path != '' THEN excluded.attacker_path
+                                         ELSE state_findings.attacker_path END,
+                    source_refs = CASE WHEN excluded.source_refs != '[]' THEN excluded.source_refs
+                                       ELSE state_findings.source_refs END,
+                    cvss      = CASE WHEN excluded.cvss != '' THEN excluded.cvss
+                                     ELSE state_findings.cvss END,
+                    vuln_class = CASE WHEN excluded.vuln_class != '' THEN excluded.vuln_class
+                                      ELSE state_findings.vuln_class END,
+                    extra     = CASE WHEN excluded.extra != '{}' THEN excluded.extra
+                                     ELSE state_findings.extra END,
+                    -- pipeline annotations: the ranker and merge count are AUTHORITATIVE from
+                    -- the writer (the pipeline re-scores in place), so they overwrite.
+                    merged_count = excluded.merged_count,
+                    ranker    = excluded.ranker,
                     source_run_id = COALESCE(excluded.source_run_id, state_findings.source_run_id),
                     last_seen = excluded.last_seen
                 """,
                 (
                     f.session_id, f.fingerprint(), f.title[:300], f.severity, f.target,
-                    f.evidence[:2000], f.tool, f.reference, f.source_run_id, now, now,
+                    f.evidence[:2000], f.tool, f.reference,
+                    f.attacker_path[:2000], json.dumps(list(f.source_refs or [])),
+                    f.cvss[:120], f.vuln_class[:60], json.dumps(dict(f.extra or {})),
+                    int(f.merged_count or 0), f.ranker,
+                    f.source_run_id, now, now,
                 ),
             )
     return len(rows)
+
+
+# --------------------------------------------------------------------------- #
+# finding-pipeline: the per-session ranker choice (a pure data setting)
+# --------------------------------------------------------------------------- #
+def get_finding_ranker(session_id: str) -> str:
+    """The severity ranker selected for a session, or '' (the default) when none is set."""
+    if not session_id:
+        return ""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT ranker_id FROM state_finding_pipeline WHERE session_id=?", (session_id,)
+        ).fetchone()
+    return (row["ranker_id"] if row else "") or ""
+
+
+def delete_findings(session_id: str, fingerprints: Iterable[str]) -> int:
+    """Drop specific findings by fingerprint (the pipeline's duplicate-collapse writes the
+    survivor and deletes the absorbed rows). Returns how many rows were removed."""
+    fps = [fp for fp in fingerprints if fp]
+    if not (session_id and fps):
+        return 0
+    removed = 0
+    with _connect() as conn:
+        for fp in fps:
+            cur = conn.execute(
+                "DELETE FROM state_findings WHERE session_id=? AND fingerprint=?",
+                (session_id, fp),
+            )
+            removed += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+    return removed
+
+
+def set_finding_ranker(session_id: str, ranker_id: str) -> None:
+    """Persist a session's severity-ranker choice. Upsert; stores nothing else."""
+    if not session_id:
+        raise ValueError("session_id is required")
+    now = _now()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO state_finding_pipeline (session_id, ranker_id, updated_at)
+            VALUES (?,?,?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                ranker_id = excluded.ranker_id, updated_at = excluded.updated_at
+            """,
+            (session_id, (ranker_id or "").strip(), now),
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -381,7 +483,17 @@ def load(session_id: str) -> StateSummary:
             Finding(
                 session_id=r["session_id"], title=r["title"], severity=r["severity"],
                 target=r["target"], evidence=r["evidence"], tool=r["tool"],
-                reference=r["reference"], source_run_id=r["source_run_id"],
+                reference=r["reference"],
+                # structured schema — read defensively so an old (pre-migration) row loads.
+                attacker_path=(r["attacker_path"] if "attacker_path" in r.keys() else "") or "",
+                source_refs=json.loads(
+                    (r["source_refs"] if "source_refs" in r.keys() else "[]") or "[]"),
+                cvss=(r["cvss"] if "cvss" in r.keys() else "") or "",
+                vuln_class=(r["vuln_class"] if "vuln_class" in r.keys() else "") or "",
+                extra=json.loads((r["extra"] if "extra" in r.keys() else "{}") or "{}"),
+                merged_count=(r["merged_count"] if "merged_count" in r.keys() else 0) or 0,
+                ranker=(r["ranker"] if "ranker" in r.keys() else "") or "",
+                source_run_id=r["source_run_id"],
                 first_seen=r["first_seen"], last_seen=r["last_seen"],
             )
             for r in conn.execute(
@@ -426,6 +538,6 @@ def clear(session_id: str) -> None:
     with _connect() as conn:
         for table in (
             "state_hosts", "state_services", "state_endpoints",
-            "state_credentials", "state_findings",
+            "state_credentials", "state_findings", "state_finding_pipeline",
         ):
             conn.execute(f"DELETE FROM {table} WHERE session_id=?", (session_id,))

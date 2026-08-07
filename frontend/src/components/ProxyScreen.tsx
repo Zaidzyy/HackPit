@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { PageShell } from "./PageShell";
 import { CopyButton } from "./CopyButton";
 import { GraphQLPanel } from "./GraphQLPanel";
+import { TokenPanel } from "./TokenPanel";
 import {
   ApiError,
   clearAuthContexts,
@@ -910,6 +911,15 @@ export function ProxyScreen() {
           container={live?.container ?? null}
           port={live?.port ?? 8090}
           engagementId={live?.engagement_id}
+        />
+
+        {/* ---- TOKEN WORKBENCH (JWT / OAuth / SAML) --------------------------
+            The token equivalent of the GraphQL panel: decode / analyze / tamper a token captured
+            here, then send the mutated one through the repeater. The core is pure — it hands the
+            token back, it never sends. Also available as a dedicated surface at /tokens. */}
+        <TokenPanel
+          engagementId={live?.engagement_id}
+          sessionId={live?.engagement_id ?? null}
         />
 
         {/* ---- HISTORY FILTERING (build #19 item 3) --------------------------- */}

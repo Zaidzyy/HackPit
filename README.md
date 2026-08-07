@@ -54,6 +54,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | ▤ **Interactive persistent sessions** | Named, parallel **tmux** sessions in the open box with per-session cwd — **automatic prompt detection** flips a session to *"interactive — send input"* when `msfconsole` / `sliver-client` / `evil-winrm` / a REPL is waiting, long scans **auto-background at 60s** with a notify-once completion, and wedge / pipe-degradation recovery. **Input stays human-only, every line.** |
 | ◈ **Guided recon** | Scoped domain → recon as approved jobs → ranked attack surface; discoveries can only widen the set *within* scope. |
 | 🕸️ **Web app testing** | Recording proxy, repeater, intruder, GraphQL, browser interception, OOB callbacks. |
+| 🎟️ **Token workbench** | Decode / analyze / tamper **JWT**, **OAuth/OIDC** and **SAML** — alg-none, RS→HS confusion, kid/jku/jwk injection, redirect_uri & PKCE-downgrade builders, XSW1–8 — then send the mutated token through the repeater. The weak-secret crack is one gated job. |
 | ◎ **Nuclei template scan** | Scoped target(s) → templates → severity-ranked findings, one approval; results flow into engagement state. |
 | 🪟 **Windows / AD** | BloodHound graph → route to Domain Admin → walk it live over WinRM. |
 | 📄 **AD CS (ESC1–8)** | `certipy find` → certtemplate/certauthority nodes + synthesized `ESC1…ESC8` edges → a low-priv enrollee → vulnerable template → Domain Admin, routed in the same graph; the agent picks an edge, you approve every command. |
@@ -174,6 +175,18 @@ A full web surface behind the same gates: a **recording proxy** that captures tr
   <img src="assets/screenshots/24-intruder.png" alt="The intruder — payload positions and fuzzing under one approval" width="49%">
   <img src="assets/screenshots/26-exposure.png" alt="Browser interception — publish the proxy to a real Chrome" width="49%">
 </p>
+
+### Token workbench — JWT / OAuth / OIDC / SAML
+
+The token equivalent of the GraphQL panel, and it takes the same shape: a **pure** analysis/tamper core that recognises tokens **by shape, not path**, hands values back only where *you* typed them, and **sends nothing** — a mutated token goes to a real endpoint only through the human-approved, scope-checked **repeater**. Paste a **JWT** and it decodes header, claims and signature and flags the classic misconfigurations (`alg=none` accepted, missing `exp`, a crackable HMAC secret, an injectable `kid`/`jku`/`jwk`/`x5u`); pick a tamper and it produces the token to send — **`alg=none`** (with the case variants `none`/`None`/`nOnE` that catch a case-blind check), **RS256→HS256 confusion** signed with the server's public key as the HMAC secret, **`kid` injection** (path-traversal / SQLi / command), **`jwk`/`jku`/`x5u` header injection**, and **edit-any-claim then re-sign**. For **OAuth/OIDC**, parse an authorization request or callback and build the attacks — `redirect_uri` bypasses (reusing the open-redirect table), `state` drop (CSRF), **PKCE downgrade**, forced `response_mode`, implicit-flow leak. For **SAML**, parse a Response (base64, or base64+deflate, or raw XML), locate whether the assertion vs the response is signed, and emit **XML Signature Wrapping (XSW1–8)**, signature stripping, comment-injection and unsigned-assertion variants.
+
+A token HackPit spots in **captured traffic** is modelled **names/claims-only** — never a claim value or signature, because a JWT claim is routinely a secret — exactly the rule the GraphQL argument model follows. The one thing that runs, the **weak-secret crack** (`hashcat -m 16500` over a wordlist), is **one gated job** behind the same four gates: the token goes to a loot file (never the argv), a recovered secret goes to loot (never the finding) and lands a high finding, and the stop is ungated. **No new gate** anywhere — per-command human approval is the only bound. Available as a dedicated **`/tokens`** surface and mounted inside **`:proxy`**.
+
+<p align="center">
+  <img src="assets/screenshots/45-token-workbench.png" alt="The token workbench at /tokens — the JWT tab with a synthetic demo token decoded: header chips alg: HS256 / typ: JWT / kid: hackpit-demo-key, the claims sub/name/role/iss/iat/exp each on its own row, a signature preview, two MEDIUM verdicts (weak-secret-crackable — 'HS256 is symmetric, a weak signing secret is recoverable offline (hashcat -m 16500)'; kid-injectable — 'a kid header selects a key file/row server-side, a path-traversal/SQLi/command payload can pick an attacker-controlled key'), and the tamper controls below: an alg=none (strip signature) button with a none/None/nOnE variant select, RS256→HS256 confusion with a public-key PEM box, kid injection prefilled ../../dev/null, and jku header injection" width="80%">
+</p>
+
+> The screenshot uses a **synthetic, self-signed demo JWT** (`/tokens?demo=1`) — never a real user's token. A real captured token pastes into the same box; the mutated result copies straight into the repeater to send.
 
 ### Guided recon → ranked attack surface
 

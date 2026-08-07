@@ -2404,6 +2404,198 @@ export const graphQLScanPlan = (req: RepeaterRequest, signal?: AbortSignal) =>
   postJSON<GraphQLScanPlan>("/cockpit/proxy/graphql/scan-plan", req, signal);
 
 /* -------------------------------------------------------------------------- */
+/* TOKEN WORKBENCH — JWT / OAuth / OIDC / SAML (web core)                       */
+/*                                                                             */
+/* The analysis/tamper core is PURE and never sends: a tamper returns a NEW     */
+/* token STRING the operator sends via the repeater (approve-each). Decode      */
+/* carries the operator's OWN pasted token (values are theirs); detect carries  */
+/* a token FOUND in traffic and is value-free (names/claims, never a secret).   */
+/* The weak-secret crack is ONE gated job — no new gate.                        */
+/* -------------------------------------------------------------------------- */
+export type TokenVerdict = { id: string; severity: string; detail: string };
+
+export type DecodedToken = {
+  kind: string;
+  valid_structure: boolean;
+  header: Record<string, unknown>;
+  claims: Record<string, unknown>;
+  alg: string;
+  kid: string;
+  typ: string;
+  jku: string;
+  x5u: string;
+  jwk_present: boolean;
+  signature: string;
+  signing_input: string;
+  verdicts: TokenVerdict[];
+  note: string;
+};
+
+/** A token FOUND in captured traffic — NAMES and non-secret timing claims only. */
+export type TokenDetection = {
+  found: boolean;
+  kind: string;
+  where: string;
+  alg: string;
+  kid: string;
+  typ: string;
+  jku_present: boolean;
+  jwk_present: boolean;
+  x5u_present: boolean;
+  exp: number | null;
+  nbf: number | null;
+  iat: number | null;
+  claim_names: string[];
+  verdicts: TokenVerdict[];
+  note: string;
+};
+
+export type TamperResult = { token: string; kind: string; note: string; ok: boolean };
+
+export type OAuthRequest = {
+  endpoint: string;
+  client_id: string;
+  redirect_uri: string;
+  response_type: string;
+  response_mode: string;
+  scope: string;
+  state: string;
+  nonce: string;
+  code_challenge: string;
+  code_challenge_method: string;
+  has_pkce: boolean;
+  is_callback: boolean;
+  callback_params: string[];
+  other_params: string[];
+  verdicts: TokenVerdict[];
+  note: string;
+};
+
+export type OAuthBuild = { url: string; attack: string; note: string; ok: boolean };
+
+export type SAMLAnalysis = {
+  valid_xml: boolean;
+  issuer: string;
+  destination: string;
+  subject_name_id: string;
+  not_before: string;
+  not_on_or_after: string;
+  audience: string;
+  response_signed: boolean;
+  assertion_signed: boolean;
+  assertion_count: number;
+  was_deflated: boolean;
+  verdicts: TokenVerdict[];
+  xml: string;
+  note: string;
+};
+
+export type SAMLBuild = { saml: string; xml: string; attack: string; note: string; ok: boolean };
+
+export type JWTTamperRequest = {
+  token: string;
+  kind: string;
+  variant?: string;
+  public_key_pem?: string;
+  kid_payload?: string;
+  header_field?: string;
+  header_value?: string;
+  secret?: string;
+  alg?: string;
+  claims_json?: string;
+};
+
+export type TokenCrackRequest = {
+  token: string;
+  wordlist?: string;
+  rule?: string;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  approved?: boolean;
+  dangerous_ack?: boolean;
+};
+
+export type TokenCrackJob = {
+  id: string;
+  state: string;
+  argv: string[];
+  alg: string;
+  container: string;
+  engagement_id: string | null;
+  session_id: string | null;
+  started_at: string;
+  finished_at: string;
+  cracked: boolean;
+  secret_len: number;
+  new_findings: number;
+  loot_path: string;
+  output_tail: string;
+  warnings: string[];
+  refused: string;
+  refused_gate: string;
+};
+
+export type TokenCrackStatus = {
+  container: string;
+  up: boolean;
+  ready: boolean;
+  running: number;
+  detail: string;
+};
+
+export type TokenCrackPreview = {
+  argv: string[];
+  alg: string;
+  crackable: boolean;
+  gate: { gate: string; reason: string; dangerous_flags: string[] } | null;
+};
+
+export const decodeToken = (token: string, signal?: AbortSignal) =>
+  postJSON<DecodedToken>("/cockpit/tokens/decode", { token }, signal);
+
+export const detectToken = (
+  req: { method?: string; url?: string; headers?: RepeaterHeader[]; body?: string },
+  signal?: AbortSignal
+) => postJSON<TokenDetection>("/cockpit/tokens/detect", req, signal);
+
+export const tamperJWT = (req: JWTTamperRequest, signal?: AbortSignal) =>
+  postJSON<TamperResult>("/cockpit/tokens/jwt/tamper", req, signal);
+
+export const parseOAuth = (url: string, signal?: AbortSignal) =>
+  postJSON<OAuthRequest>("/cockpit/tokens/oauth/parse", { url }, signal);
+
+export const buildOAuthAttack = (
+  req: { url: string; attack: string; evil_host?: string; response_mode?: string },
+  signal?: AbortSignal
+) => postJSON<OAuthBuild>("/cockpit/tokens/oauth/build", req, signal);
+
+export const parseSAML = (blob: string, signal?: AbortSignal) =>
+  postJSON<SAMLAnalysis>("/cockpit/tokens/saml/parse", { blob }, signal);
+
+export const buildSAMLAttack = (
+  req: { blob: string; attack: string; new_name_id?: string },
+  signal?: AbortSignal
+) => postJSON<SAMLBuild>("/cockpit/tokens/saml/build", req, signal);
+
+export const getTokenCrackStatus = (signal?: AbortSignal) =>
+  getJSON<TokenCrackStatus>("/cockpit/tokens/crack/status", signal);
+
+export const tokenCrackPreview = (req: TokenCrackRequest, signal?: AbortSignal) =>
+  postJSON<TokenCrackPreview>("/cockpit/tokens/crack/preview", req, signal);
+
+export const startTokenCrack = (req: TokenCrackRequest, signal?: AbortSignal) =>
+  postJSON<TokenCrackJob>("/cockpit/tokens/crack", req, signal);
+
+export const listTokenCrackJobs = (sessionId?: string, signal?: AbortSignal) =>
+  getJSON<TokenCrackJob[]>(
+    `/cockpit/tokens/crack/jobs${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,
+    signal
+  );
+
+export const stopTokenCrackJob = (jobId: string, signal?: AbortSignal) =>
+  delJSON<TokenCrackJob>(`/cockpit/tokens/crack/jobs/${encodeURIComponent(jobId)}`, signal);
+
+/* -------------------------------------------------------------------------- */
 /* FIELD-SUGGESTION ENUMERATION (build #21)                                    */
 /*                                                                             */
 /* When introspection is OFF, many servers still answer a wrong field name     */

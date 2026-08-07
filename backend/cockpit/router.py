@@ -60,6 +60,8 @@ from . import proposals as proposals_mod
 from . import redirector as redirector_mod
 from . import session as live_session
 from . import session_engine as session_engine_mod
+from . import tokens as tokens_mod
+from . import tokenjobs as tokenjobs_mod
 from . import kali as kali_mod
 from . import repeater as repeater_mod
 from . import terminal as terminal_mod
@@ -864,6 +866,213 @@ def graphql_detect(req: GraphQLDetectRequest) -> graphql_mod.GraphQLDetection:
     invents fake ones.
     """
     return graphql_mod.detect(req.method, req.url, req.headers, req.body)
+
+
+# --- TOKEN WORKBENCH (JWT / OAuth / OIDC / SAML) ------------------------------------ #
+# THE ANALYSIS/TAMPER CORE NEVER SENDS ANYTHING. Every route below is a pure transform over a
+# token or flow the operator pasted — none reaches `repeater_mod.send`, so the repeater stays
+# HUMAN-ONLY and `test_repeater.py`'s lock is untouched. A mutated token is handed BACK to the
+# operator, who sends it via the repeater (approve-each, scope-checked on the wire). The one
+# thing that runs — the weak-secret crack — is ONE gated job (below), gated by the same four
+# gates, exactly like the credential crack. THIS BUILD ADDS NO NEW GATE.
+class TokenDecodeRequest(BaseModel):
+    token: str = Field("", description="A JWT the operator pasted, to decode in full (values are "
+                       "theirs — the box they typed, exactly like the repeater body).")
+
+
+class TokenDetectRequest(BaseModel):
+    """*** EVERY FIELD OPTIONAL, LIKE THE GRAPHQL DETECT REQUEST. *** An operator pastes a header
+    or a captured body before a URL exists; detection needs none of it to be present."""
+
+    method: str = Field("GET", description="Only used to shape where a token is looked for.")
+    url: str = Field("", description="Optional — scanned for a token in the query string.")
+    headers: list[repeater_mod.RepeaterHeader] = Field(default_factory=list)
+    body: str = ""
+
+
+class JWTTamperRequest(BaseModel):
+    token: str = Field(..., min_length=1, description="The token to mutate.")
+    kind: str = Field(..., description="alg-none | alg-confusion | kid | header | resign | edit")
+    variant: str = Field("none", description="alg-none: none|None|nOnE|NONE.")
+    public_key_pem: str = Field("", description="alg-confusion: the server's PUBLIC key (PEM).")
+    kid_payload: str = Field("", description="kid: the injection payload (../../dev/null, SQLi…).")
+    header_field: str = Field("", description="header: jwk | jku | x5u.")
+    header_value: str = Field("", description="header: the URL or embedded key.")
+    secret: str = Field("", description="resign/edit/kid/header: HMAC secret (blank = empty key).")
+    alg: str = Field("", description="resign/edit: HS256|HS384|HS512|none.")
+    claims_json: str = Field("", description="edit: the new claims object, as JSON.")
+
+
+class OAuthParseRequest(BaseModel):
+    url: str = Field("", description="The authorize URL or its query string (or a callback).")
+
+
+class OAuthBuildRequest(BaseModel):
+    url: str = Field(..., min_length=1, description="The authorize URL/query to mutate.")
+    attack: str = Field(..., description="redirect_uri|drop_state|pkce_downgrade|response_mode|"
+                        "implicit_leak")
+    evil_host: str = Field("evil.example", description="Attacker origin for redirect_uri bypasses.")
+    response_mode: str = Field("form_post", description="response_mode attack target.")
+
+
+class SAMLParseRequest(BaseModel):
+    blob: str = Field("", description="A SAML Response/Assertion: base64[+deflate] or raw XML.")
+
+
+class SAMLBuildRequest(BaseModel):
+    blob: str = Field(..., min_length=1, description="The SAML Response to mutate.")
+    attack: str = Field(..., description="xsw1..xsw8 | strip | comment | unsigned")
+    new_name_id: str = Field("admin@target", description="The identity to forge into the assertion.")
+
+
+@router.post("/tokens/decode", response_model=tokens_mod.DecodedToken)
+def tokens_decode(req: TokenDecodeRequest) -> tokens_mod.DecodedToken:
+    """Decode a pasted JWT — full header + claims + signature, plus the classic-misconfig verdicts.
+
+    This is the operator's OWN token in a box they typed, so values are shown in full, exactly the
+    position the repeater body sits in. The value-free model is `/tokens/detect`, for a token found
+    in captured traffic.
+    """
+    return tokens_mod.decode_jwt(req.token)
+
+
+@router.post("/tokens/detect", response_model=tokens_mod.TokenDetection)
+def tokens_detect(req: TokenDetectRequest) -> tokens_mod.TokenDetection:
+    """Find a JWT in a request BY SHAPE — Authorization/Cookie/query/body — and report it WITHOUT
+    its claim values or signature. A JWT claim is routinely a secret; this model carries the
+    header params and claim NAMES an operator attacks, never the values, exactly as the GraphQL
+    detection model carries argument names and never argument values.
+    """
+    return tokens_mod.detect(req.method, req.url, req.headers, req.body)
+
+
+@router.post("/tokens/jwt/tamper", response_model=tokens_mod.TamperResult)
+def tokens_jwt_tamper(req: JWTTamperRequest) -> tokens_mod.TamperResult:
+    """Produce a mutated JWT for the operator to SEND via the repeater. Composes; sends nothing.
+
+    A tamper that cannot be built (missing PEM for confusion, bad claims JSON for edit) comes back
+    `ok=false` with a note rather than a token nobody wrote — the same rule the GraphQL composer
+    follows: nothing is silently guessed at.
+    """
+    decoded = tokens_mod.decode_jwt(req.token)
+    kind = (req.kind or "").strip().lower()
+    if kind == "alg-none":
+        return tokens_mod.tamper_alg_none(decoded, req.variant or "none")
+    if kind == "alg-confusion":
+        return tokens_mod.tamper_alg_confusion(decoded, req.public_key_pem)
+    if kind == "kid":
+        return tokens_mod.tamper_kid_injection(decoded, req.kid_payload, req.secret)
+    if kind == "header":
+        return tokens_mod.tamper_header_injection(decoded, req.header_field, req.header_value,
+                                                  req.secret)
+    if kind == "resign":
+        return tokens_mod.resign_hs(decoded, req.secret, req.alg)
+    if kind == "edit":
+        return tokens_mod.edit_and_resign(req.token, req.claims_json, req.secret, req.alg)
+    return tokens_mod.TamperResult(kind=kind, note="unknown tamper — one of alg-none, "
+                                   "alg-confusion, kid, header, resign, edit")
+
+
+@router.post("/tokens/oauth/parse", response_model=tokens_mod.OAuthRequest)
+def tokens_oauth_parse(req: OAuthParseRequest) -> tokens_mod.OAuthRequest:
+    """Parse an OAuth/OIDC authorization request or callback into its parameters + verdicts."""
+    return tokens_mod.parse_oauth(req.url)
+
+
+@router.post("/tokens/oauth/build", response_model=tokens_mod.OAuthBuild)
+def tokens_oauth_build(req: OAuthBuildRequest) -> tokens_mod.OAuthBuild:
+    """Build one OAuth attack request (redirect_uri bypasses, drop-state, PKCE downgrade, …) for
+    the repeater. Composes the mutated URL; sends nothing."""
+    return tokens_mod.build_oauth_attack(
+        tokens_mod.parse_oauth(req.url), req.attack, req.evil_host, req.response_mode)
+
+
+@router.post("/tokens/saml/parse", response_model=tokens_mod.SAMLAnalysis)
+def tokens_saml_parse(req: SAMLParseRequest) -> tokens_mod.SAMLAnalysis:
+    """Parse a SAML Response/Assertion (base64[+deflate] or raw XML) — issuer, conditions, WHERE
+    the signature is, and whether the assertion vs the response is signed."""
+    return tokens_mod.parse_saml(req.blob)
+
+
+@router.post("/tokens/saml/build", response_model=tokens_mod.SAMLBuild)
+def tokens_saml_build(req: SAMLBuildRequest) -> tokens_mod.SAMLBuild:
+    """Build one SAML attack (XSW1–8, signature strip, comment-injection, unsigned assertion) as a
+    mutated SAMLResponse for the repeater. Composes; sends nothing."""
+    return tokens_mod.build_saml_attack(req.blob, req.attack, req.new_name_id)
+
+
+# --- JWT weak-secret CRACK (the one gated job — mirrors the credential crack) -------- #
+def _token_crack_refusal(exc: tokenjobs_mod.TokenCrackRefused):
+    """One refusal shape: 403 for a SAFETY gate, 409 for AVAILABILITY/input."""
+    code = 409 if exc.gate in {"unavailable", "engagement", "loot", "input"} else 403
+    raise HTTPException(status_code=code, detail={
+        "gate": exc.gate, "reason": exc.reason, "dangerous_flags": exc.dangerous_flags,
+    })
+
+
+@router.get("/tokens/crack/status")
+def get_token_crack_status() -> dict[str, Any]:
+    """Engagement-sandbox availability + running-job count — the UI banner. Read-only."""
+    return tokenjobs_mod.status()
+
+
+@router.post("/tokens/crack/preview")
+def token_crack_preview(req: tokenjobs_mod.TokenCrackRequest) -> dict[str, Any]:
+    """The EXACT hashcat argv and the gate verdict, without running anything. Same functions the
+    start path uses, so the preview cannot drift from the run."""
+    decoded = tokens_mod.decode_jwt(req.token)
+    verdict = tokenjobs_mod.validate(req)
+    sid = (req.session_id or req.engagement_id or "session").strip() or "session"
+    return {
+        "argv": tokenjobs_mod.crack_argv(req, token_path=f"/loot/{sid}/token.jwt"),
+        "alg": decoded.alg,
+        "crackable": decoded.alg.lower().startswith("hs"),
+        "gate": None if verdict is None else {
+            "gate": verdict.gate, "reason": verdict.reason,
+            "dangerous_flags": list(verdict.dangerous_flags or []),
+        },
+    }
+
+
+@router.post("/tokens/crack", response_model=tokenjobs_mod.TokenCrackJob)
+def start_token_crack(req: tokenjobs_mod.TokenCrackRequest) -> tokenjobs_mod.TokenCrackJob:
+    """Crack a JWT's weak HMAC secret with a wordlist as ONE approved job. GATED, then it runs.
+
+    `executor.validate_request` runs against the equivalent `hashcat -m 16500 …` BEFORE anything
+    spawns, so an unapproved or off-scope job runs nothing. The token goes to a loot file (never
+    the argv); a recovered secret goes to loot (never the finding) and lands a high finding in
+    engagement state. The stop button (DELETE below) is the ungated panic switch.
+
+    A SAFETY refusal is **403** naming the gate; an availability/input problem is **409**.
+    """
+    try:
+        return tokenjobs_mod.start_crack(req)
+    except tokenjobs_mod.TokenCrackRefused as exc:
+        _token_crack_refusal(exc)
+
+
+@router.get("/tokens/crack/jobs", response_model=list[tokenjobs_mod.TokenCrackJob])
+def list_token_crack_jobs(session_id: str | None = Query(None)) -> list[tokenjobs_mod.TokenCrackJob]:
+    """Every JWT-crack job, newest first. Read-only, ungated — the results feed polls this."""
+    return tokenjobs_mod.list_jobs(session_id)
+
+
+@router.get("/tokens/crack/jobs/{job_id}", response_model=tokenjobs_mod.TokenCrackJob)
+def get_token_crack_job(job_id: str) -> tokenjobs_mod.TokenCrackJob:
+    """One crack job. Read-only, ungated. The recovered secret is in loot, not in this record."""
+    job = tokenjobs_mod.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no token-crack job {job_id!r}"})
+    return job
+
+
+@router.delete("/tokens/crack/jobs/{job_id}", response_model=tokenjobs_mod.TokenCrackJob)
+def stop_token_crack_job(job_id: str) -> tokenjobs_mod.TokenCrackJob:
+    """Stop an in-flight crack. NOT GATED — the panic button, exactly like `stop_scan`."""
+    job = tokenjobs_mod.stop(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no token-crack job {job_id!r}"})
+    return job
 
 
 @router.get("/repeater/cookies", response_model=list[cookiejar_mod.CookieAttachment])

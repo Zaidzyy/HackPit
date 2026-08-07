@@ -9260,6 +9260,31 @@ button.hp-tn-start:disabled, button.hp-tn-destroy:disabled { opacity: 0.45; curs
 .hp-gql-fieldtype { color: var(--dim); }
 
 /* ========================================================================== *
+ * TOKEN WORKBENCH (:tokens + the :proxy panel) — JWT / OAuth / SAML. Reuses
+ * the .hp-tn-* card/form vocabulary and the .hp-gql-* status chips + field
+ * rows; only the tab bar, the mutated-token output box and the crack subpanel
+ * are token-specific (hp-tk-*).
+ * ========================================================================== */
+.hp-tk { display: flex; flex-direction: column; gap: 4px; }
+.hp-tk-tabs { display: flex; gap: 8px; margin: 12px 0; }
+.hp-tk-tab {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12px; letter-spacing: 0.05em;
+  padding: 6px 14px; border-radius: 7px; cursor: pointer;
+  color: var(--dim); border: 1px solid var(--border); background: rgba(0,0,0,0.3);
+}
+.hp-tk-tab:hover { color: var(--white); border-color: var(--accent-line); }
+.hp-tk-tab.is-active {
+  color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft);
+}
+.hp-tk-out {
+  margin-top: 12px; padding: 12px; border-radius: 8px;
+  border: 1px solid var(--accent-line); background: var(--accent-soft);
+}
+.hp-tk-crack {
+  margin-top: 20px; padding-top: 16px; border-top: 1px dashed var(--border);
+}
+
+/* ========================================================================== *
  * FINDING PIPELINE panel (/engagements) — dynamic schema · dedup · rankers ·
  * post-scripts. Reuses the codescan severity chips (.hp-cs-sev-*) and the base
  * .hp-chip / .hp-badge vocabulary; everything panel-specific is hp-fp-*.

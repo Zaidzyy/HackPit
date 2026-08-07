@@ -1,6 +1,6 @@
 # Build spec — AI-agent code-audit fan-out (`codescan` upgrade)
 
-**Status:** ready to execute in a fresh session. **Author:** planning session, 2026-08-07.
+**Status:** BUILT 2026-08-07 — `codescan/ai_audit.py` (three-stage fan-out reusing `reasoning/`), heuristic-analyst degradation + bundled sample repo, `patched-since` (injected diff provider), engagement-state sink (injected), `/code-scan` AI mode. Tests `test_ai_audit.py` + `test_ai_audit_safety.py` green in `run_safety_tests.sh` (108 files); `next build` exit 0; screenshot `assets/screenshots/38-code-scan-ai-audit.png`. **Author:** planning session, 2026-08-07.
 **One line:** upgrade `codescan` from rule/semgrep-only to an **AI-agent audit** that uses open·kritt's context-saving decomposition — **map entrypoints/flows once, hand each downstream agent exactly ONE flow to verify against source, each returning a concrete vuln-with-attacker-path or a no-finding stub** — then dedup + severity-rank into engagement findings. Ports the good parts of open·kritt's engine (which the operator owns; license is a non-issue) onto HackPit's `reasoning/` specialist substrate, **human-gated**.
 
 ---

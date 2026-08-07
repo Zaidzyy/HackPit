@@ -148,6 +148,10 @@ run_test test_codescan_safety.py ":code scan SAFETY invariants (static-only / or
 
 run_test test_codescan_rules.py ":code scan bundled rules + ruleset picker (multi-language coverage / resolver)"
 
+run_test test_ai_audit.py "AI code-audit fan-out (enumerate -> flows -> per-flow verify composes / a non-concrete claim is DOWNRANKED to a stub, never a finding / dedup collapses the same bug found via two flows / ranking is IMPACT_LEVELS worst-first / informational maps to state 'info' / patched-since audits ONLY the diff and an empty diff scans nothing and warns / the deterministic heuristic analyst maps 6 sample routes to 6 enclosing-route findings)"
+
+run_test test_ai_audit_safety.py "AI code-audit SAFETY (§0: THE PROPOSER EXECUTES NOTHING -- ai_audit + routes make no eval/exec/subprocess/socket/HTTP call by AST, WITH A CONTROL that plants one / it reads source + calls the injected LLM agent, power from reading not running / NO NEW GATE: codescan imports no cockpit/executor/state and references no gate symbol, and the only launchable program is still runner._spawn's semgrep/bandit, exactly once / PoC IS DATA, approve-each, never auto-run / patched-since diff is INJECTED so codescan runs no git itself / persistence is an INJECTED sink so the engine imports no state / rule-mode scan unchanged)"
+
 run_test test_arsenal.py "tool arsenal tests (catalog / lookup / target-faithful render / provenance tags)"
 
 run_test test_arsenal_safety.py "tool arsenal SAFETY invariants (executes nothing / NO gate bypassed / gates unchanged)"

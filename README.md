@@ -64,6 +64,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | 🛡️ **Purple-team view** | The defender's-eye footprint of every command, with an honest OPSEC channel. |
 | 📝 **Grounded reports** | OSCP/CPTS/H1 templates, evidence spliced from real state, CVSS computed not asserted. |
 | 🧰 **Arsenal · exploits · SAST** | 123-tool catalog, a 47k-exploit CVE index, and an 8-language code scanner. |
+| 🔬 **AI code-audit fan-out** | Point it at a repo → an agent maps the entrypoints & flows **once**, then verifies **one flow per agent** against source → deduped, severity-ranked findings, each with an attacker path + a propose-only PoC. `patched-since` audits only a git diff; one approved job, no new gate. |
 | 🔌 **MCP server** | 15 read-only tools so another AI agent can *see* your engagement — eyes, not hands. |
 
 ---
@@ -294,6 +295,16 @@ An opt-in **OPSEC channel** gives the operator's honest counterpart — why a co
   <img src="assets/screenshots/16-arsenal.png" alt="The tool arsenal — 121 tools with purpose, phase, and availability" width="32%">
   <img src="assets/screenshots/20-exploits.png" alt="The exploit index — service+version to CVE to public exploit" width="32%">
   <img src="assets/screenshots/19-code-scan.png" alt="Code scan — an 8-language SAST bundle, offline-first" width="32%">
+</p>
+
+### 🔬 AI code-audit fan-out
+
+The rule scan pattern-matches file-by-file; the **AI audit** is the other half. Borrowing the context-saving decomposition from open·kritt, it **maps the repo's externally-reachable entrypoints and their flows once**, then hands each downstream agent **exactly one flow** to verify against source — so every agent spends its whole context on a single path and returns a **concrete vuln-with-attacker-path** (RCE, authz bypass, injection, SSRF, loss-of-funds) or an **honest no-finding stub**. Non-concrete claims are downranked to stubs, the rest are **deduped and severity-ranked** (`IMPACT_LEVELS`) into engagement findings with source refs. Each specialist is **KB-grounded**, and `patched-since` restricts the whole audit to a git diff — turning a huge repo into a reviewable delta.
+
+It is HackPit-gated the whole way: the audit **reads source and proposes** — it runs no scanner against a target and executes nothing — so it is **one approved job, no new gate** (the ZAP / nuclei justification, one approval buys the whole fan-out). Any PoC a finding offers is a **string to run approve-each** through the existing executor in the :kali sandbox, never auto-run. When no LLM is reachable it degrades to a deterministic heuristic analyst that runs the same three stages, which is what the shot below shows on a bundled synthetic sample repo.
+
+<p align="center">
+  <img src="assets/screenshots/38-code-scan-ai-audit.png" alt="The AI code-audit fan-out — a synthetic sample repo maps 6 HTTP-route entrypoints once, fans out one agent per flow, and returns 6 deduped, severity-ranked findings (2 critical / 4 high): code-injection in /calc, OS command injection in /ping, auth bypass in /admin — each with an attacker path, source file:line, KB-grounded technique links, and an approve-each Build-PoC button" width="80%">
 </p>
 
 ---

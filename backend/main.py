@@ -91,6 +91,8 @@ from detection.router import (  # noqa: E402  (backend/detection — purple-team
 from codescan.router import (  # noqa: E402  (backend/codescan — STATIC AppSec analysis)
     router as codescan_router,
     set_kb as set_codescan_kb,
+    set_findings_sink as set_codescan_findings_sink,
+    set_diff_provider as set_codescan_diff_provider,
 )
 from arsenal import loader as arsenal_loader  # noqa: E402  (backend/arsenal — tool catalog)
 from arsenal.router import (  # noqa: E402
@@ -357,6 +359,12 @@ async def lifespan(app: FastAPI):
         attack_path.is_step_eligible,
         lambda e: not attack_path.is_broad_reference(e),
     )
+    # :code scan AI audit — the two cross-cutting seams codescan cannot own itself (it stays
+    # orthogonal to state and runs no subprocess of its own). The sink lands ranked audit findings
+    # in engagement state; the diff provider backs 'patched-since'. Both are plain callbacks, so
+    # codescan gains no import of state / git — the capability arrives as data, like the KB above.
+    set_codescan_findings_sink(_persist_codescan_findings)
+    set_codescan_diff_provider(_git_changed_since)
     # Tool arsenal — load the catalog once and resolve its KB links against the live KB, so
     # a step's arsenal tag can point at the entry that documents that tool. Best-effort: a
     # catalog problem leaves an empty arsenal and composition behaves as it did before.
@@ -380,6 +388,8 @@ async def lifespan(app: FastAPI):
     oob_autopoll.start(app)
     yield
     set_codescan_kb(None, None, None, None)
+    set_codescan_findings_sink(None)
+    set_codescan_diff_provider(None)
     STATE.entries = []
     STATE.by_id = {}
     STATE.by_category = {}
@@ -435,6 +445,61 @@ app.include_router(exploits_router)
 # goes through the cockpit executor host-locked to the configured VPS — it is passed no
 # destination, because it has no parameter for one.
 app.include_router(oob_router)
+
+
+# --------------------------------------------------------------------------- #
+# :code scan AI-audit seams — the two capabilities codescan cannot own (it is
+# orthogonal to state and runs no subprocess). Injected via set_findings_sink /
+# set_diff_provider so the coupling lives HERE, in the app layer, not in codescan.
+# --------------------------------------------------------------------------- #
+def _persist_codescan_findings(session_id: str, items: list[dict]) -> int:
+    """Upsert AI-audit findings into engagement state. codescan hands plain dicts; this builds the
+    Finding records and writes them, so codescan never imports state (orthogonality)."""
+    from state.models import Finding
+
+    records = [
+        Finding(
+            session_id=session_id,
+            title=str(it.get("title") or "")[:300],
+            severity=str(it.get("severity") or "info"),
+            target=str(it.get("target") or ""),
+            evidence=str(it.get("evidence") or ""),
+            tool=str(it.get("tool") or "ai-audit"),
+            reference=str(it.get("reference") or ""),
+            source_run_id=it.get("source_run_id"),
+        )
+        for it in items
+        if str(it.get("title") or "").strip()
+    ]
+    return state_store.upsert_findings(records)
+
+
+def _git_changed_since(root: Path, ref: str) -> set | None:
+    """Repo-relative paths changed since a git ref (the 'patched-since' scope). Read-only: it runs
+    `git diff --name-only` in the repo and never touches the working tree. Returns None when the
+    path is not a git repo or git is unavailable — the audit then degrades to a full pass."""
+    import re
+    import subprocess  # local: a read-only git query, kept out of codescan by design
+
+    ref = (ref or "").strip()
+    if not ref or not re.match(r"^[\w./@^~-]{1,120}$", ref):
+        return None
+    try:
+        proc = subprocess.run(  # noqa: S603 - argv list, shell=False, ref validated above
+            ["git", "-C", str(root), "diff", "--name-only", f"{ref}...", "--"],
+            capture_output=True, text=True, timeout=30, shell=False,
+        )
+        if proc.returncode != 0:
+            # fall back to a two-dot diff (ref may not share history for a three-dot merge base)
+            proc = subprocess.run(  # noqa: S603
+                ["git", "-C", str(root), "diff", "--name-only", ref, "--"],
+                capture_output=True, text=True, timeout=30, shell=False,
+            )
+        if proc.returncode != 0:
+            return None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return {line.strip().replace("\\", "/") for line in proc.stdout.splitlines() if line.strip()}
 
 
 # --------------------------------------------------------------------------- #

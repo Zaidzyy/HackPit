@@ -4596,6 +4596,97 @@ export type CodeScanReport = { markdown: string; filename: string };
 export const renderCodeScanReport = (result: CodeScanResult, signal?: AbortSignal) =>
   postJSON<CodeScanReport>("/codescan/report", result, signal);
 
+// ---- AI-agent code audit (the context-saving fan-out) --------------------- //
+/** IMPACT_LEVELS — open·kritt's severity vocabulary the audit ranks by. */
+export type AuditSeverity =
+  | "critical"
+  | "high"
+  | "medium"
+  | "low"
+  | "informational";
+
+export type AuditEntrypoint = {
+  id: string;
+  name: string;
+  file: string;
+  kind: string;
+  note: string;
+};
+
+export type AuditFlow = {
+  id: string;
+  entrypoint_id: string;
+  title: string;
+  file: string;
+  note: string;
+};
+
+export type AuditVerdict = {
+  flow_id: string;
+  /** true = a concrete finding; false = an honest no-finding stub. */
+  finding: boolean;
+  title: string;
+  vuln_class: string;
+  severity: AuditSeverity;
+  attacker_path: string;
+  source_refs: string[];
+  impact: string;
+  confidence: string;
+  cwe: string | null;
+  /** A propose-only PoC command — run approve-each through the executor, never from here. */
+  poc: string;
+  kb_refs: { id: string; title: string }[];
+  reason: string;
+};
+
+/** A deduped, severity-ranked concrete finding (verdict minus the stub bookkeeping). */
+export type AuditFinding = Omit<AuditVerdict, "flow_id" | "finding" | "reason">;
+
+export type AuditResult = {
+  repo: string;
+  playbook: string;
+  /** "ai" (LLM agents) | "heuristic" (deterministic, no LLM). */
+  mode: "ai" | "heuristic";
+  patched_since: string | null;
+  changed_only: boolean;
+  duration_s: number;
+  files_scanned: number;
+  grounded: boolean;
+  entrypoints: AuditEntrypoint[];
+  flows: AuditFlow[];
+  verdicts: AuditVerdict[];
+  findings: AuditFinding[];
+  summary: {
+    entrypoints: number;
+    flows: number;
+    verified: number;
+    stubs: number;
+    findings: number;
+    by_severity: Record<string, number>;
+  };
+  warnings: string[];
+  static_only: boolean;
+  /** Present (and true) only on the bundled-sample demo audit. */
+  is_sample?: boolean;
+  /** Findings written to engagement state (0 when no session was named). */
+  persisted?: number;
+};
+
+export const runCodeAudit = (
+  payload: {
+    path: string;
+    patched_since?: string | null;
+    playbook?: string;
+    session_id?: string | null;
+    mode?: "auto" | "ai" | "heuristic";
+  },
+  signal?: AbortSignal
+) => postJSON<AuditResult>("/codescan/ai-audit", payload, signal);
+
+/** The deterministic demo audit of the bundled synthetic sample repo. */
+export const getCodeAuditSample = (signal?: AbortSignal) =>
+  getJSON<AuditResult>("/codescan/ai-audit/sample", signal);
+
 // ---- tool arsenal (curated catalog + invocation templates) ---------------- //
 //
 // Read-only catalog. A template is a STRING to copy; it becomes a command only by

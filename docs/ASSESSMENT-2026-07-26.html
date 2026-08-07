@@ -450,6 +450,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#cloud-attack-surface-iam-privesc-graph-the-cloud-parallel-to-bloodhound-cloud-graph-2026-08-06">Cloud attack surface &amp; IAM privesc graph — the cloud parallel to BloodHound (:cloud-graph) (2026-08-06)</a></li>
 <li><a href="#ad-cs-esc18-routed-in-the-graph-the-ad-parallel-to-dcsync-synthesis-ad-graph-2026-08-07">AD CS ESC1–8 routed in the graph — the AD parallel to DCSync synthesis (:ad-graph) (2026-08-07)</a></li>
 <li><a href="#unconstrained-delegation-edge-goldensilver-ticket-forging-the-delegation-family-closer-ad-graph-2026-08-07">Unconstrained delegation edge + golden/silver ticket forging — the delegation-family closer (:ad-graph) (2026-08-07)</a></li>
+<li><a href="#ai-code-audit-fan-out-openkritts-decomposition-hackpit-gated-code-scan-ai-mode-2026-08-07">AI code-audit fan-out — open·kritt's decomposition, HackPit-gated (:code-scan AI mode) (2026-08-07)</a></li>
 </ul>
 </li>
 </ul>
@@ -699,6 +700,7 @@ a { color: var(--accent); text-decoration: none; }
 <p><strong>CRTP conflict — now reconciled (Phase 4, D10).</strong> CRTP includes AMSI/logging evasion, which the panel used to refuse outright. It now has an <strong>additive second channel</strong>: the blue-team detection view is byte-for-byte unchanged and still passes the never-prescribe guard, and a separate, opt-in <code>opsec</code> channel adds the offensive half — what makes a command loud, the quieter tradecraft, and, mandatorily, <em>what still records it</em>. The OPSEC channel has its own guard (it may never advise disabling/clearing/tampering with a sensor); the LLM may extend it for uncatalogued commands, marked <code>ai_suggested</code>. See Part III, Phase 4.</p>
 <h3 id="code-scan-sast">Code scan (SAST)</h3>
 <p><strong>Well-built and genuinely safe.</strong> Static-only invariant asserted at every <code>_spawn()</code> and again by <code>test_codescan_safety.py</code>. Deliberately orthogonal — imports nothing from the engagement/executor/scope model. <strong>Limits — now widened (post-assessment):</strong> the offline bundle grew from 19 rules (Python/JS/TS) to <strong>34 across 8 languages</strong> — Java/Go/PHP/Ruby/C# added (<code>rules/hackpit-languages.yaml</code>: command injection, SQLi, unsafe deserialization, code-eval, file-inclusion, SSRF), plus a <strong>ruleset picker</strong> (bundled / per-language / a registry pack for the full online catalogue). Still offline-first. See "Post-assessment refinements".</p>
+<p><strong>AI code-audit fan-out (New, 2026-08-07).</strong> A second mode alongside the rule scan (<code>codescan/ai_audit.py</code>), porting open·kritt's context-saving decomposition onto the <code>reasoning/</code> substrate: <strong>map the repo's externally-reachable entrypoints and their flows once, then hand each downstream agent exactly one flow to verify against source</strong> — a concrete vuln-with-attacker-path or an honest no-finding stub — then dedup + severity-rank by <code>IMPACT_LEVELS</code>. A non-concrete claim is downranked to a stub by the concrete-or-stub gate; specialists are KB-grounded (<code>reasoning.retrieval</code>), the verify step is model-tiered (<code>reasoning.tiering</code>), and <code>patched-since</code> restricts the whole audit to a git diff. <strong>No new gate</strong> — the proposer reads source and calls the LLM layer, it <strong>executes nothing</strong> (AST-locked in <code>test_ai_audit_safety.py</code>): it is one approved job (the ZAP/nuclei justification), any PoC a finding offers is a <strong>string to run approve-each</strong> through the existing executor, and the diff provider + engagement-state sink are <strong>injected from <code>main.py</code></strong> so codescan stays orthogonal (no <code>state</code>/git import of its own). Degrades to a deterministic heuristic analyst when no LLM is reachable. See the dated section below.</p>
 <h3 id="frontend">Frontend</h3>
 <p>16 routes, real API wiring throughout, SSE streaming, no mocked data layer (<code>cockpitSample.ts</code> is the only sample content, explicitly labelled). New in Phases 1–3: the arsenal availability band, per-run time-budget + detach controls, the engagement-state/task-tree panel, the credential-vault "use" action, and the persistent <code>:kali</code> shell UI. <strong>Gaps:</strong> no global current-target/engagement context, no engagement export/import, no multi-target view, and the accepted 10-error <code>react-hooks</code> lint baseline (documented; <code>next build</code> passes exit 0).</p>
 <hr />
@@ -5589,5 +5591,57 @@ are persistence, explicitly not routing edges, because a route-to-DA graph shoul
 persistence. Coercion tooling (petitpotam/printerbug/coercer/dfscoerce/shadowcoerce) was already gated in
 <code>allowlist.py</code>; no allowlist policy change beyond classifying <code>Rubeus monitor</code> and <code>SpoolSample</code>. No new tools —
 mimikatz, Rubeus, impacket (<code>ticketer</code>), printerbug and PetitPotam are all already present.</p>
+<hr />
+<h2 id="ai-code-audit-fan-out-openkritts-decomposition-hackpit-gated-code-scan-ai-mode-2026-08-07">AI code-audit fan-out — open·kritt's decomposition, HackPit-gated (<code>:code-scan</code> AI mode) (2026-08-07)</h2>
+<p>The rule scan pattern-matches file-by-file; it cannot reason about whether an attacker-controlled value actually
+reaches a dangerous sink. This build adds the other half: an <strong>AI-agent audit</strong> that borrows open·kritt's
+context-saving decomposition (the engine the operator owns — the good parts ported, the autonomous-root model left
+behind) and runs it on HackPit's <code>reasoning/</code> substrate, <strong>human-gated the whole way</strong>.</p>
+<p><strong>The three-stage decomposition (<code>codescan/ai_audit.py</code>).</strong> (1) <strong>Enumerate entrypoints</strong> — one pass over the repo's
+file listing + a few entry files maps the externally-reachable entrypoints (HTTP routes, RPC/GraphQL handlers,
+consumers, CLI). (2) <strong>Trace flows</strong> — per entrypoint, the materially-different production paths (validation outcomes,
+authz boundaries, state changes, external calls, sensitive sinks). (3) <strong>Verify each flow</strong> — the fan-out: <strong>one agent,
+one flow</strong>, its whole context spent on a single path, returning either a concrete vuln (title, attacker path,
+<code>file:line</code> source refs, impact, a propose-only PoC) <strong>or an honest no-finding stub</strong>. Mapping once is the whole point:
+context cost is linear in the number of flows, and findings come back attacker-path-backed rather than repo-wide
+hand-waving. The concrete-or-stub gate (<code>gate_finding</code>) downranks any claimed finding that lacks a concrete source
+location to a stub — the critic a source audit actually needs (<code>reasoning.critic</code>'s CVE-vs-observed-version check does
+not apply to a source read, so a thin gate replaces it; stated per spec §5). Findings are then <strong>deduped</strong> (same bug
+found via more than one flow collapses) and <strong>severity-ranked</strong> by open·kritt's <code>IMPACT_LEVELS</code>.</p>
+<p><strong>Reuses the substrate, not a new engine.</strong> Domain framing comes from <code>reasoning.specialists</code>; KB grounding from the
+injected KB search (<code>reasoning.retrieval</code> in spirit — each specialist grounded in the fingerprint/CVE/methodology
+corpus, the edge HackPit has and open·kritt does not); model-tier selection from <code>reasoning.tiering</code> (the hard verify
+step can be pointed at a stronger model). The finding output schema + <code>validate_payload</code> are ported from open·kritt's
+<code>schema.py</code> (zero-dependency — HackPit does not pull in <code>jsonschema</code>). <code>patched-since</code> (ported from <code>prompting.py</code>)
+restricts the whole audit to the files changed since a git ref — a huge repo becomes a reviewable delta.</p>
+<p><strong>No new gate — §0, held.</strong> The audit <strong>reads source and PROPOSES</strong>: it walks files, reads their text, and calls the
+LLM layer (an <em>injected</em> agent runner bound to <code>backend/llm.py</code>). It launches no scanner against a target, opens no
+socket, and imports no executor/engagement/sandbox/state module — so it is <strong>one approved job</strong> (the ZAP/nuclei
+justification, one approval buys the whole fan-out), the exact category the rule scan already occupies. <code>ai_audit.py</code>
+and the AI-audit routes make <strong>no <code>eval</code>/<code>exec</code>/<code>subprocess</code>/<code>os.system</code>/<code>socket</code>/HTTP call by AST</strong> (with a control
+that plants one, in <code>test_ai_audit_safety.py</code>). Any PoC a finding offers is a <strong>string</strong>, run <strong>approve-each</strong> through
+the existing executor in the :kali sandbox — never from here. The two cross-cutting seams codescan cannot own are
+<strong>injected from <code>main.py</code></strong>: the engagement-state <strong>findings sink</strong> (so codescan never imports <code>state</code>) and the
+<strong><code>patched-since</code> git-diff provider</strong> (so codescan runs no <code>subprocess</code> of its own — the static-only lock still reads
+exactly one asserted spawn, <code>runner._spawn</code>'s semgrep/bandit). When no LLM is reachable the audit degrades to a
+<strong>deterministic heuristic analyst</strong> that runs the same three stages over sink patterns loaded from
+<code>ai_audit_rules.json</code> (kept as data, not Python, so the detector's own tokens never trip codescan's banned-literal
+scan) — this is also the offline demo the <code>/code-scan</code> screenshot renders on a bundled synthetic sample repo (six
+routes → six enclosing-route findings, ranked critical→high, KB-grounded).</p>
+<p><strong>Frontend.</strong> <code>/code-scan</code> gains a mode toggle: the AI audit picks a repo (+ optional <code>patched-since</code> ref), one
+approval fans out, and the result renders the entrypoint map, the per-flow fan-out, and the deduped severity-ranked
+findings — each with its attacker path, <code>file:line</code> refs, KB technique links, and a <strong>Build PoC (approve-each)</strong>
+disclosure that shows the proposed command with the "nothing here runs it" note (<code>hp-cs-*</code> vocabulary, verified in
+<code>test_css_vocabulary.py</code>).</p>
+<p><strong>Tests.</strong> <code>test_ai_audit.py</code> (the three stages compose; a non-concrete claim becomes a stub; dedup collapses
+duplicates; ranking is <code>IMPACT_LEVELS</code> worst-first; <code>informational</code> maps to state <code>info</code>; <code>patched-since</code> audits only
+the diff and an empty diff scans nothing and warns; the heuristic analyst maps six sample routes to six
+enclosing-route findings) and <code>test_ai_audit_safety.py</code> (the §0 invariants above, each with a control). Both added to
+<code>run_safety_tests.sh</code> — the hermetic suite is green (108 files). <code>next build</code> exits 0.</p>
+<p><strong>Assumptions (per §5), stated.</strong> Reused <code>reasoning/</code> (specialists/retrieval/tiering) as the fan-out substrate rather
+than a new engine; the flow frontier is modeled in-process rather than forced through <code>reasoning/frontier.py</code>, whose
+SQLite lead-queue is shaped for executable leads (a lead with an empty command is dropped) not source flows — noted
+here rather than bent. Shipped the <code>external-flow-analysis</code> playbook as the built-in (the web3 playbooks come with the
+web3 spec). Agent runs use <code>backend/llm.py</code> (Codex-login/OpenAI/Anthropic/OpenRouter), not open·kritt's harness.</p>
 </body>
 </html>

@@ -1,13 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { PageShell } from "./PageShell";
 import {
   ApiError,
+  getCodeAuditSample,
   getCodeScanTools,
   renderCodeScanReport,
+  runCodeAudit,
   runCodeScan,
+  type AuditFinding,
+  type AuditResult,
+  type AuditSeverity,
   type CodeScanFinding,
   type CodeScanResult,
   type CodeScanSeverity,
@@ -29,27 +34,458 @@ const SEV_COLOR: Record<CodeScanSeverity, string> = {
   low: "#7ec8a0",
   info: "#8aa4c8",
 };
+const AUDIT_SEV_COLOR: Record<AuditSeverity, string> = {
+  critical: "#ff5c7a",
+  high: "#f0776a",
+  medium: "#f0a24a",
+  low: "#7ec8a0",
+  informational: "#8aa4c8",
+};
+const AUDIT_SEVERITIES: AuditSeverity[] = [
+  "critical",
+  "high",
+  "medium",
+  "low",
+  "informational",
+];
+
+type Tab = "rules" | "ai";
 
 /**
  * :code scan — STATIC application-security analysis.
  *
- * Point it at a codebase folder; the backend runs Semgrep (+ Bandit for Python) and
- * returns normalized findings. This is the DEFENSIVE side of HackPit: it READS code
- * to find bugs. Nothing is executed, no target is involved, and none of the
- * engagement / executor / target-lock machinery is in play here.
+ * Two modes over the same read-only footprint:
+ *  - RULES: Semgrep (+ Bandit) pattern-match the tree file-by-file.
+ *  - AI AUDIT: an agent fan-out that maps the entrypoints/flows ONCE, hands each downstream
+ *    agent exactly one flow to verify against source, and returns concrete
+ *    vuln-with-attacker-path findings (or honest stubs), deduped + severity-ranked.
+ *
+ * Neither mode executes the scanned code, takes a target, or touches the engagement / executor /
+ * target-lock machinery. Any PoC an AI finding suggests is a STRING to run approve-each through
+ * the existing gated executor — never from here.
  */
 export function CodeScanScreen() {
+  const [tab, setTab] = useState<Tab>("rules");
+
+  // On a ?demo=ai deep link, load the bundled sample audit so the screen renders without input
+  // (used by the headless screenshot). The fetch is deferred to a microtask so no setState runs
+  // synchronously in the effect body — keeps the accepted lint baseline unchanged.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("demo") === "ai") {
+      void Promise.resolve().then(() => void loadSample());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---- AI-audit state ---------------------------------------------------- //
+  const [aiResult, setAiResult] = useState<AuditResult | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [auditPath, setAuditPath] = useState("");
+  const [patchedSince, setPatchedSince] = useState("");
+  const [openPoc, setOpenPoc] = useState<Set<number>>(new Set());
+
+  async function runAudit() {
+    const target = auditPath.trim();
+    if (!target || aiLoading) return;
+    setAiLoading(true);
+    setAiError(null);
+    setAiResult(null);
+    try {
+      const data = await runCodeAudit({
+        path: target,
+        patched_since: patchedSince.trim() || null,
+        mode: "auto",
+      });
+      setTab("ai");
+      setAiResult(data);
+      setOpenPoc(new Set());
+    } catch (e) {
+      setAiError(
+        (e as ApiError)?.message ??
+          "The audit could not be run. Check the path and that the backend is running."
+      );
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  async function loadSample() {
+    if (aiLoading) return;
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const data = await getCodeAuditSample();
+      setTab("ai");
+      setAiResult(data);
+      setOpenPoc(new Set());
+    } catch (e) {
+      setAiError((e as ApiError)?.message ?? "Could not load the sample audit.");
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  function togglePoc(i: number) {
+    setOpenPoc((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  }
+
+  return (
+    <PageShell crumbs={[{ label: "home", href: "/" }, { label: "Code scan" }]}>
+      <div className="hp-cs">
+        <header className="hp-listing-head">
+          <span className="hp-listing-ic" style={{ ["--cc" as string]: SCAN_COLOR }}>
+            {"◈"}
+          </span>
+          <div>
+            <h1 className="hp-listing-title">Code scan</h1>
+            <p className="hp-listing-sub">
+              Static application-security analysis — a rule scan, or an AI-agent audit that
+              fans out one agent per flow.
+            </p>
+          </div>
+        </header>
+
+        <div className="hp-cs-mode" role="tablist" aria-label="scan mode">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "rules"}
+            className={`hp-cs-modebtn${tab === "rules" ? " hp-on" : ""}`}
+            onClick={() => setTab("rules")}
+          >
+            Rules scan
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "ai"}
+            className={`hp-cs-modebtn${tab === "ai" ? " hp-on" : ""}`}
+            onClick={() => setTab("ai")}
+          >
+            AI audit
+          </button>
+        </div>
+
+        {tab === "rules" ? (
+          <RulesScan />
+        ) : (
+          <AiAudit
+            result={aiResult}
+            loading={aiLoading}
+            error={aiError}
+            path={auditPath}
+            setPath={setAuditPath}
+            patchedSince={patchedSince}
+            setPatchedSince={setPatchedSince}
+            onRun={() => void runAudit()}
+            onSample={() => void loadSample()}
+            openPoc={openPoc}
+            togglePoc={togglePoc}
+          />
+        )}
+      </div>
+    </PageShell>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// AI audit
+// --------------------------------------------------------------------------- //
+function AiAudit(props: {
+  result: AuditResult | null;
+  loading: boolean;
+  error: string | null;
+  path: string;
+  setPath: (v: string) => void;
+  patchedSince: string;
+  setPatchedSince: (v: string) => void;
+  onRun: () => void;
+  onSample: () => void;
+  openPoc: Set<number>;
+  togglePoc: (i: number) => void;
+}) {
+  const {
+    result,
+    loading,
+    error,
+    path,
+    setPath,
+    patchedSince,
+    setPatchedSince,
+    onRun,
+    onSample,
+    openPoc,
+    togglePoc,
+  } = props;
+
+  return (
+    <>
+      <p className="hp-cs-note">
+        <b>Agent fan-out, read-only.</b> The audit maps the repo&apos;s externally-reachable
+        entrypoints and their flows <b>once</b>, then hands each downstream agent exactly{" "}
+        <b>one</b> flow to verify against source — returning a concrete vuln-with-attacker-path
+        or an honest no-finding stub. Findings are deduped and severity-ranked. Nothing here
+        executes the code, and any PoC is a proposal to run <b>approve-each</b> through the
+        executor.
+      </p>
+
+      <div className="hp-cs-bar">
+        <label className="hp-cs-field">
+          <span>repo folder</span>
+          <input
+            type="text"
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onRun();
+            }}
+            placeholder="e.g. C:\\Users\\you\\projects\\my-service  (a folder, not a file)"
+            spellCheck={false}
+            autoComplete="off"
+            disabled={loading}
+          />
+        </label>
+        <label className="hp-cs-field hp-cs-field-narrow">
+          <span>patched-since (git ref)</span>
+          <input
+            type="text"
+            value={patchedSince}
+            onChange={(e) => setPatchedSince(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onRun();
+            }}
+            placeholder="optional — e.g. main, v1.2.0, HEAD~20"
+            spellCheck={false}
+            autoComplete="off"
+            disabled={loading}
+          />
+        </label>
+        <button
+          type="button"
+          className="hp-cs-run"
+          onClick={onRun}
+          disabled={loading || !path.trim()}
+        >
+          {loading ? "auditing…" : "Run AI audit"}
+        </button>
+        <button
+          type="button"
+          className="hp-cs-sample"
+          onClick={onSample}
+          disabled={loading}
+          title="Audit the bundled synthetic sample repo (deterministic, no LLM)"
+        >
+          sample repo
+        </button>
+      </div>
+
+      <p className="hp-cs-hint">
+        <b>One approved job.</b> A single run fans out into many analysis tasks — the ZAP /
+        nuclei justification — and adds no new gate. With <code>patched-since</code> set, only
+        the files changed since that git ref are audited.
+      </p>
+
+      {loading && (
+        <div className="hp-cs-loading">
+          Mapping entrypoints, tracing flows, and fanning out one agent per flow…
+        </div>
+      )}
+      {error && <div className="hp-cs-error">⚠ {error}</div>}
+
+      {result && !loading && <AuditReport result={result} openPoc={openPoc} togglePoc={togglePoc} />}
+    </>
+  );
+}
+
+function AuditReport({
+  result,
+  openPoc,
+  togglePoc,
+}: {
+  result: AuditResult;
+  openPoc: Set<number>;
+  togglePoc: (i: number) => void;
+}) {
+  const s = result.summary;
+  return (
+    <>
+      <div className="hp-cs-summary">
+        <div className="hp-cs-sumhead">
+          <b>{s.findings}</b> ranked finding{s.findings === 1 ? "" : "s"} ·{" "}
+          <b>{s.entrypoints}</b> entrypoints mapped · <b>{s.flows}</b> flows fanned out ·{" "}
+          <b>{s.stubs}</b> no-finding stub{s.stubs === 1 ? "" : "s"} · {result.duration_s}s
+        </div>
+        <div className="hp-cs-badges">
+          <span className="hp-cs-badge">{result.mode === "ai" ? "LLM agents" : "heuristic analyst"}</span>
+          <span className="hp-cs-badge">{result.playbook}</span>
+          {result.is_sample && <span className="hp-cs-badge">sample repo</span>}
+          {result.grounded && <span className="hp-cs-badge">KB-grounded</span>}
+          {result.changed_only && (
+            <span className="hp-cs-badge">patched-since {result.patched_since}</span>
+          )}
+          {typeof result.persisted === "number" && result.persisted > 0 && (
+            <span className="hp-cs-badge hp-cs-badge-ok">
+              {result.persisted} → engagement state
+            </span>
+          )}
+        </div>
+        {s.findings > 0 && (
+          <div className="hp-cs-sevbar">
+            {AUDIT_SEVERITIES.map((sev) => {
+              const n = s.by_severity[sev] ?? 0;
+              if (!n) return null;
+              return (
+                <span
+                  key={sev}
+                  className="hp-cs-sevchip"
+                  style={{ ["--sc" as string]: AUDIT_SEV_COLOR[sev] } as CSSProperties}
+                >
+                  <b>{n}</b> {sev}
+                </span>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {result.warnings.length > 0 && (
+        <ul className="hp-cs-warnings">
+          {result.warnings.map((w) => (
+            <li key={w}>⚠ {w}</li>
+          ))}
+        </ul>
+      )}
+
+      {/* the map, made once */}
+      <div className="hp-cs-map">
+        <div className="hp-cs-maphead">
+          Attack surface mapped once → <b>{result.flows.length}</b> flows fanned out, one agent
+          each
+        </div>
+        <div className="hp-cs-eps">
+          {result.entrypoints.map((ep) => {
+            const flows = result.flows.filter((f) => f.entrypoint_id === ep.id).length;
+            return (
+              <div key={ep.id} className="hp-cs-ep">
+                <span className="hp-cs-ep-kind">{ep.kind}</span>
+                <span className="hp-cs-ep-name">{ep.name}</span>
+                <span className="hp-cs-ep-file">{ep.file}</span>
+                <span className="hp-cs-ep-flows">{flows} flow{flows === 1 ? "" : "s"}</span>
+              </div>
+            );
+          })}
+          {result.entrypoints.length === 0 && (
+            <div className="hp-cs-empty">No externally-reachable entrypoints were mapped.</div>
+          )}
+        </div>
+      </div>
+
+      {/* the ranked findings */}
+      {s.findings === 0 ? (
+        <div className="hp-cs-empty">
+          <b>No concrete findings.</b> Every flow the agents verified came back a stub. That is
+          not a clean bill of health — it means no attacker path was proven on the mapped flows.
+        </div>
+      ) : (
+        <ul className="hp-cs-list">
+          {result.findings.map((f, i) => (
+            <AuditFindingRow
+              key={`${f.title}:${i}`}
+              f={f}
+              open={openPoc.has(i)}
+              onToggle={() => togglePoc(i)}
+            />
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+function AuditFindingRow({
+  f,
+  open,
+  onToggle,
+}: {
+  f: AuditFinding;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const color = AUDIT_SEV_COLOR[f.severity] ?? "#8aa4c8";
+  return (
+    <li className="hp-cs-row" style={{ ["--sc" as string]: color } as CSSProperties}>
+      <div className="hp-cs-rowhead">
+        <span className="hp-cs-sev">{f.severity}</span>
+        <span className="hp-cs-ai-title">{f.title}</span>
+        {f.confidence && <span className="hp-cs-tool">{f.confidence} confidence</span>}
+      </div>
+
+      <div className="hp-cs-ai-path">
+        <span className="hp-cs-ai-pathlabel">attacker path</span>
+        <p>{f.attacker_path}</p>
+      </div>
+
+      {f.impact && (
+        <p className="hp-cs-ai-impact">
+          <b>Impact:</b> {f.impact}
+        </p>
+      )}
+
+      <div className="hp-cs-meta">
+        {f.vuln_class && <span className="hp-cs-tag">{f.vuln_class}</span>}
+        {f.cwe && <span className="hp-cs-tag">{f.cwe}</span>}
+        {f.source_refs.map((r) => (
+          <span key={r} className="hp-cs-loc">
+            {r}
+          </span>
+        ))}
+        {f.kb_refs.map((k) => (
+          <Link key={k.id} href={`/entry/${encodeURIComponent(k.id)}`} className="hp-cs-kb">
+            {k.title || k.id} →
+          </Link>
+        ))}
+      </div>
+
+      {f.poc && (
+        <div className="hp-cs-pocwrap">
+          <button type="button" className="hp-cs-poc" onClick={onToggle}>
+            {open ? "hide PoC" : "Build PoC (approve-each)"}
+          </button>
+          {open && (
+            <div className="hp-cs-poc-box">
+              <code className="hp-cs-poc-cmd">{f.poc}</code>
+              <p className="hp-cs-poc-note">
+                Propose-only. Nothing here runs it — take this to the executor and confirm it
+                <b> approve-each</b> in the :kali sandbox.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Rules scan (the original Semgrep/Bandit pattern scan — unchanged behaviour)
+// --------------------------------------------------------------------------- //
+function RulesScan() {
   const tools = useApi(getCodeScanTools, []);
   const [path, setPath] = useState("");
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<CodeScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Defaults to medium+ so the screen opens on signal, not on noise. The scan and its
-  // data are unchanged — this is only what is shown first.
   const [sevFilter, setSevFilter] = useState<SevFilter>("important");
   const [catFilter, setCatFilter] = useState<string>("all");
   const [exporting, setExporting] = useState(false);
-  // Which offline ruleset to scan with (bundled = all languages, default).
   const [ruleset, setRuleset] = useState("bundled");
 
   const missing = (tools.data?.tools ?? []).filter((t) => !t.installed);
@@ -77,10 +513,6 @@ export function CodeScanScreen() {
     }
   }
 
-  /**
-   * Export the scan currently on screen. The backend renders the report from this exact
-   * result rather than re-scanning, so the document can't drift from what was shown.
-   */
   async function exportReport() {
     if (!result || exporting) return;
     setExporting(true);
@@ -119,233 +551,212 @@ export function CodeScanScreen() {
   );
 
   return (
-    <PageShell crumbs={[{ label: "home", href: "/" }, { label: "Code scan" }]}>
-      <div className="hp-cs">
-        <header className="hp-listing-head">
-          <span className="hp-listing-ic" style={{ ["--cc" as string]: SCAN_COLOR }}>
-            {"◈"}
-          </span>
-          <div>
-            <h1 className="hp-listing-title">Code scan</h1>
-            <p className="hp-listing-sub">
-              Static application-security analysis — Semgrep + Bandit read a codebase
-              and report what they find.
-            </p>
-          </div>
-        </header>
+    <>
+      <p className="hp-cs-note">
+        <b>Static only.</b> The scanners parse your source files — nothing here runs the code
+        being scanned, and no target, network or engagement is involved. Read-only on the
+        codebase.
+      </p>
 
-        {/* The framing, stated once and plainly. */}
-        <p className="hp-cs-note">
-          <b>Static only.</b> The scanners parse your source files — nothing here runs
-          the code being scanned, and no target, network or engagement is involved.
-          Read-only on the codebase.
-        </p>
-
-        {semgrepMissing && (
-          <div className="hp-cs-missing">
-            <b>Scanners not installed.</b> Install them into the backend environment,
-            then reload:
-            <code>cd backend &amp;&amp; uv pip install semgrep bandit</code>
-          </div>
-        )}
-
-        <div className="hp-cs-bar">
-          <label className="hp-cs-field">
-            <span>codebase folder</span>
-            <input
-              type="text"
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void scan();
-              }}
-              placeholder="e.g. C:\\Users\\you\\projects\\my-app  (a folder, not a file)"
-              spellCheck={false}
-              autoComplete="off"
-              disabled={scanning}
-            />
-          </label>
-          {(tools.data?.rulesets?.length ?? 0) > 0 && (
-            <label className="hp-cs-field">
-              <span>ruleset</span>
-              <select
-                value={ruleset}
-                onChange={(e) => setRuleset(e.target.value)}
-                disabled={scanning}
-              >
-                {tools.data!.rulesets!.map((r) => (
-                  <option key={r.key} value={r.key}>
-                    {r.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <button
-            type="button"
-            className="hp-cs-run"
-            onClick={() => void scan()}
-            disabled={scanning || !path.trim()}
-          >
-            {scanning ? "scanning…" : "Scan"}
-          </button>
+      {semgrepMissing && (
+        <div className="hp-cs-missing">
+          <b>Scanners not installed.</b> Install them into the backend environment, then reload:
+          <code>cd backend &amp;&amp; uv pip install semgrep bandit</code>
         </div>
+      )}
 
-        {missing.length > 0 && !semgrepMissing && (
-          <p className="hp-cs-hint">
-            {missing.map((t) => t.name).join(", ")} not installed — those checks are
-            skipped. <code>{missing[0].install_hint}</code>
-          </p>
+      <div className="hp-cs-bar">
+        <label className="hp-cs-field">
+          <span>codebase folder</span>
+          <input
+            type="text"
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void scan();
+            }}
+            placeholder="e.g. C:\\Users\\you\\projects\\my-app  (a folder, not a file)"
+            spellCheck={false}
+            autoComplete="off"
+            disabled={scanning}
+          />
+        </label>
+        {(tools.data?.rulesets?.length ?? 0) > 0 && (
+          <label className="hp-cs-field">
+            <span>ruleset</span>
+            <select
+              value={ruleset}
+              onChange={(e) => setRuleset(e.target.value)}
+              disabled={scanning}
+            >
+              {tools.data!.rulesets!.map((r) => (
+                <option key={r.key} value={r.key}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+          </label>
         )}
+        <button
+          type="button"
+          className="hp-cs-run"
+          onClick={() => void scan()}
+          disabled={scanning || !path.trim()}
+        >
+          {scanning ? "scanning…" : "Scan"}
+        </button>
+      </div>
 
-        {scanning && (
-          <div className="hp-cs-loading">
-            Reading the tree and running the scanners — large codebases take a moment.
-          </div>
-        )}
+      {missing.length > 0 && !semgrepMissing && (
+        <p className="hp-cs-hint">
+          {missing.map((t) => t.name).join(", ")} not installed — those checks are skipped.{" "}
+          <code>{missing[0].install_hint}</code>
+        </p>
+      )}
 
-        {error && <div className="hp-cs-error">⚠ {error}</div>}
+      {scanning && (
+        <div className="hp-cs-loading">
+          Reading the tree and running the scanners — large codebases take a moment.
+        </div>
+      )}
 
-        {result && !scanning && (
-          <>
-            <div className="hp-cs-summary">
-              <div className="hp-cs-sumhead">
-                <b>{result.summary.total}</b> findings in{" "}
-                <b>{result.summary.files_affected}</b> files ·{" "}
-                {result.files_scanned} files scanned · {result.duration_s}s ·{" "}
-                {result.tools_run.join(" + ") || "no scanner"}
-                <button
-                  type="button"
-                  className="hp-cs-export"
-                  onClick={() => void exportReport()}
-                  disabled={exporting}
-                >
-                  {exporting ? "rendering…" : "export report ↓"}
-                </button>
-              </div>
-              <div className="hp-cs-sevbar">
-                {/* SCOPE — medium+ by default; low/info are one click away, never removed. */}
-                <button
-                  type="button"
-                  className={`hp-cs-scope${sevFilter === "important" ? " hp-on" : ""}`}
-                  onClick={() => setSevFilter("important")}
-                  title="Show critical, high and medium only"
-                >
-                  medium+
-                </button>
-                <button
-                  type="button"
-                  className={`hp-cs-scope${sevFilter === "all" ? " hp-on" : ""}`}
-                  onClick={() => setSevFilter("all")}
-                  title="Show every finding, including low and info"
-                >
-                  all {result.summary.total}
-                </button>
-                <span className="hp-cs-sevsep" aria-hidden />
-                {SEVERITIES.map((s) => {
-                  const n = result.summary.by_severity[s] ?? 0;
-                  if (!n) return null;
-                  return (
-                    <button
-                      key={s}
-                      type="button"
-                      className={`hp-cs-sevchip${sevFilter === s ? " hp-on" : ""}`}
-                      style={{ ["--sc" as string]: SEV_COLOR[s] } as CSSProperties}
-                      onClick={() => setSevFilter(sevFilter === s ? "all" : s)}
-                    >
-                      <b>{n}</b> {s}
-                    </button>
-                  );
-                })}
-                {(sevFilter !== "important" || catFilter !== "all") && (
+      {error && <div className="hp-cs-error">⚠ {error}</div>}
+
+      {result && !scanning && (
+        <>
+          <div className="hp-cs-summary">
+            <div className="hp-cs-sumhead">
+              <b>{result.summary.total}</b> findings in{" "}
+              <b>{result.summary.files_affected}</b> files · {result.files_scanned} files
+              scanned · {result.duration_s}s · {result.tools_run.join(" + ") || "no scanner"}
+              <button
+                type="button"
+                className="hp-cs-export"
+                onClick={() => void exportReport()}
+                disabled={exporting}
+              >
+                {exporting ? "rendering…" : "export report ↓"}
+              </button>
+            </div>
+            <div className="hp-cs-sevbar">
+              <button
+                type="button"
+                className={`hp-cs-scope${sevFilter === "important" ? " hp-on" : ""}`}
+                onClick={() => setSevFilter("important")}
+                title="Show critical, high and medium only"
+              >
+                medium+
+              </button>
+              <button
+                type="button"
+                className={`hp-cs-scope${sevFilter === "all" ? " hp-on" : ""}`}
+                onClick={() => setSevFilter("all")}
+                title="Show every finding, including low and info"
+              >
+                all {result.summary.total}
+              </button>
+              <span className="hp-cs-sevsep" aria-hidden />
+              {SEVERITIES.map((s) => {
+                const n = result.summary.by_severity[s] ?? 0;
+                if (!n) return null;
+                return (
                   <button
+                    key={s}
                     type="button"
-                    className="hp-cs-clear"
-                    onClick={() => {
-                      setSevFilter("important");
-                      setCatFilter("all");
-                    }}
+                    className={`hp-cs-sevchip${sevFilter === s ? " hp-on" : ""}`}
+                    style={{ ["--sc" as string]: SEV_COLOR[s] } as CSSProperties}
+                    onClick={() => setSevFilter(sevFilter === s ? "all" : s)}
                   >
-                    clear filters
+                    <b>{n}</b> {s}
                   </button>
-                )}
-              </div>
-              {categories.length > 0 && (
-                <div className="hp-cs-cats">
-                  {categories.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      className={`hp-cs-cat${catFilter === c ? " hp-on" : ""}`}
-                      onClick={() => setCatFilter(catFilter === c ? "all" : c)}
-                    >
-                      {c} <span>{result.summary.by_category[c]}</span>
-                    </button>
-                  ))}
-                </div>
+                );
+              })}
+              {(sevFilter !== "important" || catFilter !== "all") && (
+                <button
+                  type="button"
+                  className="hp-cs-clear"
+                  onClick={() => {
+                    setSevFilter("important");
+                    setCatFilter("all");
+                  }}
+                >
+                  clear filters
+                </button>
               )}
             </div>
-
-            {result.warnings.length > 0 && (
-              <ul className="hp-cs-warnings">
-                {result.warnings.map((w) => (
-                  <li key={w}>⚠ {w}</li>
-                ))}
-              </ul>
-            )}
-
-            {result.summary.total === 0 ? (
-              <div className="hp-cs-empty">
-                <b>No findings.</b> The scanners had nothing to report for this tree
-                with the bundled ruleset. That is not a clean bill of health — it means
-                these rules matched nothing.
-              </div>
-            ) : shown.length === 0 ? (
-              <div className="hp-cs-empty">
-                No findings match the current filters.
-              </div>
-            ) : (
-              <ul className="hp-cs-list">
-                {shown.map((f, i) => (
-                  <li
-                    key={`${f.file}:${f.line}:${f.rule_id}:${i}`}
-                    className="hp-cs-row"
-                    style={{ ["--sc" as string]: SEV_COLOR[f.severity] } as CSSProperties}
+            {categories.length > 0 && (
+              <div className="hp-cs-cats">
+                {categories.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`hp-cs-cat${catFilter === c ? " hp-on" : ""}`}
+                    onClick={() => setCatFilter(catFilter === c ? "all" : c)}
                   >
-                    <div className="hp-cs-rowhead">
-                      <span className="hp-cs-sev">{f.severity}</span>
-                      <code className="hp-cs-loc">
-                        {f.file}:{f.line}
-                      </code>
-                      <span className="hp-cs-rule">{f.rule_id}</span>
-                      <span className="hp-cs-tool">
-                        {f.tools.length > 1 ? `${f.tools.join(" + ")} agree` : f.tool}
-                      </span>
-                    </div>
-                    <p className="hp-cs-msg">{f.message}</p>
-                    <div className="hp-cs-meta">
-                      <span className="hp-cs-tag">{f.category}</span>
-                      {f.cwe && <span className="hp-cs-tag">{f.cwe}</span>}
-                      {f.owasp && <span className="hp-cs-tag">{f.owasp}</span>}
-                      {f.confidence && (
-                        <span className="hp-cs-tag">confidence: {f.confidence.toLowerCase()}</span>
-                      )}
-                      {f.kb_entry_id && (
-                        <Link
-                          href={`/entry/${encodeURIComponent(f.kb_entry_id)}`}
-                          className="hp-cs-kb"
-                        >
-                          technique: {f.kb_title} →
-                        </Link>
-                      )}
-                    </div>
-                  </li>
+                    {c} <span>{result.summary.by_category[c]}</span>
+                  </button>
                 ))}
-              </ul>
+              </div>
             )}
-          </>
-        )}
-      </div>
-    </PageShell>
+          </div>
+
+          {result.warnings.length > 0 && (
+            <ul className="hp-cs-warnings">
+              {result.warnings.map((w) => (
+                <li key={w}>⚠ {w}</li>
+              ))}
+            </ul>
+          )}
+
+          {result.summary.total === 0 ? (
+            <div className="hp-cs-empty">
+              <b>No findings.</b> The scanners had nothing to report for this tree with the
+              bundled ruleset. That is not a clean bill of health — it means these rules matched
+              nothing.
+            </div>
+          ) : shown.length === 0 ? (
+            <div className="hp-cs-empty">No findings match the current filters.</div>
+          ) : (
+            <ul className="hp-cs-list">
+              {shown.map((f, i) => (
+                <li
+                  key={`${f.file}:${f.line}:${f.rule_id}:${i}`}
+                  className="hp-cs-row"
+                  style={{ ["--sc" as string]: SEV_COLOR[f.severity] } as CSSProperties}
+                >
+                  <div className="hp-cs-rowhead">
+                    <span className="hp-cs-sev">{f.severity}</span>
+                    <code className="hp-cs-loc">
+                      {f.file}:{f.line}
+                    </code>
+                    <span className="hp-cs-rule">{f.rule_id}</span>
+                    <span className="hp-cs-tool">
+                      {f.tools.length > 1 ? `${f.tools.join(" + ")} agree` : f.tool}
+                    </span>
+                  </div>
+                  <p className="hp-cs-msg">{f.message}</p>
+                  <div className="hp-cs-meta">
+                    <span className="hp-cs-tag">{f.category}</span>
+                    {f.cwe && <span className="hp-cs-tag">{f.cwe}</span>}
+                    {f.owasp && <span className="hp-cs-tag">{f.owasp}</span>}
+                    {f.confidence && (
+                      <span className="hp-cs-tag">confidence: {f.confidence.toLowerCase()}</span>
+                    )}
+                    {f.kb_entry_id && (
+                      <Link
+                        href={`/entry/${encodeURIComponent(f.kb_entry_id)}`}
+                        className="hp-cs-kb"
+                      >
+                        technique: {f.kb_title} →
+                      </Link>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </>
   );
 }

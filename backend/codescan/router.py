@@ -18,6 +18,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel, Field
 
+from . import ai_audit
 from . import findings as fmod
 from . import kb_link
 from . import report as report_mod
@@ -29,6 +30,13 @@ router = APIRouter(prefix="/codescan", tags=["codescan"])
 # the scan runs identically, just without technique links.
 _KB: dict[str, Any] = {"by_id": {}, "search": None, "eligible": None, "focused": None}
 
+# Cross-cutting seams for the AI audit, injected by main.py so codescan stays orthogonal (it
+# imports no state / executor / git of its own — the callbacks carry the capability in as DATA):
+#   _FINDINGS_SINK(session_id, [finding-dict, ...]) -> int   persists audit findings to state
+#   _DIFF_PROVIDER(root: Path, ref: str) -> set[str] | None  repo-relative paths changed since ref
+_FINDINGS_SINK: Callable[[str, list[dict]], int] | None = None
+_DIFF_PROVIDER: Callable[[Any, str], set | None] | None = None
+
 
 def set_kb(
     by_id: dict[str, dict] | None = None,
@@ -39,6 +47,23 @@ def set_kb(
     _KB.update(
         by_id=by_id or {}, search=search_fn, eligible=eligible, focused=focused
     )
+
+
+def set_findings_sink(fn: Callable[[str, list[dict]], int] | None) -> None:
+    """Wire (or clear) the engagement-state sink the AI audit persists findings through.
+
+    Mirrors ``set_kb``: codescan never imports ``state`` — main.py hands in a callback that
+    builds the ``Finding`` records and upserts them, so the audit can land in engagement state
+    without codescan gaining any coupling to it."""
+    global _FINDINGS_SINK
+    _FINDINGS_SINK = fn
+
+
+def set_diff_provider(fn: Callable[[Any, str], set | None] | None) -> None:
+    """Wire the ``patched-since`` diff provider (a git-backed helper in main.py). None disables
+    patched-since here — codescan runs no subprocess of its own (static-only invariant)."""
+    global _DIFF_PROVIDER
+    _DIFF_PROVIDER = fn
 
 
 # --------------------------------------------------------------------------- #
@@ -248,3 +273,129 @@ def codescan_report(result: ScanOut = Body(...)) -> dict[str, Any]:
         "markdown": report_mod.render_markdown(payload),
         "filename": f"code-scan-{safe}.md",
     }
+
+
+# --------------------------------------------------------------------------- #
+# AI-agent code audit (see ai_audit.py) — the context-saving fan-out
+# --------------------------------------------------------------------------- #
+class AiAuditIn(BaseModel):
+    path: str = Field(min_length=1, description="Codebase FOLDER to audit (read-only).")
+    patched_since: str | None = Field(
+        default=None,
+        description="Git ref (branch/tag/SHA). When set and a diff provider is wired, the audit "
+        "is restricted to the files changed since this ref — the 'patched-since' mode.",
+    )
+    playbook: str = Field(
+        default="external-flow-analysis",
+        description="The built-in audit playbook to run.",
+    )
+    session_id: str | None = Field(
+        default=None,
+        description="Engagement session to persist the ranked findings into. Optional — with "
+        "none, the audit runs and returns results but writes nothing to engagement state.",
+    )
+    mode: str = Field(
+        default="auto",
+        description="'auto' (LLM agents, falling back to the heuristic analyst if the LLM layer "
+        "is unavailable) | 'ai' (same) | 'heuristic' (deterministic, no LLM).",
+    )
+
+
+def _run_ai_audit(req: AiAuditIn) -> dict[str, Any]:
+    """Shared by the POST route: resolve diff scope, pick the engine, persist, return the result.
+
+    ONE approved job (the ZAP/nuclei justification): the operator's single action fans out into
+    many analysis tasks. It executes nothing against a target — it reads source and calls the LLM
+    layer — so it adds NO new gate, exactly like the rule-mode scan next to it.
+    """
+    try:
+        root = runner.resolve_target(req.path)
+    except runner.ScanError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    extra_warnings: list[str] = []
+    changed: set | None = None
+    if req.patched_since:
+        if _DIFF_PROVIDER is None:
+            extra_warnings.append(
+                "patched-since was requested but no diff provider is wired — audited the whole "
+                "tree instead"
+            )
+        else:
+            try:
+                changed = _DIFF_PROVIDER(root, req.patched_since)
+            except Exception as exc:  # noqa: BLE001 — a git miss degrades to a full audit
+                extra_warnings.append(f"could not diff against {req.patched_since} ({exc}) — "
+                                      "audited the whole tree")
+            if changed is not None and not changed:
+                extra_warnings.append(f"nothing changed since {req.patched_since}")
+
+    mode = (req.mode or "auto").lower()
+    try:
+        if mode == "heuristic":
+            result = ai_audit.run_heuristic_audit(
+                root, kb_search=_KB["search"], changed_paths=changed,
+                patched_since=req.patched_since, playbook=req.playbook)
+        else:
+            try:
+                routine, hard = ai_audit.default_agents()
+                result = ai_audit.run_audit(
+                    root, routine, verify_agent=hard, kb_search=_KB["search"],
+                    changed_paths=changed, patched_since=req.patched_since, playbook=req.playbook)
+            except ai_audit.AuditError as exc:
+                # graceful degradation: no LLM reachable -> the deterministic analyst still runs
+                result = ai_audit.run_heuristic_audit(
+                    root, kb_search=_KB["search"], changed_paths=changed,
+                    patched_since=req.patched_since, playbook=req.playbook)
+                result.setdefault("warnings", []).insert(
+                    0, f"LLM agents unavailable ({exc}) — ran the deterministic heuristic analyst")
+    except ai_audit.AuditError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    result.setdefault("warnings", [])[:0] = extra_warnings
+
+    # persist ranked findings to engagement state, if a session + sink are in play
+    persisted = 0
+    if req.session_id and _FINDINGS_SINK is not None and result.get("findings"):
+        # rebuild the state payload from the ranked verdicts (concrete findings only)
+        from .ai_audit import Verdict
+
+        verdicts = [
+            Verdict(flow_id="", finding=True, title=f["title"], vuln_class=f.get("vuln_class", ""),
+                    severity=f.get("severity", "medium"), attacker_path=f.get("attacker_path", ""),
+                    source_refs=f.get("source_refs", []), impact=f.get("impact", ""),
+                    cwe=f.get("cwe"))
+            for f in result["findings"]
+        ]
+        payload = ai_audit.to_state_findings(req.session_id, verdicts, result["repo"])
+        try:
+            persisted = int(_FINDINGS_SINK(req.session_id, payload) or 0)
+        except Exception as exc:  # noqa: BLE001 — persistence is best-effort
+            result["warnings"].append(f"could not persist findings to engagement state ({exc})")
+    result["persisted"] = persisted
+    return result
+
+
+@router.post("/ai-audit")
+def codescan_ai_audit(req: AiAuditIn = Body(...)) -> dict[str, Any]:
+    """Run the AI-agent code audit over a repo (see ai_audit.py). Returns the entrypoint map,
+    the flow frontier, the per-flow verdicts, and the deduped + severity-ranked findings.
+
+    No response_model on purpose: the audit shape is nested and still settling, and a
+    response_model would silently strip any field the frontend later reads."""
+    return _run_ai_audit(req)
+
+
+@router.get("/ai-audit/sample")
+def codescan_ai_audit_sample() -> dict[str, Any]:
+    """A deterministic audit of the BUNDLED synthetic sample repo (never a real client's source).
+
+    Runs the heuristic analyst so the /code-scan AI view renders the full enumerate -> flows ->
+    ranked-findings surface with no LLM and no operator input — the offline demo the screenshot
+    uses, and a live example of the pipeline's output shape."""
+    from pathlib import Path
+
+    sample = Path(__file__).parent / "sample_app"
+    result = ai_audit.run_heuristic_audit(sample, kb_search=_KB["search"])
+    result["is_sample"] = True
+    return result

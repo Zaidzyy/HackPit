@@ -1,0 +1,84 @@
+{
+  "_note": "Heuristic sink/entrypoint patterns for the AI code-audit's deterministic analyst. Kept as DATA (not Python) on purpose: codescan/*.py is source-scanned for dangerous literals (os.system, eval(, subprocess.run, requests.), and a detector that hard-codes those tokens would trip its own static-only lock. Loading them from JSON keeps ai_audit.py clean while the detector still recognises them in SCANNED code. These drive only the no-LLM fallback / demo path; the LLM agent does the real audit.",
+  "entrypoint_patterns": [
+    {"kind": "http-route", "pattern": "@(?:app|router|bp|api|blueprint)\\.(?:route|get|post|put|patch|delete|websocket)\\s*\\(\\s*[\"']([^\"']+)[\"']"},
+    {"kind": "http-route", "pattern": "(?:app|router)\\.(?:get|post|put|patch|delete)\\s*\\(\\s*[\"']([^\"']+)[\"']"},
+    {"kind": "handler", "pattern": "def\\s+(handle_[a-zA-Z0-9_]+|[a-zA-Z0-9_]*_handler)\\s*\\("},
+    {"kind": "cli", "pattern": "add_argument\\s*\\(\\s*[\"']([^\"']+)[\"']"}
+  ],
+  "taint_sources": ["request\\.", "req\\.", "params", "argv", "input\\(", "os\\.environ", "flask\\.request", "self\\.get_argument", "body", "query", "form\\["],
+  "sinks": [
+    {
+      "id": "cmd-injection",
+      "vuln_class": "command-injection",
+      "severity": "critical",
+      "cwe": "CWE-78",
+      "title": "OS command injection",
+      "pattern": "(?:os\\.system|os\\.popen|subprocess\\.(?:Popen|call|run|check_output))\\s*\\(",
+      "needs_taint": true,
+      "attacker_path": "An external request reaches {ep} and its attacker-controlled input flows into a shell command at {loc} without escaping. An attacker appends `; <cmd>` (or `$( )`) to run arbitrary commands as the service account.",
+      "impact": "Remote code execution on the host running the service.",
+      "poc": "curl '{base}{ep}?<param>=;id'"
+    },
+    {
+      "id": "ssrf",
+      "vuln_class": "ssrf",
+      "severity": "high",
+      "cwe": "CWE-918",
+      "title": "Server-side request forgery",
+      "pattern": "(?:requests\\.(?:get|post|put|head)|urllib\\.request\\.urlopen|httpx\\.(?:get|post)|\\.fetch)\\s*\\(",
+      "needs_taint": true,
+      "attacker_path": "The handler at {ep} passes attacker-controlled input into an outbound HTTP request at {loc}. An attacker supplies an internal URL (e.g. the cloud metadata endpoint 169.254.169.254) to reach services the app can see but they cannot.",
+      "impact": "Access to internal services and cloud metadata / IAM credentials (SSRF -> cloud creds).",
+      "poc": "curl '{base}{ep}?url=http://169.254.169.254/latest/meta-data/'"
+    },
+    {
+      "id": "sqli",
+      "vuln_class": "sql-injection",
+      "severity": "high",
+      "cwe": "CWE-89",
+      "title": "SQL injection via string-built query",
+      "pattern": "(?:cursor\\.execute|\\.execute|\\.executemany|db\\.query)\\s*\\([^)]*(?:%|\\+|\\.format|f[\"'])",
+      "needs_taint": false,
+      "attacker_path": "A SQL query at {loc}, reachable from {ep}, is assembled by string interpolation rather than a bound parameter. An attacker injects `' OR '1'='1` (or a UNION/stacked query) into the tainted parameter.",
+      "impact": "Database read/write, authentication bypass, or full data exfiltration.",
+      "poc": "curl \"{base}{ep}?id=1'%20OR%20'1'='1\""
+    },
+    {
+      "id": "code-exec",
+      "vuln_class": "code-injection",
+      "severity": "critical",
+      "cwe": "CWE-95",
+      "title": "Dynamic code evaluation of untrusted input",
+      "pattern": "(?:\\beval|\\bexec|pickle\\.loads|yaml\\.load\\b)\\s*\\(",
+      "needs_taint": true,
+      "attacker_path": "Attacker-controlled input reaching {ep} is evaluated as code/deserialised at {loc}. A crafted payload executes arbitrary Python in the app process.",
+      "impact": "Remote code execution.",
+      "poc": "curl '{base}{ep}' --data '<serialized-or-expression-payload>'"
+    },
+    {
+      "id": "path-traversal",
+      "vuln_class": "path-traversal",
+      "severity": "high",
+      "cwe": "CWE-22",
+      "title": "Path traversal in file access",
+      "pattern": "(?:open|send_file|send_from_directory|Path)\\s*\\(",
+      "needs_taint": true,
+      "attacker_path": "A filename derived from request input at {ep} is opened at {loc} with no canonicalisation. An attacker supplies `../../etc/passwd` to read files outside the intended directory.",
+      "impact": "Arbitrary file read (and, with a write sink, arbitrary file write).",
+      "poc": "curl '{base}{ep}?file=../../../../etc/passwd'"
+    },
+    {
+      "id": "auth-bypass",
+      "vuln_class": "broken-authentication",
+      "severity": "high",
+      "cwe": "CWE-798",
+      "title": "Authentication check against a hard-coded secret",
+      "pattern": "==\\s*[\"'](?:letmein|admin|password|secret|changeme|s3cr3t|token123)[\"']",
+      "needs_taint": false,
+      "attacker_path": "The authorization check at {loc}, guarding {ep}, compares against a constant secret baked into source. Anyone who reads the source (or guesses the value) authenticates.",
+      "impact": "Authentication/authorization bypass to privileged functionality.",
+      "poc": "curl '{base}{ep}?token=<the-hardcoded-value>'"
+    }
+  ]
+}

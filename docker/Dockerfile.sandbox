@@ -565,11 +565,13 @@ RUN set -eu; \
     chmod -R a+rX /opt/slither /opt/mythril /opt/semgrep; \
     for b in slither myth semgrep; do command -v "$b" >/dev/null || { echo "MISSING web3 tool: $b"; exit 1; }; done
 
-# echidna — release binary (Haskell; no PyPI). crytic ships a single static `echidna`.
+# echidna — release binary (Haskell; no PyPI). crytic ships a single static `echidna`. The asset
+# is named with the BARE version (echidna-2.3.3-x86_64-linux.tar.gz), so strip the tag's `v`.
 RUN set -eu; \
     E_VER="$(curl -fsSL https://api.github.com/repos/crytic/echidna/releases/latest | jq -r .tag_name)"; \
     [ -n "$E_VER" ] && [ "$E_VER" != "null" ] || { echo "echidna: could not resolve latest tag"; exit 1; }; \
-    curl -fsSL "https://github.com/crytic/echidna/releases/download/${E_VER}/echidna-${E_VER}-x86_64-linux.tar.gz" -o /tmp/ech.tgz; \
+    ENUM="${E_VER#v}"; \
+    curl -fsSL "https://github.com/crytic/echidna/releases/download/${E_VER}/echidna-${ENUM}-x86_64-linux.tar.gz" -o /tmp/ech.tgz; \
     tar -xzf /tmp/ech.tgz -C /tmp; \
     install -m0755 "$(find /tmp -maxdepth 2 -type f -name echidna | head -1)" /usr/local/bin/echidna; \
     rm -rf /tmp/ech.tgz /tmp/echidna*; \

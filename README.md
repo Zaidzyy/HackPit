@@ -55,6 +55,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | 🕸️ **Web app testing** | Recording proxy, repeater, intruder, GraphQL, browser interception, OOB callbacks. |
 | ◎ **Nuclei template scan** | Scoped target(s) → templates → severity-ranked findings, one approval; results flow into engagement state. |
 | 🪟 **Windows / AD** | BloodHound graph → route to Domain Admin → walk it live over WinRM. |
+| 📄 **AD CS (ESC1–8)** | `certipy find` → certtemplate/certauthority nodes + synthesized `ESC1…ESC8` edges → a low-priv enrollee → vulnerable template → Domain Admin, routed in the same graph; the agent picks an edge, you approve every command. |
 | ☁️ **Cloud IAM privesc** | ScoutSuite/Prowler/pacu/cloudfox → typed IAM graph → route to an admin/owner identity across AWS/Azure/GCP; the agent picks an edge, you approve every command. |
 | 🌉 **Web SSRF → cloud creds** | A captured IMDS response (from the repeater, a nuclei hit, or an OOB callback) → an **owned** cloud principal seeded into the IAM graph → the privesc walk starts from the identity you just stole. |
 | 🔑 **Credential attack** | Spray captured/OSINT creds, crack captured hashes — one approval per job; secrets stay in loot files, a hit lights the AD graph. |
@@ -218,6 +219,16 @@ Ingest **BloodHound** data, get a typed graph, route to Domain Admin, and **walk
   <img src="assets/screenshots/13-cockpit-ad.png" alt="The AD attack-path graph — BloodHound ingest, route to Domain Admin" width="49%">
   <img src="assets/screenshots/15-windows.png" alt="The WinRM driver — run AD abuse live against a Windows target you control" width="49%">
 </p>
+
+### 📄 AD CS: ESC1–8 routed in the graph
+
+The same graph now **routes certificate-services abuse**. Feed it **`certipy find -json`** and it adds `certtemplate` / `certauthority` nodes and **synthesizes composite `ESC1…ESC8` edges** — exactly the way DCSync is synthesized from its two replication rights: a predicate over a template's misconfiguration **and** a low-priv enrollee's enroll right collapses to one edge from that enrollee to Domain Admins. ESC1/ESC6/ESC8 are the direct wins; **ESC4** (write control over a template) and **ESC7** (ManageCA) emit the *two-hop reconfigure-then-abuse* shape through the template/CA node. Each edge's abuse is grounded in the KB and resolves to a real `certipy req → auth` command (plus a native `Certify.exe` variant for the on-host CRTP path), and — like every abuse in the graph — it runs **only** through the gated executor, approve-each. `certipy find` itself runs as a gated, scope-locked enumeration job. No new gate; per-command human approval is the only bound.
+
+<p align="center">
+  <img src="assets/screenshots/36-cockpit-ad-esc.png" alt="The AD CS ESC route — a synthetic vulnerable CA renders a 2-hop route from an owned low-priv enrollee to Domain Admins: HODOR (owned) —ESC4→ VulnTemplate (a certificate-template node) —ESC1→ DOMAIN ADMINS, with the agent-proposes-an-edge orchestrator panel above" width="90%">
+</p>
+
+> No AD lab needed: the sample is a **synthetic vulnerable CA** (no real domain, CA, or account names) with a real ESC route — a low-priv user who can rewrite a template's config reconfigures it to be SAN-abusable (ESC4), then enrols a Domain Admin certificate (ESC1). A live `certipy find` wires in the same way, through the gated executor, when a domain is in scope.
 
 ---
 
@@ -438,7 +449,7 @@ HackPit/
 │   ├── detection/   ATT&CK / Sigma footprints and the OPSEC channel
 │   ├── state/       hosts · services · creds · findings · task tree
 │   ├── arsenal/     the 121-tool catalog and its templates
-│   ├── adgraph/     BloodHound ingest → typed graph → routing
+│   ├── adgraph/     BloodHound + certipy (AD CS ESC1–8) ingest → typed graph → routing
 │   ├── exploits/    CVE → exploit index (local exploit-db)
 │   ├── codescan/    multi-language SAST rules (offline-first)
 │   ├── evasion/     generate-only artifact producer

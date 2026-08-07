@@ -31,9 +31,13 @@ JOFFREY = _u("1106", "joffrey")
 TYRION = _u("1107", "tyrion")
 CERSEI = _u("1108", "cersei")
 SVC_SQL = _u("1109", "svc_sql")
+# AD CS enrollees — low-priv principals whose ESC route to DA the certipy sample adds.
+HODOR = _u("1110", "hodor")   # can WRITE a template (ESC4) -> reconfigure -> ESC1
+BRAN = _u("1111", "bran")     # a direct ESC1 enrollee + a CA officer (ESC7)
 SMALL_COUNCIL = _u("1120", "small council")
 DOMAIN_ADMINS = f"{DOMAIN_SID}-512"
 DC01 = _u("1001", "dc01")
+WKSTN01 = _u("1130", "wkstn01")  # the coerced/relayed machine for ESC8
 
 
 def _user(sid: str, short: str, **props) -> dict:
@@ -76,8 +80,12 @@ def sample_collection() -> dict:
 
     tywin = _user(TYWIN, "tywin")
     cersei = _user(CERSEI, "cersei")  # already a Domain Admin (member below)
+    # AD CS enrollees — no ACL edges of their own; their only route to DA is the ESC chain the
+    # certipy sample synthesizes (so the BloodHound-only graph is byte-identical for the old tests).
+    hodor = _user(HODOR, "hodor")
+    bran = _user(BRAN, "bran")
 
-    users = [tywin, jaime, joffrey, tyrion, cersei, svc_sql]
+    users = [tywin, jaime, joffrey, tyrion, cersei, svc_sql, hodor, bran]
 
     # --- groups ------------------------------------------------------------- #
     small_council = {
@@ -131,6 +139,21 @@ def sample_collection() -> dict:
         "IsDeleted": False,
     }
 
+    # a workstation — the machine ESC8 coerces + relays to the CA's web enrollment.
+    wkstn01 = {
+        "ObjectIdentifier": WKSTN01,
+        "Properties": {"name": "WKSTN01.SEVENKINGDOMS.LOCAL", "domain": "SEVENKINGDOMS.LOCAL",
+                       "operatingsystem": "Windows 11", "highvalue": False},
+        "Aces": [], "AllowedToDelegate": [], "AllowedToAct": [],
+        "Sessions": {"Results": [], "Collected": True},
+        "LocalAdmins": {"Results": [], "Collected": True},
+        "RemoteDesktopUsers": {"Results": [], "Collected": True},
+        "PSRemoteUsers": {"Results": [], "Collected": True},
+        "DcomUsers": {"Results": [], "Collected": True},
+        "PrimaryGroupSID": f"{DOMAIN_SID}-515",
+        "IsDeleted": False,
+    }
+
     def _file(mtype: str, data: list[dict]) -> dict:
         return {"data": data, "meta": {"methods": 46, "type": mtype, "count": len(data),
                                        "version": 5}}
@@ -138,7 +161,7 @@ def sample_collection() -> dict:
     return {
         "users": _file("users", users),
         "groups": _file("groups", [small_council, domain_admins]),
-        "computers": _file("computers", [dc01]),
+        "computers": _file("computers", [dc01, wkstn01]),
         "domains": _file("domains", [domain]),
         "gpos": _file("gpos", []),
         "ous": _file("ous", []),
@@ -146,6 +169,95 @@ def sample_collection() -> dict:
     }
 
 
+def sample_certipy() -> dict:
+    """A synthetic ``certipy find -json`` for the SAME domain — a deliberately vulnerable AD CS
+    deployment covering ESC1/ESC2/ESC3/ESC4/ESC6/ESC7/ESC8. Folded into the sample graph
+    (parser.ingest_certipy) so ``/cockpit/ad`` renders an ESC route with NO live CA.
+
+    The headline route the screenshot shows (from HODOR): ``hodor --ESC4--> VulnTemplate
+    --ESC1--> Domain Admins`` — a low-priv user who can rewrite a template's config, reconfigures
+    it to be SAN-abusable, then enrols a Domain Admin certificate. No real domain, CA, or account
+    names — all synthetic.
+    """
+    dom = "SEVENKINGDOMS.LOCAL"
+    ca = "SEVENKINGDOMS-CA"
+    return {
+        "Certificate Authorities": {
+            "0": {
+                "CA Name": ca,
+                "DNS Name": "dc01.sevenkingdoms.local",
+                "Web Enrollment": "Enabled",           # ESC8 surface
+                "User Specified SAN": "Enabled",        # EDITF_ATTRIBUTESUBJECTALTNAME2 -> ESC6
+                "Manage CA Principals": [f"{dom}\\bran"],       # ESC7
+                "Relay Sources": ["WKSTN01.SEVENKINGDOMS.LOCAL"],  # ESC8 (operator-chosen source)
+                "[!] Vulnerabilities": {"ESC6": "User Specified SAN is enabled",
+                                        "ESC7": "bran has Manage CA",
+                                        "ESC8": "Web Enrollment is enabled without HTTPS/EPA"},
+            }
+        },
+        "Certificate Templates": {
+            # ESC4 demo — HODOR can rewrite this template's config; not yet ESC1 (no ESS), so the
+            # only route through it is reconfigure-then-abuse.
+            "0": {
+                "Template Name": "VulnTemplate",
+                "Enabled": True,
+                "Extended Key Usage": ["Client Authentication"],
+                "Enrollee Supplies Subject": False,
+                "Requires Manager Approval": False,
+                "Enrollment Rights": [f"{dom}\\Domain Users"],
+                "Object Control Permissions": {"Write Owner Principals": [f"{dom}\\hodor"]},
+                "Certificate Authorities": [ca],
+                "[!] Vulnerabilities": {"ESC4": "hodor has dangerous write permissions"},
+            },
+            # a directly ESC1-vulnerable template (enrollee-supplied SAN + client auth + enrol).
+            "1": {
+                "Template Name": "UserAuthESC1",
+                "Enabled": True,
+                "Extended Key Usage": ["Client Authentication"],
+                "Enrollee Supplies Subject": True,
+                "Requires Manager Approval": False,
+                "Enrollment Rights": [f"{dom}\\bran", f"{dom}\\Domain Users"],
+                "Certificate Authorities": [ca],
+                "[!] Vulnerabilities": {"ESC1": "Enrollee supplies subject + client auth"},
+            },
+            # client-auth but NOT enrollee-supplied-SAN — abusable ONLY because the CA EDITF flag
+            # is set (ESC6), not on its own.
+            "2": {
+                "Template Name": "WorkstationAuth",
+                "Enabled": True,
+                "Extended Key Usage": ["Client Authentication"],
+                "Enrollee Supplies Subject": False,
+                "Requires Manager Approval": False,
+                "Enrollment Rights": [f"{dom}\\Domain Computers"],
+                "Certificate Authorities": [ca],
+            },
+            # Any-Purpose EKU (ESC2).
+            "3": {
+                "Template Name": "AnyPurpose",
+                "Enabled": True,
+                "Extended Key Usage": ["Any Purpose"],
+                "Enrollee Supplies Subject": False,
+                "Requires Manager Approval": False,
+                "Enrollment Rights": [f"{dom}\\Domain Users"],
+                "Certificate Authorities": [ca],
+                "[!] Vulnerabilities": {"ESC2": "Any Purpose EKU"},
+            },
+            # Enrollment Agent template (ESC3).
+            "4": {
+                "Template Name": "EnrollmentAgent",
+                "Enabled": True,
+                "Extended Key Usage": ["Certificate Request Agent"],
+                "Requires Manager Approval": False,
+                "Enrollment Rights": [f"{dom}\\bran"],
+                "Certificate Authorities": [ca],
+                "[!] Vulnerabilities": {"ESC3": "Certificate Request Agent EKU"},
+            },
+        },
+    }
+
+
 # The canonical owned start + the high-value target for the demo/tests.
 OWNED_START = TYWIN
 HIGH_VALUE_TARGET = DOMAIN_ADMINS
+# The AD CS demo's owned start — a low-priv user who reaches DA via the ESC chain (ESC4 -> ESC1).
+ESC_SAMPLE_START = HODOR

@@ -6248,6 +6248,17 @@ a.hp-card {
 .hp-adg-node.is-target {
   box-shadow: 0 0 22px rgba(240, 82, 82, 0.25);
 }
+/* AD CS objects — a vulnerable certificate template / CA carried in from a certipy find ingest.
+   Amber for the template, violet for the authority, so an ESC hop reads as a distinct kind of
+   node from the user/group/computer chain around it. */
+.hp-adg-node.is-certtemplate {
+  border-color: rgba(240, 178, 82, 0.7);
+  background: rgba(38, 30, 16, 0.92);
+}
+.hp-adg-node.is-certauthority {
+  border-color: rgba(178, 130, 240, 0.7);
+  background: rgba(28, 20, 40, 0.92);
+}
 .hp-adg-node-icon { font-size: 20px; line-height: 1; }
 .hp-adg-node-label {
   font-family: var(--font-jetbrains-mono), monospace;

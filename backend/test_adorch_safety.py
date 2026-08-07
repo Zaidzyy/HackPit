@@ -311,6 +311,50 @@ def test_a_destructive_abuse_never_renders_as_benign() -> None:
           f"as benign ({destructive_seen} destructive kinds, grounder wired): PASS")
 
 
+def test_a_proposed_esc_step_runs_nothing_unapproved() -> None:
+    """THE claim, for AD CS. Take the agent's ACTUAL proposal for a synthesized ESC1 edge (a
+    low-priv enrollee -> Domain Admins) and submit it exactly as proposed: unapproved. It must be
+    refused, and nothing may run — the same load-bearing invariant as any other AD abuse."""
+    g = P.parse_collection(S.sample_collection(), certipy=S.sample_certipy())
+    edge = next(e for e in g.edges if e.kind == "ESC1")
+    prop = O.proposal_for_edge(g, edge, "enrollee reaches DA via ESC1")
+    assert prop["command"] == "certipy", prop["command"]
+    assert prop["destructive_technique"], "issuing a DA certificate is destructive"
+
+    eng = _eng("sevenkingdoms.local, dc01.sevenkingdoms.local", "dc01.sevenkingdoms.local")
+    orig = _patch(eng)
+    try:
+        rej = E.validate_request(ExecRequest(
+            command=prop["command"], args=prop["args"], approved=False,
+            engagement_id=eng.engagement_id))
+        assert rej is not None, "an unapproved ESC abuse step must be REFUSED"
+        assert rej.gate in ("approval", "danger", "target"), rej
+        # approved but NOT acked -> still refused at the danger gate (it issues a real cert)
+        rej2 = E.validate_request(ExecRequest(
+            command=prop["command"], args=prop["args"], approved=True,
+            engagement_id=eng.engagement_id))
+        assert rej2 is not None and rej2.gate == "danger", rej2
+        print("  a proposed ESC step is refused unapproved, and demands the red confirm even "
+              "when approved: PASS")
+    finally:
+        E.engagement.get_active = orig
+
+
+def test_adcs_ingest_and_techniques_execute_nothing() -> None:
+    """The certipy ingest + the ESC technique templates are DATA. Source-scan the modules that
+    gained AD CS code for any execution path — parsing captured `certipy find` output and
+    rendering a command string must never spawn a process."""
+    from adgraph import parser as PARSER
+    from adgraph import techniques as TECH
+    banned = ["subprocess", "Popen", "os.system", "os.exec", "pty.spawn", "docker exec",
+              "run_kali", "iter_run(", "check_output"]
+    for mod in (PARSER, TECH):
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        for tok in banned:
+            assert tok not in src, f"{mod.__name__} must not reference {tok!r}"
+    print("  the certipy ingest + ESC technique catalog execute nothing (source-scanned): PASS")
+
+
 def test_read_only_ad_enumeration_stays_clean() -> None:
     """The other half of the same claim. A confirm that fires on everything is one the operator
     learns to click through, so read-only enumeration must NOT be flagged."""
@@ -320,6 +364,10 @@ def test_read_only_ad_enumeration_stays_clean() -> None:
         ("bloodhound-python", ["-d", "seven.local", "-u", "u", "-p", "p", "-c", "DCOnly"]),
         ("ldapdomaindump", ["-u", "seven\\u", "-p", "p", "ldap://dc01"]),
         ("nxc", ["smb", "dc01", "-u", "u", "-p", "p", "--shares"]),
+        # AD CS ENUMERATION — certipy/Certify `find` only read the PKI config; they must stay
+        # clean, exactly like bloodhound-python above, or the ESC confirm loses its meaning.
+        ("certipy", ["find", "-u", "u@dom", "-p", "p", "-dc-ip", "10.0.0.5", "-json"]),
+        ("Certify.exe", ["find", "/vulnerable"]),
     ):
         assert A.dangerous_command_heuristic(command, args) == [], (
             f"read-only enumeration must stay clean: {command} {args}"
@@ -454,6 +502,8 @@ if __name__ == "__main__":
     test_every_destructive_windows_variant_trips_the_heuristic()
     test_windows_variant_runs_through_the_same_gates()
     test_a_destructive_abuse_never_renders_as_benign()
+    test_a_proposed_esc_step_runs_nothing_unapproved()
+    test_adcs_ingest_and_techniques_execute_nothing()
     test_read_only_ad_enumeration_stays_clean()
     test_off_scope_ad_host_is_refused()
     test_proposal_is_argv_only()

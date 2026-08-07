@@ -3492,7 +3492,16 @@ export const stopDnsListener = (lid: string, signal?: AbortSignal) =>
 
 export type ADNode = {
   id: string;
-  type: "user" | "group" | "computer" | "domain" | "ou" | "gpo" | "container";
+  type:
+    | "user"
+    | "group"
+    | "computer"
+    | "domain"
+    | "ou"
+    | "gpo"
+    | "container"
+    | "certtemplate"
+    | "certauthority";
   label: string;
   high_value: boolean;
   owned: boolean;
@@ -3571,7 +3580,11 @@ export const adIngest = (
     session_id?: string | null;
     engagement_id?: string | null;
     collection?: unknown;
+    /** Decoded `certipy find -json` — folded in as certtemplate/certauthority nodes + ESC edges. */
+    certipy?: unknown;
     use_sample?: boolean;
+    /** With use_sample, also fold in the synthetic vulnerable-CA certipy sample (ESC route). */
+    use_adcs_sample?: boolean;
   },
   signal?: AbortSignal
 ) => postJSON<ADIngestResult>("/cockpit/ad/ingest", body, signal);

@@ -44,6 +44,8 @@ const NODE_ICON: Record<ADNode["type"], string> = {
   ou: "🗂️",
   gpo: "📜",
   container: "📦",
+  certtemplate: "📄",
+  certauthority: "🏛️",
 };
 
 function shortLabel(label: string): string {
@@ -96,29 +98,33 @@ export function CockpitADGraph({
 
   const path = result?.found ? result.path : null;
 
-  const ingestSample = useCallback(async () => {
+  const ingestSample = useCallback(async (startOverride?: string) => {
+    const start = startOverride ?? SAMPLE_START;
     setLoading(true);
     setError(null);
     setResult(null);
     setWalked(new Set());
     setOpenEdge(null);
     try {
+      // The sample ingest folds in the synthetic vulnerable-CA (certipy) data too, so the graph
+      // carries the ESC route as well as the classic ACL chain.
       const ing = await adIngest({ use_sample: true, session_id: sessionId });
       setGraphId(ing.graph_id);
       setDomain(ing.domain);
-      setOwned([SAMPLE_START]);
+      setOwned([start]);
       setTraversed([]);
       setWarnings(ing.warnings);
-      // compute the route to DA (sample's owned start is TYWIN) + load the node map for icons
+      // compute the route to DA from the owned start (TYWIN = ACL chain; HODOR = ESC chain) +
+      // load the node map for icons
       const [pathRes, g] = await Promise.all([
-        adComputePath({ graph_id: ing.graph_id, start: SAMPLE_START, with_techniques: true }),
+        adComputePath({ graph_id: ing.graph_id, start, with_techniques: true }),
         adGetGraph(ing.graph_id),
       ]);
       const nm = new Map<string, ADNode>();
       for (const n of g.nodes) nm.set(n.id, n);
       // mark the start as owned for the UI
-      const s = nm.get(SAMPLE_START);
-      if (s) nm.set(SAMPLE_START, { ...s, owned: true });
+      const s = nm.get(start);
+      if (s) nm.set(start, { ...s, owned: true });
       setNodes(nm);
       setResult(pathRes);
     } catch (err: unknown) {
@@ -127,6 +133,20 @@ export function CockpitADGraph({
       setLoading(false);
     }
   }, [sessionId]);
+
+  // Deep-link auto-load (the ?demo= pattern) so the headless screenshot renders without a click:
+  //   ?demo=esc → the AD CS ESC route from a low-priv enrollee (HODOR) through a vulnerable
+  //   template to Domain Admins;  ?demo=1 → the classic ACL chain from TYWIN.
+  // The ingest runs in a deferred callback (setTimeout), never the effect body, so the initial
+  // setState stays off the effect's synchronous path and the lint baseline is unchanged.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const demo = new URLSearchParams(window.location.search).get("demo");
+    if (!demo) return;
+    const start = demo === "esc" ? ESC_SAMPLE_START : SAMPLE_START;
+    const id = window.setTimeout(() => void ingestSample(start), 0);
+    return () => window.clearTimeout(id);
+  }, [ingestSample]);
 
   const nodeOf = useCallback(
     (id: string): ADNode =>
@@ -224,7 +244,7 @@ export function CockpitADGraph({
             <button
               type="button"
               className="hp-tn-start"
-              onClick={ingestSample}
+              onClick={() => ingestSample()}
               disabled={loading}
             >
               {loading ? "loading…" : "load the sample domain (GOAD-style)"}
@@ -252,7 +272,7 @@ export function CockpitADGraph({
           <div className="hp-tn-cardsub">{result.reason}</div>
           <div className="hp-tn-actions">
             <span className="hp-tn-actions-label">act</span>
-            <button type="button" className="hp-tn-start" onClick={ingestSample}>
+            <button type="button" className="hp-tn-start" onClick={() => ingestSample()}>
               reload
             </button>
           </div>
@@ -385,6 +405,9 @@ export function CockpitADGraph({
 
 // The sample's owned start principal (TYWIN's SID) — matches sample_data.py.
 const SAMPLE_START = "S-1-5-21-1111111111-2222222222-3333333333-1104";
+// The AD CS demo's owned start (HODOR's SID) — a low-priv enrollee who reaches DA via the ESC
+// chain (ESC4 rewrite → ESC1). Matches sample_data.ESC_SAMPLE_START.
+const ESC_SAMPLE_START = "S-1-5-21-1111111111-2222222222-3333333333-1110";
 
 /** Split a one-line command into argv tokens (quote-aware). Multi-line commands use the first
  *  runnable line. Not a shell — the executor runs argv-only. */

@@ -355,6 +355,10 @@ _AD_DUMP_MARKERS = (
 _AD_WRITE_SUBCOMMANDS: dict[str, tuple[str, ...]] = {
     "bloodyad": ("set ", "add ", "remove "),
     "certipy": ("req", "shadow", "relay", "forge", "ca", "template", "cert", "auth"),
+    # Certify.exe (the .NET AD CS abuse tool) — the CRTP Windows path for ESC1-8. Its `find`
+    # subcommand is read-only enumeration (kept clean, like `certipy find`); `request` mints a
+    # certificate as a chosen principal and `download` pulls an issued one, so both mutate/mint.
+    "certify": ("request", "download"),
     "net": ("password", "/add", "/delete", "/active:"),
     "rubeus": ("ptt", "golden", "silver", "s4u", "asktgt", "changepw", "tgtdeleg", "dump"),
     "bloodhound-ce": (),

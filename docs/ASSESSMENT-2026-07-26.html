@@ -448,6 +448,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#nuclei-template-scan-the-bug-bounty-staple-wired-nuclei-2026-08-06">Nuclei template scan — the bug-bounty staple, wired (:nuclei) (2026-08-06)</a></li>
 <li><a href="#documentation-housekeeping-2026-08-06">Documentation &amp; housekeeping (2026-08-06)</a></li>
 <li><a href="#cloud-attack-surface-iam-privesc-graph-the-cloud-parallel-to-bloodhound-cloud-graph-2026-08-06">Cloud attack surface &amp; IAM privesc graph — the cloud parallel to BloodHound (:cloud-graph) (2026-08-06)</a></li>
+<li><a href="#ad-cs-esc18-routed-in-the-graph-the-ad-parallel-to-dcsync-synthesis-ad-graph-2026-08-07">AD CS ESC1–8 routed in the graph — the AD parallel to DCSync synthesis (:ad-graph) (2026-08-07)</a></li>
 </ul>
 </li>
 </ul>
@@ -659,6 +660,11 @@ a { color: var(--accent); text-decoration: none; }
 <td>BloodHound parser</td>
 <td><strong>Genuinely good</strong></td>
 <td>Handles v4/v5/CE, zip/dir/json/bytes/mapping, reconciles naming drift, synthesizes DCSync from <code>GetChanges</code>+<code>GetChangesAll</code>, emits coverage warnings for missing collection methods. Real work.</td>
+</tr>
+<tr>
+<td>AD CS ESC1–8 graph</td>
+<td><strong>New (2026-08-07)</strong></td>
+<td><code>certipy find -json</code> folded into the SAME graph: <code>certtemplate</code>/<code>certauthority</code> nodes + <strong>synthesized composite <code>ESC1…ESC8</code> edges</strong>, the AD parallel to the DCSync synthesis (a predicate over template-vuln × enroll-right → one edge from a low-priv enrollee to Domain Admins). ESC1/6/8 direct; ESC4/ESC7 emit the two-hop reconfigure-then-abuse shape through the template/CA node; ESC2/3 modeled; ESC9–11 catalog-cited. Each edge grounds to <code>certipy req → auth</code> (+ native <code>Certify.exe</code>), all destructive and oracle-locked to trip the red-confirm on both transports. <code>certipy find</code> runs as a gated scope-locked enum job. <strong>No new gate</strong> — the orchestrator still picks an edge index, never authors a command. <code>test_adcs_graph.py</code> + extended <code>test_adorch_safety.py</code>; <code>Certify.exe</code> added to the arsenal. See the dated section below.</td>
 </tr>
 <tr>
 <td>Path engine</td>
@@ -5472,5 +5478,61 @@ routing already carry Azure/GCP node/edge kinds, and the enumerate worker runs <
 providers, but the deep policy-statement → privesc-edge extraction is AWS-first — Azure/GCP produce
 principal/resource nodes + their findings via the same tolerant reader. The default objective is an
 admin/owner-equivalent principal; the operator can name a different target node.</p>
+<h2 id="ad-cs-esc18-routed-in-the-graph-the-ad-parallel-to-dcsync-synthesis-ad-graph-2026-08-07">AD CS ESC1–8 routed in the graph — the AD parallel to DCSync synthesis (<code>:ad-graph</code>) (2026-08-07)</h2>
+<p>The AD attack-path graph could route ACL abuse (ForceChangePassword → GenericWrite → … → Domain Admins) and
+DCSync, but not the <strong>certificate-services</strong> escalation path that is now the most common way a low-privileged
+domain user reaches Domain Admin. Certipy was only an arsenal tool plus one shadow-credentials technique; the
+graph could not walk the ESC chain. This build makes it route <strong>AD CS ESC1–8</strong> — ingest <code>certipy find -json</code>,
+add <code>certtemplate</code> / <code>certauthority</code> nodes, and <strong>synthesize composite <code>ESC{n}</code> edges</strong> from a low-priv enrollee
+to Domain Admins, walked the exact edge-index way the BloodHound orchestrator already works. It is a near-clone
+of how DCSync + shadow-creds already work in <code>adgraph/</code>, deliberately.</p>
+<p><strong>It adds NO new gate — §0's binding constraint.</strong> The graph <strong>proposes an edge index, never authors a command</strong>
+(<code>orchestrator.py</code> unchanged; a pick outside the frontier is refused, not repaired; it execs nothing by AST). The
+ESC abuse COMMAND comes from the deterministic KB-grounded technique catalog, and approval goes to the SAME <code>POST
+/cockpit/exec</code> every other command uses; <code>advance</code> moves only on a run that was approved and exited 0, verified
+server-side. <code>certipy find</code> itself runs as a <strong>gated, scope-locked enumeration job</strong> (the bloodhound-collector
+shape): read-only, so no red-confirm, but still a command against a real DC the human approves. Per-command human
+approval is the only bound.</p>
+<p><strong>The synthesis mirrors DCSync exactly.</strong> DCSync is one composite edge emitted when a predicate over two facts
+holds (<code>GetChanges</code> <strong>and</strong> <code>GetChangesAll</code> on the same target). An ESC edge is one composite edge emitted when a
+predicate over a template's misconfiguration <strong>and</strong> an enrollee's enroll right holds — <code>parser.ingest_certipy</code>
+reads each template's EKUs, <code>enrollee_supplies_subject</code>, manager-approval flag and enroll/write ACLs, and each
+CA's <code>EDITF_ATTRIBUTESUBJECTALTNAME2</code> / web-enrollment / ManageCA principals, then collapses the vulnerable ones
+to a <code>enrollee --ESC{n}--&gt; Domain Admins</code> edge carrying <code>template_name</code> / <code>ca_name</code> / <code>esc_variant</code> / <code>eku</code> in
+props. <strong>ESC1/ESC6/ESC8</strong> are the direct wins (ranked high for the tie-break); <strong>ESC4</strong> (write control over a
+template) and <strong>ESC7</strong> (ManageCA) emit the <strong>two-hop reconfigure-then-abuse</strong> shape, targeting the template/CA
+node and then chaining to the issue step. ESC2/ESC3 are modeled too; ESC9–11 (weak-mapping / RPC-relay) are
+catalog-cited and deferred — they have no strong SAN/enroll predicate to synthesize from and are noted here
+rather than modeled thinly. <code>PublishedTo</code> (template → CA) and <code>CanEnroll</code> (a template you may enrol but cannot
+abuse) are <strong>structural context</strong>, not traversed.</p>
+<p><strong>Each ESC edge resolves to a real, gated command — and demands the red-confirm.</strong> The catalog grounds every
+edge in a <code>certipy req → certipy auth</code> chain (obtain a cert as <code>administrator</code>, then recover the NT hash / TGT),
+with a native <code>Certify.exe</code> variant for the on-host CRTP path and <code>ntlmrelayx --adcs</code> for ESC8's relay. All are
+<strong>destructive</strong> — they issue a real certificate or reconfigure the PKI — and the danger heuristic was extended so
+every one trips it: <code>certipy</code>'s abuse subcommands and <code>ntlmrelayx</code> already fired, and <code>Certify.exe request</code> /
+<code>certipy … auth</code> now do too (<code>certify</code>'s <code>request</code>/<code>download</code> added to <code>_AD_WRITE_SUBCOMMANDS</code>, its read-only
+<code>find</code> kept clean like <code>certipy find</code>). The <strong>oracle test</strong> — every edge the catalog calls destructive must
+resolve to a command the heuristic flags, on <strong>both</strong> the Linux and native-Windows transports — passes across the
+seven new kinds, so no ESC step can run without the explicit confirm.</p>
+<p><strong><code>Certify.exe</code> added to the arsenal for the Windows path.</strong> Catalogued in <code>arsenal/tools.json</code> (read-only <code>find</code>
+template + the <code>request</code> / on-behalf-of abuse templates) and classified <code>_ARGUMENT_DEPENDENT</code> in
+<code>test_arsenal_safety.py</code> — the bare binary stays clean, at least one template fires — the same bucket as <code>certipy</code>
+and <code>rubeus</code>.</p>
+<p><strong>Frontend <code>/cockpit/ad</code></strong> renders the ESC edges + cert nodes in the <strong>existing</strong> graph — new <code>certtemplate</code>
+(amber, 📄) and <code>certauthority</code> (violet, 🏛️) node styling in the <code>hp-adg-*</code> vocabulary, <code>ESC{n}</code> edge labels, and
+a <code>?demo=esc</code> deep-link that auto-ingests the synthetic vulnerable-CA sample. <strong>The screen was looked at</strong>
+(<code>frontend-class-vocabulary</code>): the sample renders a real 2-hop route — <code>HODOR</code> (owned) —ESC4→ <code>VulnTemplate</code>
+(a certificate-template node) —ESC1→ <code>DOMAIN ADMINS</code> — with no AD lab (see screenshot 36).</p>
+<p><strong>Verification.</strong> <code>test_adcs_graph.py</code> (certipy → cert nodes + composite ESC edges with props; a low-priv
+enrollee reaches DA via ESC1; ESC4/ESC7 produce the two-hop reconfigure-then-abuse shape; every ESC edge is
+runnable on Linux <strong>and</strong> Windows; a non-vulnerable template is <code>CanEnroll</code> context; the BloodHound-only graph is
+byte-unchanged) and the extended <code>test_adorch_safety.py</code> (a proposed ESC step is refused unapproved and demands
+the red-confirm; the certipy ingest + technique catalog execute nothing by source-scan; <code>certipy</code>/<code>Certify.exe
+find</code> stay clean) both pass, wired into <code>run_safety_tests.sh</code> — the hermetic suite stands at <strong>103 test files, all
+green</strong>. <code>next build</code> exits 0 with <code>/cockpit/ad</code> in the route table.</p>
+<p><strong>Assumptions (per §5), stated.</strong> The primary enum source is <code>certipy find -json</code>; a BloodHound-CE ADCS ingest
+would fold in the same way but is not wired. Synthesized ESC edges target the Domain Admins group (RID 512) when
+collected, else the domain node — reaching it is the win, matching the existing objective model. ESC9–11 are
+deferred (catalog-cited), as noted above.</p>
 </body>
 </html>

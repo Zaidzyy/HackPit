@@ -118,6 +118,8 @@ run_test test_engagement_scope.py "engagement SCOPE tests (in-scope passes / out
 
 run_test test_adgraph.py "AD graph parser + path tests (BloodHound -> graph -> route to Domain Admin)"
 
+run_test test_adcs_graph.py "AD CS ESC1-8 graph tests (certipy find -> certtemplate/certauthority nodes + synthesized composite ESC edges / a low-priv enrollee reaches DA via ESC1 / ESC4+ESC7 two-hop reconfigure-then-abuse / every ESC edge runnable Linux + Windows + carries props / non-vulnerable template is CanEnroll context / BloodHound-only graph unchanged)"
+
 run_test test_adgraph_collector.py "AD collector tests (argv-only / unapproved / scope-locked DC / failure / no exec)"
 
 run_test test_adorch.py "AD orchestration tests (frontier / proposals / synthetic walk to Domain Admin)"

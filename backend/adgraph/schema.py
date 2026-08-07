@@ -12,7 +12,11 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 # --- node types (BloodHound's object taxonomy, lower-cased + stable) -------- #
-NODE_TYPES = ("user", "group", "computer", "domain", "ou", "gpo", "container")
+# `certtemplate` / `certauthority` are AD CS objects: they come from a certipy `find` ingest
+# (see parser._ingest_certipy), not from BloodHound's core files, but they live in the SAME
+# graph so the same path engine can walk an ESC chain (enrollee → vulnerable template → DA).
+NODE_TYPES = ("user", "group", "computer", "domain", "ou", "gpo", "container",
+              "certtemplate", "certauthority")
 
 # --- edge taxonomy ---------------------------------------------------------- #
 # Every edge kind the parser can emit. Split into structural (how the directory is wired)
@@ -22,6 +26,10 @@ STRUCTURAL_EDGES = frozenset({
     "Contains",     # OU/container -> child object
     "GpLink",       # GPO -> OU/domain it is linked to
     "TrustedBy",    # domain trust direction
+    # AD CS context (NOT traversed — they wire the cert objects into the graph so the drawer can
+    # show where a template is published and who may enrol, without inventing an abuse path):
+    "PublishedTo",  # certtemplate -> certauthority it is published on
+    "CanEnroll",    # principal -> certtemplate it may enrol (when the template is NOT vulnerable)
 })
 
 # Abusable edges — the traversable set BloodHound uses to reach Domain Admin. Each maps to a
@@ -30,6 +38,20 @@ STRUCTURAL_EDGES = frozenset({
 ABUSABLE_EDGES: tuple[str, ...] = (
     "MemberOf",              # principal -> group (inherits the group's rights)
     "DCSync",                # principal -> domain (replicate secrets => full compromise)
+    # --- AD CS (ESC1-8) -------------------------------------------------------- #
+    # Synthesized from a certipy `find` ingest exactly like DCSync is synthesized from the two
+    # replication rights: a (template-vuln x enroll-right) predicate collapses to one composite
+    # edge from a low-priv enrollee to the domain's Domain Admins. ESC1/ESC6/ESC8 are the direct,
+    # most-common wins, so they rank high (near DCSync) for the equal-length tie-break; ESC4/ESC7
+    # are reconfigure-then-abuse and target the template/CA node (a two-hop shape), so they sit a
+    # little lower. See techniques.py for each one's abuse command.
+    "ESC1",                  # enrollee -> DA : enrollee-supplied SAN + client-auth EKU + enroll
+    "ESC6",                  # enrollee -> DA : CA EDITF_ATTRIBUTESUBJECTALTNAME2 (any template)
+    "ESC8",                  # computer -> CA : NTLM relay to web enrollment (certsrv)
+    "ESC2",                  # enrollee -> DA : Any-Purpose (or no) EKU
+    "ESC3",                  # enrollee -> DA : Enrollment Agent template (enroll on behalf of)
+    "ESC4",                  # principal -> certtemplate : write over the template (-> ESC1)
+    "ESC7",                  # principal -> certauthority : ManageCA / ManageCertificates
     "AllExtendedRights",     # -> user/domain (incl. the DCSync/GetChanges rights)
     "GenericAll",            # full control over the target object
     "GenericWrite",          # write any non-protected attribute

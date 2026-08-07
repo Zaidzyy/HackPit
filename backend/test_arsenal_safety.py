@@ -299,7 +299,8 @@ _MUST_NOT_FIRE = frozenset({
 # The bare binary is deliberately CLEAN (it has a legitimate read-only mode that must not train
 # the operator to click through) but at least one catalogued template MUST fire, because that
 # template mutates the directory or mints credentials. Both halves are asserted.
-_ARGUMENT_DEPENDENT = frozenset({"certipy", "certipy-ad", "bloodyAD", "rubeus", "Rubeus.exe",
+_ARGUMENT_DEPENDENT = frozenset({"certipy", "certipy-ad", "certify", "Certify.exe",
+                                 "bloodyAD", "rubeus", "Rubeus.exe",
                                  # Kali's zaproxy ships ONE launcher and no scan scripts, so the
                                  # binary is the same for a crawl and for an attack and the whole
                                  # distinction is in the args: `-zapit` recons, `-quickurl`

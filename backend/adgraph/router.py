@@ -20,10 +20,16 @@ from pydantic import BaseModel, Field
 
 from . import orchestrator as ad_orch
 from . import store
-from .collector import CollectorParams, ParseError, build_collector_request, ingest_collection
+from .collector import (
+    CollectorParams,
+    ParseError,
+    build_certipy_find_request,
+    build_collector_request,
+    ingest_collection,
+)
 from .parser import parse_collection
 from .paths import default_high_value_target, paths_to_target
-from .sample_data import sample_collection
+from .sample_data import sample_certipy, sample_collection
 from .techniques import Grounder, technique_for_edge
 
 router = APIRouter(prefix="/cockpit/ad", tags=["ad-graph"])
@@ -70,8 +76,16 @@ class IngestIn(BaseModel):
         None, description="Decoded BloodHound JSON: a combined mapping, a list of file objects, "
         "or a single file object ({data, meta}).",
     )
+    certipy: Any | None = Field(
+        None, description="Decoded `certipy find -json` output (AD CS). Folded into the same "
+        "graph as certtemplate/certauthority nodes + synthesized ESC1-8 abuse edges.",
+    )
     use_sample: bool = Field(
         False, description="Ingest the built-in GOAD-style sample instead (demo without a lab).",
+    )
+    use_adcs_sample: bool = Field(
+        True, description="When use_sample is set, also fold in the synthetic vulnerable-CA "
+        "certipy sample so the graph renders an ESC route. Ignored for a real collection.",
     )
 
 
@@ -151,10 +165,15 @@ def ad_ingest(req: IngestIn) -> IngestOut:
     source = sample_collection() if req.use_sample else req.collection
     if source is None:
         raise HTTPException(status_code=422, detail="provide `collection` or set use_sample=true")
+    if req.use_sample:
+        certipy = sample_certipy() if req.use_adcs_sample else None
+    else:
+        certipy = req.certipy
     try:
         res = ingest_collection(
             source, req.session_id, req.engagement_id,
             origin="sample" if req.use_sample else "upload",
+            certipy=certipy,
         )
     except ParseError as exc:
         raise HTTPException(status_code=422, detail=f"could not parse collection: {exc}")
@@ -239,6 +258,52 @@ def ad_collect_preview(req: CollectPreviewIn) -> dict[str, Any]:
         "params": params.redacted(),
         "note": "unapproved — send `request` to POST /cockpit/exec; the human approves it there "
                 "and the engagement scope-lock covers the DC host.",
+    }
+
+
+class CertipyFindIn(BaseModel):
+    """Build the ``certipy find`` ExecRequest for the UI to send to POST /cockpit/exec
+    (approve-each). Read-only AD CS enumeration; nothing runs here — this assembles the argv.
+    NOTE: certipy's ``-dc-ip`` wants the DC's IP (not its FQDN)."""
+
+    engagement_id: str = Field(description="Active engagement (real domain); required.")
+    session_id: str | None = None
+    domain: str
+    username: str
+    dc: str = Field(description="The DC's IP address (certipy -dc-ip).")
+    password: str | None = None
+    nthash: str | None = None
+    nameserver: str | None = None
+
+
+@router.post("/certipy/preview")
+def ad_certipy_preview(req: CertipyFindIn) -> dict[str, Any]:
+    """Build (do NOT run) the ``certipy find`` ExecRequest. The UI sends the returned ``request``
+    to POST /cockpit/exec, where the human approves it and the scope-lock covers the DC. certipy
+    find is read-only (no red-confirm), but it is still a command against a real DC, so it runs
+    through the same gated executor. Its JSON output is then folded in via POST /cockpit/ad/ingest
+    with the `certipy` field. Nothing runs here; the secret is redacted from the preview argv."""
+    try:
+        params = CollectorParams(
+            domain=req.domain, username=req.username, dc=req.dc,
+            password=req.password, nthash=req.nthash, nameserver=req.nameserver,
+        )
+        exec_req = build_certipy_find_request(params, req.engagement_id, req.session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    preview = [exec_req.command]
+    args = list(exec_req.args)
+    for i, a in enumerate(args):
+        if i > 0 and args[i - 1] in ("-p", "-hashes"):
+            preview.append("<redacted>")
+        else:
+            preview.append(a)
+    return {
+        "request": exec_req.model_dump(),
+        "preview_argv": preview,
+        "params": params.redacted(),
+        "note": "unapproved — send `request` to POST /cockpit/exec (read-only enum, scope-locked "
+                "to the DC), then POST the JSON output to /cockpit/ad/ingest with `certipy`.",
     }
 
 

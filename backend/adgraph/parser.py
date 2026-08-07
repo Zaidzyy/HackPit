@@ -202,7 +202,7 @@ def _load(source: Any) -> _Loader:
     return loader
 
 
-def parse_collection(source: Any) -> Graph:
+def parse_collection(source: Any, certipy: Any | None = None) -> Graph:
     """Parse a BloodHound collection into a :class:`Graph`.
 
     ``source`` may be a path to a .zip / directory / single .json file, raw bytes of a zip or
@@ -210,6 +210,11 @@ def parse_collection(source: Any) -> Graph:
     Raises :class:`ParseError` if nothing parseable is found. Missing collection methods (e.g.
     no ACLs, no sessions) are tolerated and noted in ``graph.warnings`` — a partial collection
     still yields a partial graph.
+
+    ``certipy`` (optional) is decoded ``certipy find -json`` output — the authoritative AD CS
+    enumeration. When present it is folded into the SAME graph as ``certtemplate`` /
+    ``certauthority`` nodes plus synthesized ESC1-8 abuse edges (see :func:`ingest_certipy`), so
+    the path engine can walk an enrollee → vulnerable template → Domain Admin chain.
     """
     loader = _load(source)
     total = sum(len(v) for v in loader.buckets.values())
@@ -254,6 +259,9 @@ def parse_collection(source: Any) -> Graph:
             f"BloodHound legacy schema (v{max(loader.meta_versions)}) — parsed with the "
             "v4/v5 mapping"
         )
+
+    if certipy is not None:
+        ingest_certipy(g, certipy)
     return g
 
 
@@ -376,3 +384,303 @@ def _emit_aces(g: Graph, target_oid: str, aces: Any) -> None:
         if _GETCHANGES in rights and _GETCHANGES_ALL in rights:
             g.add_edge(Edge(source=psid, target=target_oid, kind="DCSync",
                             props={"via": "GetChanges+GetChangesAll"}))
+
+
+# =========================================================================== #
+# AD CS (certipy find -json) — cert nodes + synthesized ESC1-8 abuse edges.
+#
+# This mirrors the DCSync synthesis above EXACTLY: DCSync is one composite edge emitted when a
+# predicate over two facts holds (GetChanges AND GetChangesAll on the same target). An ESC edge
+# is one composite edge emitted when a predicate over a template's vulnerability AND an
+# enrollee's enroll-right holds — a low-privileged enrollee to the domain's Domain Admins. The
+# certtemplate / certauthority nodes carry the misconfiguration; the ESC edge carries the abuse.
+#
+# certipy's own field names drift across versions, so every read goes through a case-insensitive
+# getter and tolerates both dict-keyed ({"0": {...}}) and list-shaped containers. Nothing here
+# runs anything — it reads captured `certipy find` output, exactly like the BloodHound parser.
+# =========================================================================== #
+
+# Client-authentication-capable EKUs — the ones that let a cert log a user on to the domain.
+_CLIENT_AUTH_EKUS = frozenset({
+    "client authentication", "smart card logon", "pkinit client authentication",
+    "any purpose", "certificate request agent",
+})
+_ANY_PURPOSE_EKUS = frozenset({"any purpose"})
+_ENROLL_AGENT_EKUS = frozenset({"certificate request agent", "enrollment agent"})
+# Names that denote a GROUP rather than a user, for stub principals certipy references by name.
+_GROUPISH = ("users", "computers", "admins", "everyone", "authenticated", "operators", "guests")
+
+
+def _ci_get(d: dict, *keys: str, default: Any = None) -> Any:
+    """Case-insensitive first-match getter over a certipy object (its keys vary by version)."""
+    if not isinstance(d, dict):
+        return default
+    low = {str(k).strip().lower(): v for k, v in d.items()}
+    for k in keys:
+        v = low.get(k.strip().lower())
+        if v is not None:
+            return v
+    return default
+
+
+def _rows(container: Any) -> list[dict]:
+    """certipy emits ``{"0": {...}, "1": {...}}`` or a plain list — flatten either to a list."""
+    if isinstance(container, dict):
+        return [v for v in container.values() if isinstance(v, dict)]
+    if isinstance(container, list):
+        return [v for v in container if isinstance(v, dict)]
+    return []
+
+
+def _listify(v: Any) -> list[str]:
+    if v is None:
+        return []
+    if isinstance(v, (list, tuple, set)):
+        return [str(x) for x in v]
+    if isinstance(v, dict):  # {"right": [principals]} — flatten the principal lists
+        out: list[str] = []
+        for val in v.values():
+            out.extend(_listify(val))
+        return out
+    return [str(v)]
+
+
+def _truthy(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("true", "1", "yes", "enabled", "enforce")
+
+
+def _sam_key(name: str) -> str:
+    """A principal name from certipy (``DOMAIN\\user`` / ``user@dom`` / ``Domain Users``) → the
+    bare, lower-cased sam used to match it back to a BloodHound node."""
+    v = str(name or "").strip()
+    v = v.split("@", 1)[0]
+    if "\\" in v:
+        v = v.rsplit("\\", 1)[-1]
+    return v.strip().lower()
+
+
+def _principal_index(g: Graph) -> dict[str, str]:
+    """{sam_lower: node_id} over the existing principals, so a certipy enrollee named
+    ``SEVENKINGDOMS.LOCAL\\hodor`` resolves to the same node BloodHound already created."""
+    idx: dict[str, str] = {}
+    for n in g.nodes.values():
+        if n.type in ("user", "group", "computer"):
+            idx.setdefault(_sam_key(n.label), n.id)
+    return idx
+
+
+def _resolve_principal(g: Graph, idx: dict[str, str], name: str) -> str | None:
+    """Resolve a certipy principal name to a node id, creating a typed stub if unknown."""
+    sam = _sam_key(name)
+    if not sam:
+        return None
+    if sam in idx:
+        return idx[sam]
+    ntype = "group" if any(tok in sam for tok in _GROUPISH) else "user"
+    nid = f"CERTPRINCIPAL:{sam}"
+    if nid not in g.nodes:
+        g.add_node(Node(id=nid, type=ntype, label=str(name), props={"source": "certipy"}))
+    idx[sam] = nid
+    return nid
+
+
+def _esc_objective(g: Graph) -> str | None:
+    """The node an ESC chain escalates TO: Domain Admins (RID 512) if collected, else the domain
+    object, else any high-value node. Same 'reaching this is the win' terminus the path engine
+    uses, so a synthesized ESC edge lands the enrollee on the real objective."""
+    for n in g.nodes.values():
+        if n.type == "group" and n.id.endswith("-512"):
+            return n.id
+    for n in g.nodes.values():
+        if n.type == "domain":
+            return n.id
+    hv = g.high_value_nodes()
+    return hv[0].id if hv else None
+
+
+def _certtemplate_id(name: str) -> str:
+    return f"CERTTEMPLATE:{name}"
+
+
+def _certauthority_id(name: str) -> str:
+    return f"CERTAUTHORITY:{name}"
+
+
+def ingest_certipy(g: Graph, data: Any) -> Graph:
+    """Fold decoded ``certipy find -json`` into ``g``: add certtemplate / certauthority nodes and
+    synthesize the composite ESC1-8 abuse edges (predicate over template-vuln x enroll-right),
+    the AD CS parallel to the DCSync synthesis above. Idempotent (Graph.add_edge de-dups).
+
+    Returns ``g`` for chaining. Tolerates certipy's version-to-version key drift and missing
+    sections. A ``certipy`` blob with no CA/template data adds a warning rather than raising.
+    """
+    if isinstance(data, (bytes, bytearray)):
+        try:
+            data = json.loads(bytes(data).decode("utf-8", "replace"))
+        except ValueError:
+            data = None
+    if not isinstance(data, dict):
+        g.warnings.append("certipy data was not a JSON object — no AD CS nodes added")
+        return g
+
+    cas = _rows(_ci_get(data, "Certificate Authorities", "certificate_authorities", default={}))
+    templates = _rows(_ci_get(data, "Certificate Templates", "certificate_templates", default={}))
+    if not cas and not templates:
+        g.warnings.append(
+            "certipy output had no Certificate Authorities / Templates — nothing to ingest "
+            "(run `certipy find -json` and pass the resulting .json)"
+        )
+        return g
+
+    idx = _principal_index(g)
+    objective = _esc_objective(g)
+
+    # --- certificate authorities ------------------------------------------- #
+    ca_nodes: dict[str, str] = {}          # ca_name -> node id
+    ca_editf_san: dict[str, bool] = {}     # ca_name -> EDITF_ATTRIBUTESUBJECTALTNAME2 set?
+    for ca in cas:
+        ca_name = str(_ci_get(ca, "CA Name", "ca_name", "name", default="") or "").strip()
+        if not ca_name:
+            continue
+        editf = _truthy(_ci_get(ca, "User Specified SAN", "user_specified_san",
+                                "EDITF_ATTRIBUTESUBJECTALTNAME2", default=False))
+        web = _truthy(_ci_get(ca, "Web Enrollment", "web_enrollment", default=False))
+        cid = _certauthority_id(ca_name)
+        g.add_node(Node(id=cid, type="certauthority", label=ca_name, props={
+            "dns": _ci_get(ca, "DNS Name", "dns_name", default=""),
+            "web_enrollment": web,
+            "user_specified_san": editf,
+            "vulnerabilities": _ci_get(ca, "[!] Vulnerabilities", "Vulnerabilities", default={}),
+        }))
+        ca_nodes[ca_name] = cid
+        ca_editf_san[ca_name] = editf
+
+        # ESC7 — ManageCA / ManageCertificates over the CA: reconfigure it (enable a SAN-abusable
+        # template / approve requests), then issue. Two-hop, targeting the CA node.
+        officers = _listify(_ci_get(ca, "Manage CA Principals", "manage_ca_principals", default=[]))
+        officers += _listify(_ci_get(ca, "Manage Certificates Principals",
+                                     "manage_certificates_principals", default=[]))
+        for name in officers:
+            pid = _resolve_principal(g, idx, name)
+            if pid:
+                g.add_edge(Edge(source=pid, target=cid, kind="ESC7",
+                                props={"ca_name": ca_name, "esc_variant": "ESC7",
+                                       "enrollee_sam": _sam_key(name)}))
+        if officers and objective:
+            g.add_edge(Edge(source=cid, target=objective, kind="ESC6",
+                            props={"ca_name": ca_name, "esc_variant": "ESC7-then-issue",
+                                   "via": "ManageCA-enable-SAN"}))
+
+        # ESC8 — NTLM relay to web enrollment. The relay SOURCE is a coerced computer, which
+        # certipy does not name (it is operator-chosen), so it is taken from an explicit
+        # "Relay Sources" list when present. computer -> CA.
+        if web:
+            for name in _listify(_ci_get(ca, "Relay Sources", "relay_sources", default=[])):
+                pid = _resolve_principal(g, idx, name)
+                if pid:
+                    if g.nodes[pid].type != "computer":
+                        g.nodes[pid].type = "computer"
+                    g.add_edge(Edge(source=pid, target=cid, kind="ESC8",
+                                    props={"ca_name": ca_name, "esc_variant": "ESC8",
+                                           "via": "relay-to-certsrv"}))
+
+    # --- certificate templates --------------------------------------------- #
+    for t in templates:
+        name = str(_ci_get(t, "Template Name", "template_name", "name", default="") or "").strip()
+        if not name:
+            continue
+        enabled = _truthy(_ci_get(t, "Enabled", "enabled", default=True))
+        ekus = [str(e).strip().lower() for e in _listify(_ci_get(t, "Extended Key Usage",
+                                                                 "EKUs", "ekus", default=[]))]
+        name_flags = [str(f).upper() for f in _listify(_ci_get(t, "Certificate Name Flag",
+                                                               "msPKI-Certificate-Name-Flag",
+                                                               default=[]))]
+        ess = _truthy(_ci_get(t, "Enrollee Supplies Subject", "enrollee_supplies_subject",
+                              default=False)) or any("ENROLLEE" in f and "SUBJECT" in f
+                                                     for f in name_flags)
+        manager = _truthy(_ci_get(t, "Requires Manager Approval", "requires_manager_approval",
+                                  "Manager Approval", default=False))
+        client_auth = (not ekus) or bool(set(ekus) & _CLIENT_AUTH_EKUS)
+        any_purpose = (not ekus) or bool(set(ekus) & _ANY_PURPOSE_EKUS)
+        enroll_agent = bool(set(ekus) & _ENROLL_AGENT_EKUS)
+        eku_disp = ", ".join(e for e in _listify(_ci_get(t, "Extended Key Usage", "EKUs",
+                                                         "ekus", default=[]))) or "(any)"
+
+        enrollees = _listify(_ci_get(t, "Enrollment Rights", "enrollment_rights", default=[]))
+        # object-control writers over the template (ESC4): Write Owner / Write Dacl / GenericAll.
+        writers = _listify(_ci_get(t, "Object Control Permissions", "object_control_permissions",
+                                   "Write Owner Principals", "Write Dacl Principals",
+                                   "Full Control Principals", default=[]))
+        ca_list = [str(c).strip() for c in _listify(_ci_get(t, "Certificate Authorities",
+                                                            "certificate_authorities", "CA",
+                                                            default=[])) if str(c).strip()]
+
+        tid = _certtemplate_id(name)
+        g.add_node(Node(id=tid, type="certtemplate", label=name, props={
+            "enabled": enabled,
+            "ekus": eku_disp,
+            "enrollee_supplies_subject": ess,
+            "requires_manager_approval": manager,
+            "cas": ca_list,
+            "vulnerabilities": _ci_get(t, "[!] Vulnerabilities", "Vulnerabilities", default={}),
+        }))
+        for ca_name in ca_list:
+            cid = ca_nodes.get(ca_name) or _certauthority_id(ca_name)
+            if cid not in g.nodes:
+                g.add_node(Node(id=cid, type="certauthority", label=ca_name, props={}))
+            g.add_edge(Edge(source=tid, target=cid, kind="PublishedTo",
+                            props={"template_name": name}))
+
+        eku_prop = eku_disp
+        ca_for_props = ca_list[0] if ca_list else ""
+
+        def _esc_edge(src: str, variant: str) -> None:
+            if objective:
+                g.add_edge(Edge(source=src, target=objective, kind=variant,
+                                props={"template_name": name, "ca_name": ca_for_props,
+                                       "esc_variant": variant, "eku": eku_prop,
+                                       "enrollee_sam": _sam_key(g.nodes[src].label)}))
+
+        esc1_vuln = enabled and client_auth and ess and not manager
+        esc2_vuln = enabled and any_purpose
+        esc3_vuln = enabled and enroll_agent
+        esc6_vuln = enabled and client_auth and not manager and any(
+            ca_editf_san.get(c) for c in ca_list)
+
+        vulnerable_here = esc1_vuln or esc2_vuln or esc3_vuln or esc6_vuln
+        for name_p in enrollees:
+            pid = _resolve_principal(g, idx, name_p)
+            if not pid:
+                continue
+            if esc1_vuln:
+                _esc_edge(pid, "ESC1")
+            if esc2_vuln and not esc1_vuln:
+                _esc_edge(pid, "ESC2")
+            if esc3_vuln:
+                _esc_edge(pid, "ESC3")
+            if esc6_vuln and not esc1_vuln:
+                _esc_edge(pid, "ESC6")
+            if not vulnerable_here:
+                # context only — a template you may enrol but cannot abuse (not traversed).
+                g.add_edge(Edge(source=pid, target=tid, kind="CanEnroll",
+                                props={"template_name": name}))
+
+        # ESC4 — write control over the template: reconfigure it into ESC1, then abuse. Two-hop,
+        # targeting the template node, then a follow-on ESC1 from the (now-vulnerable) template.
+        for name_p in writers:
+            pid = _resolve_principal(g, idx, name_p)
+            if not pid:
+                continue
+            g.add_edge(Edge(source=pid, target=tid, kind="ESC4",
+                            props={"template_name": name, "ca_name": ca_for_props,
+                                   "esc_variant": "ESC4", "enrollee_sam": _sam_key(name_p)}))
+            if objective:
+                g.add_edge(Edge(source=tid, target=objective, kind="ESC1",
+                                props={"template_name": name, "ca_name": ca_for_props,
+                                       "esc_variant": "ESC1", "eku": eku_prop,
+                                       "via": "ESC4-reconfigure",
+                                       "enrollee_sam": _sam_key(name_p)}))
+
+    return g

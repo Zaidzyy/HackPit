@@ -110,6 +110,54 @@ def build_collector_argv(p: CollectorParams) -> list[str]:
     return [COLLECTOR_BIN, *args]
 
 
+# --- AD CS enumeration (certipy find) --------------------------------------- #
+# The authoritative ADCS enumerator. `certipy find` is READ-ONLY (it queries LDAP for the CA +
+# template configuration), so like bloodhound-python it does not trip the red-confirm — but it
+# is still a command against a real DC, so it runs as a gated, argv-only, scope-locked job the
+# human approves. Its JSON output is then folded into the graph (parser.ingest_certipy). NOTE:
+# certipy's `-dc-ip` wants the DC's IP, not its FQDN (the opposite of bloodhound-python's -dc).
+CERTIPY_BIN = "certipy"
+
+
+def build_certipy_find_argv(p: CollectorParams) -> list[str]:
+    """The argv for ``certipy find`` (command first). Argv-only — no shell — so the DC IP is an
+    inspectable token the scope-lock checks."""
+    _validate(p)
+    args: list[str] = ["find", "-u", f"{p.username}@{p.domain}", "-dc-ip", p.dc, "-json",
+                       "-stdout"]
+    if p.nthash:
+        args += ["-hashes", f":{p.nthash.strip()}"]
+    elif p.password:
+        args += ["-p", p.password]
+    if p.nameserver:
+        args += ["-ns", p.nameserver]
+    args += [a for a in p.extra_args if isinstance(a, str)]
+    return [CERTIPY_BIN, *args]
+
+
+def build_certipy_find_request(
+    p: CollectorParams, engagement_id: str, session_id: str | None = None
+) -> ExecRequest:
+    """The ``ExecRequest`` the operator approves to run ``certipy find`` in ENGAGEMENT mode.
+
+    Same contract as :func:`build_collector_request`: a real domain means a scoped engagement is
+    REQUIRED (the executor scope-locks the DC IP), and the request comes back UNAPPROVED — the
+    human approves it at ``POST /cockpit/exec``, exactly like every other cockpit command."""
+    if not (engagement_id or "").strip():
+        raise ValueError(
+            "certipy find runs against a real domain — it requires an active engagement "
+            "(enter engagement mode + scope the AD hosts/CIDR first)"
+        )
+    argv = build_certipy_find_argv(p)
+    return ExecRequest(
+        command=argv[0],
+        args=argv[1:],
+        approved=False,                 # NEVER pre-approved — the human approves at exec time
+        engagement_id=engagement_id.strip(),
+        session_id=session_id,
+    )
+
+
 def build_collector_request(
     p: CollectorParams, engagement_id: str, session_id: str | None = None
 ) -> ExecRequest:
@@ -179,15 +227,17 @@ def ingest_collection(
     session_id: str | None,
     engagement_id: str | None = None,
     origin: str = "collector",
+    certipy: Any | None = None,
 ) -> dict[str, Any]:
     """Parse a captured BloodHound collection and persist it against the session/engagement.
 
     ``source`` is anything :func:`parse_collection` accepts (zip / dir / json path / bytes /
-    decoded mapping). Returns ``{graph_id, domain, stats, warnings}``. Raises
-    :class:`ParseError` if the collection can't be parsed (the caller maps that to a clean
-    HTTP error).
+    decoded mapping). ``certipy`` (optional) is decoded ``certipy find -json`` output, folded
+    into the same graph as cert nodes + ESC edges. Returns ``{graph_id, domain, stats,
+    warnings}``. Raises :class:`ParseError` if the collection can't be parsed (the caller maps
+    that to a clean HTTP error).
     """
-    graph = parse_collection(source)          # raises ParseError on junk
+    graph = parse_collection(source, certipy=certipy)   # raises ParseError on junk
     graph_dict = graph.to_dict()
     graph_id = store.save_graph(graph_dict, session_id, engagement_id, source=origin)
     return {
@@ -200,10 +250,13 @@ def ingest_collection(
 
 __all__ = [
     "COLLECTOR_BIN",
+    "CERTIPY_BIN",
     "CollectorParams",
     "ParseError",
     "build_collector_argv",
     "build_collector_request",
+    "build_certipy_find_argv",
+    "build_certipy_find_request",
     "classify_failure",
     "ingest_collection",
 ]

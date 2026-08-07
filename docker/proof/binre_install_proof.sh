@@ -74,16 +74,22 @@ smoke patchelf --version
 smoke ropper --version
 smoke ROPgadget --version
 smoke pwninit --version
-# The two frameworks import inside their OWN venv (system python3 does not carry them).
-if docker run --rm "$IMAGE" /opt/pwntools/venv/bin/python3 -c 'import pwnlib' >/dev/null 2>&1; then
-  ok "pwntools imports inside /opt/pwntools/venv (the exploit-skeleton template runs this python3)"
-else
+# The two frameworks import inside their OWN venv (system python3 does not carry them). Judge
+# success by the ABSENCE of a Python `Traceback`, NOT by the exit code or a printed sentinel:
+#   * pwntools prints a benign terminfo warning and angr a benign "unicorn disabled" log, and both
+#     leave a NON-ZERO exit code from that teardown even though the import itself succeeded;
+#   * a `print("…")` sentinel is unusable here because MSYS/Git-Bash mangles the inner double
+#     quotes when the arg goes straight to docker.exe (print("X") -> print(X) -> NameError).
+# The bare `import` has no quotes to mangle, and a real import failure ALWAYS prints a Traceback.
+if docker run --rm "$IMAGE" /opt/pwntools/venv/bin/python3 -c 'import pwnlib' 2>&1 | grep -qi 'Traceback'; then
   bad "pwntools does NOT import inside its venv — the /opt/pwntools/venv/bin/python3 template fails"
-fi
-if docker run --rm "$IMAGE" /opt/angr/venv/bin/python3 -c 'import angr' >/dev/null 2>&1; then
-  ok "angr imports inside /opt/angr/venv (the symbolic-exec template runs this python3)"
 else
+  ok "pwntools imports inside /opt/pwntools/venv (the exploit-skeleton template runs this python3; the terminfo warning is benign)"
+fi
+if docker run --rm "$IMAGE" /opt/angr/venv/bin/python3 -c 'import angr' 2>&1 | grep -qi 'Traceback'; then
   bad "angr does NOT import inside its venv — the /opt/angr/venv/bin/python3 template fails"
+else
+  ok "angr imports inside /opt/angr/venv (the symbolic-exec template runs this python3; the unicorn-disabled log is benign)"
 fi
 # analyzeHeadless needs a project to do real work; assert its launcher is an executable symlink
 # rather than starting a JVM with no args (which exits non-zero by design — not a failure).
@@ -98,6 +104,8 @@ fi
 # not at analysis time against a challenge binary. Handles absolute template heads (venv/repo).
 cd "$(dirname "$0")/../../backend" || die "cannot find backend/"
 PY=".venv/Scripts/python.exe"; [ -x "$PY" ] || PY=".venv/bin/python"; [ -x "$PY" ] || PY="python3"
+# space-joined + \r-stripped: a Windows python emits CRLF, and a `for` loop keeps the
+# ok/bad counters in THIS shell (a `| while` runs in a subshell and loses them).
 HEADS="$("$PY" -c "
 import json
 cat=json.load(open('arsenal/tools.json'))
@@ -107,9 +115,9 @@ for t in cat['tools']:
         for tpl in t.get('templates',[]):
             parts=tpl['template'].split()
             if parts: heads.add(parts[0])
-print('\n'.join(sorted(heads)))
-")"
-printf '%s\n' "$HEADS" | while IFS= read -r h; do
+print(' '.join(sorted(heads)))
+" | tr -d '\r')"
+for h in $HEADS; do
   [ -n "$h" ] || continue
   if resolves "$h"; then
     ok "binary-re template head '$h' resolves in the image"

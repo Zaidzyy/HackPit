@@ -66,7 +66,12 @@ smoke binwalk --help
 smoke foremost -V
 smoke steghide --version
 smoke exiftool -ver
-smoke bulk_extractor -h
+# bulk_extractor -h prints its banner but exits non-zero, so grep the banner instead of the code.
+if docker run --rm "$IMAGE" sh -c "bulk_extractor -h 2>&1 | grep -qi bulk_extractor"; then
+  ok "bulk_extractor — the tool starts"
+else
+  bad "bulk_extractor failed — installed but cannot run"
+fi
 # zsteg / stegseek print their banner without a clean exit code; grep the banner instead.
 if docker run --rm "$IMAGE" sh -c "zsteg --help 2>&1 | grep -qi zsteg"; then
   ok "zsteg — the tool starts"
@@ -90,6 +95,8 @@ done
 # --- 3. every argv[0] the forensics-ctf catalog templates hardcode resolves in the container -
 cd "$(dirname "$0")/../../backend" || die "cannot find backend/"
 PY=".venv/Scripts/python.exe"; [ -x "$PY" ] || PY=".venv/bin/python"; [ -x "$PY" ] || PY="python3"
+# space-joined + \r-stripped (Windows python emits CRLF); a `for` loop keeps the counters
+# in THIS shell — a `| while` runs in a subshell and silently loses every ok/bad.
 HEADS="$("$PY" -c "
 import json
 cat=json.load(open('arsenal/tools.json'))
@@ -99,9 +106,9 @@ for t in cat['tools']:
         for tpl in t.get('templates',[]):
             parts=tpl['template'].split()
             if parts: heads.add(parts[0])
-print('\n'.join(sorted(heads)))
-")"
-printf '%s\n' "$HEADS" | while IFS= read -r h; do
+print(' '.join(sorted(heads)))
+" | tr -d '\r')"
+for h in $HEADS; do
   [ -n "$h" ] || continue
   if resolves "$h"; then
     ok "forensics-ctf template head '$h' resolves in the image"

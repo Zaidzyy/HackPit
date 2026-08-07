@@ -18,8 +18,21 @@ Used by:   backend/state/governance.py
            backend/state/killchain.py
            backend/state/references/killchain.yaml
            backend/governance_draft.py
+           backend/cockpit/session_engine.py
 
 Derived from the following Decepticon source:
+
+  tools/bash/bash.py + tools/bash/prompt.py
+      The interactive persistent-session engine: NAMED tmux sessions with
+      per-session cwd/env/background-jobs, the tmux drive with a PS1/PROMPT_COMMAND
+      marker for completion + prompt detection, pipe-pane session logging,
+      AUTOMATIC INTERACTIVE-PROMPT DETECTION (msfconsole / sliver / evil-winrm /
+      REPLs), the background + auto-background-at-60s lifecycle with a notify-once
+      completion, output tiering (inline / scratch / watchdog), ANSI stripping +
+      repetitive-line compression, and the wedged-session + tmux pipe-degradation
+      recovery ladders (backend/cockpit/session_engine.py).
+
+  tools/opplan.py
 
   tools/opplan.py
       The OPPLAN data model — Objective, OPPLAN, ObjectivePhase, ObjectiveStatus,
@@ -48,6 +61,15 @@ Adaptation notes:
   * Generation is propose-only: the drafter (backend/governance_draft.py) drafts
     the four documents from the scope + target for a human to edit and approve; it
     executes nothing an engagement acts on.
+  * The session engine adopts Decepticon's session MECHANICS but NOT its autonomy:
+    Decepticon's agent can send `is_input` to drive an interactive prompt itself,
+    which HackPit deliberately does not adopt. Every input path (run a command,
+    answer a prompt) is HUMAN-ONLY and source-scan locked to the router; the
+    orchestrator/agent/executor/proposer have no path to send input. The engine
+    lives on the open /terminal side (never the isolated sandbox), adds no gate,
+    and its container is hardcoded — the same containment the raw PTY carries.
+    Decepticon's tools/bash source was not present in the tree; the semantics were
+    reconstructed from the build spec's description and reproduced faithfully.
 
 The Apache License, Version 2.0 requires that this attribution and the license
 notice be retained. The full text of the license is reproduced in LICENSE (which

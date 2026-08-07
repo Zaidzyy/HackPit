@@ -92,6 +92,10 @@ run_test test_search_ranking.py "relevance-first KB ranking (substance-gated tie
 
 run_test test_terminal.py "raw PTY terminal containment (human-only / hardcoded open box / sentinel shell untouched)"
 
+run_test test_session_engine.py "named-session ENGINE (Decepticon tmux port: named parallel sessions keep independent cwd / auto interactive-prompt detection flips a fixture session to 'interactive - awaiting input' for msfconsole/sliver/evil-winrm/REPLs / a foreground command past the 60s window is AUTO-BACKGROUNDED and a fast one returns [DONE] inline with its rc / a background completion notifies EXACTLY ONCE then is consumed / kill PRESERVES the session log / output tiers inline<=15K, >15K to scratch, >5M watchdog / wedge + pipe-degradation signatures detected from fixtures with the false cases rejected / unsafe names refused not sanitised)"
+
+run_test test_session_engine_safety.py "named-session ENGINE SAFETY (§0: INPUT IS HUMAN-ONLY -- run_command AND send_input reachable ONLY from the router + this test across the WHOLE tree WITH A PLANTED CONTROL / NO is_input AUTONOMY: the executor/orchestrator/proposer expose no engine hook and import it nowhere / HARDCODED OPEN CONTAINER, the isolated sandbox never appears and no request field carries container/target/shell / NO NEW GATE and no isolation claim -- imports no executor/sandbox/isolation and names no gate symbol / the :kali sentinel stays pty-free AND tmux-free, the engine is a separate tmux surface / input is discrete send-keys, no held stdin writer)"
+
 run_test test_winrm.py "WinRM Windows transport (profile CRUD / routes to WinRM / records mode=windows)"
 
 run_test test_winrm_safety.py "WinRM SAFETY invariants (host-locked / no gate bypass / secret never leaks / no auto-run)"

@@ -18,5 +18,19 @@ reference) is derived from Decepticon's:
 
 The data model and state machine were reconstructed and reshaped onto HackPit's
 own persistence (SQLite, upsert-only, engagement-scoped) and its propose-only,
-human-approval-is-the-bound execution model. See THIRD_PARTY_LICENSES for the
-full attribution and license terms.
+human-approval-is-the-bound execution model.
+
+The interactive persistent-session engine (named tmux sessions with per-session
+cwd/env, automatic interactive-prompt detection, the background / auto-background
+lifecycle with a notify-once completion, output tiering, and the wedged-session +
+tmux pipe-degradation recovery ladders) is derived from Decepticon's:
+
+  - tools/bash/bash.py     (the tmux drive, PS1-marker completion detection,
+                            pipe-pane session logging, ANSI stripping)
+  - tools/bash/prompt.py   (the session semantics, the background-job lifecycle,
+                            output management, and the recovery detectors)
+
+The session MECHANICS were adopted; Decepticon's autonomy over stdin (its agent
+sending `is_input` to drive an interactive prompt) was deliberately NOT adopted.
+In HackPit every input path is human-only — the orchestrator can never send input.
+See THIRD_PARTY_LICENSES for the full attribution and license terms.

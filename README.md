@@ -51,6 +51,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | 🔎 **Knowledge base + hybrid search** | 2,747 deduped, source-attributed techniques across 33 categories. `⌘K` finds them by meaning. |
 | 🧭 **Guided attack paths** | Recon → privesc walkthroughs, write-up-first, KB-grounded, AI gap-fill clearly marked. |
 | 🎯 **Gated cockpit** | Real Kali execution, one approved command at a time, behind four ordered gates. |
+| ▤ **Interactive persistent sessions** | Named, parallel **tmux** sessions in the open box with per-session cwd — **automatic prompt detection** flips a session to *"interactive — send input"* when `msfconsole` / `sliver-client` / `evil-winrm` / a REPL is waiting, long scans **auto-background at 60s** with a notify-once completion, and wedge / pipe-degradation recovery. **Input stays human-only, every line.** |
 | ◈ **Guided recon** | Scoped domain → recon as approved jobs → ranked attack surface; discoveries can only widen the set *within* scope. |
 | 🕸️ **Web app testing** | Recording proxy, repeater, intruder, GraphQL, browser interception, OOB callbacks. |
 | ◎ **Nuclei template scan** | Scoped target(s) → templates → severity-ranked findings, one approval; results flow into engagement state. |
@@ -152,13 +153,12 @@ A Kali container driven from the UI, **one approved command at a time**. From he
   <img src="assets/screenshots/12-cockpit.png" alt="The cockpit — plot a path, then run it one approved command at a time" width="100%">
 </p>
 
-### `:kali` and `:terminal` — two shells, on purpose
+### `:kali` and `:terminal` — three shells, on purpose
 
-`:kali` is a persistent shell that logs a clean, per-command transcript (what your reports are built from). `:terminal` is a **real PTY** in the same box, so `top`, `vim`, and interactive tools render. Both are human-driven — typing *is* the approval — and both are fully audited.
+`:kali` is a persistent shell that logs a clean, per-command transcript (what your reports are built from). `:terminal` adds two more surfaces onto the same open box: a **real PTY** (so `top`, `vim`, a curses tool render), and **named persistent sessions** — the headline. Each named session is an independent, parallel **tmux** session with its own cwd/env that survive across calls, and the engine does **automatic interactive-prompt detection**: when `msfconsole` (`msf6 >`), `sliver-client`, `evil-winrm`, or a REPL stops and waits, the UI raises **"interactive — send input"** and *you* type the next line. Long scans run **`background=True`** (or auto-background after 60s) with a completion that notifies exactly once; a wedged session or a degraded tmux `pipe-pane` is diagnosed with a recovery ladder. All three are human-driven — typing *is* the approval, **every line** — and fully audited. The session engine is ported from **Decepticon**'s `tools/bash` (Apache-2.0); its *mechanics* only — the **`is_input` autonomy is deliberately not adopted**, so the orchestrator can never drive a live prompt.
 
 <p align="center">
-  <img src="assets/screenshots/21-kali.png" alt=":kali — a persistent shell with a clean per-command transcript" width="49%">
-  <img src="assets/screenshots/22-terminal.png" alt=":terminal — a real PTY inside the container" width="49%">
+  <img src="assets/screenshots/44-terminal-named-sessions.png" alt=":terminal — named persistent sessions with automatic interactive-prompt detection (msfconsole 'interactive — send input') and a background-job tracker" width="88%">
 </p>
 
 ### Web application testing

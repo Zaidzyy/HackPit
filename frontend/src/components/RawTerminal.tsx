@@ -25,7 +25,7 @@ import { getTerminalStatus, terminalSocketUrl, type TerminalStatus } from "@/lib
 
 type Phase = "idle" | "connecting" | "live" | "closed" | "refused";
 
-export function RawTerminal() {
+export function RawTerminal({ embedded = false }: { embedded?: boolean } = {}) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   // Kept in refs, not state: these are imperative handles the effect owns, and touching
   // state for them would tear down the terminal on every render.
@@ -192,9 +192,9 @@ export function RawTerminal() {
 
   const ready = !!status?.ready;
 
-  return (
-    <PageShell crumbs={[{ label: "kali" }]}>
-      <div className="hp-kali hp-pty">
+  const body = (
+    <div className={embedded ? "hp-pty-embed" : "hp-kali hp-pty"}>
+        {!embedded && (
         <header className="hp-kali-head">
           <div className="hp-ap-kicker">
             human-only · full network reach · NOT isolated · real PTY
@@ -214,6 +214,7 @@ export function RawTerminal() {
             (sentinel-delimited, one record per command).
           </p>
         </header>
+        )}
 
         {/* readiness banner — availability only; makes NO isolation claim (there is none) */}
         <div
@@ -293,6 +294,8 @@ export function RawTerminal() {
 
         {detail && phase === "live" && <p className="hp-pty-detail">{detail}</p>}
       </div>
-    </PageShell>
   );
+
+  if (embedded) return body;
+  return <PageShell crumbs={[{ label: "kali" }]}>{body}</PageShell>;
 }

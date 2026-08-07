@@ -455,6 +455,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#web3-smart-contract-audit-three-playbooks-on-the-fan-out-2026-08-07">Web3 / smart-contract audit — three playbooks on the fan-out (2026-08-07)</a></li>
 <li><a href="#formal-engagement-governance-roe-conops-deconfliction-opplan-2026-08-07">Formal engagement governance — RoE / ConOps / Deconfliction / OPPLAN (2026-08-07)</a></li>
 <li><a href="#reusable-prompt-workflow-builder-author-your-own-playbooks-over-the-fan-out-workflows-2026-08-07">Reusable prompt-workflow builder — author your own playbooks over the fan-out (:workflows) (2026-08-07)</a></li>
+<li><a href="#interactive-persistent-session-engine-named-tmux-sessions-automatic-prompt-detection-terminal-2026-08-07">Interactive persistent-session engine — named tmux sessions + automatic prompt-detection (:terminal) (2026-08-07)</a></li>
 </ul>
 </li>
 </ul>
@@ -476,7 +477,7 @@ a { color: var(--accent); text-decoration: none; }
 <p>The blocker sections for everything the five phases fixed have been removed (see Part III). What is left is genuinely small.</p>
 <h3 id="11-the-pty-gap-now-closed-without-losing-the-transcript">1.1 The PTY gap — now closed, without losing the transcript</h3>
 <p>This section previously read "no true PTY — deliberate partial", and framed it as a trade: readable logged transcripts <em>or</em> full-screen tooling. <strong>Phase 5 rejected that trade.</strong> The premise was wrong — the two are not alternatives if they are separate surfaces.</p>
-<p><code>:kali</code> is unchanged: still a persistent shell delimiting each command with a sentinel over a plain pipe, still producing the clean, escape-free, per-command transcripts reports are built from. Alongside it, <code>:terminal</code> allocates a <strong>real PTY</strong> in the same open sandbox, so <code>vim</code>, <code>top</code>, an interactive <code>msfconsole</code>, a raw <code>evil-winrm</code> shell and <code>python -c 'pty.spawn'</code> upgrades all render. Both are audited; both carry identical containment. See Part III, Phase 5.</p>
+<p><code>:kali</code> is unchanged: still a persistent shell delimiting each command with a sentinel over a plain pipe, still producing the clean, escape-free, per-command transcripts reports are built from. Alongside it, <code>:terminal</code> now carries <strong>two</strong> surfaces onto the same open sandbox: a <strong>real PTY</strong> (so <code>vim</code>, <code>top</code>, a curses tool render) and — the 2026-08-07 addition — <strong>named persistent tmux sessions</strong> with per-session cwd and <strong>automatic interactive-prompt detection</strong>, so an interactive <code>msfconsole</code> / <code>sliver-client</code> / <code>evil-winrm</code> becomes first-class (the UI raises <em>"interactive — send input"</em> and the human types the next line; the orchestrator never can). Both are audited; both carry identical containment; input is human-only on all of them. See Part III, Phase 5 and the dated session-engine section.</p>
 <h3 id="12-the-human-approval-model-settled-not-open">1.2 The human-approval model — settled, not open</h3>
 <p><strong>Current state:</strong> every command needs individual <code>approved=true</code>; anything the danger heuristic flags additionally needs <code>dangerous_ack</code>; <code>:kali</code> and <code>:terminal</code> are human-driven (typing <em>is</em> the approval). Phase 3 added <strong>one-keystroke approve</strong> (<code>Enter</code> = approve · <code>S</code> = skip · <code>Esc</code> = stop; a dangerous command never fires on <code>Enter</code> alone).</p>
 <p>This section previously proposed <strong>risk-tiered approval</strong> — auto-running "passive" commands, batch-approving a plan of read-only ones — as open work. <strong>That is now decided against</strong> (D5). Per-command approval is the project's single load-bearing safety property in engagement mode: Wall A is down, the sandbox reaches the internet, the host and the LAN, and nothing else bounds <em>where</em> a command can go. A tier that auto-runs anything would remove the only gate on the one mode that needs it most, and it would do so by trusting a classifier — a new component, on the wrong side of the safety boundary, to decide when the human can be skipped. The convenience it buys is a keystroke that has already been optimised away.</p>
@@ -602,8 +603,8 @@ a { color: var(--accent); text-decoration: none; }
 </tr>
 <tr>
 <td><code>:terminal</code></td>
-<td><strong>Real PTY, second surface (Phase 5)</strong></td>
-<td><code>pty.fork()</code> inside the same open box, driven over a framed WebSocket to xterm.js; full-screen tools render and resize. Containment mirrors <code>:kali</code> point for point; the raw stream is audited. Does not replace <code>:kali</code> (§1.1).</td>
+<td><strong>Real PTY + named tmux sessions (Phase 5 · session engine 2026-08-07)</strong></td>
+<td>Two surfaces onto the same open box. <strong>PTY:</strong> <code>pty.fork()</code> driven over a framed WebSocket to xterm.js; full-screen tools render and resize. <strong>Named sessions:</strong> parallel persistent tmux sessions with per-session cwd, <strong>automatic interactive-prompt detection</strong> (<code>msfconsole</code>/<code>sliver</code>/<code>evil-winrm</code>/REPLs → "interactive — send input"), auto-background at 60s with notify-once completion, wedge/pipe-degradation recovery. Both HUMAN-ONLY (source-scan locked), no new gate, audited; ported from Decepticon's <code>tools/bash</code>. Does not replace <code>:kali</code> (§1.1).</td>
 </tr>
 <tr>
 <td><code>:exploits</code></td>
@@ -5925,5 +5926,55 @@ open·kritt's source was not vendored in the tree, so the step/batch/depth-sibli
 reconstructed from the spec's description</strong> and reproduced faithfully; the attribution stands regardless. Depth is
 modelled as a batch step re-expanding its own list output for <code>depth</code> generations (bounded); the "child steps" of the
 docs are that self-expansion plus downstream batch-over-prior-step chaining.</p>
+<h2 id="interactive-persistent-session-engine-named-tmux-sessions-automatic-prompt-detection-terminal-2026-08-07">Interactive persistent-session engine — named tmux sessions + automatic prompt-detection (<code>:terminal</code>) (2026-08-07)</h2>
+<p><strong>The idea.</strong> <code>:kali</code> gives clean per-command transcripts; <code>:terminal</code>'s pty gives one full-screen shell. Neither gives
+a <em>named</em>, <em>parallel</em>, <em>persistent</em> session whose cwd/env/background-jobs survive across calls, and neither knows when a
+program has stopped at an <strong>interactive prompt</strong> waiting for the operator. The <strong>session engine</strong> is that third surface:
+named <strong>tmux</strong> sessions in the same open sandbox, with <strong>automatic interactive-prompt detection</strong> (<code>msfconsole</code> <code>msf6 &gt;</code>,
+<code>sliver-client</code>, <code>evil-winrm</code> PS, generic REPLs), a background lifecycle (<code>background=True</code> + <strong>auto-background at 60s</strong>
+with a notify-once completion), output tiering, and wedge / pipe-degradation recovery. Ported from <strong>Decepticon</strong>'s
+<code>tools/bash/bash.py</code> + <code>tools/bash/prompt.py</code> (Apache-2.0 — attribution in <code>NOTICE</code> / <code>THIRD_PARTY_LICENSES</code>).</p>
+<p><strong>The HackPit twist — mechanics without autonomy.</strong> Decepticon's agent drives everything, including sending a line to an
+interactive prompt (<code>is_input</code>). HackPit adopts the session <em>engine</em> and <strong>not that autonomy</strong>: <strong>every input path is
+HUMAN-ONLY</strong>. Both <code>run_command</code> (send a command) and <code>send_input</code> (the <code>is_input</code> path: answer a prompt / send a control
+key) are reachable only from the router the operator's UI drives; the orchestrator / agent / executor / proposer have
+<strong>zero</strong> code path to either. This is the one §0 invariant that cannot be weakened, and it is source-scan locked across
+the whole backend tree with a planted control (<code>test_session_engine_safety.py</code>), exactly like <code>:kali</code> / the pty.</p>
+<p><strong>The engine (<code>backend/cockpit/session_engine.py</code>).</strong> Containment mirrors the pty point for point: the container is the
+hardcoded <code>config.KALI_OPEN_CONTAINER</code> (the request models carry no container/target/shell field), there is <strong>no new
+gate and no isolation gate</strong> (the open box is intentionally not isolated — the human at the keyboard is the approval),
+the transcript is audited to the run store, and tmux <code>pipe-pane</code> mirrors the raw stream to a per-session log under the
+workspace <code>.sessions/</code> — which a <strong>kill deliberately preserves</strong>. Every heuristic is a <strong>pure function</strong> tested against
+fixtures — <code>detect_prompt</code> (idle-shell vs interactive-tool vs running, via a <code>PROMPT_COMMAND</code> marker that carries the
+last exit code <strong>and</strong> <code>$PWD</code>, so each named session tracks its cwd independently), <code>manage_output</code> (inline ≤15K / &gt;15K
+saved to <code>.scratch/</code> with a head+tail preview / &gt;5M watchdog-truncated at source), <code>strip_ansi</code>, <code>compress_repeats</code>, and
+the three-condition <code>detect_wedge</code> and <code>detect_pipe_degradation</code> signatures with their operator-facing recovery ladders.
+The single impure boundary is <code>_tmux</code> (one <code>docker exec … tmux …</code> call), so the whole suite runs with <strong>no Docker and no
+tmux</strong>. <code>run_command</code> sends the command then watches for the completion marker up to 60s, returning <code>[DONE]</code> (with the
+rc) / <code>[INTERACTIVE]</code> / <code>[BACKGROUND]</code> / <code>[AUTO-BACKGROUND]</code>; <code>poll_jobs</code> delivers each background completion <strong>exactly
+once</strong> (mirroring the job/OBSERVE notify-once contract), then <code>consume_job</code> clears it.</p>
+<p><strong>The surface (<code>/terminal</code>).</strong> The screen is now two tabs — <strong>named sessions</strong> (the engine) and <strong>raw pty</strong> (the
+unchanged full-screen surface, embedded so the screen's header renders once). The named-session panel shows session
+tabs (a live/waiting/dead dot per session, an amber pulsing dot when a tool is awaiting input), the headline
+<strong>prompt-detection banner</strong> (<em>"interactive — send input · msfconsole · msf6 &gt;"</em>), per-session cwd/program/state, the
+live capture, a background-job tracker with notify-once completions, and the operator's input box — which flips between
+"run a command" (with a <em>run in background</em> option) and "answer the prompt…" (<code>send line</code>) based on the detected state.
+Twelve new backend routes under <code>/cockpit/sessions/*</code>, all HUMAN-ONLY, none gated (open box, like the pty).</p>
+<p><strong>Why this is safe (mirrors the pty exactly, adds nothing to the trust surface).</strong> No new gate; no isolation claim; the
+container is hardcoded and no request field can redirect the exec; input is discrete per-line <code>send-keys</code>, so there is no
+held <code>proc.stdin</code> an autonomous caller could reach (unlike a caught C2 shell); the <code>:kali</code> sentinel stays <strong>pty-free AND
+tmux-free</strong> (asserted); and the human-only lock is source-scan enforced with a control. <code>test_session_engine.py</code>
+(14 checks) proves the mechanics against fixtures; <code>test_session_engine_safety.py</code> (6 checks) locks the invariants. Both
+registered in <code>run_safety_tests.sh</code>. <strong><code>run_safety_tests.sh</code>: 115 hermetic files, all exit 0. <code>next build</code> exits 0.</strong>
+Screen LOOKED AT: <code>44-terminal-named-sessions.png</code> (the panel rendering a <strong>synthetic/local</strong> msfconsole session at
+<code>msf6 exploit(multi/handler) &gt;</code> with the interactive banner raised, a second running <code>recon</code> session, and a notify-once
+background completion — no real target, no live shell in the shot).</p>
+<p><strong>Assumptions (per §5), stated.</strong> The primary target is the <code>:terminal</code> surface + the human operator, not an autonomous
+agent (assumption 5.1); prompt-detection covers msf / sliver / evil-winrm / common REPLs first and the heuristic set
+extends later (5.2); the engine lives on the OPEN/terminal side, never the <code>:kali</code> sentinel side, keeping the
+two-sandbox separation intact (5.3). Decepticon's <code>tools/bash</code> source was not vendored in the tree, so the session
+semantics were <strong>reconstructed from the spec's description</strong> (the same path the governance port took) and reproduced
+faithfully; the attribution stands regardless. The engine needs <code>tmux</code> inside <code>hackpit-kali-open</code> (Kali ships it); the
+availability check refuses cleanly when the sandbox is down, and the hermetic suite fakes the one <code>_tmux</code> boundary.</p>
 </body>
 </html>

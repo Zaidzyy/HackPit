@@ -1,5 +1,5 @@
-import { RawTerminal } from "@/components/RawTerminal";
+import { TerminalScreen } from "@/components/TerminalScreen";
 
 export default function TerminalPage() {
-  return <RawTerminal />;
+  return <TerminalScreen />;
 }

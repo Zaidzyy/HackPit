@@ -1506,6 +1506,155 @@ export function terminalSocketUrl(
   return `${base}/cockpit/terminal/ws?${qs.toString()}`;
 }
 
+// --- named persistent sessions (tmux engine — interactive tools, HUMAN-ONLY) ------
+//
+// A THIRD open-sandbox surface: named, parallel, persistent tmux sessions with per-session
+// cwd, automatic interactive-prompt detection (msfconsole/sliver/evil-winrm/REPLs), a
+// background lifecycle with a notify-once completion, and wedge/pipe-degradation recovery.
+// Same containment as the pty: full reach, NOT isolated, HUMAN-ONLY input. Ported from
+// Decepticon's tools/bash (Apache-2.0).
+
+/** Availability of the named-session engine (GET /cockpit/sessions/status). */
+export type SessionEngineStatus = {
+  container: string;
+  isolated: boolean;
+  up: boolean;
+  ready: boolean;
+  live: number;
+  max_live: number;
+  auto_background_seconds: number;
+  detail: string;
+};
+
+/** One backgrounded command in a session. */
+export type SessionJob = {
+  job_id: string;
+  session: string;
+  command: string;
+  started_at: string;
+  /** running | done | consumed */
+  state: string;
+  rc: number | null;
+  notified: boolean;
+};
+
+/** The public state of one named session. */
+export type NamedSession = {
+  name: string;
+  tmux: string;
+  container: string;
+  run_id: string;
+  /** active | killed */
+  state: string;
+  started_at: string;
+  cwd: string;
+  /** the detected interactive tool, or "shell" */
+  program: string;
+  /** idle | interactive | running */
+  prompt_kind: string;
+  awaiting_input: boolean;
+  log_path: string;
+  background_jobs: SessionJob[];
+  session_id: string | null;
+};
+
+/** The current prompt state parsed from a capture. */
+export type SessionPrompt = {
+  /** idle | interactive | running */
+  kind: string;
+  program: string;
+  line: string;
+  awaiting_input: boolean;
+};
+
+/** The live view of a session: managed output + prompt state (GET …/capture). */
+export type SessionCapture = {
+  name: string;
+  output: string;
+  saved_path: string | null;
+  truncated: boolean;
+  watchdog: boolean;
+  prompt: SessionPrompt;
+  state: string;
+  jobs: SessionJob[];
+};
+
+/** The result of running one command in a session (POST …/run). */
+export type SessionRunResult = {
+  /** [DONE] | [INTERACTIVE] | [BACKGROUND] | [AUTO-BACKGROUND] */
+  marker: string;
+  job_id: string;
+  rc?: number;
+  output: string;
+  saved_path?: string | null;
+  prompt?: SessionPrompt;
+  detail?: string;
+};
+
+export const getSessionEngineStatus = (signal?: AbortSignal) =>
+  getJSON<SessionEngineStatus>("/cockpit/sessions/status", signal);
+
+export const listNamedSessions = (signal?: AbortSignal) =>
+  getJSON<NamedSession[]>("/cockpit/sessions", signal);
+
+export const openNamedSession = (name: string, sessionId?: string | null, signal?: AbortSignal) =>
+  postJSON<NamedSession>(
+    "/cockpit/sessions",
+    { name, session_id: sessionId ?? null },
+    signal
+  );
+
+export const getNamedSession = (name: string, signal?: AbortSignal) =>
+  getJSON<NamedSession>(`/cockpit/sessions/${encodeURIComponent(name)}`, signal);
+
+export const captureNamedSession = (name: string, signal?: AbortSignal) =>
+  getJSON<SessionCapture>(`/cockpit/sessions/${encodeURIComponent(name)}/capture`, signal);
+
+/** Run ONE command in a named session. HUMAN-ONLY — the human clicked run. */
+export const runInNamedSession = (
+  name: string,
+  command: string,
+  background = false,
+  signal?: AbortSignal
+) =>
+  postJSON<SessionRunResult>(
+    `/cockpit/sessions/${encodeURIComponent(name)}/run`,
+    { command, background },
+    signal
+  );
+
+/** Send one line/keys to a session's interactive prompt. HUMAN-ONLY (the is_input path). */
+export const sendNamedSessionInput = (
+  name: string,
+  data: string,
+  enter = true,
+  signal?: AbortSignal
+) =>
+  postJSON<NamedSession>(
+    `/cockpit/sessions/${encodeURIComponent(name)}/input`,
+    { data, enter },
+    signal
+  );
+
+/** Background-job completions across every session — each delivered ONCE. */
+export const pollNamedSessionJobs = (signal?: AbortSignal) =>
+  getJSON<SessionJob[]>("/cockpit/sessions/jobs/poll", signal);
+
+export const consumeNamedSessionJob = (name: string, jobId: string, signal?: AbortSignal) =>
+  postJSON<SessionJob>(
+    `/cockpit/sessions/${encodeURIComponent(name)}/jobs/${encodeURIComponent(jobId)}/consume`,
+    {},
+    signal
+  );
+
+export const killNamedSession = (name: string, signal?: AbortSignal) =>
+  sendJSON<NamedSession>(
+    "DELETE",
+    `/cockpit/sessions/${encodeURIComponent(name)}`,
+    undefined,
+    signal
+  ) as Promise<NamedSession>;
+
 // --- :kali — human-only arbitrary shell into the isolated sandbox ---------------
 
 /** Availability of the :kali OPEN sandbox (GET /cockpit/kali/status). Note: `isolated`

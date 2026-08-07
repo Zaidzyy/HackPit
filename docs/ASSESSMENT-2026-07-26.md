@@ -28,7 +28,7 @@ The blocker sections for everything the five phases fixed have been removed (see
 
 This section previously read "no true PTY — deliberate partial", and framed it as a trade: readable logged transcripts *or* full-screen tooling. **Phase 5 rejected that trade.** The premise was wrong — the two are not alternatives if they are separate surfaces.
 
-`:kali` is unchanged: still a persistent shell delimiting each command with a sentinel over a plain pipe, still producing the clean, escape-free, per-command transcripts reports are built from. Alongside it, `:terminal` allocates a **real PTY** in the same open sandbox, so `vim`, `top`, an interactive `msfconsole`, a raw `evil-winrm` shell and `python -c 'pty.spawn'` upgrades all render. Both are audited; both carry identical containment. See Part III, Phase 5.
+`:kali` is unchanged: still a persistent shell delimiting each command with a sentinel over a plain pipe, still producing the clean, escape-free, per-command transcripts reports are built from. Alongside it, `:terminal` now carries **two** surfaces onto the same open sandbox: a **real PTY** (so `vim`, `top`, a curses tool render) and — the 2026-08-07 addition — **named persistent tmux sessions** with per-session cwd and **automatic interactive-prompt detection**, so an interactive `msfconsole` / `sliver-client` / `evil-winrm` becomes first-class (the UI raises *"interactive — send input"* and the human types the next line; the orchestrator never can). Both are audited; both carry identical containment; input is human-only on all of them. See Part III, Phase 5 and the dated session-engine section.
 
 ### 1.2 The human-approval model — settled, not open
 
@@ -70,7 +70,7 @@ Per-command approval is therefore **standing policy, not a deferred item**, and 
 | Orchestrator loop | **Now state-grounded** | Proposes one command, never executes. Feeds on the structured state model + live task tree (Phase 2) instead of stdout tails. |
 | Engagement state model | **New (Phase 2)** | hosts/services/endpoints/credentials/findings, upsert-only, fed by output parsers + loot-file ingest; drives the planner and a UI panel. Executes nothing (AST-asserted). |
 | `:kali` | **Now a persistent shell (Phase 3)** | One long-lived `docker exec -i sh`; `cd`/env/background jobs persist. Same containment (hardcoded open container, human-only, audited, no isolation gate). Deliberately no PTY — that is what keeps its transcripts clean (§1.1). |
-| `:terminal` | **Real PTY, second surface (Phase 5)** | `pty.fork()` inside the same open box, driven over a framed WebSocket to xterm.js; full-screen tools render and resize. Containment mirrors `:kali` point for point; the raw stream is audited. Does not replace `:kali` (§1.1). |
+| `:terminal` | **Real PTY + named tmux sessions (Phase 5 · session engine 2026-08-07)** | Two surfaces onto the same open box. **PTY:** `pty.fork()` driven over a framed WebSocket to xterm.js; full-screen tools render and resize. **Named sessions:** parallel persistent tmux sessions with per-session cwd, **automatic interactive-prompt detection** (`msfconsole`/`sliver`/`evil-winrm`/REPLs → "interactive — send input"), auto-background at 60s with notify-once completion, wedge/pipe-degradation recovery. Both HUMAN-ONLY (source-scan locked), no new gate, audited; ported from Decepticon's `tools/bash`. Does not replace `:kali` (§1.1). |
 | `:exploits` | **New (Phase 5)** | Version-keyed CVE → exploit lookup over the sandbox's local exploit-db catalogue — 47k exploits, 25k distinct CVEs. Read-only; executes nothing. |
 | Live sessions | **Well-designed, now tooled** | Start is a gated command; stdin is human-only and source-scan locked. |
 | HTTP repeater | **New (Phase 4)** | Compose/send/replay/diff. Argv-only curl inside the hardcoded open box (no shell parses a request field; body on stdin), human-only + source-scan locked like `:kali`, scope-checked against a named engagement, every send run-recorded. |
@@ -5824,3 +5824,60 @@ open·kritt's source was not vendored in the tree, so the step/batch/depth-sibli
 reconstructed from the spec's description** and reproduced faithfully; the attribution stands regardless. Depth is
 modelled as a batch step re-expanding its own list output for `depth` generations (bounded); the "child steps" of the
 docs are that self-expansion plus downstream batch-over-prior-step chaining.
+
+## Interactive persistent-session engine — named tmux sessions + automatic prompt-detection (`:terminal`) (2026-08-07)
+
+**The idea.** `:kali` gives clean per-command transcripts; `:terminal`'s pty gives one full-screen shell. Neither gives
+a *named*, *parallel*, *persistent* session whose cwd/env/background-jobs survive across calls, and neither knows when a
+program has stopped at an **interactive prompt** waiting for the operator. The **session engine** is that third surface:
+named **tmux** sessions in the same open sandbox, with **automatic interactive-prompt detection** (`msfconsole` `msf6 >`,
+`sliver-client`, `evil-winrm` PS, generic REPLs), a background lifecycle (`background=True` + **auto-background at 60s**
+with a notify-once completion), output tiering, and wedge / pipe-degradation recovery. Ported from **Decepticon**'s
+`tools/bash/bash.py` + `tools/bash/prompt.py` (Apache-2.0 — attribution in `NOTICE` / `THIRD_PARTY_LICENSES`).
+
+**The HackPit twist — mechanics without autonomy.** Decepticon's agent drives everything, including sending a line to an
+interactive prompt (`is_input`). HackPit adopts the session *engine* and **not that autonomy**: **every input path is
+HUMAN-ONLY**. Both `run_command` (send a command) and `send_input` (the `is_input` path: answer a prompt / send a control
+key) are reachable only from the router the operator's UI drives; the orchestrator / agent / executor / proposer have
+**zero** code path to either. This is the one §0 invariant that cannot be weakened, and it is source-scan locked across
+the whole backend tree with a planted control (`test_session_engine_safety.py`), exactly like `:kali` / the pty.
+
+**The engine (`backend/cockpit/session_engine.py`).** Containment mirrors the pty point for point: the container is the
+hardcoded `config.KALI_OPEN_CONTAINER` (the request models carry no container/target/shell field), there is **no new
+gate and no isolation gate** (the open box is intentionally not isolated — the human at the keyboard is the approval),
+the transcript is audited to the run store, and tmux `pipe-pane` mirrors the raw stream to a per-session log under the
+workspace `.sessions/` — which a **kill deliberately preserves**. Every heuristic is a **pure function** tested against
+fixtures — `detect_prompt` (idle-shell vs interactive-tool vs running, via a `PROMPT_COMMAND` marker that carries the
+last exit code **and** `$PWD`, so each named session tracks its cwd independently), `manage_output` (inline ≤15K / >15K
+saved to `.scratch/` with a head+tail preview / >5M watchdog-truncated at source), `strip_ansi`, `compress_repeats`, and
+the three-condition `detect_wedge` and `detect_pipe_degradation` signatures with their operator-facing recovery ladders.
+The single impure boundary is `_tmux` (one `docker exec … tmux …` call), so the whole suite runs with **no Docker and no
+tmux**. `run_command` sends the command then watches for the completion marker up to 60s, returning `[DONE]` (with the
+rc) / `[INTERACTIVE]` / `[BACKGROUND]` / `[AUTO-BACKGROUND]`; `poll_jobs` delivers each background completion **exactly
+once** (mirroring the job/OBSERVE notify-once contract), then `consume_job` clears it.
+
+**The surface (`/terminal`).** The screen is now two tabs — **named sessions** (the engine) and **raw pty** (the
+unchanged full-screen surface, embedded so the screen's header renders once). The named-session panel shows session
+tabs (a live/waiting/dead dot per session, an amber pulsing dot when a tool is awaiting input), the headline
+**prompt-detection banner** (*"interactive — send input · msfconsole · msf6 >"*), per-session cwd/program/state, the
+live capture, a background-job tracker with notify-once completions, and the operator's input box — which flips between
+"run a command" (with a *run in background* option) and "answer the prompt…" (`send line`) based on the detected state.
+Twelve new backend routes under `/cockpit/sessions/*`, all HUMAN-ONLY, none gated (open box, like the pty).
+
+**Why this is safe (mirrors the pty exactly, adds nothing to the trust surface).** No new gate; no isolation claim; the
+container is hardcoded and no request field can redirect the exec; input is discrete per-line `send-keys`, so there is no
+held `proc.stdin` an autonomous caller could reach (unlike a caught C2 shell); the `:kali` sentinel stays **pty-free AND
+tmux-free** (asserted); and the human-only lock is source-scan enforced with a control. `test_session_engine.py`
+(14 checks) proves the mechanics against fixtures; `test_session_engine_safety.py` (6 checks) locks the invariants. Both
+registered in `run_safety_tests.sh`. **`run_safety_tests.sh`: 115 hermetic files, all exit 0. `next build` exits 0.**
+Screen LOOKED AT: `44-terminal-named-sessions.png` (the panel rendering a **synthetic/local** msfconsole session at
+`msf6 exploit(multi/handler) >` with the interactive banner raised, a second running `recon` session, and a notify-once
+background completion — no real target, no live shell in the shot).
+
+**Assumptions (per §5), stated.** The primary target is the `:terminal` surface + the human operator, not an autonomous
+agent (assumption 5.1); prompt-detection covers msf / sliver / evil-winrm / common REPLs first and the heuristic set
+extends later (5.2); the engine lives on the OPEN/terminal side, never the `:kali` sentinel side, keeping the
+two-sandbox separation intact (5.3). Decepticon's `tools/bash` source was not vendored in the tree, so the session
+semantics were **reconstructed from the spec's description** (the same path the governance port took) and reproduced
+faithfully; the attribution stands regardless. The engine needs `tmux` inside `hackpit-kali-open` (Kali ships it); the
+availability check refuses cleanly when the sandbox is down, and the hermetic suite fakes the one `_tmux` boundary.

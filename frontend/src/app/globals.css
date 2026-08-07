@@ -8773,6 +8773,154 @@ button.hp-tn-start:disabled, button.hp-tn-destroy:disabled { opacity: 0.45; curs
 .hp-pty-attach:disabled { opacity: 0.45; cursor: not-allowed; }
 .hp-pty-msg { font-size: 12px; color: var(--dim); letter-spacing: 0.3px; }
 .hp-pty-detail { margin-top: 10px; font-size: 12px; color: var(--dim); }
+/* When the pty is embedded in the tabbed :terminal screen it drops its own header/chrome —
+   the screen provides them once — and renders only the banner + xterm stage. */
+.hp-pty-embed { display: block; }
+
+/* --- :terminal top-level tabs (named sessions | raw pty) --------------------------- */
+.hp-tt-tabs { display: flex; gap: 6px; margin: 4px 0 16px; border-bottom: 1px solid var(--line); }
+.hp-tt-tab {
+  font-family: var(--font-mono, ui-monospace), monospace; font-size: 12px; cursor: pointer;
+  color: var(--dim); background: transparent; border: 1px solid transparent; border-bottom: none;
+  padding: 8px 16px; border-radius: 6px 6px 0 0; margin-bottom: -1px; letter-spacing: 0.3px;
+}
+.hp-tt-tab:hover { color: var(--fg); }
+.hp-tt-tab-on {
+  color: var(--accent); background: var(--accent-soft);
+  border-color: var(--accent-line); border-bottom: 1px solid #07090c;
+}
+
+/* --- named-session engine (the tmux surface) -------------------------------------- */
+.hp-ns { display: block; }
+.hp-ns-err { color: #ff8f6b; font-size: 12px; margin: 10px 0; }
+.hp-ns-empty {
+  margin: 18px 0; padding: 22px; border: 1px dashed var(--line); border-radius: 8px;
+  color: var(--dim); font-size: 13px; line-height: 1.55; text-align: center;
+}
+
+/* session tabs */
+.hp-ns-tabs { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 16px 0 6px; }
+.hp-ns-tab {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+  font-family: var(--font-mono, ui-monospace), monospace; font-size: 12px; color: var(--fg);
+  background: rgba(255, 255, 255, 0.03); border: 1px solid var(--line);
+  border-radius: 6px; padding: 7px 12px;
+}
+.hp-ns-tab:hover { border-color: var(--accent-line); }
+.hp-ns-tab-on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
+.hp-ns-tab-prog {
+  font-size: 10px; color: var(--dim); background: rgba(255, 255, 255, 0.05);
+  padding: 1px 6px; border-radius: 3px;
+}
+.hp-ns-tab-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.hp-ns-dot-live { background: #7fe0a0; box-shadow: 0 0 6px rgba(127, 224, 160, 0.7); }
+.hp-ns-dot-wait { background: #ffcf5c; box-shadow: 0 0 7px rgba(255, 207, 92, 0.85); animation: hp-ns-pulse 1.4s ease-in-out infinite; }
+.hp-ns-dot-dead { background: #6b7076; }
+@keyframes hp-ns-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.hp-ns-new { display: inline-flex; gap: 6px; align-items: center; margin-left: auto; }
+.hp-ns-newinput {
+  font-family: var(--font-mono, ui-monospace), monospace; font-size: 12px; color: var(--fg);
+  background: rgba(255, 255, 255, 0.03); border: 1px solid var(--line); border-radius: 6px;
+  padding: 7px 10px; outline: none; width: 160px;
+}
+.hp-ns-newinput:focus { border-color: var(--accent-line); }
+.hp-ns-newinput::placeholder { color: color-mix(in srgb, var(--dim) 70%, transparent); }
+.hp-ns-newbtn {
+  font-family: inherit; font-size: 12px; cursor: pointer; color: var(--accent);
+  background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: 6px;
+  padding: 7px 14px; white-space: nowrap;
+}
+.hp-ns-newbtn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.hp-ns-newbtn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* THE PROMPT-DETECTION BANNER — the headline feature */
+.hp-ns-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 14px 0 10px; padding: 11px 14px; border-radius: 8px; font-size: 12.5px;
+  border: 1px solid var(--line); background: rgba(255, 255, 255, 0.02);
+}
+.hp-ns-banner-idle { color: var(--dim); }
+.hp-ns-banner-wait {
+  color: #ffe6a6; border-color: rgba(255, 207, 92, 0.55);
+  background: rgba(255, 207, 92, 0.10);
+}
+.hp-ns-banner-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: currentColor; }
+.hp-ns-banner-wait .hp-ns-banner-dot { animation: hp-ns-pulse 1.4s ease-in-out infinite; }
+.hp-ns-prompt-line {
+  font-family: var(--font-mono, ui-monospace), monospace; font-size: 11.5px;
+  background: rgba(0, 0, 0, 0.35); padding: 2px 8px; border-radius: 4px; color: #ffcf5c;
+}
+
+/* per-session facts */
+.hp-ns-meta {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  font-size: 11.5px; color: var(--dim); margin-bottom: 8px;
+}
+.hp-ns-meta-item code, .hp-ns-meta-item b { color: var(--fg); }
+.hp-ns-meta-spacer { flex: 1; }
+.hp-ns-kill {
+  font-family: inherit; font-size: 11px; cursor: pointer; color: #ff8f6b;
+  background: transparent; border: 1px solid rgba(255, 143, 107, 0.4); border-radius: 5px;
+  padding: 5px 12px;
+}
+.hp-ns-kill:hover:not(:disabled) { background: rgba(255, 143, 107, 0.12); }
+.hp-ns-kill:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* the live capture */
+.hp-ns-out {
+  font-family: var(--font-mono, ui-monospace), monospace; font-size: 12px; line-height: 1.5;
+  color: #d7e0e8; background: #07090c; border: 1px solid var(--line); border-radius: 8px;
+  padding: 14px 16px; margin: 0 0 12px; height: min(52vh, 560px); overflow: auto;
+  white-space: pre-wrap; word-break: break-word;
+}
+.hp-ns-saved { color: var(--dim); }
+
+/* the human's input box */
+.hp-ns-form { display: flex; gap: 8px; margin-bottom: 14px; }
+.hp-ns-input {
+  flex: 1; font-family: var(--font-mono, ui-monospace), monospace; font-size: 13px;
+  color: var(--fg); background: rgba(255, 255, 255, 0.03); border: 1px solid var(--line);
+  border-radius: 6px; padding: 11px 14px; outline: none;
+}
+.hp-ns-input:focus { border-color: var(--accent-line); background: rgba(255, 255, 255, 0.05); }
+.hp-ns-input::placeholder { color: color-mix(in srgb, var(--dim) 70%, transparent); }
+.hp-ns-run, .hp-ns-send {
+  font-family: inherit; font-size: 12px; cursor: pointer; color: var(--accent);
+  background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: 6px;
+  padding: 0 20px; white-space: nowrap;
+}
+.hp-ns-send { color: #ffcf5c; background: rgba(255, 207, 92, 0.12); border-color: rgba(255, 207, 92, 0.5); }
+.hp-ns-run:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.hp-ns-send:hover:not(:disabled) { background: rgba(255, 207, 92, 0.2); }
+.hp-ns-bg {
+  font-family: inherit; font-size: 12px; cursor: pointer; color: var(--dim);
+  background: transparent; border: 1px solid var(--line); border-radius: 6px;
+  padding: 0 16px; white-space: nowrap;
+}
+.hp-ns-bg:hover:not(:disabled) { color: var(--fg); border-color: var(--accent-line); }
+.hp-ns-run:disabled, .hp-ns-send:disabled, .hp-ns-bg:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* the background-job tracker + completion notifications */
+.hp-ns-jobs { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 14px; }
+.hp-ns-job {
+  display: flex; align-items: center; gap: 10px; font-size: 11.5px;
+  padding: 8px 12px; border-radius: 6px; border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+}
+.hp-ns-job-run { border-color: rgba(127, 209, 255, 0.35); }
+.hp-ns-job-done { border-color: rgba(127, 224, 160, 0.4); background: rgba(127, 224, 160, 0.07); }
+.hp-ns-jobdot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: currentColor; }
+.hp-ns-job-run .hp-ns-jobdot { background: #7fd1ff; animation: hp-ns-pulse 1.4s ease-in-out infinite; }
+.hp-ns-job-done .hp-ns-jobdot { background: #7fe0a0; }
+.hp-ns-jobcmd { color: var(--fg); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hp-ns-jobcmd code, .hp-ns-jobcmd b { color: inherit; }
+.hp-ns-jobstate { color: var(--dim); font-variant-numeric: tabular-nums; }
+.hp-ns-jobdismiss {
+  font-family: inherit; font-size: 10.5px; cursor: pointer; color: var(--dim);
+  background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 3px 10px;
+}
+.hp-ns-jobdismiss:hover { color: var(--fg); border-color: var(--accent-line); }
 
 /* --- :exploits — version-keyed CVE -> exploit lookup ------------------------------- */
 .hp-xp-head { margin-bottom: 18px; }

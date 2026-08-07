@@ -59,6 +59,7 @@ from . import recon as recon_mod
 from . import proposals as proposals_mod
 from . import redirector as redirector_mod
 from . import session as live_session
+from . import session_engine as session_engine_mod
 from . import kali as kali_mod
 from . import repeater as repeater_mod
 from . import terminal as terminal_mod
@@ -614,6 +615,121 @@ def close_terminal(tid: str) -> terminal_mod.TerminalInfo:
         return terminal_mod.close_terminal(tid)
     except terminal_mod.TerminalRefused as exc:
         raise HTTPException(status_code=404, detail={"reason": str(exc)})
+
+
+# --- Named persistent sessions (tmux engine — interactive tools, HUMAN-ONLY) --------- #
+#
+# A THIRD open-sandbox surface alongside :kali and the pty: named, parallel, persistent tmux
+# sessions with per-session cwd, automatic interactive-prompt detection (msfconsole / sliver /
+# evil-winrm / REPLs), a background lifecycle with a notify-once completion, and wedge /
+# pipe-degradation recovery. Ported from Decepticon's tools/bash (Apache-2.0 — see
+# THIRD_PARTY_LICENSES / NOTICE).
+#
+# SAME containment as :kali / the pty: the container is the hardcoded open box, there is NO
+# gate and no isolation claim (the human at the keyboard is the approval), the transcript is
+# audited to the run store, and — the rule that matters most — the INPUT paths are HUMAN-ONLY.
+# session_engine_mod.run_command / send_input / open_session are referenced by THIS router and
+# nothing else; source-scan locked by test_session_engine_safety.py exactly like the pty. The
+# orchestrator/agent/executor/proposer must NEVER send input (Decepticon's is_input autonomy is
+# explicitly NOT adopted).
+
+
+@router.get("/sessions/status")
+def get_session_engine_status() -> dict[str, Any]:
+    """Availability of the named-session engine (no isolation claim — there is none)."""
+    return session_engine_mod.engine_status()
+
+
+@router.get("/sessions/jobs/poll", response_model=list[session_engine_mod.BackgroundJobInfo])
+def poll_session_jobs() -> list[session_engine_mod.BackgroundJobInfo]:
+    """Background-job completions across every session — each delivered ONCE. Read-only."""
+    return session_engine_mod.poll_jobs()
+
+
+@router.get("/sessions", response_model=list[session_engine_mod.SessionInfo])
+def list_named_sessions() -> list[session_engine_mod.SessionInfo]:
+    """Every named session this process knows about. Read-only."""
+    return session_engine_mod.list_sessions()
+
+
+@router.post("/sessions", response_model=session_engine_mod.SessionInfo)
+def open_named_session(
+    req: session_engine_mod.SessionOpenRequest,
+) -> session_engine_mod.SessionInfo:
+    """Open a named tmux session in the OPEN sandbox. HUMAN-ONLY (a human's UI action)."""
+    try:
+        return session_engine_mod.open_session(req)
+    except session_engine_mod.SessionRefused as exc:
+        raise HTTPException(status_code=409, detail={"reason": str(exc)})
+
+
+@router.get("/sessions/{name}", response_model=session_engine_mod.SessionInfo)
+def get_named_session(name: str) -> session_engine_mod.SessionInfo:
+    try:
+        return session_engine_mod.get_session(name)
+    except session_engine_mod.SessionNotFound:
+        raise HTTPException(status_code=404, detail={"reason": f"no session {name!r}"})
+
+
+@router.get("/sessions/{name}/capture")
+def capture_named_session(name: str) -> dict[str, Any]:
+    """The live view of a session: managed output + the current prompt state. Read-only."""
+    try:
+        return session_engine_mod.capture(name)
+    except session_engine_mod.SessionNotFound:
+        raise HTTPException(status_code=404, detail={"reason": f"no session {name!r}"})
+
+
+@router.post("/sessions/{name}/run")
+def run_in_named_session(
+    name: str, req: session_engine_mod.SessionRunRequest
+) -> dict[str, Any]:
+    """Run ONE command in a named session. *** HUMAN-ONLY *** — the human clicked run.
+
+    The orchestrator has no path here; a named session is a full-reach interactive process.
+    Returns [DONE] / [INTERACTIVE] / [BACKGROUND] / [AUTO-BACKGROUND] with the managed output.
+    """
+    try:
+        return session_engine_mod.run_command(name, req)
+    except session_engine_mod.SessionNotFound:
+        raise HTTPException(status_code=404, detail={"reason": f"no session {name!r}"})
+    except session_engine_mod.SessionRefused as exc:
+        raise HTTPException(status_code=409, detail={"reason": str(exc)})
+
+
+@router.post("/sessions/{name}/input", response_model=session_engine_mod.SessionInfo)
+def send_input_to_named_session(
+    name: str, req: session_engine_mod.SessionInputRequest
+) -> session_engine_mod.SessionInfo:
+    """Send one line/keys to a session's interactive prompt. *** HUMAN-ONLY *** (the is_input
+    path: the operator answering msfconsole / sliver / evil-winrm). Never the orchestrator."""
+    try:
+        return session_engine_mod.send_input(name, req)
+    except session_engine_mod.SessionNotFound:
+        raise HTTPException(status_code=404, detail={"reason": f"no session {name!r}"})
+    except session_engine_mod.SessionRefused as exc:
+        raise HTTPException(status_code=409, detail={"reason": str(exc)})
+
+
+@router.post("/sessions/{name}/jobs/{job_id}/consume",
+             response_model=session_engine_mod.BackgroundJobInfo)
+def consume_named_session_job(
+    name: str, job_id: str
+) -> session_engine_mod.BackgroundJobInfo:
+    """Mark a completed background job's notification consumed (the tracker stops flagging it)."""
+    try:
+        return session_engine_mod.consume_job(name, job_id)
+    except session_engine_mod.SessionNotFound:
+        raise HTTPException(status_code=404, detail={"reason": f"no session/job {name}:{job_id}"})
+
+
+@router.delete("/sessions/{name}", response_model=session_engine_mod.SessionInfo)
+def kill_named_session(name: str) -> session_engine_mod.SessionInfo:
+    """Kill a named session (PRESERVING its .sessions/ log) and finalise its record."""
+    try:
+        return session_engine_mod.kill_session(name)
+    except session_engine_mod.SessionNotFound:
+        raise HTTPException(status_code=404, detail={"reason": f"no session {name!r}"})
 
 
 # --- HTTP repeater (Phase 4 item 3 — compose / send / replay / diff) ---------------- #

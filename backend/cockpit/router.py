@@ -56,6 +56,7 @@ from . import intercept as intercept_mod
 from . import intruder as intruder_mod
 from . import race as race_mod
 from . import smuggle as smuggle_mod
+from . import cache as cache_mod
 from . import nuclei as nuclei_mod
 from . import recon as recon_mod
 from . import proposals as proposals_mod
@@ -1479,6 +1480,139 @@ def stop_smuggle_job(job_id: str) -> smuggle_mod.SmuggleJob:
     job = smuggle_mod.stop(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail={"reason": f"no smuggle job {job_id!r}"})
+    return job
+
+
+# --------------------------------------------------------------------------- #
+# THE WEB-CACHE-POISONING / CACHE-DECEPTION DETECTOR (cache-probe build) — one probe per candidate
+# unkeyed input from one press. The CDN/edge cache behaviour the proxy already reasons about, made
+# testable.
+#
+# *** IT IS GATED EXACTLY LIKE THE SCANNER \ SMUGGLE: THE FOUR GATES, NO NEW ONES. ***
+# DETECTION is safe-by-default (reflection + cacheability — it plants NO cache entry) and is the
+# POST /cache path. CONFIRMATION (poison-plant, which CAN serve a poisoned response to other users of
+# the cache) is a SEPARATE approve-each at POST /cache/confirm that carries a plain-language co-user
+# warning — still approve-each, NO new gate class. Every probe rides argv-only from inside the
+# hardcoded open sandbox, scope-checked on the wire; stop is the ungated panic button.
+# --------------------------------------------------------------------------- #
+@router.get("/cache/status")
+def get_cache_status() -> dict[str, Any]:
+    """Sandbox availability + running-job count — drives the UI banner. Read-only."""
+    return cache_mod.status()
+
+
+@router.get("/cache/catalogue")
+def cache_catalogue() -> dict[str, Any]:
+    """The pickable candidate-input set, the default (safe) subset, and the co-user warning text the
+    confirm stage shows — one source of truth so the UI does not carry a second copy. Read-only."""
+    return {
+        "inputs": list(cache_mod.INPUTS),
+        "default_inputs": list(cache_mod.DEFAULT_INPUTS),
+        "stages": list(cache_mod.STAGES),
+        "co_user_warning": cache_mod.CO_USER_WARNING,
+    }
+
+
+def _cache_preview(req: cache_mod.CacheRequest) -> dict[str, Any]:
+    """WHAT WOULD BE PROBED and WHETHER THE GATE WOULD REFUSE IT — without probing anything.
+
+    Both halves come from the same functions the start path uses (`plan`, `validate`,
+    `cache_argv_for`), so a preview cannot drift from the run. The co-user warning is included on the
+    confirm stage so it is shown BEFORE anything runs.
+    """
+    stage, inputs, warnings = cache_mod.plan(req)
+    verdict = cache_mod.validate(req)
+    return {
+        "argv": cache_mod.cache_argv_for(req),
+        "stage": stage,
+        "inputs": inputs,
+        "warnings": warnings,
+        "co_user_warning": cache_mod.CO_USER_WARNING if stage == "confirm" else "",
+        "gate": None if verdict is None else {
+            "gate": verdict.gate, "reason": verdict.reason,
+            "dangerous_flags": list(verdict.dangerous_flags or []),
+        },
+    }
+
+
+@router.post("/cache/preview")
+def cache_preview(req: cache_mod.CacheRequest) -> dict[str, Any]:
+    """The detect/confirm preview — the argv, the inputs, the gate verdict, and (confirm) the co-user
+    warning. Probes nothing."""
+    return _cache_preview(req)
+
+
+@router.post("/cache", response_model=cache_mod.CacheJob)
+def start_cache(req: cache_mod.CacheRequest) -> cache_mod.CacheJob:
+    """DETECTION — reflection + cacheability sweep (+ cache deception) as ONE approved job. GATED,
+    then it runs.
+
+    *** THIS IS THE SAFE PATH — IT PLANTS NO CACHE ENTRY. *** Each probe carries a unique marker in
+    one candidate unkeyed input and reports whether it is reflected AND lands in a cacheable response;
+    nothing is served to any other user. The stage is PINNED to detect here so this endpoint can
+    never run the co-user-affecting confirmation — that is a separate route.
+    `executor.validate_request` runs against the equivalent `cache-probe` command BEFORE anything
+    spawns, so an unapproved or off-target job probes nothing.
+
+    A SAFETY refusal is **403** naming the gate; an availability/input problem is **409**.
+    """
+    req = req.model_copy(update={"stage": "detect"})
+    try:
+        return cache_mod.start(req)
+    except cache_mod.CacheRefused as exc:
+        code = 409 if exc.gate in {"unavailable", "input"} else 403
+        raise HTTPException(status_code=code, detail={
+            "gate": exc.gate, "reason": exc.reason, "dangerous_flags": exc.dangerous_flags,
+        })
+
+
+@router.post("/cache/confirm", response_model=cache_mod.CacheJob)
+def start_cache_confirm(req: cache_mod.CacheRequest) -> cache_mod.CacheJob:
+    """CONFIRMATION — poison-plant confirmation as a SEPARATE approve-each. GATED, then it runs.
+
+    *** THIS ONE CAN SERVE A POISONED RESPONSE TO OTHER USERS OF THE CACHE. *** It plants the marker
+    entry then fetches it back with a request that never carried the marker, so the poisoned entry a
+    fresh request receives is the same entry a real co-user would receive. That is why it is its OWN
+    approval, distinct from detection, and why the co-user warning (`cache.CO_USER_WARNING`) is
+    surfaced on this route's preview and job. It is still approve-each — the SAME four gates, NO new
+    gate class. The stage is PINNED to confirm here, so a confirmation cannot happen without an
+    operator deliberately hitting this endpoint with its own approval set.
+
+    A SAFETY refusal is **403** naming the gate; an availability/input problem is **409**.
+    """
+    req = req.model_copy(update={"stage": "confirm"})
+    try:
+        return cache_mod.start(req)
+    except cache_mod.CacheRefused as exc:
+        code = 409 if exc.gate in {"unavailable", "input"} else 403
+        raise HTTPException(status_code=code, detail={
+            "gate": exc.gate, "reason": exc.reason, "dangerous_flags": exc.dangerous_flags,
+        })
+
+
+@router.get("/cache", response_model=list[cache_mod.CacheJob])
+def list_cache_jobs(
+    session_id: str | None = Query(None),
+) -> list[cache_mod.CacheJob]:
+    """Every cache job, newest first. Read-only, ungated — the results table polls this."""
+    return cache_mod.list_jobs(session_id)
+
+
+@router.get("/cache/{job_id}", response_model=cache_mod.CacheJob)
+def get_cache_job(job_id: str) -> cache_mod.CacheJob:
+    """One job with its per-input verdicts. Read-only, ungated."""
+    job = cache_mod.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no cache job {job_id!r}"})
+    return job
+
+
+@router.delete("/cache/{job_id}", response_model=cache_mod.CacheJob)
+def stop_cache_job(job_id: str) -> cache_mod.CacheJob:
+    """Stop an in-flight sweep. NOT GATED — the panic button, exactly like `stop_scan`."""
+    job = cache_mod.stop(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no cache job {job_id!r}"})
     return job
 
 

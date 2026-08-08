@@ -215,6 +215,18 @@ export const SURFACE_BANDS: SurfaceBand[] = [
         desc: "Probe for request smuggling / desync — safe timing detection, gated confirmation.",
         needsStack: true,
       },
+      // OPERATE, next to :smuggle because it is the other shared-cache primitive: probe a target for
+      // web cache poisoning (unkeyed inputs) + cache deception. Detection is safe-by-default
+      // (reflection + cacheability, plants nothing); confirmation is a separate approve-each with a
+      // co-user warning. Same four gates, needs the stack.
+      {
+        key: "cache",
+        icon: "▤",
+        label: ":cache",
+        href: "/cache",
+        desc: "Probe for cache poisoning / deception — safe reflection+cacheability, gated confirm.",
+        needsStack: true,
+      },
       // OPERATE, and the payoff of the whole state model: spray captured/OSINT creds across a
       // service, or crack captured hashes with a wordlist — one approval per job, an ungated
       // stop. A hit writes a validated credential + finding into state and marks the AD node

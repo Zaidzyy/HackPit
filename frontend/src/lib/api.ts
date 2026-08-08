@@ -3096,6 +3096,134 @@ export const stopSmuggleJob = (id: string, signal?: AbortSignal) =>
   delJSON<SmuggleJob>(`/cockpit/smuggle/${encodeURIComponent(id)}`, signal);
 
 /* -------------------------------------------------------------------------- */
+/* WEB CACHE POISONING / DECEPTION (:cache) — one probe per candidate unkeyed  */
+/* input, one press. DETECTION is safe-by-default (reflection + cacheability,  */
+/* plants nothing); CONFIRMATION (poison-plant) is a SEPARATE approve-each     */
+/* carrying a co-user warning. The same four gates, no new gate class.         */
+/* -------------------------------------------------------------------------- */
+export type CacheRequest = {
+  url: string;
+  method: string;
+  headers: RepeaterHeader[];
+  body: string;
+  /** Which candidate unkeyed inputs to probe (see INPUTS). Empty = the safe default set. */
+  inputs: string[];
+  /** detect (safe reflection+cacheability, default) or confirm (poison-plant, co-user risk). */
+  stage: string;
+  /** Run the cache-deception path-confusion probes alongside detection. */
+  deception: boolean;
+  timeout_seconds?: number | null;
+  insecure: boolean;
+  follow_redirects: boolean;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  use_cookie_jar: boolean;
+  approved: boolean;
+  /** Demanded by the GATE when the request content warrants it, not by the form. */
+  dangerous_ack: boolean;
+};
+
+export type InputVerdict = {
+  input: string;
+  reflected: boolean;
+  cacheable: boolean;
+  candidate: boolean;
+  marker: string;
+  indicator: string;
+  status: number | null;
+  error: string;
+  note: string;
+};
+
+export type DeceptionVerdict = {
+  path: string;
+  extension: string;
+  cached: boolean;
+  status: number | null;
+  indicator: string;
+  evidence: string;
+  error: string;
+  note: string;
+};
+
+export type CacheConfirmVerdict = {
+  input: string;
+  poisoned: boolean;
+  status: number | null;
+  evidence: string;
+  error: string;
+  note: string;
+};
+
+export type CacheJob = {
+  id: string;
+  state: string;
+  stage: string;
+  request: CacheRequest;
+  container: string;
+  started_at: string;
+  finished_at: string;
+  inputs: string[];
+  verdicts: InputVerdict[];
+  deceptions: DeceptionVerdict[];
+  confirms: CacheConfirmVerdict[];
+  candidates: string[];
+  confirmed: string[];
+  co_user_warning: string;
+  warnings: string[];
+  scope_refusals: number;
+  finding_written: boolean;
+};
+
+export type CachePreview = {
+  argv: string[];
+  stage: string;
+  inputs: string[];
+  warnings: string[];
+  co_user_warning: string;
+  /** What the four gates WOULD say. `null` means nothing stands in the way. */
+  gate: { gate: string; reason: string; dangerous_flags: string[] } | null;
+};
+
+export type CacheCatalogue = {
+  inputs: string[];
+  default_inputs: string[];
+  stages: string[];
+  co_user_warning: string;
+};
+
+export const getCacheStatus = (signal?: AbortSignal) =>
+  getJSON<{ container: string; up: boolean; ready: boolean; running: number; detail: string }>(
+    "/cockpit/cache/status",
+    signal
+  );
+
+export const getCacheCatalogue = (signal?: AbortSignal) =>
+  getJSON<CacheCatalogue>("/cockpit/cache/catalogue", signal);
+
+/** What would be probed AND whether the gate would refuse it — probing nothing. */
+export const cachePreview = (req: CacheRequest, signal?: AbortSignal) =>
+  postJSON<CachePreview>("/cockpit/cache/preview", req, signal);
+
+/** DETECTION — safe reflection + cacheability sweep. Stage is pinned to detect server-side. */
+export const startCache = (req: CacheRequest, signal?: AbortSignal) =>
+  postJSON<CacheJob>("/cockpit/cache", req, signal);
+
+/** CONFIRMATION — poison-plant, a SEPARATE approval that can affect other users of the cache. */
+export const startCacheConfirm = (req: CacheRequest, signal?: AbortSignal) =>
+  postJSON<CacheJob>("/cockpit/cache/confirm", req, signal);
+
+export const listCacheJobs = (signal?: AbortSignal) =>
+  getJSON<CacheJob[]>("/cockpit/cache", signal);
+
+export const getCacheJob = (id: string, signal?: AbortSignal) =>
+  getJSON<CacheJob>(`/cockpit/cache/${encodeURIComponent(id)}`, signal);
+
+/** Stop an in-flight sweep. NOT GATED — the panic button, exactly like stopping a scan. */
+export const stopCacheJob = (id: string, signal?: AbortSignal) =>
+  delJSON<CacheJob>(`/cockpit/cache/${encodeURIComponent(id)}`, signal);
+
+/* -------------------------------------------------------------------------- */
 /* CREDENTIAL ATTACK (:credentials) — spray captured creds, crack captured hashes */
 /* -------------------------------------------------------------------------- */
 export type SprayRequest = {
@@ -6456,3 +6584,187 @@ export const runWorkflow = (wid: string, input: WorkflowRunInput, signal?: Abort
 
 export const sampleWorkflow = (wid: string, signal?: AbortSignal) =>
   getJSON<WorkflowRun>(`/codescan/workflows/${encodeURIComponent(wid)}/sample`, signal);
+
+// --- cross-domain KILL-CHAIN overlay (backend/killchain/) ---------------------------------- //
+//
+// The capstone: one view that stitches the web foothold, cloud IAM and on-prem AD graphs into a
+// single routed kill chain, joined by cross-domain SEAMS (SSRF→IMDS, cloud-creds→AD, web-RCE→host).
+// Read-and-stitch overlay — it reads each graph's public output; it executes nothing. The agent
+// PROPOSES the next edge (an index); a cross-domain hop is approved through the SAME gated executor
+// every cockpit command uses, a within-lane hop is approved in its own :cloud / :ad-graph view.
+
+export type KillchainDomain = "web" | "cloud" | "onprem";
+
+export type KillchainNode = {
+  id: string;
+  type: string;
+  label: string;
+  domain: KillchainDomain | "";
+  high_value: boolean;
+  owned: boolean;
+  props: Record<string, unknown>;
+};
+
+export type KillchainEdge = {
+  source: string;
+  target: string;
+  kind: string;
+  abusable: boolean;
+  bridge: boolean;
+  props: Record<string, unknown>;
+};
+
+export type KillchainTechnique = {
+  title: string;
+  summary: string;
+  tool: string;
+  destructive: boolean;
+  grounded: boolean;
+  ai_suggested: boolean;
+  entry_id: string | null;
+  entry_title: string | null;
+  attack_id: string;
+  commands: CloudCommand[];
+  domain_from: string;
+  domain_to: string;
+  why: string;
+};
+
+export type KillchainPathEdge = {
+  source: string;
+  target: string;
+  kind: string;
+  source_label: string;
+  target_label: string;
+  bridge: boolean;
+  props: Record<string, unknown>;
+  technique?: KillchainTechnique;
+};
+
+export type KillchainPath = {
+  node_ids: string[];
+  edges: KillchainPathEdge[];
+  length: number;
+  cost: number;
+  crossings: number;
+};
+
+export type KillchainRoute = {
+  found: boolean;
+  path: KillchainPath | null;
+  alternatives: KillchainPath[];
+  reason: string | null;
+  target?: string;
+  target_label?: string;
+  start_label?: string;
+};
+
+export type KillchainGraph = {
+  domains: KillchainDomain[];
+  nodes: KillchainNode[];
+  edges: KillchainEdge[];
+  stats: Record<string, number>;
+  warnings: string[];
+};
+
+export type KillchainGraphResult = {
+  graph: KillchainGraph;
+  start: string | null;
+  goal: string | null;
+  route: KillchainRoute;
+};
+
+/** The merged three-lane graph + the computed route. `demo=true` (or no session) loads the
+ *  synthetic chain — no real host, account or domain. Read-only. */
+export const killchainGraph = (
+  params: { session_id?: string | null; demo?: boolean; start?: string | null; goal?: string | null },
+  signal?: AbortSignal
+) => {
+  const q = new URLSearchParams();
+  if (params.demo) q.set("demo", "1");
+  if (params.session_id) q.set("session_id", params.session_id);
+  if (params.start) q.set("start", params.start);
+  if (params.goal) q.set("goal", params.goal);
+  const qs = q.toString();
+  return getJSON<KillchainGraphResult>(`/killchain/graph${qs ? `?${qs}` : ""}`, signal);
+};
+
+export type KillchainProposal = {
+  edge: {
+    source: string;
+    target: string;
+    kind: string;
+    source_label: string;
+    target_label: string;
+    bridge: boolean;
+    domain_from: string;
+    domain_to: string;
+  };
+  technique: KillchainTechnique;
+  command: string;
+  args: string[];
+  cmd_display: string;
+  rationale: string;
+  runnable: boolean;
+  is_bridge: boolean;
+  lane_view: string | null;
+  resolution: "ready" | "note-only" | "unparsable" | "lane-view";
+  gate_ok: boolean;
+  gate_reason: string;
+  dangerous_flags: string[];
+  requires_confirm: boolean;
+  destructive_technique: boolean;
+  destructive_unresolved: boolean;
+};
+
+export type KillchainProposeResult = {
+  done: boolean;
+  proposal: KillchainProposal | null;
+  candidates: number;
+  reason: string | null;
+  goal: string;
+  goal_label: string;
+  state: { owned: string[]; traversed: string[] };
+  mode: "engagement" | "lab";
+  note: string;
+};
+
+/** Propose the next edge to take across the chain (an index into the real frontier). Executes
+ *  nothing — the human approves each step. */
+export const killchainPropose = (
+  body: {
+    session_id?: string | null;
+    demo?: boolean;
+    owned: string[];
+    traversed?: string[];
+    goal?: string | null;
+    engagement_id?: string | null;
+    avoid?: string[];
+  },
+  signal?: AbortSignal
+) => postJSON<KillchainProposeResult>("/killchain/propose", body, signal);
+
+export type KillchainAdvanceResult = {
+  state: { owned: string[]; traversed: string[] };
+  owned_label: string;
+  crossed_seam: boolean;
+  objective_reached: boolean;
+  remaining_frontier: number;
+  proposal: KillchainProposal;
+};
+
+/** Advance the chain after a hop succeeded. A cross-domain hop needs an approved, exit-0 `run_id`;
+ *  a within-lane hop (approved in its own view) does not. */
+export const killchainAdvance = (
+  body: {
+    session_id?: string | null;
+    demo?: boolean;
+    owned: string[];
+    traversed?: string[];
+    source: string;
+    target: string;
+    kind: string;
+    run_id?: string | null;
+  },
+  signal?: AbortSignal
+) => postJSON<KillchainAdvanceResult>("/killchain/advance", body, signal);

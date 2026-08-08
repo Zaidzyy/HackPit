@@ -5802,6 +5802,81 @@
           "what": "the front-end proxy URL to attempt the h2c upgrade against"
         }
       ]
+    },
+    {
+      "name": "cache-probe",
+      "category": "web",
+      "purpose": "In-repo web-cache-poisoning / cache-deception prober — the :cache job's engine. Reflection + cacheability DETECTION (safe, plants nothing) by default; poison-plant CONFIRMATION as a separate approve-each. Probes unkeyed inputs (X-Forwarded-Host and friends, cloaked params, fat-GET body) and cache-deception path confusion.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "web cache poisoning",
+        "unkeyed input reflection",
+        "cache deception (path confusion)",
+        "open-redirect / XSS via cached response"
+      ],
+      "docs": "https://portswigger.net/web-security/web-cache-poisoning",
+      "templates": [
+        {
+          "label": "detect + confirm (:cache job, stdin)",
+          "template": "cache-probe --job-stdin",
+          "note": "The whole request (URL, headers, body, candidate-input set, stage) is delivered as JSON on stdin — no request byte reaches a shell. This is how the :cache job invokes it. Stage 'detect' plants no cache entry; stage 'confirm' is the separately-approved poison-plant step."
+        },
+        {
+          "label": "reflection + cacheability detection (explicit)",
+          "template": "cache-probe -u <url> --stage detect --inputs x-forwarded-host,x-forwarded-scheme,param-cloak --deception",
+          "note": "For each candidate unkeyed input, marks it and reports whether the marker is reflected AND the response is cacheable; also runs the cache-deception path-confusion probes. Plants nothing — safe by default."
+        },
+        {
+          "label": "poison-plant confirmation (co-user risk)",
+          "template": "cache-probe -u <url> --stage confirm --inputs x-forwarded-host",
+          "note": "Primes the cache with the marker request then fetches it back with a request that never carried the marker. CAN SERVE A POISONED RESPONSE TO OTHER USERS OF THE CACHE — only on an authorised target."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--stage",
+          "what": "detect (safe reflection+cacheability, the default) or confirm (poison-plant, co-user risk)"
+        },
+        {
+          "flag": "--inputs",
+          "what": "comma-separated candidate unkeyed inputs to probe (empty = the safe default set)"
+        }
+      ]
+    },
+    {
+      "name": "wcvs",
+      "category": "web",
+      "purpose": "Hackmanit's Web-Cache-Vulnerability-Scanner — the standard external web-cache-poisoning scanner. Walks unkeyed-header, parameter-cloaking, fat-GET and normalization checks against a target and reports which inputs poison a shared cache.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "web cache poisoning",
+        "unkeyed header / parameter cloaking",
+        "cache deception",
+        "response splitting via cache"
+      ],
+      "docs": "https://github.com/Hackmanit/Web-Cache-Vulnerability-Scanner",
+      "templates": [
+        {
+          "label": "scan a URL for cache poisoning",
+          "template": "wcvs -u <url>",
+          "note": "Runs the built-in check set; a reflected + cacheable header is the poisoning signal. Its transcript can be pasted back into :cache to land in the same verdict table."
+        },
+        {
+          "label": "scan with a generator config",
+          "template": "wcvs -u <url> -gc default.json",
+          "note": "Pick a generator config to widen the header / parameter permutations."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-u",
+          "what": "the target URL to scan for cache poisoning"
+        }
+      ]
     }
   ]
 }

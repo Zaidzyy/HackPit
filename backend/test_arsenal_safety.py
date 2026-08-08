@@ -253,6 +253,17 @@ _MUST_NOT_FIRE = frozenset({
     # the bare binary dangerous (which would fire a confirm on every safe timing-only detection run
     # and stop meaning anything — the argument this file makes for race-singlepacket four lines up).
     "smuggle-probe", "smuggler.py", "smuggler", "h2csmuggler",
+    # web-cache-poisoning / cache-deception prober (cache-probe build) + the external Hackmanit
+    # scanner it sits alongside (wcvs). Both SEND HTTP AND READ WHAT COMES BACK — a marked request
+    # and the reflection / cache headers it earns. Neither generates a payload, opens a shell,
+    # tunnels traffic or runs code on a remote host, which is the test this bucket is judged by; they
+    # are the same class as sqlmap / dalfox / smuggle-probe above, all clean. The red-confirm still
+    # fires on request CONTENT (a body carrying '| sh') through the heuristic; and the ONE genuinely
+    # co-user-affecting action — poison-plant CONFIRMATION — is gated as its own approve-each WITH a
+    # co-user warning in cockpit/cache.py, not by marking the bare binary dangerous (which would fire
+    # a confirm on every safe detection-only run and stop meaning anything — the argument this file
+    # makes for smuggle-probe / race-singlepacket above).
+    "cache-probe", "wcvs",
     # GraphQL tooling (build #20 item 6). All four SEND HTTP AND READ WHAT COMES BACK. None
     # generates or delivers a payload, opens a shell, tunnels traffic or runs code on a remote
     # host, which is the test this bucket is judged by.

@@ -11,6 +11,7 @@ import { ModelBadge } from "./ModelBadge";
 import { TargetTypeChips } from "./TargetTypeChips";
 import { ComposingLoader } from "./ComposingLoader";
 import { DetectionDisclosure } from "./DetectionPanel";
+import { AlternativeDisclosure } from "./AlternativeDisclosure";
 import {
   ApiError,
   composeAttackPath,
@@ -446,7 +447,13 @@ export function AttackPathScreen() {
                   </div>
                   <div className="hp-ap-steps">
                     {ph.steps.map((s) => (
-                      <StepCard key={s.id} step={s} />
+                      <StepCard
+                        key={s.id}
+                        step={s}
+                        goal={result.goal}
+                        target={result.target}
+                        scopeText={scopeText}
+                      />
                     ))}
                   </div>
                 </li>
@@ -478,7 +485,17 @@ export function AttackPathScreen() {
  * reuse its real commands. AI-suggested steps carry no entry link and are tinted
  * with a "verify" badge — the commands are the model's own, unverified.
  */
-function StepCard({ step }: { step: AttackStep }) {
+function StepCard({
+  step,
+  goal,
+  target,
+  scopeText,
+}: {
+  step: AttackStep;
+  goal: string;
+  target?: string | null;
+  scopeText?: string | null;
+}) {
   const ai = step.ai_suggested === true;
   const wu = step.from_writeup === true;
   return (
@@ -556,6 +573,15 @@ function StepCard({ step }: { step: AttackStep }) {
           </Link>
           .
         </div>
+      )}
+
+      {step.commands.length > 0 && (
+        <AlternativeDisclosure
+          goal={goal}
+          target={target}
+          scopeText={scopeText}
+          step={{ title: step.title, cmd: step.commands[0].cmd, entryId: step.entry_id }}
+        />
       )}
 
       {(step.on_success || step.on_blocked) && (

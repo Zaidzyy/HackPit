@@ -595,6 +595,45 @@ export const search = (
 
 // ---- guided attack paths + LLM config ------------------------------------ //
 
+/** Advisory "which is better and why" for a second-opinion alternative. Prose only. */
+export type AltVerdict = {
+  recommendation: "primary" | "alternative" | "situational";
+  summary: string;
+  factors: string[];
+  model_used: string;
+  provider: string;
+};
+
+/** One AI-curated alternative command. `grounded` = a real KB entry's command verbatim;
+ *  `ai_suggested` = the model's own tuned command, marked unverified. */
+export type Alternative = {
+  kind: "grounded" | "ai_suggested";
+  entry_id: string;
+  entry_title: string;
+  title: string;
+  commands: PlannedCode[];
+  /** Foreign hosts still named after scope adaptation (same annotation a primary step carries). */
+  foreign_refs?: string[] | null;
+};
+
+export type AlternativeResult = {
+  alternative: Alternative | null;
+  verdict: AltVerdict;
+};
+
+/** On-demand second opinion for one attack-path step. */
+export const getStepAlternative = (
+  input: {
+    goal: string;
+    target?: string | null;
+    scope_text?: string | null;
+    step_title?: string;
+    step_cmd?: string;
+    step_entry_id?: string;
+  },
+  signal?: AbortSignal,
+) => postJSON<AlternativeResult>("/attack-path/alternative", input, signal);
+
 export const getLLMConfig = (signal?: AbortSignal) =>
   getJSON<LLMConfig>("/llm-config", signal);
 

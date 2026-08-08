@@ -2166,6 +2166,106 @@ a.hp-card {
   word-break: break-all;
 }
 
+/* SECOND OPINION (dual-candidate) — an on-demand alternative for one step, fetched on click.
+ * The primary command above is never touched. A grounded alternative is accent-tinted (trusted,
+ * from the KB); an ai_suggested one is amber (the model's own, UNVERIFIED) — the same colour
+ * language as the AI-suggested badge and the foreign-host caution elsewhere on the card. */
+.hp-ap-alt-toggle,
+.hp-ap-alt-retry {
+  font-size: 12px;
+  background: none;
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  padding: 3px 8px;
+  color: var(--dim);
+  cursor: pointer;
+}
+.hp-ap-alt-toggle:hover,
+.hp-ap-alt-retry:hover {
+  color: var(--white);
+  border-color: var(--accent-line);
+}
+.hp-ap-alt-retry {
+  border: none;
+  padding: 0;
+  text-decoration: underline;
+}
+.hp-ap-alt {
+  margin: 8px 0 6px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--border-2);
+  background: color-mix(in srgb, var(--white) 3%, transparent);
+  border-radius: 0 4px 4px 0;
+}
+.hp-ap-alt-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.hp-ap-alt-badge {
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.hp-ap-alt-badge.is-grounded {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.hp-ap-alt-badge.is-ai_suggested {
+  color: #ff7a59;
+  background: color-mix(in srgb, #ff7a59 12%, transparent);
+}
+.hp-ap-alt-title {
+  color: var(--white);
+  font-size: 13px;
+}
+.hp-ap-alt-cmd {
+  margin: 4px 0;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--white) 4%, transparent);
+  border-radius: 4px;
+  overflow-x: auto;
+}
+.hp-ap-alt-cmd code {
+  font-family: var(--font-jetbrains-mono), "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: var(--white);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.hp-ap-alt-foreign {
+  margin: 4px 0;
+  font-size: 12px;
+  color: #ff7a59;
+}
+.hp-ap-alt-verdict {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--dim);
+}
+.hp-ap-alt-verdict-lead {
+  font-weight: 600;
+  margin-right: 6px;
+  color: var(--white);
+  letter-spacing: 0.02em;
+}
+.hp-ap-alt-factors {
+  color: var(--dim);
+}
+.hp-ap-alt-msg {
+  font-size: 12.5px;
+  color: var(--dim);
+  padding: 4px 0;
+}
+.hp-ap-alt-err {
+  color: #ff7a59;
+}
+
 /* …and the same verdict on the individual command, which is where it is actually
  * actionable. The block keeps its normal shape — this is a caution, not a refusal, and
  * the command stays fully readable and copyable so the operator can edit it. */

@@ -144,6 +144,10 @@ export function CockpitKillchain({
     const params = new URLSearchParams(window.location.search);
     if (params.has("demo") || sessionId == null) {
       autoloaded.current = true;
+      // Deep-link auto-load: setState lives in load()'s async body, but Next 16's
+      // set-state-in-effect flags calling a setState-carrying callback from an effect regardless.
+      // Deliberate — keep the counted lint baseline at 11 (frontend/AGENTS.md).
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       void load(true);
     }
   }, [load, sessionId]);

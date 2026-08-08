@@ -220,6 +220,10 @@ export function CockpitCloudGraph({
       autoloaded.current = true;
       // Ingest the sample first (so the seed merges onto the enumerated ci-deployer node), then let
       // the seed panel auto-seed the synthetic identity — its result renders in the panel.
+      // setState lives in ingestSample()'s async body, but Next 16's set-state-in-effect flags
+      // calling a setState-carrying callback from an effect regardless. Deliberate — keep the
+      // counted lint baseline at 11 (frontend/AGENTS.md).
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       void ingestSample().then(() => setAutoSeed(true));
     } else if (params.has("demo")) {
       autoloaded.current = true;

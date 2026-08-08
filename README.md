@@ -22,11 +22,8 @@
   <img alt="Local-first" src="https://img.shields.io/badge/local--first-Ollama%20fallback-111111?style=flat-square">
 </p>
 
-> ### ⚠️ Authorized use only
-> The cockpit runs **real offensive tools against real hosts** — with C2, evasion tooling, and a live Windows/AD path. Use it only where you're authorized: your own lab, an HTB/PG box, or a client with a signed scope. Every command is gated on your explicit approval, and in engagement mode on a target you declared in scope. **Engagement mode has no network containment** — human approval is the only thing standing between a command and the internet. Read the [Safety model](#-safety-model); it's the core of the design, not a footnote.
-
-> ### 📦 KB not shared here contact me for full access to this tool
-> The knowledge sources the KB is built from — course notes, write-ups, cloned repos, PDFs, cheat sheets — are kept **local and git-ignored**. **a fresh clone starts with an empty knowledge base until you build one or get it from the author.** 
+> ### 📦 KB not shared here, Contact me for full access to this tool
+> The knowledge sources the KB is built from — course notes, write-ups, cloned repos, PDFs, cheat sheets — are kept **local and git-ignored**. **a fresh clone starts with an empty knowledge base until you build one or get it from the author.**
 
 HackPit is an **AI-driven offensive-security companion with a gated execution cockpit**. It started as one thing — turn a scattered pile of pentest notes into a single searchable knowledge base — and grew into a second: a Kali cockpit where the AI plans the attack and you approve every command it runs.
 
@@ -40,6 +37,10 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 <p align="center">
   <img src="assets/screenshots/02-home.png" alt="HackPit home — category grid and live knowledge-base counters" width="100%">
 </p>
+
+> ### ⚠️ Authorized use only
+> The cockpit runs **real offensive tools against real hosts** — with C2, evasion tooling, and a live Windows/AD path. Use it only where you're authorized: your own lab, an HTB/PG box, or a client with a signed scope. Every command is gated on your explicit approval, and in engagement mode on a target you declared in scope. **Engagement mode has no network containment** — human approval is the only thing standing between a command and the internet. Read the [Safety model](#-safety-model); it's the core of the design, not a footnote.
+
 
 
 ---

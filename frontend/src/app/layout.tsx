@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import { CommandPalette } from "@/components/CommandPalette";
+import { MatrixRain } from "@/components/MatrixRain";
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
@@ -34,6 +35,7 @@ export default function RootLayout({
       className={`${jetbrainsMono.variable} ${spaceGrotesk.variable} h-full antialiased`}
     >
       <body className="min-h-full">
+        <MatrixRain />
         {children}
         <CommandPalette />
       </body>

@@ -49,9 +49,30 @@ class AuditFailed(RuntimeError):
 
 
 def preflight() -> None:
-    """Run both audits. Raises rather than warning — see the module docstring."""
+    """Run both audits. Raises rather than warning — see the module docstring.
+
+    *** THE APPROVAL-FIELD LINE IS ABSOLUTE; THE EXECUTION LINE HAS ONE OPT-IN DOOR. ***
+    By default both audits must come back empty or the server refuses to start. When the operator
+    sets HACKPIT_MCP_EXECUTE=1, the execution audit still runs and stays honest — we tolerate ONLY
+    the named opt-in execution tools (`mcp_tools.EXECUTION_TOOL_NAMES`), say so loudly on stderr,
+    and refuse on anything else. The approval-FIELD audit is NEVER relaxed: an agent that could
+    NAME `approved` would approve itself, which no opt-in changes.
+    """
     approval = mcp_tools.audit_no_approval_fields()
     execution = mcp_tools.audit_no_execution_paths()
+
+    if getattr(mcp_tools, "EXECUTE_ENABLED", False):
+        allowed = tuple(getattr(mcp_tools, "EXECUTION_TOOL_NAMES", ()))
+        tolerated = [e for e in execution if e.split(" ->")[0] in allowed]
+        execution = [e for e in execution if e not in tolerated]
+        if tolerated:
+            print(
+                "!! HACKPIT MCP EXECUTION MODE IS ON (HACKPIT_MCP_EXECUTE=1).\n"
+                "!! The agent can RUN commands against targets with NO human approval.\n"
+                "!! Tolerated execution paths: " + ", ".join(tolerated),
+                file=sys.stderr,
+            )
+
     if approval or execution:
         raise AuditFailed(
             "REFUSING TO START. The MCP tool surface violates the one non-negotiable line.\n"

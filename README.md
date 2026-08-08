@@ -78,7 +78,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | ▣ **Finding pipeline** | Every producer emits one **structured schema** (attacker-path, source-refs, CVSS, custom fields) → duplicates **auto-merge** idempotently → a **pluggable severity ranker** (bug-bounty payout vs compliance) rescores per engagement → **post-scripts** validate / draft a report (in-process) or build a PoC (approve-each). Pure data; no new gate. |
 | ⧉ **Workflow builder** | Compose your own **reusable prompt-step playbooks** over the code-audit fan-out: each step is a focused prompt with **variables** (`{{repo}}`, dotted `{{steps.…output}}`, per-run extras), an output schema, and a **batch / depth / siblings** fan-out shape. Export / import them as portable JSON — imported ones are **inspected before they ever run** — and two proven built-ins ship visible on first load. Authoring executes nothing; a run is the audit's one approved job, no new gate. |
 | ⚖️ **Engagement governance** | Before an engagement goes live, draft + approve a formal **RoE / ConOps / Deconfliction / OPPLAN** package: objectives carry a status **state machine** + **MITRE ATT&CK** ids + OPSEC level, an objectives board + coverage matrix render it, and it flows into the report. The RoE **formalises** the scope handrail — advisory, not a machine veto; per-command human approval stays the bound. Generation is propose-only; no new gate. |
-| 🔌 **MCP server** | 15 read-only tools so another AI agent can *see* your engagement — eyes, not hands. |
+| 🔌 **MCP server** | 22 read-only tools so another AI agent can *see* your engagement — eyes, not hands (opt-in execution available). |
 
 ---
 
@@ -475,7 +475,59 @@ Compose a workflow, preview its **static fan-out plan**, export it, re-import it
 
 ## 🔌 MCP server — eyes, not hands
 
-HackPit ships an optional **Model Context Protocol server** (`backend/mcp_server.py`) exposing **15 read-only tools** — KB search, arsenal lookup, exploit lookup, engagement state, findings, proxy history, scan status, command-scope checks, and a *propose* (not execute) hook. It lets another AI client **observe and reason about** your engagement without ever touching an execution surface. That boundary is proven in CI: the tool registry imports nothing from the execution layer, and a safety test enumerates every exposed tool.
+HackPit ships an optional **Model Context Protocol server** (`backend/mcp_server.py`) exposing **22 read-only tools** so another AI client can **observe and reason about** your engagement without touching an execution surface:
+
+- **Engagement & scope** — active engagement + RoE note, command-scope checks, the approval queue.
+- **Captured traffic** — proxy history, ZAP scan status, alerts, session health, intercept state, fronting.
+- **Knowledge** — KB search (2,744 entries), tool arsenal, CVE/exploit index.
+- **Engagement state** — hosts / services / endpoints / findings, and credentials **as names only**.
+- **Attack-path graphs** — the cross-domain **kill-chain** graph + computed route, the **cloud IAM** privilege-escalation graph, and the **Active Directory** attack-path graph.
+- **Governance** — the RoE / ConOps / deconfliction docs and the full **OPPLAN** (objectives tree, status counts, ATT&CK coverage).
+- **Discovery** — the ranked **recon surface**, **parameter/content discovery** results, and **JS-recon** results (mined endpoints/params; secrets as type + masked preview + loot path, **never the value**).
+- **`propose_command`** — the one write-shaped tool. It appends a command to the approval queue; a human reviews it in the cockpit and sends it to the execution route with the gate flags *they* set. It runs nothing.
+
+That boundary is proven in CI: the registry imports nothing from the `mcp` SDK (so the lock runs without it), and `test_mcp_safety.py` AST-walks every exposed tool to assert **no tool can name an approval field** and **no handler reaches an execution path**. The server *refuses to start* if either audit fails.
+
+### Install for Claude Code / Claude Desktop
+
+The server speaks **stdio** (no port, so no localhost DNS-rebinding surface). Install the optional dependency into the backend venv, then register it with your client:
+
+```bash
+cd backend && uv pip install --python .venv/Scripts/python.exe mcp   # or: pip install mcp
+```
+
+```jsonc
+// Claude Desktop: claude_desktop_config.json  ·  Claude Code: .mcp.json / ~/.claude.json
+{
+  "mcpServers": {
+    "hackpit": {
+      "command": "C:/Users/<you>/HackPit/backend/.venv/Scripts/python.exe",
+      "args": ["C:/Users/<you>/HackPit/backend/mcp_server.py"]
+    }
+  }
+}
+```
+
+Or from the Claude Code CLI:
+
+```bash
+claude mcp add hackpit -- C:/Users/<you>/HackPit/backend/.venv/Scripts/python.exe \
+  C:/Users/<you>/HackPit/backend/mcp_server.py
+```
+
+Use absolute paths (macOS/Linux: `backend/.venv/bin/python`). The server reads the same local state the web app writes, so run an engagement in the cockpit first and the agent's reads have something to see.
+
+### ⚠️ Opt-in execution mode (`HACKPIT_MCP_EXECUTE=1`)
+
+By default the agent has **eyes, not hands** — the safe posture for a public tool. If you deliberately want the agent to **run commands with no human in the loop**, set `HACKPIT_MCP_EXECUTE=1` in the server's environment. That registers one extra tool, `hackpit_execute`, wired to the same sandboxed executor the cockpit uses — it self-approves the gate and runs. It is **off unless the flag is exactly `1`**, it prints a loud banner on startup when on, and even then the approval-*field* line still holds (the agent cannot name an approval field; the tool hardcodes it). This removes the human-approval bound from the MCP path — enable it only on an engagement you are driving agent-first, against authorized targets.
+
+```jsonc
+{ "mcpServers": { "hackpit": {
+    "command": "C:/Users/<you>/HackPit/backend/.venv/Scripts/python.exe",
+    "args": ["C:/Users/<you>/HackPit/backend/mcp_server.py"],
+    "env": { "HACKPIT_MCP_EXECUTE": "1" }
+} } }
+```
 
 ---
 
@@ -586,7 +638,7 @@ Stated plainly rather than left to be discovered:
 | **LLM (API, optional)** | OpenAI · Anthropic · OpenRouter (key-swappable) |
 | **Windows/AD** | `pywinrm` (NTLM/Negotiate, pass-the-hash) — optional, live-target only |
 | **Detection data** | ATT&CK v19 + SigmaHQ, verified against live upstream |
-| **Integration** | Model Context Protocol server (15 read-only tools) |
+| **Integration** | Model Context Protocol server (22 read-only tools; opt-in execution) |
 | **Tests / CI** | 93 plain-script suites, no pytest; CI runs the hermetic suite + frontend build + eslint on every push |
 
 ---

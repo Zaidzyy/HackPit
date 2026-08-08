@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -620,6 +621,121 @@ def hackpit_proposals(session_id: str = "", status: str = "") -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# THE OFFENSIVE-BUILD READS (Q2/Q3) — graphs, governance, discovery
+#
+# These arrived AFTER the first registry (which was written around the proxy/ZAP world) and give
+# an agent eyes onto what the recent builds actually know: the attack-path graphs, the OPPLAN, and
+# the discovery surfaces. Every one is a READ — it reads a store or rebuilds a graph from stored
+# state, and none reaches an execution path (the AST audit proves it). The two secret-bearing
+# surfaces (JS-recon secrets, engagement credentials) hand back NAMES/locations only, never a value.
+# --------------------------------------------------------------------------- #
+@tool("hackpit_killchain_graph", "The cross-domain kill-chain: the merged web/cloud/on-prem graph "
+      "for a session plus the computed route from an owned foothold to the objective, with each "
+      "hop's technique. Read-only — it stitches the STORED cloud + AD graphs and the engagement "
+      "findings; nothing runs. With no session (or demo=true) it returns the synthetic sample.",
+      _schema({"session_id": {"type": "string"},
+               "demo": {"type": "boolean", "description": "Return the synthetic sample graph."}}))
+def hackpit_killchain_graph(session_id: str = "", demo: bool = False) -> dict[str, Any]:
+    from adgraph import store as ad_store
+    from cloudgraph import store as cloud_store
+    from killchain import service as kc_service
+    from state import store as state_store
+
+    if demo or not session_id:
+        graph = kc_service.build_demo()
+    else:
+        cloud_row = cloud_store.latest_for_session(session_id)
+        ad_row = ad_store.latest_for_session(session_id)
+        cloud_dict = cloud_row.get("graph") if isinstance(cloud_row, dict) else None
+        ad_dict = ad_row.get("graph") if isinstance(ad_row, dict) else None
+        findings = state_store.load(session_id).findings
+        graph = kc_service.build_from_session(cloud_dict, ad_dict, findings)
+        if not graph.nodes:
+            graph = kc_service.build_demo()
+    # grounder left None — the per-hop technique still resolves; only the KB citation is omitted,
+    # which an agent that wants it can get from hackpit_kb_search.
+    return kc_service.graph_payload(graph, None, None)
+
+
+@tool("hackpit_cloud_graph", "The parsed cloud IAM privilege-escalation graph for a session — "
+      "principals, roles, resources and the abusable edges between them, plus which nodes are "
+      "OWNED. Read-only; the latest parsed graph for the session, or null if none has been parsed.",
+      _schema({"session_id": {"type": "string"}}, ["session_id"]))
+def hackpit_cloud_graph(session_id: str) -> dict[str, Any]:
+    from cloudgraph import store as cloud_store
+
+    row = cloud_store.latest_for_session(session_id)
+    if not row:
+        return {"session_id": session_id, "graph": None,
+                "note": "no cloud IAM graph has been parsed for this session yet — this is "
+                        "'nothing parsed', NOT 'no privilege-escalation path exists'."}
+    return {"session_id": session_id, **row}
+
+
+@tool("hackpit_ad_graph", "The parsed Active Directory attack-path graph for a session — the "
+      "BloodHound-style nodes and the abusable edges (ACLs, sessions, delegation) between them. "
+      "Read-only; the latest parsed graph, or null if none has been parsed.",
+      _schema({"session_id": {"type": "string"}}, ["session_id"]))
+def hackpit_ad_graph(session_id: str) -> dict[str, Any]:
+    from adgraph import store as ad_store
+
+    row = ad_store.latest_for_session(session_id)
+    if not row:
+        return {"session_id": session_id, "graph": None,
+                "note": "no AD graph has been parsed for this session yet — this is 'nothing "
+                        "parsed', NOT 'no attack path exists'."}
+    return {"session_id": session_id, **row}
+
+
+@tool("hackpit_governance", "The engagement's governance package: the RoE, ConOps and "
+      "deconfliction documents, and the full OPPLAN — its objectives tree, status counts, and "
+      "MITRE ATT&CK coverage. Read this to know what the operator is trying to ACHIEVE, not just "
+      "what is in scope. Read-only.",
+      _schema({"session_id": {"type": "string"}}, ["session_id"]))
+def hackpit_governance(session_id: str) -> dict[str, Any]:
+    from state import governance as gov
+
+    return gov.package(session_id)
+
+
+@tool("hackpit_recon_surface", "The ranked recon surface for a session — the hosts worth testing "
+      "first, each with the WHY that earned its place (open services, CVE stacks, param/auth "
+      "endpoints, findings) and the endpoints worth pointing a scanner at. Read-only; ranks the "
+      "engagement's stored state, runs no scan.",
+      _schema({"session_id": {"type": "string"}}, ["session_id"]))
+def hackpit_recon_surface(session_id: str) -> dict[str, Any]:
+    from cockpit import recon
+
+    return recon.rank_surface(session_id).model_dump()
+
+
+@tool("hackpit_discover_results", "Parameter/content discovery results for a session — the "
+      "discovered parameter names (with the injection/SSRF/redirect-magnet ones flagged) and the "
+      "discovered paths, per job. Counts are what HAPPENED. Read-only.",
+      _schema({"session_id": {"type": "string"}}))
+def hackpit_discover_results(session_id: str = "") -> dict[str, Any]:
+    from cockpit import discover
+
+    jobs = discover.list_jobs(session_id or None)
+    return {"count": len(jobs), "jobs": [j.model_dump() for j in jobs]}
+
+
+@tool("hackpit_jsrecon_results", "JavaScript-recon results for a session — endpoints and "
+      "parameters mined from JS, recovered source-map paths, and secrets found. SECRETS ARE "
+      "NAMES ONLY: type, location, a value-free masked preview and the loot-file path — never the "
+      "value itself (mirror of the credential read). Read-only.",
+      _schema({"session_id": {"type": "string"}}))
+def hackpit_jsrecon_results(session_id: str = "") -> dict[str, Any]:
+    from cockpit import jsrecon
+
+    # `MinedSecret` carries only type/source_url/verified/masked/loot_file by construction — the
+    # value lives solely in the loot file — so model_dump() here cannot leak a secret. A jsrecon
+    # test pins that property; this read inherits it rather than re-filtering.
+    jobs = jsrecon.list_jobs(session_id or None)
+    return {"count": len(jobs), "jobs": [j.model_dump() for j in jobs]}
+
+
+# --------------------------------------------------------------------------- #
 # THE ONE WRITE-SHAPED TOOL — it writes to a piece of paper
 # --------------------------------------------------------------------------- #
 @tool("propose_command",
@@ -659,3 +775,71 @@ def propose_command(command: str, args: list[str] | None = None, rationale: str 
         "note": "QUEUED, NOT RUN. A human approves this in the cockpit and then sends it to the "
                 "execution route with their own approval flags. Nothing was executed.",
     }
+
+
+# --------------------------------------------------------------------------- #
+# THE OPT-IN EXECUTION SURFACE — OFF BY DEFAULT, AND THE DEFAULT IS THE POINT
+#
+# The whole registry above is eyes-and-no-hands: the audit refuses to expose any tool that can
+# self-approve or reach an execution path, and `test_mcp_safety.py` fails the build if one does.
+# That is the right default for a PUBLIC tool anyone can install — installing the MCP server must
+# never silently hand an AI the ability to run offensive commands.
+#
+# But the operator can DELIBERATELY remove the human-in-the-loop for their own engagement by
+# setting HACKPIT_MCP_EXECUTE=1. When they do, one execution-capable tool is registered:
+# `hackpit_execute`, wired to the SAME executor the cockpit route uses, self-approving the gate
+# fields (approved / dangerous_ack) so no human press is required. This is a real capability with
+# a real cost, so:
+#
+#   * It is OFF unless the env var is exactly "1". No flag → this tool does not exist, the audits
+#     see nothing new, and CI (which never sets the flag) stays green.
+#   * The execution audit stays HONEST: `audit_no_execution_paths()` still reports this tool as an
+#     execution path. Only `mcp_server.preflight()` TOLERATES it, only when the flag is set, and it
+#     prints a loud banner saying the human gate is off. The approval-FIELD audit is never relaxed
+#     — the agent still cannot NAME an approval field; the tool hardcodes it in its body.
+#   * It is a second write-shaped tool, by design, and only in this mode.
+# --------------------------------------------------------------------------- #
+#: The env-gated execution tools. Named so `mcp_server.preflight()` can tolerate exactly these
+#: (and nothing else) when execution mode is on.
+EXECUTION_TOOL_NAMES: tuple[str, ...] = ("hackpit_execute",)
+
+#: True only when the operator has explicitly opted in. Read once, at import.
+EXECUTE_ENABLED: bool = os.environ.get("HACKPIT_MCP_EXECUTE") == "1"
+
+
+def _register_execution_tools() -> None:
+    """Register the opt-in execution surface. Called at import when EXECUTE_ENABLED, and callable
+    directly from the safety test so the opt-in behaviour is a tested invariant, not an accident."""
+
+    @tool("hackpit_execute",
+          "RUN a command in the sandbox with NO human approval. This exists only when the operator "
+          "set HACKPIT_MCP_EXECUTE=1 — it self-approves the gate and executes. Prefer "
+          "propose_command unless you have been told this engagement runs agent-driven. One "
+          "command, not a pipeline; it still passes the executor's target-lock and mode rules.",
+          _schema({
+              "command": {"type": "string", "description": "The binary. One command, not a pipeline."},
+              "args": {"type": "array", "items": {"type": "string"}},
+              "session_id": {"type": "string"},
+              "engagement_id": {"type": "string"},
+              "timeout_seconds": {"type": "integer"},
+          }, ["command"]),
+          writes=True)
+    def hackpit_execute(command: str, args: list[str] | None = None, session_id: str = "",
+                        engagement_id: str = "", timeout_seconds: int = 0) -> dict[str, Any]:
+        """*** THIS IS THE HANDS. *** It sets `approved` and `dangerous_ack` itself and calls the
+        real executor. There is no human between the agent and the target here; that is what the
+        operator opted into. The executor's own target-lock and mode resolution still apply."""
+        from cockpit import executor
+        from cockpit.models import ExecRequest
+
+        req = ExecRequest(
+            command=command, args=args or [], approved=True, dangerous_ack=True,
+            session_id=session_id or None, engagement_id=engagement_id or None,
+            timeout_seconds=timeout_seconds or None,
+        )
+        record = executor.run_command(req)
+        return _asdict(record)
+
+
+if EXECUTE_ENABLED:
+    _register_execution_tools()

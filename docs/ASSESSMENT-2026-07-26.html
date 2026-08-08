@@ -390,7 +390,10 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#item-3-history-filtering-where-the-counts-are-the-feature">Item 3 — history filtering, where the counts ARE the feature</a></li>
 <li><a href="#item-4-interception-which-adds-no-gate-because-there-is-nothing-to-bypass">Item 4 — interception, which adds no gate because there is nothing to bypass</a></li>
 <li><a href="#item-5-the-intruder-and-why-one-approval-may-buy-thousands-of-requests">Item 5 — the intruder, and why one approval may buy thousands of requests</a></li>
-<li><a href="#item-6-the-mcp-server-eyes-not-hands">Item 6 — the MCP server: eyes, not hands</a></li>
+<li><a href="#item-6-the-mcp-server-eyes-not-hands">Item 6 — the MCP server: eyes, not hands</a><ul>
+<li><a href="#addendum-2026-08-08-extended-for-the-q2q3-builds-plus-an-opt-in-execution-door">Addendum (2026-08-08) — extended for the Q2/Q3 builds, plus an opt-in execution door</a></li>
+</ul>
+</li>
 <li><a href="#six-defects-this-build-found-in-its-own-work-and-each-needed-a-different-kind-of-check">Six defects this build found in its own work, and each needed a different kind of check</a></li>
 <li><a href="#the-screens-were-looked-at-and-here-is-how-because-the-usual-way-was-unavailable">The screens were LOOKED AT, and here is how, because the usual way was unavailable</a></li>
 <li><a href="#what-was-not-done-and-why">What was NOT done, and why</a></li>
@@ -4302,10 +4305,16 @@ is ungated like every other stop here.</p>
 bomb of two 1,000-entry lists is a million requests from one press — that deserves its own
 argument rather than inheriting this one.</p>
 <h3 id="item-6-the-mcp-server-eyes-not-hands">Item 6 — the MCP server: eyes, not hands</h3>
-<p>Fifteen tools. Fourteen are reads — engagement and scope, filtered proxy history, scan status,
-alerts, session health, interception state, CDN fronting, findings, engagement state, KB search,
-the arsenal, the CVE/exploit index including the curated overlay, and a command-scope check. One
-is write-shaped: <strong><code>propose_command</code>, which appends to an approval queue and runs nothing.</strong></p>
+<p>Twenty-two tools (extended 2026-08-08 — see the addendum). Twenty-one are reads — engagement and
+scope, filtered proxy history, scan status, alerts, session health, interception state, CDN
+fronting, findings, engagement state, KB search, the arsenal, the CVE/exploit index including the
+curated overlay, a command-scope check, and the offensive-build reads added on 2026-08-08: the
+cross-domain kill-chain graph, the cloud IAM and Active Directory attack-path graphs, the
+governance package (RoE/ConOps/deconfliction + OPPLAN objectives and ATT&amp;CK coverage), the ranked
+recon surface, and the parameter/content and JS-recon discovery results (JS secrets as names +
+masked preview only). One is write-shaped: <strong><code>propose_command</code>, which appends to an approval queue
+and runs nothing.</strong> A second, execution-capable tool exists only behind an explicit opt-in — again,
+see the addendum.</p>
 <p>*** THE LINE. *** HackPit's action routes take <code>approved=true</code> and <code>dangerous_ack=true</code> <strong>in the
 request body</strong>. If an MCP tool could set those fields the agent would approve itself and every
 gate in this codebase would become theatre — which is exactly why <code>proxy._gate_request</code> passes
@@ -4355,14 +4364,40 @@ session after a restart. Note the reads that reflect <em>live</em> ZAP or engage
 (<code>hackpit_scan_status</code>, <code>hackpit_alerts</code>, <code>hackpit_proxy_history</code>, <code>hackpit_session_health</code>) only
 carry data when a scan or proxy session is actually up; the file-backed reads (KB, arsenal,
 exploit index, engagement state) work with the backend down.</p>
-<p><strong>README TODO — the README still does not mention the MCP server exists.</strong> When the README is next
-written or revised, add two things: (a) that HackPit ships an MCP server exposing fifteen
-read-mostly tools over stdio (<code>propose_command</code> is the only write, and it queues rather than
-runs), and (b) the install/registration steps for Claude Desktop or Claude Code —
-<code>uv pip install --python backend/.venv/Scripts/python.exe mcp</code> if the optional <code>mcp</code> group is
-absent, then
-<code>claude mcp add --scope user hackpit -- &lt;backend&gt;/.venv/Scripts/python.exe &lt;backend&gt;/mcp_server.py</code>,
-and a restart of the host so the <code>mcp__hackpit__*</code> tools load.</p>
+<p><strong>README — DONE (2026-08-08).</strong> The README now carries a full MCP section: what the tools are,
+the stdio install/registration steps for Claude Desktop and Claude Code (config JSON and the
+<code>claude mcp add</code> form), and the opt-in execution mode below. The earlier "README does not mention
+it" TODO is closed.</p>
+<h4 id="addendum-2026-08-08-extended-for-the-q2q3-builds-plus-an-opt-in-execution-door">Addendum (2026-08-08) — extended for the Q2/Q3 builds, plus an opt-in execution door</h4>
+<p>The registry written for build #19 predated the Q2/Q3 offensive builds, so an agent using it as
+eyes was blind to what those builds know. <strong>Seven read tools were added</strong>, all within the existing
+line (closed schemas, no approval field, no execution path — the same audit passes with them):
+<code>hackpit_killchain_graph</code> (rebuilds the cross-domain graph + route from the STORED cloud/AD graphs
+and findings), <code>hackpit_cloud_graph</code>, <code>hackpit_ad_graph</code>, <code>hackpit_governance</code> (RoE/ConOps/
+deconfliction + the full OPPLAN and ATT&amp;CK coverage), <code>hackpit_recon_surface</code>, and
+<code>hackpit_discover_results</code> / <code>hackpit_jsrecon_results</code>. The JS-recon read inherits the
+value-free-secret property from <code>MinedSecret</code> (type + masked preview + loot path, never the value) —
+the same discipline as the credential read.</p>
+<p><strong>The one deliberate policy change: an opt-in execution surface.</strong> By default the server is still
+eyes-and-no-hands and the audit still refuses to start a violating surface. But when the operator
+sets <code>HACKPIT_MCP_EXECUTE=1</code>, one execution-capable tool — <code>hackpit_execute</code> — registers, wired to
+the same sandboxed executor the cockpit route uses, self-approving the gate so <strong>no human sits
+between the agent and the target</strong>. This removes the human-approval bound <em>for the MCP path</em>, on
+the operator's explicit say-so. It was built to stay honest about that cost:</p>
+<ul>
+<li>it is OFF unless the env var is exactly <code>1</code>; with no flag the tool does not exist, the audits see
+  nothing new, and <strong>CI (which never sets the flag) stays green with the build-#19 locks unchanged</strong>;</li>
+<li>the execution audit is never blinded — <code>audit_no_execution_paths()</code> still REPORTS the execute
+  tool as an execution path; only <code>mcp_server.preflight()</code> tolerates it, only in this mode, and it
+  prints a loud startup banner saying the human gate is off;</li>
+<li>the approval-FIELD line is never relaxed even here — the tool names no gate field in its schema;
+  it hardcodes <code>approved</code>/<code>dangerous_ack</code> in its body, so an agent still cannot <em>name</em> approval.</li>
+</ul>
+<p><code>test_mcp_safety.py</code> gained a test that pins all of this: execution is off by default, and when the
+opt-in surface is registered the audit stays honest while preflight tolerates only the named tool.
+This is a genuine loosening of the model's central guarantee, chosen deliberately — the safe
+default is what ships to anyone who installs the public tool; the hands are a flag the operator
+flips for an engagement they are driving agent-first, against authorized targets.</p>
 <h3 id="six-defects-this-build-found-in-its-own-work-and-each-needed-a-different-kind-of-check">Six defects this build found in its own work, and each needed a different kind of check</h3>
 <p><strong>1. SIX OF FIFTEEN MCP HANDLERS WERE WRITTEN AGAINST NAMES THAT DO NOT EXIST.</strong>
 <code>pipeline.search</code>, <code>state.store.list_findings</code>, <code>state.store.session_summary</code>, <code>arsenal.catalog</code>,

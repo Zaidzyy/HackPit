@@ -4016,10 +4016,16 @@ argument rather than inheriting this one.
 
 ### Item 6 — the MCP server: eyes, not hands
 
-Fifteen tools. Fourteen are reads — engagement and scope, filtered proxy history, scan status,
-alerts, session health, interception state, CDN fronting, findings, engagement state, KB search,
-the arsenal, the CVE/exploit index including the curated overlay, and a command-scope check. One
-is write-shaped: **`propose_command`, which appends to an approval queue and runs nothing.**
+Twenty-two tools (extended 2026-08-08 — see the addendum). Twenty-one are reads — engagement and
+scope, filtered proxy history, scan status, alerts, session health, interception state, CDN
+fronting, findings, engagement state, KB search, the arsenal, the CVE/exploit index including the
+curated overlay, a command-scope check, and the offensive-build reads added on 2026-08-08: the
+cross-domain kill-chain graph, the cloud IAM and Active Directory attack-path graphs, the
+governance package (RoE/ConOps/deconfliction + OPPLAN objectives and ATT&CK coverage), the ranked
+recon surface, and the parameter/content and JS-recon discovery results (JS secrets as names +
+masked preview only). One is write-shaped: **`propose_command`, which appends to an approval queue
+and runs nothing.** A second, execution-capable tool exists only behind an explicit opt-in — again,
+see the addendum.
 
 *** THE LINE. *** HackPit's action routes take `approved=true` and `dangerous_ack=true` **in the
 request body**. If an MCP tool could set those fields the agent would approve itself and every
@@ -4077,14 +4083,43 @@ session after a restart. Note the reads that reflect *live* ZAP or engagement st
 carry data when a scan or proxy session is actually up; the file-backed reads (KB, arsenal,
 exploit index, engagement state) work with the backend down.
 
-**README TODO — the README still does not mention the MCP server exists.** When the README is next
-written or revised, add two things: (a) that HackPit ships an MCP server exposing fifteen
-read-mostly tools over stdio (`propose_command` is the only write, and it queues rather than
-runs), and (b) the install/registration steps for Claude Desktop or Claude Code —
-`uv pip install --python backend/.venv/Scripts/python.exe mcp` if the optional `mcp` group is
-absent, then
-`claude mcp add --scope user hackpit -- <backend>/.venv/Scripts/python.exe <backend>/mcp_server.py`,
-and a restart of the host so the `mcp__hackpit__*` tools load.
+**README — DONE (2026-08-08).** The README now carries a full MCP section: what the tools are,
+the stdio install/registration steps for Claude Desktop and Claude Code (config JSON and the
+`claude mcp add` form), and the opt-in execution mode below. The earlier "README does not mention
+it" TODO is closed.
+
+#### Addendum (2026-08-08) — extended for the Q2/Q3 builds, plus an opt-in execution door
+
+The registry written for build #19 predated the Q2/Q3 offensive builds, so an agent using it as
+eyes was blind to what those builds know. **Seven read tools were added**, all within the existing
+line (closed schemas, no approval field, no execution path — the same audit passes with them):
+`hackpit_killchain_graph` (rebuilds the cross-domain graph + route from the STORED cloud/AD graphs
+and findings), `hackpit_cloud_graph`, `hackpit_ad_graph`, `hackpit_governance` (RoE/ConOps/
+deconfliction + the full OPPLAN and ATT&CK coverage), `hackpit_recon_surface`, and
+`hackpit_discover_results` / `hackpit_jsrecon_results`. The JS-recon read inherits the
+value-free-secret property from `MinedSecret` (type + masked preview + loot path, never the value) —
+the same discipline as the credential read.
+
+**The one deliberate policy change: an opt-in execution surface.** By default the server is still
+eyes-and-no-hands and the audit still refuses to start a violating surface. But when the operator
+sets `HACKPIT_MCP_EXECUTE=1`, one execution-capable tool — `hackpit_execute` — registers, wired to
+the same sandboxed executor the cockpit route uses, self-approving the gate so **no human sits
+between the agent and the target**. This removes the human-approval bound *for the MCP path*, on
+the operator's explicit say-so. It was built to stay honest about that cost:
+
+* it is OFF unless the env var is exactly `1`; with no flag the tool does not exist, the audits see
+  nothing new, and **CI (which never sets the flag) stays green with the build-#19 locks unchanged**;
+* the execution audit is never blinded — `audit_no_execution_paths()` still REPORTS the execute
+  tool as an execution path; only `mcp_server.preflight()` tolerates it, only in this mode, and it
+  prints a loud startup banner saying the human gate is off;
+* the approval-FIELD line is never relaxed even here — the tool names no gate field in its schema;
+  it hardcodes `approved`/`dangerous_ack` in its body, so an agent still cannot *name* approval.
+
+`test_mcp_safety.py` gained a test that pins all of this: execution is off by default, and when the
+opt-in surface is registered the audit stays honest while preflight tolerates only the named tool.
+This is a genuine loosening of the model's central guarantee, chosen deliberately — the safe
+default is what ships to anyone who installs the public tool; the hands are a flag the operator
+flips for an engagement they are driving agent-first, against authorized targets.
 
 ### Six defects this build found in its own work, and each needed a different kind of check
 

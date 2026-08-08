@@ -244,6 +244,57 @@ def test_the_SERVER_REFUSES_TO_START_if_either_audit_fails() -> None:
     print("  the server refuses to start on a violating surface, with a control: PASS")
 
 
+def test_EXECUTION_MODE_is_off_by_default_and_a_tested_opt_in() -> None:
+    """The opt-in execution surface (HACKPIT_MCP_EXECUTE=1) must be OFF unless the operator asks,
+    and when it IS on the audit must stay honest — it still REPORTS the execute tool as an
+    execution path; only preflight tolerates it, and only in that mode. The approval-FIELD line is
+    never relaxed, even for the execute tool."""
+    import mcp_server
+
+    # OFF by default: no flag in CI, no execute tool, both audits clean, server starts.
+    assert mcp_tools.EXECUTE_ENABLED is False, "the execution flag is set in a plain test env"
+    assert "hackpit_execute" not in {t.name for t in mcp_tools.tools()}
+    mcp_server.preflight()
+
+    # Register the opt-in surface the way import would when the flag is set.
+    mcp_tools._register_execution_tools()
+    saved = mcp_tools.EXECUTE_ENABLED
+    try:
+        assert "hackpit_execute" in {t.name for t in mcp_tools.tools()}, "opt-in tool did not register"
+        exec_spec = next(t for t in mcp_tools.tools() if t.name == "hackpit_execute")
+        assert exec_spec.writes is True, "the execute tool must be write-shaped"
+
+        # THE AUDIT STAYS HONEST: it reports the execute tool as an execution path...
+        execution = mcp_tools.audit_no_execution_paths()
+        assert any(o.startswith("hackpit_execute") for o in execution), (
+            "the execution audit went blind to the execute tool: " + repr(execution)
+        )
+        # ...but the APPROVAL-FIELD line still holds — the tool names no gate field.
+        assert mcp_tools.audit_no_approval_fields() == [], "the execute tool exposed an approval field"
+
+        # With the flag OFF, preflight REFUSES even though the tool is registered.
+        mcp_tools.EXECUTE_ENABLED = False
+        raised = False
+        try:
+            mcp_server.preflight()
+        except mcp_server.AuditFailed:
+            raised = True
+        assert raised, "preflight tolerated an execution path with the flag OFF"
+
+        # With the flag ON, preflight TOLERATES exactly the named opt-in tool and starts.
+        mcp_tools.EXECUTE_ENABLED = True
+        mcp_server.preflight()
+    finally:
+        mcp_tools.EXECUTE_ENABLED = saved
+        mcp_tools._REGISTRY.pop("hackpit_execute", None)
+        mcp_tools._HANDLERS.pop("hackpit_execute", None)
+    # Clean again: back to the eyes-and-no-hands default.
+    mcp_server.preflight()
+    assert mcp_tools.audit_no_execution_paths() == []
+    print("  execution mode is off by default; when on, the audit stays honest and preflight "
+          "tolerates only the named opt-in tool: PASS")
+
+
 def test_a_failing_read_is_an_ERROR_VALUE_not_an_empty_result() -> None:
     """This repo's silent-empty rule at a protocol boundary: a read that fails must not look
     like a read that found nothing."""
@@ -289,6 +340,7 @@ if __name__ == "__main__":
     test_the_gate_preview_ASKS_WITH_BOTH_FLAGS_FALSE()
     test_the_registry_does_NOT_import_the_mcp_sdk()
     test_the_SERVER_REFUSES_TO_START_if_either_audit_fails()
+    test_EXECUTION_MODE_is_off_by_default_and_a_tested_opt_in()
     test_a_failing_read_is_an_ERROR_VALUE_not_an_empty_result()
     test_the_intercept_read_does_NOT_hand_over_the_held_request()
     test_the_engagement_state_read_hands_over_NO_CREDENTIAL_VALUES()

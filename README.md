@@ -54,6 +54,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | ▤ **Interactive persistent sessions** | Named, parallel **tmux** sessions in the open box with per-session cwd — **automatic prompt detection** flips a session to *"interactive — send input"* when `msfconsole` / `sliver-client` / `evil-winrm` / a REPL is waiting, long scans **auto-background at 60s** with a notify-once completion, and wedge / pipe-degradation recovery. **Input stays human-only, every line.** |
 | ◈ **Guided recon** | Scoped domain → recon as approved jobs → ranked attack surface; discoveries can only widen the set *within* scope. |
 | 🔦 **Parameter / content discovery** | Mine an endpoint's **hidden params** (arjun), **hidden paths** (ffuf / feroxbuster) and **historical params** (paramspider) as one gated job — each discovery is a **pre-filled hand-off** to `:intruder` / `:nuclei` / `:repeater`, never auto-fired, and only in-scope items land, by construction. |
+| 🧬 **JS recon → secrets / endpoints** | Pull a target's JavaScript (bundles + **source maps**), mine **endpoints, parameters and secrets / API keys** out of it as one gated job — endpoints feed the ranked surface, **secrets go to loot, never the finding text** (trufflehog-verified keys High); only in-scope JS is fetched and only in-scope mined hosts land, by construction. |
 | 🕸️ **Web app testing** | Recording proxy, repeater, intruder, GraphQL, browser interception, OOB callbacks. |
 | 🎟️ **Token workbench** | Decode / analyze / tamper **JWT**, **OAuth/OIDC** and **SAML** — alg-none, RS→HS confusion, kid/jku/jwk injection, redirect_uri & PKCE-downgrade builders, XSW1–8 — then send the mutated token through the repeater. The weak-secret crack is one gated job. |
 | ⇶ **Single-packet race** | Fire one request **N times so the copies arrive in the same instant** — HTTP/2 single-packet or HTTP/1.1 last-byte sync — to beat a check-then-act window (limit overrun, TOCTOU, coupon reuse, one-time-token replay). One approval buys the batch; the verdict is **"K of N won the race"** and a confirmed race becomes a High finding. |
@@ -250,6 +251,20 @@ Discoveries are **suggestions, never auto-fired**: each hidden parameter becomes
 </p>
 
 > No new gate, no autonomy: one approval buys the discovery job, the target is scope-locked by construction, and every discovered param/endpoint is a hand-off the operator sends themselves — approve-each, scope-checked on the wire.
+
+### JS recon → secrets / endpoints
+
+The `S3 → bundle → secret` chain, made a first-class **`:recon`** job. Point it at an in-scope page (it collects the `<script src>` set), paste JS URLs you already found, and/or mine the `.js` endpoints already in state — one approval fetches the in-scope JavaScript and **mines endpoints, parameter names, and secrets / API keys** out of the bundles, then **unpacks any source map** to recover the original `src/` paths, comments and the pre-minified source (which is mined too). The mining runs headless in the open engagement sandbox via the in-repo **`js-mine`** engine (the `cache-probe` / `race-singlepacket` shape); the standard tools — **getjs/subjs, LinkFinder, SecretFinder, trufflehog, gitleaks, sourcemapper** — are installed alongside for manual use, and **trufflehog** is folded into the engine to mark **verified** keys. No new gate, ungated stop.
+
+**Scope-safe by construction, two filters:** the collection target and any explicitly-named JS URL are scope-locked *before* the job runs, and **every candidate JS URL and every mined URL/host is scope-filtered before it lands** — a `<script src>` to a third-party CDN is never fetched, and a URL mined from inside a bundle but pointing off-scope never reaches the surface. A relative endpoint (`/api/v2/account`) is resolved against its JS origin so it can be scope-checked and handed off.
+
+**Secrets go to loot, never the finding text** (mirroring `:credentials`): each secret's value is written to a loot file; the `Finding` names the **type, the source JS URL, a masked preview and the loot path** — never the value. A **trufflehog-verified** key is **High**; an unverified regex match is **Low** (confirm before reporting). Mined endpoints/params are written into engagement state tagged source `js`, so a param-rich bundle endpoint **raises its host's rank** in the sweep surface, and each carries a pre-filled `:nuclei` / `:repeater` hand-off.
+
+<p align="center">
+  <img src="assets/screenshots/47-jsrecon.png" alt="The :recon JS-recon view — collect JS from an in-scope host / paste JS URLs / mine .js already in state, with source-map and trufflehog toggles; the mined view shows a secrets panel (VERIFIED aws-access-key-id and stripe-secret-key, an UNVERIFIED generic-api-key, each masked with 'value in loot, never shown' and its source bundle), mined endpoints tagged 'js' with param chips (id/role, oid/include) and :nuclei/:repeater hand-offs, a recovered source map (src/api/client.ts, src/config/keys.ts, src/admin/flags.ts with leftover comments), and an out-of-scope cdn.thirdparty.net result dropped" width="90%">
+</p>
+
+> One approval fetches and mines a target's JavaScript; endpoints/params feed the ranked surface tagged `js`, secrets/API keys go to a loot file + Findings (verified keys High) with the value never in the finding text, and source maps are recovered — only in-scope JS is fetched and only in-scope mined hosts land, by construction.
 
 ### Credential attack
 

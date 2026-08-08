@@ -60,6 +60,7 @@ from . import cache as cache_mod
 from . import nuclei as nuclei_mod
 from . import recon as recon_mod
 from . import discover as discover_mod
+from . import jsrecon as jsrecon_mod
 from . import proposals as proposals_mod
 from . import redirector as redirector_mod
 from . import session as live_session
@@ -2062,6 +2063,89 @@ def stop_discover_job(job_id: str) -> discover_mod.DiscoverJob:
     job = discover_mod.stop(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail={"reason": f"no discover job {job_id!r}"})
+    return job
+
+
+# --- JS recon -> mined endpoints/params + secrets (:jsrecon — a :recon sibling) ------ #
+#
+# ONE gated job, the SAME shape as :recon / :discover — one approval buys a fetch+mine pass that
+# pulls a target's JavaScript (bundles + source maps) and mines endpoints/params/secrets out of it.
+# NO new gate: `executor.validate_request` runs BEFORE anything spawns, the stop is ungated.
+# SCOPE-SAFE BY CONSTRUCTION: the collection target + any named JS URL are scope-locked before the
+# job runs, and every candidate JS URL and every mined URL/host is scope-filtered before it lands.
+# Mined endpoints/params feed the ranked :recon surface; SECRETS go to a loot file + a Finding whose
+# text never carries the value (verified keys High), mirroring :credentials.
+
+
+def _jsrecon_refusal(exc: jsrecon_mod.JsReconRefused):
+    """One refusal shape: 409 for AVAILABILITY/engagement/loot/input, 403 for a SAFETY/scope gate."""
+    code = 409 if exc.gate in {"unavailable", "engagement", "loot", "input"} else 403
+    raise HTTPException(status_code=code, detail={
+        "gate": exc.gate, "reason": exc.reason, "dangerous_flags": exc.dangerous_flags,
+    })
+
+
+@router.get("/jsrecon/status")
+def get_jsrecon_status() -> dict[str, Any]:
+    """Engagement-sandbox availability + running-job count — the UI banner. Read-only."""
+    return jsrecon_mod.status()
+
+
+@router.post("/jsrecon/preview")
+def jsrecon_preview(req: jsrecon_mod.JsReconRequest) -> dict[str, Any]:
+    """The entry argv + the gate verdict for a JS-recon job, mining nothing.
+
+    Same `gate_argv` + gate the start path uses, so the preview cannot drift from the run. Every
+    operator-named host rides as `-u` so what the human approves is what goes out.
+    """
+    argv = jsrecon_mod.gate_argv(req)
+    verdict = jsrecon_mod.validate(req)
+    return {
+        "argv": argv,
+        "gate": None if verdict is None else {
+            "gate": verdict.gate, "reason": verdict.reason,
+            "dangerous_flags": list(verdict.dangerous_flags or []),
+        },
+    }
+
+
+@router.post("/jsrecon", response_model=jsrecon_mod.JsReconJob)
+def start_jsrecon(req: jsrecon_mod.JsReconRequest) -> jsrecon_mod.JsReconJob:
+    """Run ONE JS-recon job (collect JS → fetch in-scope → mine endpoints/params/secrets) as a single
+    approved job.
+
+    GATED, then runs: `executor.validate_request` runs BEFORE anything spawns; the target + any named
+    JS URL are scope-locked by construction; every candidate JS URL and mined host is scope-filtered
+    before it lands. A SAFETY/scope refusal is 403; availability/engagement/input is 409. The stop
+    button (DELETE below) is the ungated panic switch.
+    """
+    try:
+        return jsrecon_mod.start(req)
+    except jsrecon_mod.JsReconRefused as exc:
+        _jsrecon_refusal(exc)
+
+
+@router.get("/jsrecon/jobs", response_model=list[jsrecon_mod.JsReconJob])
+def list_jsrecon_jobs(session_id: str | None = Query(None)) -> list[jsrecon_mod.JsReconJob]:
+    """Every JS-recon job, newest first. Read-only, ungated — the live view polls this."""
+    return jsrecon_mod.list_jobs(session_id)
+
+
+@router.get("/jsrecon/jobs/{job_id}", response_model=jsrecon_mod.JsReconJob)
+def get_jsrecon_job(job_id: str) -> jsrecon_mod.JsReconJob:
+    """One job with its mined endpoints/params, secrets (value-free) + recovered sources. Read-only."""
+    job = jsrecon_mod.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no jsrecon job {job_id!r}"})
+    return job
+
+
+@router.delete("/jsrecon/jobs/{job_id}", response_model=jsrecon_mod.JsReconJob)
+def stop_jsrecon_job(job_id: str) -> jsrecon_mod.JsReconJob:
+    """Stop an in-flight job. NOT GATED — the panic button, exactly like `stop_scan`."""
+    job = jsrecon_mod.stop(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no jsrecon job {job_id!r}"})
     return job
 
 

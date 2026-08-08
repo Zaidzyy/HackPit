@@ -1129,6 +1129,71 @@ RUN set -eu; \
     command -v wcvs >/dev/null; \
     wcvs --help >/dev/null 2>&1 || wcvs -h >/dev/null 2>&1 || true
 
+# --- 9n. JS-recon engine (js-mine) --------------------------------------------
+# The engine the :jsrecon job invokes as ONE approve-each pass:
+# `docker exec -i <engage sandbox> js-mine --job-stdin` with the (already scope-filtered) JS URL set
+# as JSON on stdin. It is a small in-repo client (like cache-probe / race-singlepacket) so the GATED
+# job has a headless miner with a stable JSON contract. It uses ONLY the Python stdlib (json, re, ssl,
+# urllib) plus an OPTIONAL shell-out to trufflehog (installed above) for VERIFIED keys — no venv, no
+# third-party deps — so the wrapper execs the system python3 directly. `--selftest` is the smoke test:
+# `command -v` alone is not one (build #4's lesson), so the layer FAILS here if the engine cannot mine
+# its planted fixture.
+COPY js_mine.py /opt/hackpit/js_mine.py
+RUN set -eu; \
+    chmod 0644 /opt/hackpit/js_mine.py; \
+    printf '#!/bin/sh\nexec python3 /opt/hackpit/js_mine.py "$@"\n' \
+        > /usr/local/bin/js-mine; \
+    chmod 0755 /usr/local/bin/js-mine; \
+    chmod -R a+rX /opt/hackpit; \
+    command -v js-mine >/dev/null; \
+    js-mine --selftest | grep -qi 'js-mine ok'
+
+# --- 9o. JS-recon EXTERNAL toolchain (manual use, catalogued in tools.json) ----
+# The standard tools the arsenal names for hand JS mining, installed alongside js-mine so a manual
+# run in :kali / :terminal has them. Each name is VERIFIED to resolve, not assumed (kali-sandbox image
+# trap), and docker/proof/jsrecon_install_proof.sh re-checks every name inside the running container.
+#   * LinkFinder / SecretFinder — Python, isolated venv + PATH wrapper (the jwt_tool idiom).
+#   * gitleaks — release binary (like trufflehog): no Go toolchain here, fetched from the latest tag.
+#   * sourcemapper — Go; the reconFTW toolchain is long gone, so a THROWAWAY latest-Go is fetched to
+#     build it (the wcvs pattern), then removed so only the binary ships.
+RUN set -eu; \
+    wrap() { printf '#!/bin/sh\nexec %s "$@"\n' "$2" > "/usr/local/bin/$1"; chmod 0755 "/usr/local/bin/$1"; }; \
+    git clone --depth 1 https://github.com/GerbenJavado/LinkFinder /opt/LinkFinder; \
+        python3 -m venv /opt/LinkFinder/venv; \
+        /opt/LinkFinder/venv/bin/pip install --no-cache-dir -q -r /opt/LinkFinder/requirements.txt || true; \
+        /opt/LinkFinder/venv/bin/pip install --no-cache-dir -q jsbeautifier; \
+        wrap LinkFinder "/opt/LinkFinder/venv/bin/python /opt/LinkFinder/linkfinder.py"; \
+    git clone --depth 1 https://github.com/m4ll0k/SecretFinder /opt/SecretFinder; \
+        python3 -m venv /opt/SecretFinder/venv; \
+        /opt/SecretFinder/venv/bin/pip install --no-cache-dir -q jsbeautifier requests requests_file lxml || true; \
+        wrap SecretFinder "/opt/SecretFinder/venv/bin/python /opt/SecretFinder/SecretFinder.py"; \
+    chmod -R a+rX /opt/LinkFinder /opt/SecretFinder; \
+    for b in LinkFinder SecretFinder; do command -v "$b" >/dev/null || { echo "MISSING js tool: $b"; exit 1; }; done
+# gitleaks — latest release binary (no Go here).
+RUN set -eu; \
+    GL_TAG="$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
+        | grep -oP '\"tag_name\":\s*\"\K[^\"]+')"; \
+    [ -n "$GL_TAG" ] || { echo "gitleaks: could not resolve the latest tag"; exit 1; }; \
+    GL_VER="${GL_TAG#v}"; \
+    curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/${GL_TAG}/gitleaks_${GL_VER}_linux_x64.tar.gz" \
+        -o /tmp/gitleaks.tgz; \
+    tar -C /usr/local/bin -xzf /tmp/gitleaks.tgz gitleaks; \
+    rm /tmp/gitleaks.tgz; \
+    chmod 0755 /usr/local/bin/gitleaks; \
+    command -v gitleaks >/dev/null; \
+    gitleaks version >/dev/null 2>&1 || gitleaks --version >/dev/null 2>&1
+# sourcemapper — Go, throwaway toolchain (the wcvs pattern).
+RUN set -eu; \
+    GO_VER="$(curl -fsSL https://go.dev/VERSION?m=text | head -1)"; \
+    [ -n "$GO_VER" ] || { echo "sourcemapper: could not resolve the latest Go version"; exit 1; }; \
+    curl -fsSL "https://go.dev/dl/${GO_VER}.linux-amd64.tar.gz" -o /tmp/smgo.tgz; \
+    mkdir -p /opt/sm-go; tar -C /opt/sm-go -xzf /tmp/smgo.tgz; rm /tmp/smgo.tgz; \
+    export PATH="/opt/sm-go/go/bin:$PATH" GOBIN=/usr/local/bin GOFLAGS=-buildvcs=false GOTOOLCHAIN=auto; \
+    go install github.com/denandz/sourcemapper@latest; \
+    rm -rf /opt/sm-go /root/go /root/.cache/go-build; \
+    command -v sourcemapper >/dev/null; \
+    sourcemapper -h >/dev/null 2>&1 || sourcemapper --help >/dev/null 2>&1 || true
+
 # --- 10. Strip file capabilities (REQUIRED — do not remove) -------------------
 # Kali ships a few binaries with FILE capabilities so unprivileged desktop users get raw
 # sockets: /usr/lib/nmap/nmap (cap_net_raw,cap_net_admin,cap_net_bind_service) and

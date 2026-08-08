@@ -6124,3 +6124,69 @@ highlighted) and content hits (`/admin`, `/.git/config`) each carrying the tri-s
 content (`ffuf`/`feroxbuster`) and historical (`paramspider`) round it out — all three shipped. `x8` was dropped as absent
 from the image (noted above). The hand-off pre-fills the target surface but never fires it; the discovery job itself is the
 only thing approved.
+
+## JS recon → secret / endpoint mining — the S3→bundle→secret chain, live (`:jsrecon`) (2026-08-08)
+
+**The gap.** `:recon` builds a surface from a domain and `:discover` mines an endpoint's hidden params — but the step every
+modern web hunt lives in, *reading the target's JavaScript*, had no first-class surface. The `S3 → bundle → secret → OAuth`
+chain was a chain-builder concept and a `secrets-hunt` skill; nothing mined a live target's shipped JS for endpoints,
+parameters and hardcoded keys as an engagement surface. This build is that final `:recon` sibling (the last of the Q2 spec
+queue), modelled on `:recon`/`:discover` point for point.
+
+**One gated job, an in-repo engine (`backend/cockpit/jsrecon.py` + `docker/js_mine.py`).** The worker mirrors `recon.py`
+(engagement-bound, one approval buys the collect+mine passes, ungated stop) and the *execution* mirrors `:cache`: the
+mining runs headless in the open engagement sandbox as `docker exec -i … js-mine --job-stdin`, the **`js-mine`** engine —
+the same baked-client shape as `cache-probe`/`race-singlepacket`/`smuggle-probe`, so the gated job has a stable JSON
+contract the backend can parse. The engine (stdlib only) fetches each JS URL, mines **endpoints** (a LinkFinder-style
+regex, relatives resolved against the JS origin so they are scope-checkable), **parameter names**, and **secrets/API keys**
+(a SecretFinder-style provider set), unpacks any **source map** (`//# sourceMappingURL=`) to recover the original `src/`
+paths + comments and mines the recovered source too, and folds **trufflehog** in best-effort to mark *verified* keys. The
+external toolchain — `getjs`/`subjs`, `LinkFinder`, `SecretFinder`, `trufflehog`, `gitleaks`, `sourcemapper` — is installed
+alongside for manual use and catalogued in `tools.json`; **the image rebuild is the operator's step** (`docker compose -f
+docker/docker-compose.yml build engage-sandbox`), and `docker/proof/jsrecon_install_proof.sh` re-checks every name +
+`--selftest` + the stdin contract in the built image and the running container.
+
+**Scope-safe by construction, two filters (the `:recon` property, not an extra gate).** The collection **target and any
+explicitly-named JS URL are scope-locked before the job runs** (`start()` refuses `gate="scope"`), and **every candidate JS
+URL and every mined URL/host is scope-filtered before it lands** — `filter_urls_in_scope` means only in-scope JS is ever
+fetched (a `<script src>` to a third-party CDN is dropped read-only), and `filter_endpoints_in_scope` means a URL mined from
+inside a bundle but pointing off-scope never reaches the surface. This is the same two-filter split `:discover` makes for
+operator-input vs discovered URLs.
+
+**Secrets → loot, never finding text (mirroring `:credentials`).** The engine returns secret values; the worker writes them
+to a loot file (`jsrecon-<job>-secrets.txt`) and builds a `Finding` carrying the **type, source JS URL, a masked preview and
+the loot path — never the value** (report.py renders findings verbatim). A **trufflehog-verified** key is **High**; an
+unverified regex match is **Low**. Mined endpoints/params are upserted into engagement state (tagged source `js`), so a
+param-rich bundle endpoint **raises its host's rank** in the `:recon` surface; each carries a `:nuclei`/`:repeater`
+hand-off. The `state/parsers.py` `parse_jsmine` — the one place a mined endpoint becomes a surface record, so a plain
+terminal `js-mine` run ingests too — respects the **`urllib` ban** the state package is regression-locked to (hand-parsed
+query params, no `urllib` import; `test_state.py` green).
+
+**Routes + frontend.** Six routes on the cockpit router (`/cockpit/jsrecon` + `/status`/`/preview`/`/jobs…`), the same
+shape as `/recon`/`/discover`. The **JS-recon view lives on `/recon`** behind a third tab (`?view=jsrecon`, `?demo=1` for
+synthetic data), with a collect-target + JS-URL form, source-map/verify toggles, a preview (the exact gate argv), a
+**secrets panel** (type + verified badge + masked preview + source, value in loot), mined endpoints tagged `js` with their
+hand-offs, recovered source-map paths + comments, and the out-of-scope drops shown. Reused only existing `hp-tn-*` classes
+(no new phantom — `test_css_vocabulary` green).
+
+**Tests + screen.** `test_jsrecon.py` (functional): the engine mines a JS blob (relatives resolved to the JS origin,
+absolutes kept, param names + AWS/Stripe/generic secrets, a `.map` → recovered source paths + comments, collect → the
+`<script src>` set); `parse_mine_output` splits the engine JSON into Endpoint rows (via `parse_jsmine`) + secret dicts +
+source maps; **both scope filters keep in-scope + drop/collect out-of-scope with controls**; a verified secret → a **High**
+Finding whose serialized text carries the value **nowhere**, and the value **is** written to the loot file; unverified →
+Low. `test_jsrecon_safety.py` (invariants, mirrors `test_recon_safety.py`): the pure half executes nothing by AST;
+`start`/`validate` reach the gate before any spawn; engagement-bound; **target + named JS URL scope-locked by construction
+with a control**, both filters drop out-of-scope with a control; **a secret value never reaches a finding with a planted
+control** but is written to loot; flags default False; stop ungated. Both registered in `run_safety_tests.sh` — **126 files
+green**, `next build` exits 0. Screen LOOKED AT: `47-jsrecon.png` — the JS-recon view with the secrets panel (verified
+aws-access-key-id + stripe-secret-key, an unverified generic-api-key, each masked and marked *value in loot, never shown*),
+mined endpoints tagged `js` with param chips and hand-offs, a recovered source map (`src/api/client.ts`,
+`src/config/keys.ts`, `src/admin/flags.ts` with leftover comments), and an out-of-scope `cdn.thirdparty.net` dropped (not
+blank/error).
+
+**Assumptions (per §5), stated.** Endpoints/params + secrets were the must-haves and shipped; source-map unpacking shipped
+too (the bonus). JS URL collection accepts operator hosts, the engagement's `.js` endpoints already in state, and a
+collect-from-target pass — no fetching outside scope, ever. Execution was modelled on `:cache`'s baked engine + catalogued
+external tools + install-proof (the most robust choice given the image rebuild is the operator's step and the built tools
+can't run in a hermetic session); the engine's own regex mining works without any external tool, and trufflehog only
+*upgrades* a hit to verified. Secrets go to loot, never finding text.

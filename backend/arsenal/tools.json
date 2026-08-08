@@ -3851,6 +3851,172 @@
       ]
     },
     {
+      "name": "js-mine",
+      "category": "web",
+      "purpose": "The in-repo JS-recon engine the :jsrecon job runs: fetch a target's JS (bundles + source maps) and mine endpoints, parameter names and secrets/API keys out of it. Headless, JSON on stdin.",
+      "phases": [
+        "web",
+        "recon"
+      ],
+      "techniques": [
+        "JavaScript analysis",
+        "endpoint discovery",
+        "secret discovery",
+        "source-map recovery"
+      ],
+      "docs": "https://github.com/GerbenJavado/LinkFinder",
+      "templates": [
+        {
+          "label": "Mine a bundle for endpoints/params/secrets",
+          "template": "echo '{\"action\":\"mine\",\"js_urls\":[\"<url>\"],\"maps\":true,\"verify\":true}' | js-mine --job-stdin",
+          "note": "The :jsrecon surface runs this gated + scope-filtered; this is the manual equivalent."
+        },
+        {
+          "label": "List the JS a page loads",
+          "template": "echo '{\"action\":\"collect\",\"seed_urls\":[\"<url>\"]}' | js-mine --job-stdin",
+          "note": "Collect the <script src> set, then scope-filter and mine the in-scope subset."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--job-stdin",
+          "what": "read a JSON job (collect | mine) on stdin"
+        },
+        {
+          "flag": "--selftest",
+          "what": "smoke test — mine a planted fixture"
+        }
+      ]
+    },
+    {
+      "name": "LinkFinder",
+      "category": "web",
+      "purpose": "Extract endpoints and paths from JavaScript with a battle-tested regex — the manual endpoint half of JS mining.",
+      "phases": [
+        "web",
+        "recon"
+      ],
+      "techniques": [
+        "JavaScript analysis",
+        "endpoint discovery"
+      ],
+      "docs": "https://github.com/GerbenJavado/LinkFinder",
+      "templates": [
+        {
+          "label": "Endpoints from one JS URL",
+          "template": "LinkFinder -i <url> -o cli",
+          "note": "Feeds the mined endpoints into :recon / :nuclei / :repeater."
+        },
+        {
+          "label": "Endpoints from a whole domain's JS",
+          "template": "LinkFinder -i 'https://<domain>/*' -d -o cli",
+          "note": "-d follows every JS the pages load."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-i",
+          "what": "input (URL / file / wildcard)"
+        },
+        {
+          "flag": "-o",
+          "what": "output (cli / html file)"
+        }
+      ]
+    },
+    {
+      "name": "SecretFinder",
+      "category": "web",
+      "purpose": "Regex-hunt API keys, tokens and secrets in JavaScript files — the manual secret half of JS mining.",
+      "phases": [
+        "web",
+        "recon"
+      ],
+      "techniques": [
+        "secret discovery",
+        "JavaScript analysis"
+      ],
+      "docs": "https://github.com/m4ll0k/SecretFinder",
+      "templates": [
+        {
+          "label": "Secrets from one JS URL",
+          "template": "SecretFinder -i <url> -o cli",
+          "note": "Cross-check high-signal hits with trufflehog/gitleaks for verified keys."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-i",
+          "what": "input (URL / file / wildcard)"
+        },
+        {
+          "flag": "-o",
+          "what": "output (cli / html file)"
+        }
+      ]
+    },
+    {
+      "name": "gitleaks",
+      "category": "web",
+      "purpose": "High-signal secret scanner for files and git history — used over downloaded JS / recovered source to confirm hardcoded keys.",
+      "phases": [
+        "web",
+        "recon"
+      ],
+      "techniques": [
+        "secret discovery"
+      ],
+      "docs": "https://github.com/gitleaks/gitleaks",
+      "templates": [
+        {
+          "label": "Scan a directory of downloaded JS",
+          "template": "gitleaks detect --source <path> --no-git --report-format json",
+          "note": "Pair with trufflehog --only-verified for keys that actually authenticate."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "detect",
+          "what": "scan mode"
+        },
+        {
+          "flag": "--no-git",
+          "what": "treat the source as plain files, not a repo"
+        }
+      ]
+    },
+    {
+      "name": "sourcemapper",
+      "category": "web",
+      "purpose": "Unpack a JavaScript source map (.map) back into the original src/ tree — recover the pre-bundle source, comments and paths.",
+      "phases": [
+        "web",
+        "recon"
+      ],
+      "techniques": [
+        "source-map recovery",
+        "JavaScript analysis"
+      ],
+      "docs": "https://github.com/denandz/sourcemapper",
+      "templates": [
+        {
+          "label": "Recover original source from a .map",
+          "template": "sourcemapper -url <url>.map -output recovered/",
+          "note": "The recovered src/ tree often carries endpoints, comments and secrets the minified bundle hid."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-url",
+          "what": "the source-map URL"
+        },
+        {
+          "flag": "-output",
+          "what": "the directory to write the recovered tree to"
+        }
+      ]
+    },
+    {
       "name": "commix",
       "category": "web",
       "purpose": "Detect and exploit OS command-injection in web parameters automatically.",

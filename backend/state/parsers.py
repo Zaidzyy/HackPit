@@ -703,6 +703,44 @@ def _query_params(url: str) -> list[str]:
     return names
 
 
+def parse_jsmine(text: str, session_id: str, run_id: str | None = None) -> Parsed:
+    """js-mine ``--mine`` JSON -> Endpoint rows for the endpoints/params mined out of a target's JS.
+
+    The :jsrecon engine (docker/js_mine.py) emits ``{"action":"mine","results":[{"url":<js url>,
+    "endpoints":[<absolute url>...],"params":[...],"secrets":[...],"source_map":{...}}...]}``. Each
+    mined endpoint URL becomes ONE Endpoint carrying the query-parameter NAMES on that specific URL —
+    the IDOR/injection surface the :recon ranker weighs. SECRETS ARE DELIBERATELY NOT PARSED HERE: a
+    secret's value must go to a loot file, never into a state record this returns (and this parser is
+    also what a plain-terminal ``js-mine`` run ingests, which has no loot to write to). Endpoints are
+    resolved to absolute URLs by the engine, so a relative ``/api/x`` already carries its JS origin.
+
+    Hand-parsed for the query params (the state package imports nothing network-capable —
+    test_state.py bans ``urllib`` — and a query string only needs a split). One Endpoint per URL,
+    duplicates collapsed. Never raises.
+    """
+    out = Parsed()
+    seen: set[str] = set()
+    for obj in _json_objects(text):
+        results = obj.get("results")
+        if not isinstance(results, list):
+            continue
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            eps = r.get("endpoints")
+            if not isinstance(eps, list):
+                continue
+            for url in eps:
+                if not isinstance(url, str) or not url.lower().startswith("http") or url in seen:
+                    continue
+                seen.add(url)
+                out.endpoints.append(
+                    Endpoint(session_id=session_id, url=url, params=_query_params(url),
+                             source_run_id=run_id)
+                )
+    return out
+
+
 def parse_urls(text: str, session_id: str, run_id: str | None = None) -> Parsed:
     """A flat list of URLs (gau / waybackurls / katana) -> Endpoint rows with query params mined.
 
@@ -756,6 +794,10 @@ STDOUT_PARSERS = {
     "arjun": parse_arjun,
     "feroxbuster": parse_feroxbuster,
     "paramspider": parse_urls,
+    # :jsrecon — the JS-mining engine. A plain terminal `js-mine --mine` run ingests its mined
+    # endpoints/params too, with no extra wiring, exactly as arjun/httpx do. Secrets are NOT ingested
+    # here (they belong in loot, which a parser cannot write) — the :jsrecon worker handles those.
+    "js-mine": parse_jsmine,
     # :recon discovery tools — so a plain terminal run of any of them ingests too, with no
     # extra wiring, exactly as httpx/netexec already do.
     "subfinder": parse_subfinder,

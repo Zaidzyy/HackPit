@@ -3729,6 +3729,131 @@ export const stopDiscoverJob = (id: string, signal?: AbortSignal) =>
   delJSON<DiscoverJob>(`/cockpit/discover/jobs/${encodeURIComponent(id)}`, signal);
 
 /* -------------------------------------------------------------------------- */
+/* JS RECON -> mined endpoints/params + secrets (:jsrecon) — a :recon sibling */
+/* -------------------------------------------------------------------------- */
+export type JsReconRequest = {
+  /** An in-scope page/host to COLLECT JS from (its <script src> set). Scope-locked before run. */
+  target?: string;
+  /** Explicit in-scope JS URLs to fetch+mine directly (from :recon / the proxy). Each scope-locked. */
+  js_urls?: string[];
+  /** Also mine the .js endpoints already in this session's state. */
+  include_state?: boolean;
+  /** Fetch + unpack source maps (recover original source paths/comments). */
+  maps?: boolean;
+  /** Fold trufflehog in (best-effort) to mark VERIFIED keys High. */
+  verify?: boolean;
+  insecure?: boolean;
+  rate_limit?: number | null;
+  timeout_seconds?: number | null;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  approved: boolean;
+  dangerous_ack: boolean;
+};
+
+export type JsReconStage = {
+  tool: string;
+  argv: string[];
+  state: string;
+  note: string;
+};
+
+/** One endpoint mined from JS + the pre-filled hand-offs. Tagged source `js`. */
+export type MinedEndpoint = {
+  url: string;
+  params: string[];
+  source_url: string;
+  tag: string;
+  nuclei_target: string;
+  repeater_url: string;
+};
+
+/** One secret/API key found in JS — its TYPE + location, NEVER its value (that lives in loot). */
+export type MinedSecret = {
+  type: string;
+  source_url: string;
+  verified: boolean;
+  /** A value-free preview (first/last few chars) — never the real secret. */
+  masked: string;
+  loot_file: string;
+};
+
+/** A JS file's recovered source map — original paths + top-of-file comments. */
+export type RecoveredSource = {
+  js_url: string;
+  map_url: string;
+  recovered_sources: string[];
+  comments: string[];
+};
+
+export type JsReconJob = {
+  id: string;
+  state: string;
+  argv: string[];
+  target: string;
+  container: string;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  started_at: string;
+  finished_at: string;
+  stages: JsReconStage[];
+  js_urls_mined: string[];
+  endpoints: MinedEndpoint[];
+  secrets: MinedSecret[];
+  recovered_sources: RecoveredSource[];
+  /** JS URLs / mined hosts surfaced READ-ONLY — never fetched, handed off or upserted. */
+  discovered_out_of_scope: string[];
+  new_endpoints: number;
+  new_findings: number;
+  secrets_found: number;
+  verified_secrets: number;
+  /** Loot path the secret VALUES were written to (container path). */
+  loot_file: string;
+  output_tail: string;
+  warnings: string[];
+  refused: string;
+  refused_gate: string;
+};
+
+export type JsReconStatus = {
+  container: string;
+  up: boolean;
+  ready: boolean;
+  running: number;
+  detail: string;
+};
+
+export type JsReconPreview = {
+  argv: string[];
+  gate: CredGate;
+};
+
+export const getJsReconStatus = (signal?: AbortSignal) =>
+  getJSON<JsReconStatus>("/cockpit/jsrecon/status", signal);
+
+/** The entry argv + gate verdict for a JS-recon job, mining nothing. */
+export const jsReconPreview = (req: JsReconRequest, signal?: AbortSignal) =>
+  postJSON<JsReconPreview>("/cockpit/jsrecon/preview", req, signal);
+
+/** Run ONE JS-recon job (collect JS → fetch in-scope → mine endpoints/params/secrets). One approval. */
+export const startJsRecon = (req: JsReconRequest, signal?: AbortSignal) =>
+  postJSON<JsReconJob>("/cockpit/jsrecon", req, signal);
+
+export const listJsReconJobs = (sessionId?: string, signal?: AbortSignal) =>
+  getJSON<JsReconJob[]>(
+    "/cockpit/jsrecon/jobs" +
+      (sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""),
+    signal
+  );
+
+export const getJsReconJob = (id: string, signal?: AbortSignal) =>
+  getJSON<JsReconJob>(`/cockpit/jsrecon/jobs/${encodeURIComponent(id)}`, signal);
+
+/** Stop an in-flight JS-recon job. NOT GATED — the panic button. */
+export const stopJsReconJob = (id: string, signal?: AbortSignal) =>
+  delJSON<JsReconJob>(`/cockpit/jsrecon/jobs/${encodeURIComponent(id)}`, signal);
+
+/* -------------------------------------------------------------------------- */
 /* THE WAF-BYPASS HEADER (build #18 item 1)                                    */
 /*                                                                             */
 /* THE VALUE IS A CREDENTIAL AND ONLY TRAVELS ONE WAY. `setBypassHeader` sends  */

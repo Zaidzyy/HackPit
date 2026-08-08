@@ -18,12 +18,24 @@ import {
   startDiscover,
   listDiscoverJobs,
   stopDiscoverJob,
+  getJsReconStatus,
+  jsReconPreview,
+  startJsRecon,
+  listJsReconJobs,
+  stopJsReconJob,
   type DiscoverJob,
   type DiscoverPreview,
   type DiscoverRequest,
   type DiscoverStatus,
   type DiscoveredEndpoint,
   type DiscoveredParam,
+  type JsReconJob,
+  type JsReconPreview,
+  type JsReconRequest,
+  type JsReconStatus,
+  type MinedEndpoint,
+  type MinedSecret,
+  type RecoveredSource,
   type ReconJob,
   type ReconPreview,
   type ReconRequest,
@@ -153,7 +165,95 @@ const DEMO_DISCOVER_JOBS: DiscoverJob[] = [
   },
 ];
 
-type View = "recon" | "discovery";
+/** Synthetic data for /recon?view=jsrecon&demo=1 — fake endpoints/keys, never a real target's secrets. */
+const DEMO_JSRECON_JOBS: JsReconJob[] = [
+  {
+    id: "demo-jsrecon",
+    state: "finished",
+    argv: ["js-mine", "--mine", "-u", "https://app.demo.example.com", "--maps", "--verify"],
+    target: "https://app.demo.example.com",
+    container: "hackpit-engage-sandbox",
+    started_at: "",
+    finished_at: "",
+    stages: [
+      { tool: "js-mine", argv: [], state: "ran", note: "collected 4 JS URL(s) from app.demo.example.com" },
+      { tool: "js-mine", argv: [], state: "ran", note: "mined 6 endpoint(s), 3 secret(s)" },
+    ],
+    js_urls_mined: [
+      "https://app.demo.example.com/static/app.4f2c.js",
+      "https://app.demo.example.com/static/vendor.9a1b.js",
+    ],
+    endpoints: [
+      {
+        url: "https://app.demo.example.com/api/v2/account?id=1&role=admin",
+        params: ["id", "role"],
+        source_url: "https://app.demo.example.com/static/app.4f2c.js",
+        tag: "js",
+        nuclei_target: "https://app.demo.example.com/api/v2/account",
+        repeater_url: "https://app.demo.example.com/api/v2/account?id=1&role=admin",
+      },
+      {
+        url: "https://api.demo.example.com/internal/v2/orders?oid=7&include=items",
+        params: ["oid", "include"],
+        source_url: "https://app.demo.example.com/static/app.4f2c.js",
+        tag: "js",
+        nuclei_target: "https://api.demo.example.com/internal/v2/orders",
+        repeater_url: "https://api.demo.example.com/internal/v2/orders?oid=7&include=items",
+      },
+      {
+        url: "https://app.demo.example.com/api/v2/admin/flags",
+        params: [],
+        source_url: "https://app.demo.example.com/static/vendor.9a1b.js",
+        tag: "js",
+        nuclei_target: "https://app.demo.example.com/api/v2/admin/flags",
+        repeater_url: "https://app.demo.example.com/api/v2/admin/flags",
+      },
+    ],
+    secrets: [
+      {
+        type: "aws-access-key-id",
+        source_url: "https://app.demo.example.com/static/app.4f2c.js",
+        verified: true,
+        masked: "AKIA…LE (20 chars)",
+        loot_file: "/loot/demo/jsrecon-demo-secrets.txt",
+      },
+      {
+        type: "stripe-secret-key",
+        source_url: "https://app.demo.example.com/static/app.4f2c.js",
+        verified: true,
+        masked: "sk_l…67 (32 chars)",
+        loot_file: "/loot/demo/jsrecon-demo-secrets.txt",
+      },
+      {
+        type: "generic-api-key",
+        source_url: "https://app.demo.example.com/static/vendor.9a1b.js",
+        verified: false,
+        masked: "abcd…89 (32 chars)",
+        loot_file: "/loot/demo/jsrecon-demo-secrets.txt",
+      },
+    ],
+    recovered_sources: [
+      {
+        js_url: "https://app.demo.example.com/static/app.4f2c.js",
+        map_url: "https://app.demo.example.com/static/app.4f2c.js.map",
+        recovered_sources: ["src/api/client.ts", "src/config/keys.ts", "src/admin/flags.ts"],
+        comments: ["// TODO remove hardcoded key before ship", "// internal admin flags endpoint"],
+      },
+    ],
+    discovered_out_of_scope: ["cdn.thirdparty.net"],
+    new_endpoints: 6,
+    new_findings: 3,
+    secrets_found: 3,
+    verified_secrets: 2,
+    loot_file: "/loot/demo/jsrecon-demo-secrets.txt",
+    output_tail: "",
+    warnings: [],
+    refused: "",
+    refused_gate: "",
+  },
+];
+
+type View = "recon" | "discovery" | "jsrecon";
 type Mode = "params" | "content" | "historical";
 
 export function ReconScreen() {
@@ -188,6 +288,19 @@ export function ReconScreen() {
   const [discAck, setDiscAck] = useState(false);
   const [discPreview, setDiscPreview] = useState<DiscoverPreview | null>(null);
   const [discStarting, setDiscStarting] = useState(false);
+
+  // --- js recon view state ---
+  const [jsStatus, setJsStatus] = useState<JsReconStatus | null>(null);
+  const [jsJobs, setJsJobs] = useState<JsReconJob[]>([]);
+  const [jsTarget, setJsTarget] = useState("");
+  const [jsUrlsText, setJsUrlsText] = useState("");
+  const [jsIncludeState, setJsIncludeState] = useState(true);
+  const [jsMaps, setJsMaps] = useState(true);
+  const [jsVerify, setJsVerify] = useState(true);
+  const [jsApproved, setJsApproved] = useState(false);
+  const [jsAck, setJsAck] = useState(false);
+  const [jsPreview, setJsPreview] = useState<JsReconPreview | null>(null);
+  const [jsStarting, setJsStarting] = useState(false);
 
   const request = useCallback(
     (): ReconRequest => ({
@@ -226,10 +339,32 @@ export function ReconScreen() {
     [discMode, url, domain, method, tool, words, wordlist, extText, paramWordlist, rate, sessionId, discApproved, discAck]
   );
 
+  const jsUrls = useMemo(
+    () => jsUrlsText.split(/\r?\n/).map((u) => u.trim()).filter(Boolean),
+    [jsUrlsText]
+  );
+
+  const jsRequest = useCallback(
+    (): JsReconRequest => ({
+      target: jsTarget.trim(),
+      js_urls: jsUrls,
+      include_state: jsIncludeState,
+      maps: jsMaps,
+      verify: jsVerify,
+      rate_limit: Number.parseInt(rate, 10) || null,
+      engagement_id: sessionId.trim() || null,
+      session_id: sessionId.trim() || null,
+      approved: jsApproved,
+      dangerous_ack: jsAck,
+    }),
+    [jsTarget, jsUrls, jsIncludeState, jsMaps, jsVerify, rate, sessionId, jsApproved, jsAck]
+  );
+
   useEffect(() => {
     const ctrl = new AbortController();
     getReconStatus(ctrl.signal).then(setStatus).catch(() => setStatus(null));
     getDiscoverStatus(ctrl.signal).then(setDiscStatus).catch(() => setDiscStatus(null));
+    getJsReconStatus(ctrl.signal).then(setJsStatus).catch(() => setJsStatus(null));
     return () => ctrl.abort();
   }, []);
 
@@ -240,11 +375,16 @@ export function ReconScreen() {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
     const sid = params.get("session");
-    const wantDiscovery = params.get("view") === "discovery" || params.has("demo");
+    const viewParam = params.get("view");
     const isDemo = params.has("demo");
+    // ?view= picks the tab; a bare ?demo=1 (no view) opens the discovery demo, as before.
+    const wantView: View | null =
+      viewParam === "jsrecon" ? "jsrecon"
+        : viewParam === "discovery" ? "discovery"
+          : isDemo ? "discovery" : null;
     Promise.resolve().then(() => {
       if (sid) setSessionId(sid);
-      if (wantDiscovery) setView("discovery");
+      if (wantView) setView(wantView);
       if (isDemo) setDemo(true);
       if (sid && !isDemo) getReconSurface(sid).then(setSurface).catch(() => setSurface(null));
     });
@@ -263,16 +403,25 @@ export function ReconScreen() {
       .catch(() => setDiscJobs([]));
   }, [sessionId, demo]);
 
+  const refreshJsJobs = useCallback(() => {
+    if (demo) return;
+    listJsReconJobs(sessionId.trim() || undefined)
+      .then(setJsJobs)
+      .catch(() => setJsJobs([]));
+  }, [sessionId, demo]);
+
   // A running sweep/job's stages + counts grow, so this polls.
   useEffect(() => {
     refreshJobs();
     refreshDiscJobs();
+    refreshJsJobs();
     const t = setInterval(() => {
       refreshJobs();
       refreshDiscJobs();
+      refreshJsJobs();
     }, 2000);
     return () => clearInterval(t);
-  }, [refreshJobs, refreshDiscJobs]);
+  }, [refreshJobs, refreshDiscJobs, refreshJsJobs]);
 
   const doPreview = useCallback(
     (kind: "passive" | "active") => {
@@ -333,6 +482,32 @@ export function ReconScreen() {
     [refreshDiscJobs]
   );
 
+  const doJsPreview = useCallback(() => {
+    setError(null);
+    jsReconPreview(jsRequest())
+      .then(setJsPreview)
+      .catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
+  }, [jsRequest]);
+
+  const runJs = useCallback(() => {
+    if (jsStarting) return;
+    setJsStarting(true);
+    setError(null);
+    startJsRecon(jsRequest())
+      .then(() => refreshJsJobs())
+      .catch((e) => setError(e instanceof ApiError ? e.message : String(e)))
+      .finally(() => setJsStarting(false));
+  }, [jsStarting, jsRequest, refreshJsJobs]);
+
+  const stopJs = useCallback(
+    (id: string) => {
+      stopJsReconJob(id)
+        .then(() => refreshJsJobs())
+        .catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
+    },
+    [refreshJsJobs]
+  );
+
   const loadSurface = useCallback(() => {
     const sid = sessionId.trim();
     if (!sid) return;
@@ -365,8 +540,19 @@ export function ReconScreen() {
     return url.trim() !== "";
   }, [discApproved, discMode, domain, url, sessionId]);
 
+  const canJsRun = useMemo(() => {
+    if (!jsApproved) return false;
+    return (
+      jsTarget.trim() !== "" ||
+      jsUrls.length > 0 ||
+      (jsIncludeState && sessionId.trim() !== "")
+    );
+  }, [jsApproved, jsTarget, jsUrls, jsIncludeState, sessionId]);
+
   const shownDiscJobs = demo ? DEMO_DISCOVER_JOBS : discJobs;
-  const activeStatus = view === "discovery" ? discStatus : status;
+  const shownJsJobs = demo ? DEMO_JSRECON_JOBS : jsJobs;
+  const activeStatus =
+    view === "discovery" ? discStatus : view === "jsrecon" ? jsStatus : status;
 
   return (
     <PageShell crumbs={[{ label: "cockpit", href: "/cockpit" }, { label: "recon" }]}>
@@ -404,6 +590,13 @@ export function ReconScreen() {
               onClick={() => setView("discovery")}
             >
               parameter / content discovery
+            </button>
+            <button
+              type="button"
+              className={`hp-tn-chip${view === "jsrecon" ? " is-on" : ""}`}
+              onClick={() => setView("jsrecon")}
+            >
+              js recon → secrets
             </button>
           </div>
         </header>
@@ -886,6 +1079,242 @@ export function ReconScreen() {
                           {" · "}
                           <Link href="/repeater">:repeater</Link> <CopyButton text={e.repeater_url} />
                         </p>
+                      </div>
+                    ))}
+
+                    {job.discovered_out_of_scope.length > 0 && (
+                      <p className="hp-tn-olhint">
+                        out of scope, dropped ({job.discovered_out_of_scope.length}):{" "}
+                        {job.discovered_out_of_scope.slice(0, 8).join(", ")}
+                      </p>
+                    )}
+                    {job.warnings.map((w) => (
+                      <p key={w} className="hp-tn-olhint">
+                        {w}
+                      </p>
+                    ))}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          </>
+        )}
+
+        {view === "jsrecon" && (
+          <>
+            <section className="hp-tn-card">
+              <div className="hp-tn-cardhead">the JS-recon job</div>
+              <div className="hp-tn-cardsub">
+                Engagement-bound, exactly like a sweep. Give an in-scope <strong>page/host</strong> to
+                collect JavaScript from, paste <strong>JS URLs</strong> you already found, and/or mine
+                the <code>.js</code> endpoints already in this session&rsquo;s state. One approval fetches
+                the in-scope JS, mines <strong>endpoints, parameters and secrets / API keys</strong> out
+                of the bundles (and their source maps), feeds endpoints into the ranked surface and writes
+                secrets to <strong>loot</strong> — the finding never carries the value. Only in-scope JS is
+                fetched and only in-scope mined hosts land, by construction.
+              </div>
+              <div className="hp-tn-form">
+                <input
+                  value={sessionId}
+                  onChange={(e) => setSessionId(e.target.value)}
+                  placeholder="engagement / session id"
+                  aria-label="Engagement id"
+                  style={{ flex: "1 1 260px" }}
+                />
+                <input
+                  value={jsTarget}
+                  onChange={(e) => setJsTarget(e.target.value)}
+                  placeholder="collect JS from (e.g. https://app.example.com — blank = only the URLs below / state)"
+                  aria-label="Collection target"
+                  style={{ flex: "1 1 360px" }}
+                />
+                <input
+                  className="hp-tn-port"
+                  value={rate}
+                  onChange={(e) => setRate(e.target.value)}
+                  placeholder="rate/s"
+                  aria-label="Rate limit, requests per second"
+                />
+              </div>
+              <textarea
+                value={jsUrlsText}
+                onChange={(e) => setJsUrlsText(e.target.value)}
+                placeholder={"explicit in-scope JS URLs, one per line (optional)\nhttps://app.example.com/static/app.4f2c.js"}
+                aria-label="JS URLs"
+                rows={3}
+                style={{ width: "100%", fontFamily: "var(--font-mono, monospace)", marginTop: "0.4rem" }}
+              />
+              <div className="hp-tn-chips">
+                <button
+                  type="button"
+                  className={`hp-tn-chip${jsIncludeState ? " is-on" : ""}`}
+                  onClick={() => setJsIncludeState((v) => !v)}
+                >
+                  mine .js already in state
+                </button>
+                <button
+                  type="button"
+                  className={`hp-tn-chip${jsMaps ? " is-on" : ""}`}
+                  onClick={() => setJsMaps((v) => !v)}
+                >
+                  unpack source maps
+                </button>
+                <button
+                  type="button"
+                  className={`hp-tn-chip${jsVerify ? " is-on" : ""}`}
+                  onClick={() => setJsVerify((v) => !v)}
+                >
+                  verify keys (trufflehog)
+                </button>
+              </div>
+
+              <div className="hp-tn-form">
+                <button type="button" onClick={doJsPreview}>
+                  preview — the argv the gate reads
+                </button>
+              </div>
+
+              {jsPreview && (
+                <>
+                  <div className="hp-tn-olhint">
+                    the approved command <CopyButton text={jsPreview.argv.join(" ")} />
+                  </div>
+                  <pre className="hp-tn-oneliner">{jsPreview.argv.join(" ") || "(nothing to run)"}</pre>
+                  {gateLine(jsPreview.gate)}
+                </>
+              )}
+
+              <div className="hp-tn-danger">
+                <div className="hp-tn-danger-head">a JS-recon job fetches a target&rsquo;s JavaScript and mines it</div>
+                <div className="hp-tn-danger-note">
+                  One approval buys the whole job — it collects the in-scope JS, fetches each bundle (and
+                  its source map) and mines endpoints/params/secrets. Only in-scope JS is fetched, by
+                  construction. Preview first — the gate&rsquo;s answer is shown above.
+                </div>
+                <label className="hp-tn-danger-why" style={{ display: "flex", gap: "0.4rem", alignItems: "flex-start" }}>
+                  <input type="checkbox" checked={jsApproved} onChange={(e) => setJsApproved(e.target.checked)} />
+                  I approve this JS-recon job
+                </label>
+                <label className="hp-tn-danger-why" style={{ display: "flex", gap: "0.4rem", alignItems: "flex-start" }}>
+                  <input type="checkbox" checked={jsAck} onChange={(e) => setJsAck(e.target.checked)} />
+                  I understand this fetches a real target&rsquo;s JS (red-confirm, when the gate asks)
+                </label>
+                <div className="hp-tn-danger-actions">
+                  <button
+                    type="button"
+                    className="hp-tn-danger-go"
+                    onClick={runJs}
+                    disabled={jsStarting || !canJsRun}
+                  >
+                    {jsStarting ? "starting…" : "run JS-recon job"}
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <section className="hp-tn-card">
+              <div className="hp-tn-cardhead">mined from JavaScript{demo ? " · demo data" : ""}</div>
+              <div className="hp-tn-cardsub">
+                Endpoints/params are <strong>tagged source <code>js</code></strong> and seed the ranked
+                surface (they raise their host&rsquo;s rank in sweep &amp; rank). Secrets/API keys are
+                written to a <strong>loot file</strong> and become Findings — a{" "}
+                <strong>trufflehog-verified</strong> key is High; the value is never shown here, only a
+                masked preview.
+              </div>
+              {shownJsJobs.length === 0 && (
+                <p className="hp-tn-olhint">
+                  no JS-recon jobs yet — run one above, or open{" "}
+                  <code>/recon?view=jsrecon&amp;demo=1</code> to see the mined view.
+                </p>
+              )}
+              <ul className="hp-tn-list">
+                {shownJsJobs.map((job) => (
+                  <li key={job.id} className={`hp-tn-row${job.refused ? " is-down" : ""}`}>
+                    <div className="hp-tn-rowtop">
+                      <span className="hp-tn-kind">js recon</span>
+                      <span className="hp-tn-subs" style={{ flex: "1 1 220px", wordBreak: "break-all" }}>
+                        {job.target || `${job.js_urls_mined.length} JS URL(s)`}
+                      </span>
+                      <span className={`hp-tn-state ${job.state === "running" ? "is-listening" : "is-down"}`}>
+                        {job.state}
+                      </span>
+                      <span className="hp-tn-olhint">
+                        +{job.new_endpoints} ep · {job.secrets_found} secret(s) · {job.verified_secrets} verified · +{job.new_findings} find
+                      </span>
+                      {job.state === "running" && !demo && (
+                        <button type="button" className="hp-tn-stop" onClick={() => stopJs(job.id)}>
+                          stop — not gated
+                        </button>
+                      )}
+                    </div>
+
+                    {job.secrets.length > 0 && (
+                      <div className="hp-tn-row" style={{ marginTop: "0.4rem" }}>
+                        <div className="hp-tn-cardhead" style={{ fontSize: "0.85rem" }}>
+                          secrets found → loot {job.loot_file ? <code>{job.loot_file}</code> : null}
+                        </div>
+                        {job.secrets.map((s: MinedSecret, i) => (
+                          <div key={`${s.type}-${i}`} className="hp-tn-rowtop">
+                            <span className={`hp-tn-state ${s.verified ? "is-listening" : "is-starting"}`}>
+                              {s.verified ? "VERIFIED" : "unverified"}
+                            </span>
+                            <span className="hp-tn-kind">{s.type}</span>
+                            <span className="hp-tn-subs" style={{ flex: "1 1 200px", wordBreak: "break-all" }}>
+                              {s.masked} <span className="hp-tn-olhint">— value in loot, never shown</span>
+                            </span>
+                            <span className="hp-tn-olhint" style={{ wordBreak: "break-all" }}>
+                              {s.source_url}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {job.endpoints.map((e: MinedEndpoint) => (
+                      <div key={e.url} className="hp-tn-row" style={{ marginTop: "0.4rem" }}>
+                        <div className="hp-tn-rowtop">
+                          <span className="hp-tn-kind">js</span>
+                          <span className="hp-tn-subs" style={{ flex: "1 1 260px", wordBreak: "break-all" }}>
+                            {e.url}
+                          </span>
+                          <span className="hp-tn-olhint">{e.params.length} param(s)</span>
+                        </div>
+                        {e.params.length > 0 && (
+                          <div className="hp-tn-chips">
+                            {e.params.map((name) => (
+                              <span key={name} className="hp-tn-chip is-on">
+                                {name}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        <p className="hp-tn-olhint">
+                          send to{" "}
+                          <Link href="/nuclei">:nuclei</Link> <CopyButton text={e.nuclei_target} />
+                          {" · "}
+                          <Link href="/repeater">:repeater</Link> <CopyButton text={e.repeater_url} />
+                        </p>
+                      </div>
+                    ))}
+
+                    {job.recovered_sources.map((r: RecoveredSource) => (
+                      <div key={r.js_url} className="hp-tn-row" style={{ marginTop: "0.4rem" }}>
+                        <p className="hp-tn-olhint" style={{ wordBreak: "break-all" }}>
+                          source map recovered from {r.js_url} — {r.recovered_sources.length} original
+                          source path(s)
+                        </p>
+                        <div className="hp-tn-chips">
+                          {r.recovered_sources.slice(0, 12).map((src) => (
+                            <span key={src} className="hp-tn-chip">
+                              {src}
+                            </span>
+                          ))}
+                        </div>
+                        {r.comments.map((c) => (
+                          <p key={c} className="hp-tn-olhint">
+                            {c}
+                          </p>
+                        ))}
                       </div>
                     ))}
 

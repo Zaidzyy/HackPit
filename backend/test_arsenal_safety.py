@@ -233,6 +233,14 @@ _MUST_NOT_FIRE = frozenset({
     "wafw00f", "testssl", "testssl.sh", "jwt_tool", "jwt-tool", "jwt_tool.py", "wfuzz",
     "hakrawler", "sslscan", "nomore403", "crlfuzz", "getjs", "jsluice", "subjs",
     "gf", "qsreplace", "unfurl",
+    # JS-recon engine (js-mine build) + the external tools it sits alongside (LinkFinder,
+    # SecretFinder, gitleaks, sourcemapper). All FETCH JS / READ FILES AND REPORT WHAT THEY FIND —
+    # endpoints, parameter names, secrets, a recovered source map. None generates a payload, opens a
+    # shell, tunnels traffic or runs code on a remote host, which is the test this bucket is judged
+    # by; they are the same class as getjs / jsluice / subjs above, all clean. A found secret's VALUE
+    # goes to a loot file, never an argv or a finding (cockpit/jsrecon.py), and js-mine reads its URL
+    # set on STDIN, so no URL byte reaches a shell — nothing here warrants a red-confirm.
+    "js-mine", "LinkFinder", "SecretFinder", "gitleaks", "sourcemapper",
     # single-packet / last-byte race client (race-singlepacket build). It SENDS HTTP AND READS
     # WHAT COMES BACK — one request fired N times, synchronized. It generates no payload, opens no
     # shell, tunnels nothing and runs no code on a remote host, which is the test this bucket is

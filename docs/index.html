@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HackPit — Autonomous AI Pentest Cockpit</title>
+<style>
+  :root{--bg:#05060a;--fg:#e6ebf1;--dim:#6b7686;--acc:#a78bfa;--acc-rgb:167,139,250;--line:rgba(255,255,255,.08)}
+  *{margin:0;padding:0;box-sizing:border-box}html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--fg);font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;line-height:1.65;overflow-x:hidden}
+  a{color:var(--acc);text-decoration:none}
+  #rain{position:fixed;inset:0;z-index:0;opacity:.14}
+  #boot{position:fixed;inset:0;background:var(--bg);z-index:50;padding:8vh 8vw;font-size:15px;color:var(--fg);transition:opacity .6s;white-space:pre-wrap;word-break:break-word;overflow:hidden}
+  #boot.done{opacity:0;pointer-events:none}
+  #boot .ok{color:var(--acc)}#boot .d{color:var(--dim)}#boot .a{color:var(--acc);font-weight:700}
+  .cur{display:inline-block;width:.6ch;height:1.1em;background:var(--acc);vertical-align:-2px;animation:bl 1s steps(1) infinite}
+  @keyframes bl{50%{opacity:0}}
+  .wrap{max-width:1040px;margin:0 auto;padding:0 26px;position:relative;z-index:1}
+  nav{display:flex;justify-content:space-between;align-items:center;padding:22px 0}
+  .brand{color:var(--acc);font-weight:800;letter-spacing:1px}
+  nav a{color:var(--dim);margin-left:22px;font-size:13px}nav a:hover{color:var(--fg)}
+  .reveal{opacity:0;transform:translateY(14px);transition:.7s}.reveal.in{opacity:1;transform:none}
+  .hero{text-align:center;padding:72px 0 44px}
+  .kick{color:var(--acc);font-size:12px;letter-spacing:4px;text-transform:uppercase}
+  #logo{margin:18px 0 4px;font-size:clamp(34px,7vw,64px);font-weight:800;letter-spacing:-1px;color:#fff}
+  #logo .cur2{display:inline-block;width:.5ch;height:.86em;background:var(--acc);vertical-align:-1px;margin-left:3px;animation:bl 1s steps(1) infinite}
+  .lede{font-size:clamp(15px,2.6vw,19px);max-width:640px;margin:14px auto 0}.lede b{color:var(--acc)}
+  .sub{color:var(--dim);max-width:540px;margin:12px auto 0;font-size:14px}
+  .cta{margin:28px 0;display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+  .btn{padding:12px 24px;border-radius:5px;font-size:14px;font-weight:700;transition:.16s}
+  .btn.p{background:var(--acc);color:#05060a}.btn.p:hover{filter:brightness(1.1);box-shadow:0 0 26px var(--acc)}
+  .btn.s{border:1px solid var(--line);color:var(--fg)}.btn.s:hover{border-color:var(--acc);color:var(--acc)}
+  .badges{display:flex;gap:9px;justify-content:center;flex-wrap:wrap;margin-top:30px}
+  .badge{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:20px;padding:5px 12px}.badge b{color:var(--acc)}
+  section{padding:56px 0}
+  .h{color:var(--dim);font-size:13px;letter-spacing:3px;text-transform:uppercase;margin-bottom:26px}.h span{color:var(--acc)}
+  .demo{border:1px solid var(--line);border-radius:12px;padding:66px 20px;text-align:center;color:var(--dim);background:rgba(255,255,255,.02)}.demo .p{font-size:26px;color:var(--acc)}
+  /* how it works */
+  .flow{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+  .step{background:rgba(255,255,255,.02);border:1px solid var(--line);border-radius:12px;padding:20px 16px;text-align:center;position:relative}
+  .step .num{color:var(--acc);font-size:12px;font-weight:700;letter-spacing:1px}
+  .step h4{color:#fff;font-size:15px;margin:8px 0 5px}
+  .step p{color:var(--dim);font-size:12.5px;line-height:1.5}
+  .step:not(:last-child)::after{content:"→";position:absolute;right:-11px;top:50%;transform:translateY(-50%);color:var(--dim);z-index:2}
+  /* feature groups */
+  .groups{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .group{background:rgba(255,255,255,.02);border:1px solid var(--line);border-radius:14px;padding:24px 24px 10px}
+  .group .gh{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .group .gh .dot{width:9px;height:9px;border-radius:50%;background:var(--acc);box-shadow:0 0 10px var(--acc)}
+  .group .gh h3{color:#fff;font-size:16px}
+  .group .gh .tag{color:var(--dim);font-size:11px;margin-left:auto;border:1px solid var(--line);border-radius:12px;padding:2px 9px}
+  .group ul{list-style:none}
+  .group li{padding:9px 0;border-top:1px solid var(--line);font-size:13.5px;color:var(--dim)}
+  .group li:first-child{border-top:0}
+  .group li b{color:var(--fg);font-weight:600}
+  /* strip */
+  .strip{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .box{border:1px solid var(--line);border-radius:12px;padding:22px 24px;background:rgba(255,255,255,.02)}
+  .box h4{color:#fff;font-size:15px;margin-bottom:7px}.box h4 span{color:var(--acc)}
+  .box p{color:var(--dim);font-size:13px}
+  .box.warn{border-color:var(--acc)}
+  footer{border-top:1px solid var(--line);padding:30px 0;color:var(--dim);font-size:13px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+  @media(max-width:820px){.flow{grid-template-columns:1fr 1fr}.step::after{display:none}.groups,.strip{grid-template-columns:1fr}}
+  @media(max-width:480px){.flow{grid-template-columns:1fr}#boot{font-size:12px;padding:7vh 6vw}.hero{padding:48px 0 34px}}
+  @media(prefers-reduced-motion:reduce){#boot{display:none}.reveal{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<canvas id="rain"></canvas>
+<div id="boot"><span id="bootlog"></span><span class="cur"></span></div>
+
+<nav class="wrap reveal"><span class="brand">root@hackpit:~#</span><span><a href="#how">how</a><a href="#does">features</a><a href="https://github.com/Zaidzyy/HackPit">github</a></span></nav>
+
+<header class="wrap hero">
+  <div class="kick reveal">grounded plan · live execution</div>
+  <div id="logo" class="reveal">hackpit<span class="cur2"></span></div>
+  <p class="lede reveal">An AI pentest cockpit that <b>plans the attack</b> and <b>runs it live</b> — with a human approving every command.</p>
+  <p class="sub reveal">Recon to Domain Admin, grounded in real technique knowledge, gated at every step.</p>
+  <div class="cta reveal"><a class="btn p" href="https://github.com/Zaidzyy/HackPit">View on GitHub</a><a class="btn s" href="#does">What it does ↓</a></div>
+  <div class="badges reveal"><span class="badge">CI <b>passing</b></span><span class="badge"><b>2,743</b> KB</span><span class="badge"><b>115</b> tools</span></div>
+</header>
+
+<section class="wrap reveal"><div class="h"><span>01</span> // demo</div>
+  <div class="demo"><div class="p">▶</div>demo video — coming here</div>
+</section>
+
+<section class="wrap reveal" id="how"><div class="h"><span>02</span> // how it works</div>
+  <div class="flow">
+    <div class="step"><div class="num">01</div><h4>Describe</h4><p>Tell it a target — a box, a domain, a bug-bounty scope.</p></div>
+    <div class="step"><div class="num">02</div><h4>Plan</h4><p>It composes an attack path, each step from a real technique.</p></div>
+    <div class="step"><div class="num">03</div><h4>Propose</h4><p>The AI suggests the next command — and the reason for it.</p></div>
+    <div class="step"><div class="num">04</div><h4>Approve</h4><p>You okay it. Nothing runs until you do. Every time.</p></div>
+    <div class="step"><div class="num">05</div><h4>Run &amp; adapt</h4><p>It executes in a sandbox and reasons from the result.</p></div>
+  </div>
+</section>
+
+<section class="wrap reveal" id="does"><div class="h"><span>03</span> // everything it does</div>
+  <div class="groups">
+    <div class="group"><div class="gh"><span class="dot"></span><h3>Plan</h3><span class="tag">the companion</span></div>
+      <ul>
+        <li><b>Search your knowledge</b> — semantic search over ~2,743 techniques, one keystroke away.</li>
+        <li><b>Compose attack paths</b> — describe a target, get an ordered recon→privesc walkthrough, grounded in real commands.</li>
+        <li><b>Run engagements</b> — a live checklist that remembers your steps, evidence and creds.</li>
+        <li><b>Draft reports</b> — grounded write-ups (OSCP / CPTS / bug-bounty formats) built from what you actually did.</li>
+        <li><b>Ask the assistant</b> — a chat that knows where you are and cites real techniques.</li>
+      </ul>
+    </div>
+    <div class="group"><div class="gh"><span class="dot"></span><h3>Execute</h3><span class="tag">gated · human-approved</span></div>
+      <ul>
+        <li><b>Run commands live</b> — streamed from an isolated lab or a scope-locked real target.</li>
+        <li><b>Guided loop</b> — the AI proposes the next command; you approve each one.</li>
+        <li><b>Kill-chain map</b> — watch the attack path light up as it runs.</li>
+        <li><b>Real shells</b> — a persistent <code>:kali</code> shell and a full <code>:terminal</code> (vim, msfconsole, evil-winrm).</li>
+        <li><b>HTTP repeater</b> — compose, send, replay and diff web requests.</li>
+        <li><b>CVE lookup</b> — <code>:exploits</code> maps a service + version to public exploits.</li>
+      </ul>
+    </div>
+    <div class="group"><div class="gh"><span class="dot"></span><h3>Go deeper</h3><span class="tag">the hard stuff</span></div>
+      <ul>
+        <li><b>Active Directory</b> — load BloodHound, see the route to Domain Admin, and let the AI walk it <b>live over WinRM</b> against a real Windows box.</li>
+        <li><b>C2 &amp; tunnels</b> — Sliver implants, DNS tunneling, chisel/ligolo pivoting — all behind the gates.</li>
+        <li><b>Tool arsenal</b> — 115 tools with ready-to-run commands, target already filled in.</li>
+        <li><b>Code scan</b> — static AppSec (Semgrep + Bandit) across 8 languages.</li>
+      </ul>
+    </div>
+    <div class="group"><div class="gh"><span class="dot"></span><h3>Stay safe</h3><span class="tag">safe by design</span></div>
+      <ul>
+        <li><b>Nothing auto-runs</b> — every command needs your approval, no exceptions.</li>
+        <li><b>The AI proposes, you decide</b> — it can't fire a command on its own.</li>
+        <li><b>Isolated lab + scope lock</b> — practice safely, or bind a real engagement to an exact scope.</li>
+        <li><b>Purple-team view</b> — for every action, see what a defender would see (telemetry, ATT&amp;CK, the alert that fires).</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="wrap reveal"><div class="strip">
+  <div class="box"><h4><span>◆</span> Local-first</h4><p>Runs entirely on your machine — no cloud, no account, nothing leaving your box. Use a fully local LLM or a frontier one. The repo ships code only; the knowledge base builds locally, so a fresh clone starts empty.</p></div>
+  <div class="box warn"><h4><span>⚠</span> Authorized use only</h4><p>A real offensive tool — with C2, evasion and a live Windows/AD path. Run it only against systems you own or have explicit written permission to test. In engagement mode, your approval is the only thing bounding where a command goes.</p></div>
+</div></section>
+
+<footer class="wrap reveal"><span>© 2026 HackPit · Apache-2.0</span><span>built by Zaid · <a href="https://github.com/Zaidzyy/HackPit">github.com/Zaidzyy/HackPit</a></span></footer>
+
+<script>
+const RAIN='167,139,250';
+// matrix rain
+const rc=document.getElementById('rain'),rx=rc.getContext('2d');let RW,RH,cols,drops;
+const glyphs='01ABCDEF#$%<>[]{}=+*';
+function rrs(){RW=rc.width=innerWidth;RH=rc.height=innerHeight;cols=Math.floor(RW/16);drops=Array(cols).fill(1)}
+rrs();addEventListener('resize',rrs);
+function rain(){rx.fillStyle='rgba(5,6,10,.09)';rx.fillRect(0,0,RW,RH);rx.fillStyle='rgba('+RAIN+',.8)';rx.font='14px monospace';
+for(let i=0;i<cols;i++){const c=glyphs[Math.floor(Math.random()*glyphs.length)];rx.fillText(c,i*16,drops[i]*16);if(drops[i]*16>RH&&Math.random()>.975)drops[i]=0;drops[i]++}
+requestAnimationFrame(rain)}rain();
+// boot then reveal
+const lines=[
+ ['$ hackpit --init',''],
+ ['[+] loading knowledge base ......... ','2,743 entries','ok'],
+ ['[+] sandboxes up .................. ','isolated lab · engage · :kali','ok'],
+ ['[+] tools staged .................. ','115 catalogued','ok'],
+ ['[+] gates armed ................... ','target-lock · approval · danger · isolation','ok'],
+ ['[+] agent policy .................. ','propose-only · never-auto-run','ok'],
+ ['[+] ready. every command is yours to approve.','','a'],
+];
+const log=document.getElementById('bootlog');let bi=0,ci=0,buf='';
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;')}
+function boot(){
+  if(bi>=lines.length){finish();return}
+  const ln=lines[bi],text=ln[0]+ln[1];
+  if(ci<=text.length){
+    const head=ln[0].slice(0,Math.min(ci,ln[0].length));
+    const tail=ci>ln[0].length?ln[1].slice(0,ci-ln[0].length):'';
+    const cls=ln[2]==='ok'?'ok':ln[2]==='a'?'a':'';
+    log.innerHTML=buf+'<span class="d">'+esc(head)+'</span><span class="'+cls+'">'+esc(tail)+'</span>';
+    ci++;setTimeout(boot,tail?13:7);
+  } else {
+    const cls=ln[2]==='ok'?'ok':ln[2]==='a'?'a':'d';
+    buf+='<span class="d">'+esc(ln[0])+'</span><span class="'+cls+'">'+esc(ln[1])+'</span>\n';
+    bi++;ci=0;setTimeout(boot,110);
+  }
+}
+function finish(){document.getElementById('boot').classList.add('done');
+  [...document.querySelectorAll('.reveal')].forEach((e,i)=>setTimeout(()=>e.classList.add('in'),90*i))}
+setTimeout(boot,350);
+</script>
+</body></html>

@@ -1069,16 +1069,22 @@ RUN set -eu; \
         > /usr/local/bin/smuggler.py; \
     chmod 0755 /usr/local/bin/smuggler.py; \
     git clone --depth 1 https://github.com/BishopFox/h2csmuggler.git /opt/smuggle/h2csmuggler; \
-    /opt/smuggle/venv/bin/pip install --no-cache-dir -q -r /opt/smuggle/h2csmuggler/requirements.txt; \
+    if [ -f /opt/smuggle/h2csmuggler/requirements.txt ]; then \
+        /opt/smuggle/venv/bin/pip install --no-cache-dir -q -r /opt/smuggle/h2csmuggler/requirements.txt; \
+    else \
+        /opt/smuggle/venv/bin/pip install --no-cache-dir -q hpack; \
+    fi; \
     printf '#!/bin/sh\nexec /opt/smuggle/venv/bin/python3 /opt/smuggle/h2csmuggler/h2csmuggler.py "$@"\n' \
         > /usr/local/bin/h2csmuggler; \
     chmod 0755 /usr/local/bin/h2csmuggler; \
     chmod -R a+rX /opt/smuggle /opt/hackpit; \
     command -v smuggle-probe >/dev/null; \
     smuggle-probe --selftest | grep -qi 'smuggle-probe ok'; \
-    /opt/smuggle/venv/bin/python3 -c 'import h2'; \
+    /opt/smuggle/venv/bin/python3 -c 'import h2, hyperframe'; \
     command -v smuggler.py >/dev/null; \
-    command -v h2csmuggler >/dev/null
+    smuggler.py -h >/dev/null 2>&1 || smuggler.py --help >/dev/null 2>&1 || true; \
+    command -v h2csmuggler >/dev/null; \
+    h2csmuggler -h >/dev/null 2>&1 || true
 
 # --- 10. Strip file capabilities (REQUIRED — do not remove) -------------------
 # Kali ships a few binaries with FILE capabilities so unprivileged desktop users get raw

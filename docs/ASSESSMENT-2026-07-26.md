@@ -5942,3 +5942,66 @@ categories, rendering the new tools with their templates — not blank/error).
 not separate binaries; `ropper` alongside `ROPgadget`; `zsteg`/`stegseek` for stego; `bulk_extractor`). These are
 proposable tools, **not** a new surface or a CTF-solver agent — that would be HexStrike's autonomy, and a dedicated `/ctf`
 surface, if ever wanted, is a separate build. `hashcat`/`john` were already catalogued (cracking) and are not duplicated.
+
+## Cross-domain kill-chain graph — the capstone that stitches web → cloud → on-prem into one route (`:killchain`) (2026-08-08)
+
+**The gap.** HackPit had three *separate* attack-path graphs — the web foothold (findings from `:recon`/`:proxy`), the
+cloud IAM graph (`:cloud`), and the on-prem AD graph (`:ad-graph`) — but nothing that showed how a chain *crosses* them.
+The seams an operator actually walks (an SSRF that reaches cloud metadata, a cloud secret reused as an AD credential, a
+web RCE that lands on a domain-joined host) lived only in the analyst's head. This build adds the **capstone**: one view
+that routes a foothold in *one* lane to a high-value target in *another*, across those seams, using the same edge-index
+orchestrator that already drives the two per-lane graphs.
+
+**A read-and-stitch OVERLAY, not a new engine (`backend/killchain/`).** The overlay consumes each graph's **public dict**
+(`Graph.to_dict()` — a plain nodes/edges mapping in which every edge already carries a precomputed `abusable` flag) and
+merges it into one graph, tagging every node with its `domain` (`web` | `cloud` | `onprem`) and namespacing ids so the
+lanes cannot collide. Because it trusts each lane's own `abusable` classification, **it needs neither package's edge
+taxonomy — and imports NEITHER `adgraph` NOR `cloudgraph`.** That is the decoupling invariant, and a safety test AST-scans
+every module to prove it: the two graph packages stay independent of each other *and* of the overlay; the cross-cutting
+join (fetching each store's public dict) lives only in `main.py`.
+
+**The new content — the cross-domain bridge catalog (`killchain/bridges.py`).** Within a lane the abuse edges already
+exist (the `:cloud` / `:ad-graph` technique catalogs own them). What connects the lanes does not live in any single-lane
+graph — it is the SEAM. The bridge catalog is the small, new parallel to those technique catalogs, covering five seam
+kinds, each with a title, a KB-grounded-or-catalog crossing command, and the ATT&CK technique + the two domains it
+crosses: **`SsrfToImds`** (web SSRF → cloud principal, T1552.005), **`NodeToCloud`** (compute/K8s node → its instance role),
+**`WebToHost`** (web RCE → host, T1190), **`CloudToOnprem`** (cloud secret/sync-account/RunCommand → AD credential, T1078),
+**`OnpremToCloud`** (AD-synced identity / SP cert / SYSVOL creds → tenant, T1078.004). Seams are declared on lane nodes
+(`props["seams"]`) and synthesized after the merge; a seam pointing at a missing node is refused with a warning, never a
+dangling edge. Grounding uses a **tool-head match guard** (the cloud grounder's `_cli_key` lesson) so a KB entry retrieved
+by the seam's seed terms is *cited* but never *mis-grounds* the command.
+
+**The orchestrator is copied from `cloudgraph`, safety design and all (`killchain/orchestrator.py`).** BFS over the merged
+abusable subgraph routes an owned foothold in any lane to a high-value target in any lane (Domain Admin, cloud Owner/root).
+The model is handed the numbered frontier and returns an **INDEX** — it authors no command; a pick outside the frontier is
+refused, not repaired. A **cross-domain (seam) hop** resolves to a runnable crossing command the human approves through
+the SAME gated executor every cockpit command uses (`POST /cockpit/exec`, approve-each, scope-locked, heuristic
+red-confirm). A **within-lane hop** is deliberately **not runnable here** — it defers to that lane's own `:cloud` /
+`:ad-graph` view, so there is exactly one command catalog per abuse and no drifting copy. `advance` moves the chain only
+on an approved, exit-0 run for a seam hop, and on the operator's word for a within-lane one. **This build adds NO new
+gate.**
+
+**Routes (`main.py`, cross-cutting) + frontend (`/cockpit/killchain`).** `GET /killchain/graph`, `POST /killchain/propose`,
+`POST /killchain/advance`, all delegating to a thin, testable `killchain/service.py` (the evidence-gated `advance_step`
+takes an injected `run_lookup`, so it is unit-tested with a stub run, no app boot). The screen renders **three swim-lanes**
+(web / cloud / on-prem) with the stitched path lit across them: each route node sits in its lane at its step column, so the
+path visibly *descends* through the lanes as it advances; a cross-domain seam is drawn in bright pink, a within-lane hop
+dim. The per-hop drawer shows the technique and either **APPROVE & CROSS** (a seam, through the gated executor, with the
+defender's-eye ATT&CK/detection disclosure) or **open in :cloud / :ad-graph** (a within-lane hop). `?demo=1` loads a
+synthetic web→cloud→on-prem chain — no real host, account or domain.
+
+**Tests.** `test_killchain.py` (functional): three synthetic lane dicts merge into one domain-tagged graph; the bridge
+catalog synthesizes all five seams; BFS routes *web SSRF → cloud ci-deployer → on-prem SVC-SQL → Domain Admins* crossing
+two seams over three lanes; the orchestrator returns an index resolving to the real seam edge, a within-lane hop defers to
+its view, an out-of-frontier pick is refused; advance is evidence-gated. `test_killchain_safety.py` (invariants, mirrors
+`test_cloudgraph_safety.py`): the proposer + service execute nothing (AST, with a positive control), cannot set
+`approved`/`dangerous_ack`, expose no run/batch path; a proposed seam step submitted unapproved is refused; **no killchain
+module imports `adgraph` or `cloudgraph`** (decoupling); lab mode byte-for-byte unchanged. Both are registered in
+`run_safety_tests.sh`. **`next build` exits 0.** Screen LOOKED AT: `41-killchain.png` — the three swim-lanes with the
+stitched web→cloud→on-prem route to Domain Admin (not blank/error).
+
+**Assumptions (per §5), stated.** The overlay renders on synthetic data; live lanes arrive from the three underlying
+surfaces (`:recon`/`:proxy`, `:cloud`, `:ad-graph`) as an engagement fills them, and live cross-domain seams deepen as the
+dedicated seam integrations (e.g. the existing SSRF→IMDS `/cloud/seed-imds` flow) carry the linkage. On synthetic data it
+is a diagram; its operational weight scales with how much real graph data sits behind it — which is exactly why it is the
+*capstone*.

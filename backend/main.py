@@ -3147,3 +3147,143 @@ def evasion_deliver(
         raise HTTPException(status_code=409, detail={"gate": "honesty", "reason": str(exc)})
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail={"gate": "artifact", "reason": str(exc)})
+
+
+# --------------------------------------------------------------------------- #
+# CROSS-DOMAIN KILL-CHAIN OVERLAY (see backend/killchain/) — the capstone that stitches the web
+# foothold, cloud IAM and on-prem AD graphs into ONE routed kill chain.
+#
+# CROSS-CUTTING, so it lives HERE and not inside any graph package: it reads each graph's PUBLIC
+# DICT from its store (cloud_store / ad_store) + the web lane from engagement findings, and hands
+# those dicts to the killchain overlay — which imports NEITHER adgraph NOR cloudgraph (the two graph
+# packages stay decoupled from each other AND from the overlay; a safety test proves it). The overlay
+# PROPOSES an edge index and executes nothing: a cross-domain SEAM hop is approved and sent to
+# POST /cockpit/exec (the same gated executor); a within-lane hop is approved in its own :cloud /
+# :ad-graph view (single source of truth for per-lane abuse — no duplicated catalog here).
+# --------------------------------------------------------------------------- #
+from killchain import service as kc_service  # noqa: E402
+
+
+def _killchain_kb_grounder(seeds: str) -> dict | None:
+    """Ground a CROSS-DOMAIN seam in the KB. A bridge spans lanes (web → cloud → AD), so unlike the
+    cloud grounder this is not category-restricted: the best entry whose commands include a real
+    invocation for the seam's seed terms. The bridge catalog only ADOPTS the command when its tool
+    head matches, so a mismatched entry is cited but not mis-grounded. Returns ``{id, title,
+    commands}`` or None (→ catalog fallback / ai_suggested)."""
+    try:
+        hits = _resilient_search(seeds, 8, "hybrid")
+    except Exception:
+        return None
+    for h in hits:
+        e = STATE.by_id.get(h.get("id"))
+        if not e:
+            continue
+        cmds = attack_path.entry_commands(e)
+        if cmds:
+            return {"id": e["id"], "title": e.get("title") or e["id"], "commands": cmds[:3]}
+    return None
+
+
+def _killchain_graph_for(session_id: str | None, demo: bool):
+    """Build the merged kill-chain graph: the synthetic demo, or a session's live lanes (the cloud
+    graph's public dict + the AD graph's public dict + the web lane from engagement findings). Falls
+    back to the demo when there is nothing live to stitch, so the surface always renders."""
+    if demo or not session_id:
+        return kc_service.build_demo()
+    cloud_row = cloud_store.latest_for_session(session_id)
+    ad_row = ad_store.latest_for_session(session_id)
+    cloud_dict = cloud_row.get("graph") if isinstance(cloud_row, dict) else None
+    ad_dict = ad_row.get("graph") if isinstance(ad_row, dict) else None
+    try:
+        findings = state_store.load(session_id).findings
+    except Exception:
+        findings = []
+    graph = kc_service.build_from_session(cloud_dict, ad_dict, findings)
+    return graph if graph.nodes else kc_service.build_demo()
+
+
+class KillchainProposeIn(BaseModel):
+    session_id: str | None = Field(
+        None, description="Session whose live lanes to merge (omit / demo=true for the synthetic chain)."
+    )
+    demo: bool = Field(False, description="Use the synthetic three-lane demo instead of live lanes.")
+    owned: list[str] = Field(default_factory=list, description="Merged node ids of footholds you control.")
+    traversed: list[str] = Field(default_factory=list, description="Edge keys already walked.")
+    goal: str | None = Field(None, description="Objective node id; omit to auto-pick the furthest high-value node.")
+    engagement_id: str | None = Field(None, description="Engagement to scope the pre-check to.")
+    avoid: list[str] = Field(default_factory=list, description="Edge keys the operator skipped.")
+
+
+class KillchainAdvanceIn(BaseModel):
+    session_id: str | None = None
+    demo: bool = False
+    owned: list[str] = Field(default_factory=list)
+    traversed: list[str] = Field(default_factory=list)
+    source: str
+    target: str
+    kind: str
+    run_id: str | None = Field(
+        None, description="The approved, exit-0 run that carried out a cross-domain hop. Not required "
+        "for a within-lane hop (approved in its own view) or an inherited-rights hop.",
+    )
+
+
+@app.get("/killchain/graph")
+def killchain_graph(session_id: str | None = Query(None), demo: bool = Query(False),
+                    start: str | None = Query(None), goal: str | None = Query(None)) -> dict[str, Any]:
+    """The merged three-lane kill-chain graph + the computed route from an owned foothold to the
+    objective, with each hop's technique. Read-only — nothing runs."""
+    graph = _killchain_graph_for(session_id, demo)
+    return kc_service.graph_payload(graph, start, goal, _killchain_kb_grounder)
+
+
+@app.post("/killchain/propose")
+def killchain_propose(req: KillchainProposeIn) -> dict[str, Any]:
+    """Propose the NEXT edge to take across the chain. Executes NOTHING — returns a proposal the
+    human reviews and explicitly approves (a seam step → POST /cockpit/exec; a within-lane step → its
+    own :cloud / :ad-graph view)."""
+    graph = _killchain_graph_for(req.session_id, req.demo)
+    scope_ctx = _loop_scope_context(req.engagement_id) if req.engagement_id else None
+    try:
+        return kc_service.propose_payload(
+            graph, req.owned, req.traversed, req.goal, llm.load_config(),
+            _killchain_kb_grounder, scope_ctx, req.avoid, engagement=bool(req.engagement_id),
+        )
+    except kc_service.KillchainError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
+    except llm.LLMError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.post("/killchain/advance")
+def killchain_advance(req: KillchainAdvanceIn) -> dict[str, Any]:
+    """Record that a hop SUCCEEDED and advance the chain. A cross-domain (runnable) hop advances ONLY
+    on an approved, exit-0 run (evidence, not a claim); a within-lane hop advances on the operator's
+    word (it was approved in its own view). Executes nothing."""
+    from cockpit import runstore
+
+    graph = _killchain_graph_for(req.session_id, req.demo)
+    try:
+        out = kc_service.advance_step(
+            graph, owned=req.owned, traversed=req.traversed, source=req.source, target=req.target,
+            kind=req.kind, run_id=req.run_id, run_lookup=runstore.get_run,
+        )
+    except kc_service.KillchainError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
+    # The kill-chain STEP lands as a Finding in engagement state (mirrors :cloud / :ad-graph).
+    if req.session_id:
+        try:
+            edge = out["proposal"]["edge"]
+            state_store.upsert_findings([Finding(
+                session_id=req.session_id,
+                title=f"Kill-chain step: {edge['kind']} ({edge['domain_from']}→{edge['domain_to']})",
+                severity="high",
+                target=edge["target_label"],
+                tool="killchain", reference=req.run_id or "within-lane",
+                evidence=f"{edge['source_label']} --{edge['kind']}--> {edge['target_label']} "
+                         f"(run {req.run_id or 'n/a'})",
+                source_run_id=req.run_id,
+            )])
+        except Exception:  # noqa: BLE001 - finding is best-effort
+            pass
+    return out

@@ -135,6 +135,9 @@ export function CockpitView() {
           <Link href="/cockpit/cloud" className="hp-cv-adlink">
             ☁️ Cloud IAM privesc graph — ScoutSuite/Prowler → route to admin →
           </Link>
+          <Link href="/cockpit/killchain" className="hp-cv-adlink">
+            ⛓️ cross-domain kill-chain — web → cloud → on-prem AD, stitched to Domain Admin →
+          </Link>
           <Link href="/cockpit/session" className="hp-cv-adlink">
             ⌁ live session — catch a shell and drive it by hand →
           </Link>

@@ -64,6 +64,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | 🎫 **Unconstrained delegation + tickets** | `unconstraineddelegation` → a routable `TrustedForDelegation` edge (own the host, coerce a DC, capture its TGT, DCSync) → Domain Admin; **golden / silver ticket forging** as propose-only persistence, offered only once you hold the secret and never a step on the route. |
 | ☁️ **Cloud IAM privesc** | ScoutSuite/Prowler/pacu/cloudfox → typed IAM graph → route to an admin/owner identity across AWS/Azure/GCP; the agent picks an edge, you approve every command. |
 | 🌉 **Web SSRF → cloud creds** | A captured IMDS response (from the repeater, a nuclei hit, or an OOB callback) → an **owned** cloud principal seeded into the IAM graph → the privesc walk starts from the identity you just stole. |
+| ⛓️ **Cross-domain kill-chain** | The capstone: **three swim-lanes** (web → cloud → on-prem AD) stitched into one routed chain by the cross-domain seams (SSRF→cloud metadata, cloud secret→AD credential, web RCE→host). The agent picks an edge, never a command — a seam crossing runs through the gated executor, a within-lane hop in its own `:cloud`/`:ad-graph` view. |
 | 🔑 **Credential attack** | Spray captured/OSINT creds, crack captured hashes — one approval per job; secrets stay in loot files, a hit lights the AD graph. |
 | 📡 **C2 & tunnels** | Sliver implants, DNS tunnels, pivots, a public redirector — all gated. |
 | 🛡️ **Purple-team view** | The defender's-eye footprint of every command, with an honest OPSEC channel. |
@@ -334,6 +335,20 @@ The bridge **executes nothing** — the request that actually touched IMDS ran t
 <p align="center">
   <img src="assets/screenshots/35-cloud-imds.png" alt="The Seed-from-SSRF/IMDS panel on the cloud graph: a captured synthetic AWS IMDS credentials body is pasted in, and the parsed result shows an OWNED ci-deployer principal tagged 'via ssrf-imds', matched onto an enumerated node, with the secret sent to the vault and a high-severity finding recorded; below it the route now runs 1 hop from the seeded ci-deployer to the break-glass-admin role" width="90%">
 </p>
+
+---
+
+## ⛓️ Cross-domain kill-chain graph
+
+The **capstone** over the three attack-path graphs. HackPit maps the web foothold, the cloud IAM graph, and the on-prem AD graph *separately* — **`:killchain`** stitches them into **one routed chain**, so a foothold in one lane routes to a high-value target in another. It is a **read-and-stitch overlay**: it reads each graph's public output and **executes nothing**, and it imports neither the cloud nor the AD graph package (they stay decoupled — the join lives in `main.py`). What it adds is the small, new catalog of **cross-domain seams** the lanes are joined by — `SsrfToImds` (web SSRF → cloud metadata creds), `NodeToCloud` (a compute/K8s node → its instance role), `WebToHost` (web RCE → a domain-joined host), `CloudToOnprem` (a cloud secret reused as an AD credential, or a sync-account / RunCommand pivot), `OnpremToCloud` (an AD-synced identity / service-principal cert / SYSVOL creds → the tenant) — each carrying its ATT&CK technique and, for the crossing itself, a KB-grounded-or-catalog command.
+
+The screen renders **three swim-lanes** (web / cloud / on-prem) with the stitched path lit across them — each route node sits in its lane at its step column, so the path visibly descends through the lanes as it advances, and a cross-domain seam is drawn bright where a within-lane hop is dim. Exactly like the two per-lane graphs, the agent **picks an edge to abuse (an index into the real frontier), never authors a command**: a **cross-domain seam** resolves to a crossing command you approve through the same gated executor every cockpit command uses (with the defender's-eye ATT&CK/detection disclosure beside it), and a **within-lane hop defers to its own `:cloud` / `:ad-graph` view** — so there is one command catalog per abuse and no drifting copy. Advancing the chain requires a run that was actually approved and exited 0 for a seam hop, checked server-side; each step lands as a finding.
+
+<p align="center">
+  <img src="assets/screenshots/41-killchain.png" alt="The cross-domain kill-chain graph — three swim-lanes (web, cloud, on-prem) with a synthetic chain lit across them: a web SSRF finding crosses the SsrfToImds seam into the cloud ci-deployer role, reads the app/prod secret, crosses the CloudToOnprem seam to the on-prem SVC-SQL user, then GenericAll → BACKUPADMIN → MemberOf → Domain Admins; the agent-proposes-an-edge panel and a per-hop technique drawer sit above, with cross-domain seams marked in pink" width="90%">
+</p>
+
+> No live data needed to see it work: the sample stitches a **synthetic** web→cloud→on-prem chain (no real host, account or domain) to Domain Admin across two cross-domain seams. Live lanes wire in from `:recon`/`:proxy` (web), `:cloud`, and `:ad-graph` as an engagement fills them — the overlay renders with whatever exists.
 
 > All demo data is **synthetic** — the pasted IMDS body carries a fake account id, ARN and token, and the seeded `ci-deployer` role matches the synthetic sample account so the 1-hop route to the admin role lights up. Real SSRF captures wire in exactly the same way.
 

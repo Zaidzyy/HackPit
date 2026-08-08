@@ -9910,3 +9910,183 @@ button.hp-tn-start:disabled, button.hp-tn-destroy:disabled { opacity: 0.45; curs
   .hp-wf-grid { grid-template-columns: 1fr; }
   .hp-wf-cols { grid-template-columns: 1fr; }
 }
+
+/* ===================================================================== */
+/* CROSS-DOMAIN KILL-CHAIN (:killchain) — three swim-lanes with the      */
+/* stitched path lit across them. Per-lane accents: web=violet,          */
+/* cloud=cyan, on-prem=amber; a cross-domain SEAM is bright pink.        */
+/* ===================================================================== */
+.hp-kc { display: flex; flex-direction: column; gap: 16px; }
+
+.hp-kc-web { --kc-lane: 180, 140, 255; }     /* violet  */
+.hp-kc-cloud { --kc-lane: 98, 182, 239; }    /* cyan    */
+.hp-kc-onprem { --kc-lane: 240, 178, 82; }   /* amber   */
+.hp-kc-seam-c { --kc-seam: 255, 94, 156; }   /* pink    */
+
+/* summary header */
+.hp-kc-summary {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+  flex-wrap: wrap;
+}
+.hp-kc-stats { display: flex; gap: 10px; flex-wrap: wrap; }
+.hp-kc-stat {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 11px; color: var(--dim);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; white-space: nowrap;
+}
+.hp-kc-stat b { color: var(--white); }
+
+/* the swim-lane board */
+.hp-kc-board {
+  display: flex; flex-direction: column; gap: 8px;
+  border: 1px solid var(--border); border-radius: 12px; padding: 12px;
+  background: rgba(12, 14, 20, 0.7); overflow-x: auto;
+}
+.hp-kc-lanerow {
+  display: grid; grid-template-columns: 116px 1fr; align-items: stretch; gap: 10px;
+  border-radius: 10px; padding: 8px;
+  background: rgba(var(--kc-lane), 0.05);
+  border: 1px solid rgba(var(--kc-lane), 0.18);
+  min-width: 640px;
+}
+.hp-kc-lanerow.is-web { --kc-lane: 180, 140, 255; }
+.hp-kc-lanerow.is-cloud { --kc-lane: 98, 182, 239; }
+.hp-kc-lanerow.is-onprem { --kc-lane: 240, 178, 82; }
+.hp-kc-lanelabel {
+  display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  padding-right: 10px; border-right: 1px solid rgba(var(--kc-lane), 0.25);
+}
+.hp-kc-lanelabel-name {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 13px; font-weight: 600;
+  color: rgb(var(--kc-lane)); text-transform: lowercase;
+}
+.hp-kc-lanelabel-kicker {
+  font-size: 9.5px; letter-spacing: 0.3px; text-transform: uppercase; color: var(--dim);
+}
+.hp-kc-track { display: grid; align-items: center; gap: 6px; }
+.hp-kc-cell {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  min-height: 84px; justify-content: center;
+}
+.hp-kc-cell.is-empty { position: relative; }
+/* a faint spine so the eye follows the column even where a lane has no node */
+.hp-kc-cell.is-empty::before {
+  content: ""; width: 2px; height: 100%; border-radius: 2px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* the incoming-edge label (a button) sitting above each route node */
+.hp-kc-edgelabel {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 10px;
+  color: var(--dim); background: none; border: 1px solid transparent; border-radius: 6px;
+  padding: 1px 6px; cursor: pointer; white-space: nowrap; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.hp-kc-edgelabel:hover, .hp-kc-edgelabel.is-open { color: var(--white); border-color: var(--border); }
+.hp-kc-edgelabel.is-seam {
+  color: rgb(255, 94, 156); border-color: rgba(255, 94, 156, 0.45);
+  background: rgba(255, 94, 156, 0.08); font-weight: 600;
+}
+.hp-kc-edgelabel.is-done { color: #8fe0ae; border-color: rgba(95, 208, 138, 0.4); }
+.hp-kc-edgelabel.is-active {
+  color: #ffd166; border-color: rgba(255, 209, 102, 0.5);
+  animation: kcPulse 1s ease-in-out infinite;
+}
+@keyframes kcPulse { 0%,100% { opacity: 0.6; } 50% { opacity: 1; } }
+
+/* a route node card */
+.hp-kc-node {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  min-width: 96px; max-width: 132px; padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 10px;
+  background: rgba(20, 22, 28, 0.92); position: relative;
+}
+.hp-kc-node.is-owned { border-color: rgba(95, 208, 138, 0.6); }
+.hp-kc-node.is-hv, .hp-kc-node.is-target { border-color: rgba(240, 82, 82, 0.6); }
+.hp-kc-node.is-target { box-shadow: 0 0 22px rgba(240, 82, 82, 0.25); }
+.hp-kc-node-icon { font-size: 19px; line-height: 1; }
+.hp-kc-node-label {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 10.5px; color: var(--white);
+  max-width: 112px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hp-kc-node-tag {
+  font-size: 9px; letter-spacing: 0.3px; text-transform: uppercase; color: #8fe0ae;
+  border: 1px solid rgba(95, 208, 138, 0.4); border-radius: 4px; padding: 0 4px;
+}
+.hp-kc-node-tag.is-target { color: #ff9a86; border-color: rgba(240, 82, 82, 0.45); }
+
+/* orchestrator panel */
+.hp-kc-orch {
+  border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+  background: rgba(16, 18, 24, 0.6); display: flex; flex-direction: column; gap: 8px;
+}
+.hp-kc-orch-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.hp-kc-orch-title {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12px; color: var(--white);
+}
+.hp-kc-orch-note { font-size: 12px; color: var(--dim); line-height: 1.5; margin: 0; }
+.hp-kc-orch-pick { font-size: 12.5px; color: var(--white); line-height: 1.5; margin: 0; }
+
+/* seam / lane chips */
+.hp-kc-seamchip {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 10px;
+  color: rgb(255, 94, 156); border: 1px solid rgba(255, 94, 156, 0.45);
+  background: rgba(255, 94, 156, 0.08); border-radius: 5px; padding: 1px 6px; white-space: nowrap;
+}
+.hp-kc-lanechip {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 10px; color: var(--dim);
+  border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; white-space: nowrap;
+}
+.hp-kc-attackbadge {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 10px; color: var(--dim);
+  border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px;
+}
+
+.hp-kc-out { margin-top: 2px; }
+
+/* a seam crossing gets a pink-edged drawer */
+.hp-kc-drawer-seam { border-color: rgba(255, 94, 156, 0.4) !important; }
+
+/* within-lane hop: defer to the lane's own view */
+.hp-kc-laneview {
+  display: flex; flex-direction: column; gap: 10px; align-items: flex-start;
+  padding: 12px; border: 1px dashed var(--border); border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.hp-kc-laneview-note { font-size: 12.5px; color: var(--dim); line-height: 1.6; margin: 0; }
+.hp-kc-laneview-note b { color: var(--white); }
+.hp-kc-laneview-link { text-decoration: none; }
+
+/* lane overview — every node in each lane */
+.hp-kc-overview {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+}
+.hp-kc-lanecard {
+  border: 1px solid rgba(var(--kc-lane), 0.25); border-radius: 10px; padding: 10px 12px;
+  background: rgba(var(--kc-lane), 0.05); display: flex; flex-direction: column; gap: 8px;
+}
+.hp-kc-lanecard.is-web { --kc-lane: 180, 140, 255; }
+.hp-kc-lanecard.is-cloud { --kc-lane: 98, 182, 239; }
+.hp-kc-lanecard.is-onprem { --kc-lane: 240, 178, 82; }
+.hp-kc-lanecard-head { display: flex; justify-content: space-between; align-items: center; }
+.hp-kc-lanecard-name {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 12px; font-weight: 600;
+  color: rgb(var(--kc-lane)); text-transform: lowercase;
+}
+.hp-kc-lanecard-count {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 11px; color: var(--dim);
+  border: 1px solid rgba(var(--kc-lane), 0.3); border-radius: 10px; padding: 0 7px;
+}
+.hp-kc-lanecard-nodes { display: flex; flex-wrap: wrap; gap: 5px; }
+.hp-kc-chip {
+  font-family: var(--font-jetbrains-mono), monospace; font-size: 10px; color: var(--white);
+  border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 5px; padding: 2px 6px;
+  background: rgba(20, 22, 28, 0.8); white-space: nowrap;
+}
+.hp-kc-chip.is-owned { border-color: rgba(95, 208, 138, 0.5); }
+.hp-kc-chip.is-hv { border-color: rgba(240, 82, 82, 0.5); }
+.hp-kc-chip.is-empty { color: var(--dim); border-style: dashed; }
+
+@media (max-width: 900px) {
+  .hp-kc-overview { grid-template-columns: 1fr; }
+  .hp-kc-summary { flex-direction: column; }
+}

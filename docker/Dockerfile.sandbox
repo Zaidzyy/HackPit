@@ -1086,6 +1086,49 @@ RUN set -eu; \
     command -v h2csmuggler >/dev/null; \
     h2csmuggler -h >/dev/null 2>&1 || true
 
+# --- 9l. web-cache-poisoning / cache-deception prober -------------------------
+# The engine the :cache job invokes as ONE approve-each tool pass:
+# `docker exec -i <open sandbox> cache-probe --job-stdin` with the whole request + candidate-input
+# set as JSON on stdin. It is a small in-repo client (like race-singlepacket / smuggle-probe) so the
+# GATED job has a headless engine with a stable JSON contract. It uses ONLY the Python stdlib (json,
+# urllib, ssl, re) — no venv, no third-party deps — so the wrapper execs the system python3 directly.
+# `--selftest` is the smoke test — `command -v` alone is not one (build #4's lesson), so the layer
+# FAILS here if the engine cannot even import.
+COPY cache_probe.py /opt/hackpit/cache_probe.py
+RUN set -eu; \
+    chmod 0644 /opt/hackpit/cache_probe.py; \
+    printf '#!/bin/sh\nexec python3 /opt/hackpit/cache_probe.py "$@"\n' \
+        > /usr/local/bin/cache-probe; \
+    chmod 0755 /usr/local/bin/cache-probe; \
+    chmod -R a+rX /opt/hackpit; \
+    command -v cache-probe >/dev/null; \
+    cache-probe --selftest | grep -qi 'cache-probe ok'
+
+# --- 9m. wcvs (Hackmanit Web-Cache-Vulnerability-Scanner) — Go ----------------
+# The standard external cache-poisoning scanner the arsenal names, installed for MANUAL use in
+# :kali / :terminal. No kali package exists, so it is built from source. WCVS's recent deps
+# (fasthttp v1.65, golang.org/x/net v0.43) need a CURRENT Go — the pinned reconFTW go1.23.4 CANNOT
+# build them (it fails compiling the newer stdlib: "undefined: goarch.PtrBits" / "abi.MapGroupSlots").
+# So this fetches the LATEST Go (the gosec layer's proven `go.dev/VERSION` pattern) into a THROWAWAY
+# dir — never /usr/local/go, so the web3 layer's toolchain is left untouched — builds, symlinks the
+# module-named binary to the short name `wcvs`, then removes the temp toolchain + caches so only the
+# binary ships. Smoke-checked so a bad build fails the layer here.
+RUN set -eu; \
+    GO_VER="$(curl -fsSL https://go.dev/VERSION?m=text | head -1)"; \
+    [ -n "$GO_VER" ] || { echo "wcvs: could not resolve the latest Go version"; exit 1; }; \
+    curl -fsSL "https://go.dev/dl/${GO_VER}.linux-amd64.tar.gz" -o /tmp/wcvsgo.tgz; \
+    mkdir -p /opt/wcvs-go; \
+    tar -C /opt/wcvs-go -xzf /tmp/wcvsgo.tgz; \
+    rm /tmp/wcvsgo.tgz; \
+    export PATH="/opt/wcvs-go/go/bin:$PATH" GOBIN=/usr/local/bin GOFLAGS=-buildvcs=false GOTOOLCHAIN=auto; \
+    go install github.com/Hackmanit/Web-Cache-Vulnerability-Scanner@latest; \
+    if [ -x /usr/local/bin/Web-Cache-Vulnerability-Scanner ]; then \
+        ln -sfn /usr/local/bin/Web-Cache-Vulnerability-Scanner /usr/local/bin/wcvs; \
+    fi; \
+    rm -rf /opt/wcvs-go /root/go /root/.cache/go-build; \
+    command -v wcvs >/dev/null; \
+    wcvs --help >/dev/null 2>&1 || wcvs -h >/dev/null 2>&1 || true
+
 # --- 10. Strip file capabilities (REQUIRED — do not remove) -------------------
 # Kali ships a few binaries with FILE capabilities so unprivileged desktop users get raw
 # sockets: /usr/lib/nmap/nmap (cap_net_raw,cap_net_admin,cap_net_bind_service) and

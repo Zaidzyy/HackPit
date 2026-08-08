@@ -47,6 +47,7 @@ import search as kb_search  # noqa: E402  (pipeline/search.py)
 from schema import Code, Entry  # noqa: E402  (pipeline/schema.py — canonical models)
 
 # generative layer (backend/llm.py + backend/attack_path.py) — provider-swappable
+import alternatives  # noqa: E402  (backend/alternatives.py — second-opinion engine, executes nothing)
 import attack_path  # noqa: E402
 import chat as chat_assistant  # noqa: E402  (backend/chat.py — engagement assistant)
 import llm  # noqa: E402
@@ -1261,6 +1262,49 @@ class AttackPathOut(BaseModel):
     provider: str
 
 
+# ---- second-opinion (dual-candidate) ------------------------------------- #
+class AltVerdict(BaseModel):
+    recommendation: str = Field(
+        description='"primary" | "alternative" | "situational" — ADVISORY only, never a gate.'
+    )
+    summary: str = Field(default="", description="Which candidate is better and why. Prose only.")
+    factors: list[str] = Field(default_factory=list, description="Optional tradeoff bullets.")
+    model_used: str = ""
+    provider: str = ""
+
+
+class Alternative(BaseModel):
+    kind: str = Field(
+        description='"grounded" (verbatim KB entry) | "ai_suggested" (model, unverified).'
+    )
+    entry_id: str = Field(
+        default="", description="Cited KB entry — set + real when grounded, else empty."
+    )
+    entry_title: str = ""
+    title: str
+    commands: list[PlannedCode] = Field(default_factory=list)
+    foreign_refs: list[str] | None = Field(
+        default=None,
+        description="Foreign hosts still named after scope adaptation — the same annotation a "
+        "primary step carries. Null when the command names only in-scope hosts. Declared here "
+        "so the response model does not strip it (the per-command-fact three-files trap).",
+    )
+
+
+class AlternativeOut(BaseModel):
+    alternative: Alternative | None = None
+    verdict: AltVerdict
+
+
+class AltStepIn(BaseModel):
+    goal: str
+    target: str | None = None
+    scope_text: str | None = None
+    step_title: str = ""
+    step_cmd: str = ""
+    step_entry_id: str = ""
+
+
 # ---- engagement sessions ------------------------------------------------- #
 class SessionCreateIn(BaseModel):
     goal: str = Field(min_length=1)
@@ -2086,6 +2130,24 @@ def attack_path_compose(req: AttackPathIn = Body(...)) -> dict[str, Any]:
     except llm.LLMError as e:
         # Ollama offline / no key / unparseable output / nothing grounded.
         raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/attack-path/alternative", response_model=AlternativeOut)
+def attack_path_alternative(req: AltStepIn = Body(...)) -> dict[str, Any]:
+    """On-demand SECOND OPINION for one attack-path step. Returns one alternative candidate
+    (a grounded KB technique, or an AI-tuned command marked unverified) plus an advisory
+    verdict. EXECUTES NOTHING; the primary step is untouched. Soft-fails (alternative null)
+    when the LLM is unreachable, so the plan view never breaks."""
+    goal = req.goal.strip()
+    if not goal:
+        raise HTTPException(status_code=400, detail="goal is required")
+    return alternatives.best_alternative(
+        {"title": req.step_title, "cmd": req.step_cmd, "entry_id": req.step_entry_id},
+        goal=goal, target=req.target, scope=req.scope_text,
+        by_id=STATE.by_id,
+        # the engine's search_fn contract is one-arg; _resilient_search needs (q, top, mode)
+        search_fn=lambda q: _resilient_search(q, 8, "hybrid"),
+    )
 
 
 # --------------------------------------------------------------------------- #

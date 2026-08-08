@@ -5691,6 +5691,117 @@
           "what": "N — how many synchronized copies to fire"
         }
       ]
+    },
+    {
+      "name": "smuggle-probe",
+      "category": "web",
+      "purpose": "In-repo HTTP request-smuggling / desync prober — the :smuggle job's engine. Timing-differential DETECTION (safe, self-contained) by default; socket-poisoning CONFIRMATION as a separate approve-each. Probes CL.TE / TE.CL / CL.CL / TE.TE / CL.0 and the HTTP/2-downgrade H2.CL / H2.TE / H2.0 variants.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "HTTP request smuggling",
+        "CL.TE / TE.CL / TE.TE desync",
+        "HTTP/2 downgrade desync",
+        "timing-differential detection",
+        "response queue / cache poisoning"
+      ],
+      "docs": "https://portswigger.net/web-security/request-smuggling",
+      "templates": [
+        {
+          "label": "detect + confirm (:smuggle job, stdin)",
+          "template": "smuggle-probe --job-stdin",
+          "note": "The whole request (URL, headers, body, mutation set, stage) is delivered as JSON on stdin — no request byte reaches a shell. This is how the :smuggle job invokes it. Stage 'detect' is timing-only and touches no other request; stage 'confirm' is the separately-approved socket-poisoning step."
+        },
+        {
+          "label": "timing-differential detection (explicit)",
+          "template": "smuggle-probe -u <url> -X POST --stage detect --mutations CL.TE,TE.CL,CL.0",
+          "note": "For each mutation, times an ambiguous request against a baseline; a large delay means a front-end/back-end framing split. Self-contained — safe by default."
+        },
+        {
+          "label": "socket-poisoning confirmation (co-tenant risk)",
+          "template": "smuggle-probe -u <url> -X POST --stage confirm --mutations CL.TE",
+          "note": "Smuggles a partial request then sends a normal one on the same connection to observe the poisoned response. CAN AFFECT CO-TENANT TRAFFIC on the shared connection — only on an authorised target."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--job-stdin",
+          "what": "read the whole request + mutation set as a JSON job on stdin (how HackPit invokes it)"
+        },
+        {
+          "flag": "--stage",
+          "what": "detect (safe timing-differential, default) or confirm (socket poisoning, co-tenant risk)"
+        },
+        {
+          "flag": "--mutations",
+          "what": "comma-separated: CL.TE,TE.CL,CL.CL,TE.TE,CL.0,H2.CL,H2.TE,H2.0"
+        }
+      ]
+    },
+    {
+      "name": "smuggler.py",
+      "aliases": ["smuggler"],
+      "category": "web",
+      "purpose": "defparam's CL/TE request-smuggling mutation prober — the standard headless smuggler. Walks a large set of Content-Length / Transfer-Encoding permutations against a target and reports which desync.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "HTTP request smuggling",
+        "CL.TE / TE.CL / TE.TE desync",
+        "header obfuscation"
+      ],
+      "docs": "https://github.com/defparam/smuggler",
+      "templates": [
+        {
+          "label": "smuggle scan a URL",
+          "template": "smuggler.py -u <url>",
+          "note": "Runs the built-in mutation set; a DISCONNECT/TIMEOUT on a payload is the desync signal. Its transcript can be pasted back into :smuggle to land in the same verdict table."
+        },
+        {
+          "label": "smuggle scan with a config",
+          "template": "smuggler.py -u <url> -c default.py",
+          "note": "Pick a mutation config; 'default.py' is the standard permutation set."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-u",
+          "what": "target URL"
+        },
+        {
+          "flag": "-c",
+          "what": "mutation config file (default.py / doubles.py / exhaustive.py)"
+        }
+      ]
+    },
+    {
+      "name": "h2csmuggler",
+      "category": "web",
+      "purpose": "assetnote/BishopFox h2c-upgrade smuggling client — tunnels requests past an edge proxy by upgrading a cleartext HTTP/2 (h2c) connection the intermediary mishandles.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "h2c upgrade smuggling",
+        "HTTP/2 cleartext desync",
+        "access-control bypass"
+      ],
+      "docs": "https://github.com/BishopFox/h2csmuggler",
+      "templates": [
+        {
+          "label": "check for h2c smuggling",
+          "template": "h2csmuggler -x <url> <target>",
+          "note": "Attempts the h2c upgrade through the proxy at -x and, if it succeeds, sends the smuggled request to the target path/origin."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "-x",
+          "what": "the front-end proxy URL to attempt the h2c upgrade against"
+        }
+      ]
     }
   ]
 }

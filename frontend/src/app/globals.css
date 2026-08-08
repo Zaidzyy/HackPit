@@ -8484,6 +8484,7 @@ a.hp-card {
 .hp-tn-row { border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
 .hp-tn-row.is-down { opacity: 0.55; }
 .hp-tn-rowtop { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hp-tn-rowbody { font-size: 12px; color: var(--dim); line-height: 1.55; margin: 6px 0 0; }
 .hp-tn-kind {
   font-family: var(--font-jetbrains-mono), monospace; font-size: 12px; color: var(--accent);
   border: 1px solid var(--accent-line); border-radius: 4px; padding: 1px 7px;

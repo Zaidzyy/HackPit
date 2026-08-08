@@ -55,6 +55,7 @@ from . import graphql_zap as graphql_zap_mod
 from . import intercept as intercept_mod
 from . import intruder as intruder_mod
 from . import race as race_mod
+from . import smuggle as smuggle_mod
 from . import nuclei as nuclei_mod
 from . import recon as recon_mod
 from . import proposals as proposals_mod
@@ -1347,6 +1348,137 @@ def stop_race_job(job_id: str) -> race_mod.RaceJob:
     job = race_mod.stop(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail={"reason": f"no race job {job_id!r}"})
+    return job
+
+
+# --------------------------------------------------------------------------- #
+# THE REQUEST-SMUGGLING / DESYNC DETECTOR (smuggle-probe build) — one probe per mutation from one
+# press. The FE/BE parsing split the proxy already reasons about, made testable.
+#
+# *** IT IS GATED EXACTLY LIKE THE SCANNER / RACE: THE FOUR GATES, NO NEW ONES. ***
+# DETECTION is safe-by-default (timing-differential, self-contained — no co-tenant impact) and is
+# the POST /smuggle path. CONFIRMATION (socket poisoning, which CAN affect co-tenant traffic) is a
+# SEPARATE approve-each at POST /smuggle/confirm that carries a plain-language co-tenant warning —
+# still approve-each, NO new gate class. Every probe rides argv-only from inside the hardcoded open
+# sandbox, scope-checked on the wire; stop is the ungated panic button.
+# --------------------------------------------------------------------------- #
+@router.get("/smuggle/status")
+def get_smuggle_status() -> dict[str, Any]:
+    """Sandbox availability + running-job count — drives the UI banner. Read-only."""
+    return smuggle_mod.status()
+
+
+@router.get("/smuggle/catalogue")
+def smuggle_catalogue() -> dict[str, Any]:
+    """The pickable mutation set, the default (safe) subset, and the co-tenant warning text the
+    confirm stage shows — one source of truth so the UI does not carry a second copy. Read-only."""
+    return {
+        "mutations": list(smuggle_mod.MUTATIONS),
+        "default_mutations": list(smuggle_mod.DEFAULT_MUTATIONS),
+        "stages": list(smuggle_mod.STAGES),
+        "co_tenant_warning": smuggle_mod.CO_TENANT_WARNING,
+        "susceptible_delta_ms": smuggle_mod.SUSCEPTIBLE_DELTA_MS,
+    }
+
+
+def _smuggle_preview(req: smuggle_mod.SmuggleRequest) -> dict[str, Any]:
+    """WHAT WOULD BE PROBED and WHETHER THE GATE WOULD REFUSE IT — without probing anything.
+
+    Both halves come from the same functions the start path uses (`plan`, `validate`,
+    `smuggle_argv_for`), so a preview cannot drift from the run. The co-tenant warning is included
+    on the confirm stage so it is shown BEFORE anything runs.
+    """
+    stage, mutations, warnings = smuggle_mod.plan(req)
+    verdict = smuggle_mod.validate(req)
+    return {
+        "argv": smuggle_mod.smuggle_argv_for(req),
+        "stage": stage,
+        "mutations": mutations,
+        "warnings": warnings,
+        "co_tenant_warning": smuggle_mod.CO_TENANT_WARNING if stage == "confirm" else "",
+        "gate": None if verdict is None else {
+            "gate": verdict.gate, "reason": verdict.reason,
+            "dangerous_flags": list(verdict.dangerous_flags or []),
+        },
+    }
+
+
+@router.post("/smuggle/preview")
+def smuggle_preview(req: smuggle_mod.SmuggleRequest) -> dict[str, Any]:
+    """The detect/confirm preview — the argv, the mutations, the gate verdict, and (confirm) the
+    co-tenant warning. Probes nothing."""
+    return _smuggle_preview(req)
+
+
+@router.post("/smuggle", response_model=smuggle_mod.SmuggleJob)
+def start_smuggle(req: smuggle_mod.SmuggleRequest) -> smuggle_mod.SmuggleJob:
+    """DETECTION — timing-differential susceptibility sweep as ONE approved job. GATED, then it runs.
+
+    *** THIS IS THE SAFE, SELF-CONTAINED PATH. *** Each mutation's probe hangs a *back-end* on bytes
+    that never come; no other user's request is touched. The stage is PINNED to detect here so this
+    endpoint can never run the co-tenant-affecting confirmation — that is a separate route.
+    `executor.validate_request` runs against the equivalent `smuggle-probe` command BEFORE anything
+    spawns, so an unapproved or off-target job probes nothing.
+
+    A SAFETY refusal is **403** naming the gate; an availability/input problem is **409**.
+    """
+    req = req.model_copy(update={"stage": "detect"})
+    try:
+        return smuggle_mod.start(req)
+    except smuggle_mod.SmuggleRefused as exc:
+        code = 409 if exc.gate in {"unavailable", "input"} else 403
+        raise HTTPException(status_code=code, detail={
+            "gate": exc.gate, "reason": exc.reason, "dangerous_flags": exc.dangerous_flags,
+        })
+
+
+@router.post("/smuggle/confirm", response_model=smuggle_mod.SmuggleJob)
+def start_smuggle_confirm(req: smuggle_mod.SmuggleRequest) -> smuggle_mod.SmuggleJob:
+    """CONFIRMATION — socket-poisoning confirmation as a SEPARATE approve-each. GATED, then it runs.
+
+    *** THIS ONE CAN AFFECT CO-TENANT REQUESTS. *** It smuggles a partial request onto a shared
+    connection, so the next request on that connection — possibly another user's — can get the
+    poisoned response. That is why it is its OWN approval, distinct from detection, and why the
+    co-tenant warning (`smuggle.CO_TENANT_WARNING`) is surfaced on this route's preview and job. It
+    is still approve-each — the SAME four gates, NO new gate class. The stage is PINNED to confirm
+    here, so a confirmation cannot happen without an operator deliberately hitting this endpoint
+    with its own approval set.
+
+    A SAFETY refusal is **403**; an availability/input problem is **409**.
+    """
+    req = req.model_copy(update={"stage": "confirm"})
+    try:
+        return smuggle_mod.start(req)
+    except smuggle_mod.SmuggleRefused as exc:
+        code = 409 if exc.gate in {"unavailable", "input"} else 403
+        raise HTTPException(status_code=code, detail={
+            "gate": exc.gate, "reason": exc.reason, "dangerous_flags": exc.dangerous_flags,
+        })
+
+
+@router.get("/smuggle", response_model=list[smuggle_mod.SmuggleJob])
+def list_smuggle_jobs(
+    session_id: str | None = Query(None),
+) -> list[smuggle_mod.SmuggleJob]:
+    """Every smuggling job, newest first. Read-only, ungated — the results matrix polls this."""
+    return smuggle_mod.list_jobs(session_id)
+
+
+@router.get("/smuggle/{job_id}", response_model=smuggle_mod.SmuggleJob)
+def get_smuggle_job(job_id: str) -> smuggle_mod.SmuggleJob:
+    """One job with its per-mutation verdicts. Read-only, ungated."""
+    job = smuggle_mod.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no smuggle job {job_id!r}"})
+    return job
+
+
+@router.delete("/smuggle/{job_id}", response_model=smuggle_mod.SmuggleJob)
+def stop_smuggle_job(job_id: str) -> smuggle_mod.SmuggleJob:
+    """Stop an in-flight sweep. NOT GATED — the panic button, exactly like `stop_scan`."""
+    job = smuggle_mod.stop(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no smuggle job {job_id!r}"})
     return job
 
 

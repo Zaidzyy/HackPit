@@ -242,6 +242,17 @@ _MUST_NOT_FIRE = frozenset({
     # the bare name stays clean or a confirm would fire on every benign coupon-race and stop
     # meaning anything.
     "race-singlepacket",
+    # request-smuggling / desync prober (smuggle-probe build) + the external CL/TE and h2c tools it
+    # sits alongside (defparam's smuggler.py, BishopFox's h2csmuggler). All three SEND HTTP AND READ
+    # WHAT COMES BACK — an ambiguous request and the timing / response it earns. None generates a
+    # payload, opens a shell, tunnels traffic or runs code on a remote host, which is the test this
+    # bucket is judged by; they are the same class as sqlmap / dalfox / race-singlepacket above, all
+    # clean. The red-confirm still fires on request CONTENT (a body carrying '| sh') through the
+    # heuristic; and the ONE genuinely co-tenant-affecting action — socket-poisoning CONFIRMATION —
+    # is gated as its own approve-each WITH a co-tenant warning in cockpit/smuggle.py, not by marking
+    # the bare binary dangerous (which would fire a confirm on every safe timing-only detection run
+    # and stop meaning anything — the argument this file makes for race-singlepacket four lines up).
+    "smuggle-probe", "smuggler.py", "smuggler", "h2csmuggler",
     # GraphQL tooling (build #20 item 6). All four SEND HTTP AND READ WHAT COMES BACK. None
     # generates or delivers a payload, opens a shell, tunnels traffic or runs code on a remote
     # host, which is the test this bucket is judged by.

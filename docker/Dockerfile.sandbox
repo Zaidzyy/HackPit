@@ -1043,6 +1043,43 @@ RUN set -eu; \
     race-singlepacket --selftest | grep -qi 'race-singlepacket ok'; \
     /opt/race/venv/bin/python3 -c 'import h2'
 
+# --- 9k. request-smuggling / desync prober + external CL/TE and h2c tools ------
+# The engine the :smuggle job invokes as ONE approve-each tool pass:
+# `docker exec -i <open sandbox> smuggle-probe --job-stdin` with the whole request + mutation set as
+# JSON on stdin. It is a small in-repo client (like race-singlepacket) so the GATED job has a
+# headless engine with a stable JSON contract; defparam's smuggler.py and BishopFox's h2csmuggler
+# are the standard external tools, installed alongside for MANUAL use in :kali / :terminal and named
+# in tools.json. HTTP/2-downgrade probing needs the `h2` framing library, so all three share ONE
+# venv (the race / jwt_tool / pwntools idiom).
+#
+# THE WRAPPERS ARE THE PRODUCT: /usr/local/bin/{smuggle-probe,smuggler.py,h2csmuggler} exec the venv
+# python against the baked/cloned scripts, so each catalog name resolves on PATH under the exact name
+# and the backend never has to know a venv path. `--selftest` is the smoke test — `command -v` alone
+# is not one (build #4's lesson), so the layer FAILS here if the engine cannot even import.
+COPY smuggle_probe.py /opt/hackpit/smuggle_probe.py
+RUN set -eu; \
+    python3 -m venv /opt/smuggle/venv; \
+    /opt/smuggle/venv/bin/pip install --no-cache-dir -q h2 hyperframe; \
+    chmod 0644 /opt/hackpit/smuggle_probe.py; \
+    printf '#!/bin/sh\nexec /opt/smuggle/venv/bin/python3 /opt/hackpit/smuggle_probe.py "$@"\n' \
+        > /usr/local/bin/smuggle-probe; \
+    chmod 0755 /usr/local/bin/smuggle-probe; \
+    git clone --depth 1 https://github.com/defparam/smuggler.git /opt/smuggle/smuggler; \
+    printf '#!/bin/sh\nexec /opt/smuggle/venv/bin/python3 /opt/smuggle/smuggler/smuggler.py "$@"\n' \
+        > /usr/local/bin/smuggler.py; \
+    chmod 0755 /usr/local/bin/smuggler.py; \
+    git clone --depth 1 https://github.com/BishopFox/h2csmuggler.git /opt/smuggle/h2csmuggler; \
+    /opt/smuggle/venv/bin/pip install --no-cache-dir -q -r /opt/smuggle/h2csmuggler/requirements.txt; \
+    printf '#!/bin/sh\nexec /opt/smuggle/venv/bin/python3 /opt/smuggle/h2csmuggler/h2csmuggler.py "$@"\n' \
+        > /usr/local/bin/h2csmuggler; \
+    chmod 0755 /usr/local/bin/h2csmuggler; \
+    chmod -R a+rX /opt/smuggle /opt/hackpit; \
+    command -v smuggle-probe >/dev/null; \
+    smuggle-probe --selftest | grep -qi 'smuggle-probe ok'; \
+    /opt/smuggle/venv/bin/python3 -c 'import h2'; \
+    command -v smuggler.py >/dev/null; \
+    command -v h2csmuggler >/dev/null
+
 # --- 10. Strip file capabilities (REQUIRED — do not remove) -------------------
 # Kali ships a few binaries with FILE capabilities so unprivileged desktop users get raw
 # sockets: /usr/lib/nmap/nmap (cap_net_raw,cap_net_admin,cap_net_bind_service) and

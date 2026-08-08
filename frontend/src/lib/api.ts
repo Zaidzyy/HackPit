@@ -2983,6 +2983,119 @@ export const stopRaceJob = (id: string, signal?: AbortSignal) =>
   delJSON<RaceJob>(`/cockpit/race/${encodeURIComponent(id)}`, signal);
 
 /* -------------------------------------------------------------------------- */
+/* REQUEST SMUGGLING / DESYNC (:smuggle) — one probe per mutation, one press.   */
+/* DETECTION is safe-by-default (timing-differential, self-contained);          */
+/* CONFIRMATION (socket poisoning) is a SEPARATE approve-each carrying a        */
+/* co-tenant warning. The same four gates, no new gate class.                   */
+/* -------------------------------------------------------------------------- */
+export type SmuggleRequest = {
+  url: string;
+  method: string;
+  headers: RepeaterHeader[];
+  body: string;
+  /** Which desync variants to probe (see MUTATIONS). Empty = the safe default set. */
+  mutations: string[];
+  /** detect (safe timing-differential, default) or confirm (socket poisoning, co-tenant risk). */
+  stage: string;
+  timeout_seconds?: number | null;
+  insecure: boolean;
+  follow_redirects: boolean;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  use_cookie_jar: boolean;
+  approved: boolean;
+  /** Demanded by the GATE when the request content warrants it, not by the form. */
+  dangerous_ack: boolean;
+};
+
+export type MutationVerdict = {
+  mutation: string;
+  susceptible: boolean;
+  baseline_ms: number;
+  probe_ms: number;
+  delta_ms: number;
+  error: string;
+  note: string;
+};
+
+export type ConfirmVerdict = {
+  mutation: string;
+  confirmed: boolean;
+  status: number | null;
+  evidence: string;
+  error: string;
+  note: string;
+};
+
+export type SmuggleJob = {
+  id: string;
+  state: string;
+  stage: string;
+  request: SmuggleRequest;
+  container: string;
+  started_at: string;
+  finished_at: string;
+  mutations: string[];
+  verdicts: MutationVerdict[];
+  confirms: ConfirmVerdict[];
+  susceptible: string[];
+  confirmed: string[];
+  co_tenant_warning: string;
+  warnings: string[];
+  scope_refusals: number;
+  finding_written: boolean;
+};
+
+export type SmugglePreview = {
+  argv: string[];
+  stage: string;
+  mutations: string[];
+  warnings: string[];
+  co_tenant_warning: string;
+  /** What the four gates WOULD say. `null` means nothing stands in the way. */
+  gate: { gate: string; reason: string; dangerous_flags: string[] } | null;
+};
+
+export type SmuggleCatalogue = {
+  mutations: string[];
+  default_mutations: string[];
+  stages: string[];
+  co_tenant_warning: string;
+  susceptible_delta_ms: number;
+};
+
+export const getSmuggleStatus = (signal?: AbortSignal) =>
+  getJSON<{ container: string; up: boolean; ready: boolean; running: number; detail: string }>(
+    "/cockpit/smuggle/status",
+    signal
+  );
+
+export const getSmuggleCatalogue = (signal?: AbortSignal) =>
+  getJSON<SmuggleCatalogue>("/cockpit/smuggle/catalogue", signal);
+
+/** What would be probed AND whether the gate would refuse it — probing nothing. */
+export const smugglePreview = (req: SmuggleRequest, signal?: AbortSignal) =>
+  postJSON<SmugglePreview>("/cockpit/smuggle/preview", req, signal);
+
+/** DETECTION — safe timing-differential sweep. Stage is pinned to detect server-side. */
+export const startSmuggle = (req: SmuggleRequest, signal?: AbortSignal) =>
+  postJSON<SmuggleJob>("/cockpit/smuggle", req, signal);
+
+/** CONFIRMATION — socket poisoning, a SEPARATE approval that can affect co-tenant traffic. */
+export const startSmuggleConfirm = (req: SmuggleRequest, signal?: AbortSignal) =>
+  postJSON<SmuggleJob>("/cockpit/smuggle/confirm", req, signal);
+
+export const listSmuggleJobs = (signal?: AbortSignal) =>
+  getJSON<SmuggleJob[]>("/cockpit/smuggle", signal);
+
+export const getSmuggleJob = (id: string, signal?: AbortSignal) =>
+  getJSON<SmuggleJob>(`/cockpit/smuggle/${encodeURIComponent(id)}`, signal);
+
+/** Stop an in-flight sweep. NOT GATED — the panic button, exactly like stopping a scan. */
+export const stopSmuggleJob = (id: string, signal?: AbortSignal) =>
+  delJSON<SmuggleJob>(`/cockpit/smuggle/${encodeURIComponent(id)}`, signal);
+
+/* -------------------------------------------------------------------------- */
 /* CREDENTIAL ATTACK (:credentials) — spray captured creds, crack captured hashes */
 /* -------------------------------------------------------------------------- */
 export type SprayRequest = {

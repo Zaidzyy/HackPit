@@ -204,6 +204,17 @@ export const SURFACE_BANDS: SurfaceBand[] = [
         desc: "Fire one request N times, synchronized — limit-overrun / TOCTOU races. One approval.",
         needsStack: true,
       },
+      // OPERATE, next to :race because it is the other FE/BE-parsing primitive: probe a target for
+      // request smuggling / desync. Detection is safe-by-default (timing-differential); confirmation
+      // is a separate approve-each with a co-tenant warning. Same four gates, needs the stack.
+      {
+        key: "smuggle",
+        icon: "⇋",
+        label: ":smuggle",
+        href: "/smuggle",
+        desc: "Probe for request smuggling / desync — safe timing detection, gated confirmation.",
+        needsStack: true,
+      },
       // OPERATE, and the payoff of the whole state model: spray captured/OSINT creds across a
       // service, or crack captured hashes with a wordlist — one approval per job, an ungated
       // stop. A hit writes a validated credential + finding into state and marks the AD node

@@ -201,6 +201,13 @@ def test_roe_scope_advisory_flags_but_never_blocks() -> None:
     import main
     from fastapi.testclient import TestClient
 
+    # This test drives a live TestClient, which does NOT run the app lifespan (deliberate — the
+    # suite stays hermetic; lifespan also spins up the OOB auto-poll daemon). Lifespan is where
+    # sessions_db.init_db() normally fires, so on a clean CI checkout (no sessions.db on disk) the
+    # `sessions` table is absent and POST /sessions raises `no such table: sessions`. Create just
+    # the one table this test needs — gov's table is already initialised at module import (line 17).
+    main.sessions_db.init_db()
+
     c = TestClient(main.app)
     path = {"phases": [{"phase": "recon", "label": "Recon",
                         "steps": [{"id": "recon-1", "title": "x", "why": "", "commands": [], "entry_id": "e"}]}]}

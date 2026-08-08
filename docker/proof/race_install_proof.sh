@@ -45,7 +45,10 @@ fi
 # --- 3. the HTTP/2 single-packet mode's framing library is really in the venv ----------------
 # h1-last-byte works without it, but the DEFAULT mode is h2-single-packet, so a missing h2 would
 # silently degrade every default run to an error row. Assert the import in the venv directly.
-if docker run --rm "$IMAGE" /opt/race/venv/bin/python3 -c 'import h2; print(h2.__version__)' >/dev/null 2>&1; then
+# NB: pass the absolute venv path INSIDE `sh -c` with a leading `exec`, not as a bare argv
+# token — Git Bash / MSYS rewrites a lone `/opt/...` argument into `C:/Program Files/Git/opt/...`
+# before docker sees it, which made this the only check that false-FAILed on Windows.
+if docker run --rm "$IMAGE" sh -c 'exec /opt/race/venv/bin/python3 -c "import h2"' >/dev/null 2>&1; then
   ok "the h2 framing library imports inside /opt/race/venv (the h2-single-packet default transport)"
 else
   bad "h2 does NOT import inside /opt/race/venv — the h2-single-packet default would error on every run"

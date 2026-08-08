@@ -1040,7 +1040,8 @@ RUN set -eu; \
     chmod 0755 /usr/local/bin/race-singlepacket; \
     chmod -R a+rX /opt/race /opt/hackpit; \
     command -v race-singlepacket >/dev/null; \
-    race-singlepacket --selftest | grep -qi 'race-singlepacket ok'
+    race-singlepacket --selftest | grep -qi 'race-singlepacket ok'; \
+    /opt/race/venv/bin/python3 -c 'import h2'
 
 # --- 10. Strip file capabilities (REQUIRED — do not remove) -------------------
 # Kali ships a few binaries with FILE capabilities so unprivileged desktop users get raw

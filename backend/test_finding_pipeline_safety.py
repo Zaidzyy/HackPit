@@ -28,11 +28,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 # *** temp DB BEFORE any connection opens (test_zap_scan_ingest house style). *** #
+# The state package spreads across store/tasks/governance, and tasks.py + governance.py each did
+# `from .store import DB_PATH` at import — capturing a *copy* of the path. Redirecting only
+# store.DB_PATH therefore leaves those two pointed at the real (gitignored) sessions.db, and
+# store.init_db() alone never creates state_tasks. On a clean CI checkout the pipeline route then
+# raised `no such table: state_tasks`. Redirect all three captured paths to the temp DB, then
+# create every state table through the package-level init (store + tasks + governance).
+import state as _engagement_state  # noqa: E402
 from state import store  # noqa: E402
+from state import governance as _gov  # noqa: E402
+from state import tasks as _tasks  # noqa: E402
 
 _TMP = Path(tempfile.mkdtemp(prefix="hackpit-fp-safety-")) / "sessions.db"
 store.DB_PATH = _TMP
-store.init_db()
+_tasks.DB_PATH = _TMP
+_gov.DB_PATH = _TMP
+_engagement_state.init_db()
 
 from fastapi.testclient import TestClient  # noqa: E402
 

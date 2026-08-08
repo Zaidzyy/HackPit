@@ -64,6 +64,11 @@ def test_default_targets_seed_from_state() -> None:
     session with nothing in state warns rather than building an empty, targetless scan."""
     from state import store
 
+    # Create the state tables if absent. Locally the gitignored sessions.db already carries them,
+    # but on a clean CI checkout store.clear() below would hit `no such table: state_hosts`. This
+    # test drives the store directly (no app lifespan runs), so it must init the schema itself.
+    store.init_db()
+
     sid = "test-nuclei-seed"
     store.clear(sid)  # idempotent across re-runs — start from a known-empty session
     # No state yet -> warns, no targets.

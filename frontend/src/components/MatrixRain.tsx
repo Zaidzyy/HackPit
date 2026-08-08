@@ -40,8 +40,10 @@ function glyphAt(col: number, row: number): string {
  *    at 60 Hz, which is free), so it does not double WaveGrid's per-frame cost
  *  - each frame clearRect()s to full transparency (never a black fade), so the
  *    WaveGrid and veil below show through untouched
- *  - the loop is paused when the tab is hidden, and a single static frame is
- *    drawn (no animation) when the user prefers reduced motion
+ *  - the loop is paused when the tab is hidden (CPU while backgrounded)
+ *
+ * The rain always animates: prefers-reduced-motion is intentionally NOT honoured
+ * here (Zaid's call — he wants motion regardless of the OS setting).
  */
 export function MatrixRain() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -61,10 +63,6 @@ export function MatrixRain() {
     let heads: number[] = []; // head row index per column
     let raf = 0;
     let last = 0;
-
-    const prefersReduced = window.matchMedia(
-      "(prefers-reduced-motion: reduce)"
-    ).matches;
 
     // Accent is cached and refreshed only when --accent actually changes (same
     // approach as WaveGrid): getComputedStyle forces a style recalc, so it must
@@ -138,7 +136,7 @@ export function MatrixRain() {
       if (document.hidden) {
         cancelAnimationFrame(raf);
         raf = 0;
-      } else if (!raf && !prefersReduced) {
+      } else if (!raf) {
         raf = requestAnimationFrame(loop);
       }
     }
@@ -147,11 +145,7 @@ export function MatrixRain() {
     window.addEventListener("resize", resize);
     document.addEventListener("visibilitychange", onVisibility);
 
-    if (prefersReduced) {
-      draw(); // one static frame, no animation
-    } else {
-      raf = requestAnimationFrame(loop);
-    }
+    raf = requestAnimationFrame(loop); // always animate
 
     return () => {
       cancelAnimationFrame(raf);

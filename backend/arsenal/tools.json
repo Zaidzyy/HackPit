@@ -5645,6 +5645,52 @@
           "note": "Signature-based recovery into <output>; the input is read read-only."
         }
       ]
+    },
+    {
+      "name": "race-singlepacket",
+      "category": "web",
+      "purpose": "Single-packet / last-byte-sync race client — fires one request N times so the copies arrive in the same instant, to hit limit-overrun / TOCTOU / coupon-reuse / one-time-token races the serial intruder cannot.",
+      "phases": [
+        "exploitation"
+      ],
+      "techniques": [
+        "race condition",
+        "HTTP/2 single-packet attack",
+        "HTTP/1.1 last-byte synchronization",
+        "TOCTOU"
+      ],
+      "docs": "https://portswigger.net/research/smashing-the-state-machine",
+      "templates": [
+        {
+          "label": "HTTP/2 single-packet race (:race job, stdin)",
+          "template": "race-singlepacket --job-stdin",
+          "note": "The whole request (URL, headers, body, mode, N) is delivered as JSON on stdin — no request byte reaches a shell. This is how the :race job invokes it."
+        },
+        {
+          "label": "HTTP/2 single-packet race (explicit)",
+          "template": "race-singlepacket -u <target> -X POST -d '<payload>' --mode h2-single-packet -n 20",
+          "note": "One H2 connection, N requests queued with the final frame withheld, then all released together."
+        },
+        {
+          "label": "HTTP/1.1 last-byte race",
+          "template": "race-singlepacket -u <target> -X POST -d '<payload>' --mode h1-last-byte -n 20",
+          "note": "N connections, every byte but the last sent, then the last byte released on all together."
+        }
+      ],
+      "flags": [
+        {
+          "flag": "--job-stdin",
+          "what": "read the whole request as a JSON job on stdin (how HackPit invokes it)"
+        },
+        {
+          "flag": "--mode",
+          "what": "h2-single-packet (default) or h1-last-byte"
+        },
+        {
+          "flag": "-n",
+          "what": "N — how many synchronized copies to fire"
+        }
+      ]
     }
   ]
 }

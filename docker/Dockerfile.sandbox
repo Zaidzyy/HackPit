@@ -1019,6 +1019,29 @@ RUN set -eu; \
     command -v stegseek >/dev/null; \
     stegseek 2>&1 | grep -qi stegseek
 
+# --- 9j. single-packet / last-byte race client (race-singlepacket build) ------
+# The synchronized HTTP client the :race job invokes as ONE approve-each tool pass:
+# `docker exec -i <open sandbox> race-singlepacket --job-stdin` with the whole request as JSON on
+# stdin. It is a small in-repo client rather than Turbo Intruder, which is a Burp extension and not
+# headless. HTTP/2 single-packet needs the `h2` framing library, so it gets its OWN venv (the
+# jwt_tool / pwntools idiom) — the h1-last-byte mode is pure stdlib and works even if h2 is absent.
+#
+# THE WRAPPER IS THE PRODUCT: /usr/local/bin/race-singlepacket execs the venv python against the
+# baked script, so the catalog name resolves on PATH exactly like every other tool and the backend
+# never has to know the venv path. `--selftest` is the smoke test — `command -v` alone is not one
+# (build #4's lesson), so the layer FAILS here if the client cannot even import.
+COPY race_singlepacket.py /opt/hackpit/race_singlepacket.py
+RUN set -eu; \
+    python3 -m venv /opt/race/venv; \
+    /opt/race/venv/bin/pip install --no-cache-dir -q h2; \
+    chmod 0644 /opt/hackpit/race_singlepacket.py; \
+    printf '#!/bin/sh\nexec /opt/race/venv/bin/python3 /opt/hackpit/race_singlepacket.py "$@"\n' \
+        > /usr/local/bin/race-singlepacket; \
+    chmod 0755 /usr/local/bin/race-singlepacket; \
+    chmod -R a+rX /opt/race /opt/hackpit; \
+    command -v race-singlepacket >/dev/null; \
+    race-singlepacket --selftest | grep -qi 'race-singlepacket ok'
+
 # --- 10. Strip file capabilities (REQUIRED — do not remove) -------------------
 # Kali ships a few binaries with FILE capabilities so unprivileged desktop users get raw
 # sockets: /usr/lib/nmap/nmap (cap_net_raw,cap_net_admin,cap_net_bind_service) and

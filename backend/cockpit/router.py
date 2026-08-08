@@ -54,6 +54,7 @@ from . import graphql_enum as graphql_enum_mod
 from . import graphql_zap as graphql_zap_mod
 from . import intercept as intercept_mod
 from . import intruder as intruder_mod
+from . import race as race_mod
 from . import nuclei as nuclei_mod
 from . import recon as recon_mod
 from . import proposals as proposals_mod
@@ -1253,6 +1254,99 @@ def stop_intruder_job(job_id: str) -> intruder_mod.IntruderJob:
     job = intruder_mod.stop(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail={"reason": f"no intruder job {job_id!r}"})
+    return job
+
+
+# --------------------------------------------------------------------------- #
+# THE SINGLE-PACKET RACE TESTER (race-singlepacket build) — one request, fired N times so they
+# land in the same instant. The primitive the intruder's serial loop cannot do.
+#
+# *** IT IS GATED EXACTLY LIKE THE INTRUDER: THE FOUR GATES, NO NEW ONES. ***
+# One approval buys N synchronized requests, the same way the intruder's one approval buys a whole
+# payload set. The whole request template + the concurrency count are in the approved surface;
+# every request rides argv-only from inside the hardcoded open sandbox, scope-checked on the wire;
+# stop is the ungated panic button.
+# --------------------------------------------------------------------------- #
+@router.get("/race/status")
+def get_race_status() -> dict[str, Any]:
+    """Sandbox availability + running-job count — drives the UI banner. Read-only."""
+    return race_mod.status()
+
+
+@router.post("/race/preview")
+def race_preview(req: race_mod.RaceRequest) -> dict[str, Any]:
+    """WHAT WOULD BE FIRED, and WHETHER THE GATE WOULD REFUSE IT — without firing anything.
+
+    Both halves come from the same functions the start path uses (`plan`, `validate`,
+    `race_argv_for`), so a preview cannot drift from the run. The gate verdict is included because
+    "would this need a red-confirm" is worth answering before firing N synchronized requests, and
+    answering it costs nothing.
+    """
+    n, warnings, capped = race_mod.plan(req)
+    verdict = race_mod.validate(req)
+    return {
+        "argv": race_mod.race_argv_for(req),
+        "mode": race_mod._mode_of(req)[0],
+        "planned": n,
+        "warnings": warnings,
+        "capped": capped,
+        "gate": None if verdict is None else {
+            "gate": verdict.gate, "reason": verdict.reason,
+            "dangerous_flags": list(verdict.dangerous_flags or []),
+        },
+    }
+
+
+@router.post("/race", response_model=race_mod.RaceJob)
+def start_race(req: race_mod.RaceRequest) -> race_mod.RaceJob:
+    """Fire one request N times, synchronized, as ONE approved job. GATED, then it runs.
+
+    *** THIS SENDS REAL ATTACK TRAFFIC — N identical requests in one packet. ***
+    `executor.validate_request` runs against the equivalent `race-singlepacket` command BEFORE
+    anything is fired, so an unapproved or off-target job fires nothing. The red-confirm is demanded
+    by the GATE and not by this route: a request body carrying `| sh` trips "reverse-shell /
+    code-exec pattern", an ordinary coupon body does not. Requiring the ack unconditionally here
+    would be this build adding a confirm, which it may not.
+
+    A SAFETY refusal (approval / danger / target / isolation) is **403** naming the gate; an
+    AVAILABILITY or input problem is **409**. Nothing is fired on either.
+    """
+    try:
+        return race_mod.start(req)
+    except race_mod.RaceRefused as exc:
+        code = 409 if exc.gate in {"unavailable", "input"} else 403
+        raise HTTPException(status_code=code, detail={
+            "gate": exc.gate, "reason": exc.reason, "dangerous_flags": exc.dangerous_flags,
+        })
+
+
+@router.get("/race", response_model=list[race_mod.RaceJob])
+def list_race_jobs(
+    session_id: str | None = Query(None),
+) -> list[race_mod.RaceJob]:
+    """Every race job, newest first. Read-only, ungated — a results table polls this."""
+    return race_mod.list_jobs(session_id)
+
+
+@router.get("/race/{job_id}", response_model=race_mod.RaceJob)
+def get_race_job(job_id: str) -> race_mod.RaceJob:
+    """One job with its results + verdict. Read-only, ungated."""
+    job = race_mod.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no race job {job_id!r}"})
+    return job
+
+
+@router.delete("/race/{job_id}", response_model=race_mod.RaceJob)
+def stop_race_job(job_id: str) -> race_mod.RaceJob:
+    """Stop an in-flight job. NOT GATED — the panic button, exactly like `stop_scan`.
+
+    N synchronized requests may still be in flight when this is called. A gate that could refuse to
+    stop them would make the system less safe.
+    """
+    job = race_mod.stop(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no race job {job_id!r}"})
     return job
 
 

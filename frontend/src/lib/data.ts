@@ -192,6 +192,18 @@ export const SURFACE_BANDS: SurfaceBand[] = [
         desc: "One request, marked positions, a payload set — one approval.",
         needsStack: true,
       },
+      // OPERATE for the same reason the intruder is: its start IS human-approved (the scanner's
+      // four gates, unchanged) and it needs the stack. It sits next to :intruder because it is the
+      // one thing the intruder's serial loop cannot do — fire the identical request N times so the
+      // copies land in one instant and beat a check-then-act window.
+      {
+        key: "race",
+        icon: "⇶",
+        label: ":race",
+        href: "/race",
+        desc: "Fire one request N times, synchronized — limit-overrun / TOCTOU races. One approval.",
+        needsStack: true,
+      },
       // OPERATE, and the payoff of the whole state model: spray captured/OSINT creds across a
       // service, or crack captured hashes with a wordlist — one approval per job, an ungated
       // stop. A hit writes a validated credential + finding into state and marks the AD node

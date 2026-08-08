@@ -2885,6 +2885,104 @@ export const stopIntruderJob = (id: string, signal?: AbortSignal) =>
   delJSON<IntruderJob>(`/cockpit/intruder/${encodeURIComponent(id)}`, signal);
 
 /* -------------------------------------------------------------------------- */
+/* SINGLE-PACKET RACE (:race) — one request fired N times, synchronized.       */
+/* The intruder's shape with a synchronized transport: ONE approval buys N     */
+/* requests that land in the same instant. The whole request + N are in the    */
+/* approved surface; stop is the ungated panic button.                         */
+/* -------------------------------------------------------------------------- */
+export type RaceRequest = {
+  url: string;
+  method: string;
+  headers: RepeaterHeader[];
+  body: string;
+  /** h2-single-packet (default, reliable) or h1-last-byte. */
+  mode: string;
+  /** N — how many synchronized copies to fire. */
+  count: number;
+  follow_redirects: boolean;
+  insecure: boolean;
+  timeout_seconds?: number | null;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  use_cookie_jar: boolean;
+  approved: boolean;
+  /** Demanded by the GATE when the request body warrants it, not by the form. */
+  dangerous_ack: boolean;
+};
+
+export type RaceResult = {
+  index: number;
+  status: number | null;
+  size_bytes: number;
+  time_ms: number;
+  body_excerpt: string;
+  error: string;
+  /** In the winning (rare) cluster — i.e. this request WON the race. */
+  won: boolean;
+};
+
+export type RaceVerdict = {
+  race_detected: boolean;
+  won: number;
+  of: number;
+  winning_status: number | null;
+  clusters: { status: number; size: number; count: number }[];
+  note: string;
+};
+
+export type RaceJob = {
+  id: string;
+  state: string;
+  request: RaceRequest;
+  container: string;
+  started_at: string;
+  finished_at: string;
+  mode: string;
+  planned: number;
+  sent: number;
+  baseline: RaceResult | null;
+  results: RaceResult[];
+  verdict: RaceVerdict | null;
+  capped: boolean;
+  warnings: string[];
+  scope_refusals: number;
+  finding_written: boolean;
+};
+
+export type RacePreview = {
+  argv: string[];
+  mode: string;
+  planned: number;
+  warnings: string[];
+  capped: boolean;
+  /** What the four gates WOULD say. `null` means nothing stands in the way. */
+  gate: { gate: string; reason: string; dangerous_flags: string[] } | null;
+};
+
+export const getRaceStatus = (signal?: AbortSignal) =>
+  getJSON<{ container: string; up: boolean; ready: boolean; running: number; detail: string }>(
+    "/cockpit/race/status",
+    signal
+  );
+
+/** What would be fired AND whether the gate would refuse it — firing nothing. */
+export const racePreview = (req: RaceRequest, signal?: AbortSignal) =>
+  postJSON<RacePreview>("/cockpit/race/preview", req, signal);
+
+export const startRace = (req: RaceRequest, signal?: AbortSignal) =>
+  postJSON<RaceJob>("/cockpit/race", req, signal);
+
+export const listRaceJobs = (signal?: AbortSignal) =>
+  getJSON<RaceJob[]>("/cockpit/race", signal);
+
+export const getRaceJob = (id: string, signal?: AbortSignal) =>
+  getJSON<RaceJob>(`/cockpit/race/${encodeURIComponent(id)}`, signal);
+
+/** Stop an in-flight job. NOT GATED — the panic button, exactly like stopping a scan. */
+export const stopRaceJob = (id: string, signal?: AbortSignal) =>
+  delJSON<RaceJob>(`/cockpit/race/${encodeURIComponent(id)}`, signal);
+
+/* -------------------------------------------------------------------------- */
 /* CREDENTIAL ATTACK (:credentials) — spray captured creds, crack captured hashes */
 /* -------------------------------------------------------------------------- */
 export type SprayRequest = {

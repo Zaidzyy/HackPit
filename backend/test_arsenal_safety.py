@@ -233,6 +233,15 @@ _MUST_NOT_FIRE = frozenset({
     "wafw00f", "testssl", "testssl.sh", "jwt_tool", "jwt-tool", "jwt_tool.py", "wfuzz",
     "hakrawler", "sslscan", "nomore403", "crlfuzz", "getjs", "jsluice", "subjs",
     "gf", "qsreplace", "unfurl",
+    # single-packet / last-byte race client (race-singlepacket build). It SENDS HTTP AND READS
+    # WHAT COMES BACK — one request fired N times, synchronized. It generates no payload, opens no
+    # shell, tunnels nothing and runs no code on a remote host, which is the test this bucket is
+    # judged by; it is the same class as ffuf / sqlmap / dalfox four lines up, all clean. The
+    # red-confirm still fires on request CONTENT (a body carrying '| sh') through the heuristic,
+    # exactly as it does for the intruder's ffuf — that is content-based, not binary-identity, so
+    # the bare name stays clean or a confirm would fire on every benign coupon-race and stop
+    # meaning anything.
+    "race-singlepacket",
     # GraphQL tooling (build #20 item 6). All four SEND HTTP AND READ WHAT COMES BACK. None
     # generates or delivers a payload, opens a shell, tunnels traffic or runs code on a remote
     # host, which is the test this bucket is judged by.

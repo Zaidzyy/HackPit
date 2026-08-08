@@ -55,6 +55,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | ◈ **Guided recon** | Scoped domain → recon as approved jobs → ranked attack surface; discoveries can only widen the set *within* scope. |
 | 🕸️ **Web app testing** | Recording proxy, repeater, intruder, GraphQL, browser interception, OOB callbacks. |
 | 🎟️ **Token workbench** | Decode / analyze / tamper **JWT**, **OAuth/OIDC** and **SAML** — alg-none, RS→HS confusion, kid/jku/jwk injection, redirect_uri & PKCE-downgrade builders, XSW1–8 — then send the mutated token through the repeater. The weak-secret crack is one gated job. |
+| ⇶ **Single-packet race** | Fire one request **N times so the copies arrive in the same instant** — HTTP/2 single-packet or HTTP/1.1 last-byte sync — to beat a check-then-act window (limit overrun, TOCTOU, coupon reuse, one-time-token replay). One approval buys the batch; the verdict is **"K of N won the race"** and a confirmed race becomes a High finding. |
 | ◎ **Nuclei template scan** | Scoped target(s) → templates → severity-ranked findings, one approval; results flow into engagement state. |
 | 🪟 **Windows / AD** | BloodHound graph → route to Domain Admin → walk it live over WinRM. |
 | 📄 **AD CS (ESC1–8)** | `certipy find` → certtemplate/certauthority nodes + synthesized `ESC1…ESC8` edges → a low-priv enrollee → vulnerable template → Domain Admin, routed in the same graph; the agent picks an edge, you approve every command. |
@@ -187,6 +188,18 @@ A token HackPit spots in **captured traffic** is modelled **names/claims-only** 
 </p>
 
 > The screenshot uses a **synthetic, self-signed demo JWT** (`/tokens?demo=1`) — never a real user's token. A real captured token pastes into the same box; the mutated result copies straight into the repeater to send.
+
+### Single-packet race tester — the primitive the intruder can't do
+
+The intruder's serial loop sends one request, then the next — so a target's *check-then-act* window closes between them and a race never fires. **`:race`** is the missing primitive: it takes **one** request and fires it **N times so the copies arrive in the same instant**, to hit limit-overrun / TOCTOU / coupon-reuse / one-time-token races. Two transports the operator picks: **HTTP/2 single-packet** — one connection, N requests queued with the **final frame withheld**, then every final frame **released together** so all N complete in a single packet (PortSwigger's technique, the reliable modern mode) — and **HTTP/1.1 last-byte sync** — N connections, every byte but the last sent, then the last byte **released on all at once**. The engine is a small in-repo client baked into the sandbox (`race-singlepacket`), invoked **argv-only with the whole request delivered on stdin** — no shell parses a request byte.
+
+It is modelled **exactly on the intruder**: **one gated job**, the **same four gates** and no new ones, run inside the hardcoded open sandbox, **scope-checked on the wire** (an out-of-scope host refuses the whole batch, nothing sent), with an **ungated stop**. The whole request template *and* the concurrency count N are in the approved surface — the intruder's completeness rule, so a body carrying a shell pattern reaches the danger gate rather than hiding behind a count. The verdict is the race-window signal, not a raw dump: the N responses are clustered, and when the **rare** outcome a serial baseline returns *once* (the single "coupon applied") appears **more than once**, that is a race — reported as **"K of N requests won the race"**, and a confirmed race lands a **High finding** in engagement state. Available as a dedicated **`/race`** surface next to `:intruder`.
+
+<p align="center">
+  <img src="assets/screenshots/46-race-singlepacket.png" alt="The race tester at /race — a POST to https://host/api/coupon/redeem with body code=SAVE10, mode h2-single-packet and N=20, the gated run card with an 'I approve this job' checkbox and a red-confirm ('this fires N real requests in one packet'), and a synthetic demo result: 'RACE WON — 3 of 20 requests landed the rare status 200 · written to engagement state as a High finding', response clusters (200 ×3 the winning outcome, 409 ×17), a serial baseline of 409, and the per-request rows #0–#2 returning 200 marked WON while #3+ return 409" width="90%">
+</p>
+
+> The screenshot uses a **synthetic demo result set** — a coupon-redeem endpoint where 3 of 20 single-packet requests beat the "already used" check — never a real target. A real job pastes the one-time request into the same box and fires it under one approval.
 
 ### Guided recon → ranked attack surface
 

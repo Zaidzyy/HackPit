@@ -59,6 +59,7 @@ from . import smuggle as smuggle_mod
 from . import cache as cache_mod
 from . import nuclei as nuclei_mod
 from . import recon as recon_mod
+from . import discover as discover_mod
 from . import proposals as proposals_mod
 from . import redirector as redirector_mod
 from . import session as live_session
@@ -1972,6 +1973,96 @@ def get_recon_surface(session_id: str = Query(...)) -> recon_mod.ReconSurface:
     scan. Each target carries a clean handoff into :attack-paths / :nuclei.
     """
     return recon_mod.rank_surface(session_id)
+
+
+# --- parameter / content discovery (:discover — a :recon sibling, feeds the surface) --- #
+#
+# ONE gated job, the SAME shape as :recon / :nuclei / the intruder — one approval buys a discovery
+# job that sends many requests. NO new gate: `executor.validate_request` runs BEFORE anything
+# spawns, the stop is ungated. SCOPE-SAFE BY CONSTRUCTION: the target host is scope-locked before
+# the job runs and every discovered URL/param is scope-filtered before it lands. Discovered
+# params/endpoints are SUGGESTIONS handed to :intruder / :nuclei / :repeater (each row carries a
+# pre-filled hand-off) — the discovery job is the only thing approved; the attack itself is still
+# approve-each on the surface it was handed to.
+
+
+def _discover_refusal(exc: discover_mod.DiscoverRefused):
+    """One refusal shape: 403 for a SAFETY gate, 409 for AVAILABILITY/engagement/input, and scope
+    is 403 (it is a target refusal, like the repeater's out-of-scope send)."""
+    code = 409 if exc.gate in {"unavailable", "engagement", "loot", "input"} else 403
+    raise HTTPException(status_code=code, detail={
+        "gate": exc.gate, "reason": exc.reason, "dangerous_flags": exc.dangerous_flags,
+    })
+
+
+@router.get("/discover/status")
+def get_discover_status() -> dict[str, Any]:
+    """Engagement-sandbox availability + running-job count — the UI banner. Read-only."""
+    return discover_mod.status()
+
+
+@router.post("/discover/preview")
+def discover_preview(req: discover_mod.DiscoverRequest) -> dict[str, Any]:
+    """The entry argv + the gate verdict for a discovery job, running nothing.
+
+    Same `gate_argv` + `_gate` the start path uses, so the preview cannot drift from the run. For a
+    content job the argv carries EVERY word (intruder-style) — nothing truncated — so the human
+    approves the real set.
+    """
+    record = engagement.get_active(req.engagement_id) if req.engagement_id else None
+    domain = discover_mod._resolve_domain(req, record)
+    argv = discover_mod.gate_argv(req, domain)
+    verdict = discover_mod.validate(req)
+    words = [w.strip() for w in req.words if w.strip()]
+    return {
+        "mode": (req.mode or "params"),
+        "argv": argv,
+        "words_in_surface": len(words),
+        "capped": len(words) > discover_mod.DISCOVER_MAX_WORDS,
+        "gate": None if verdict is None else {
+            "gate": verdict.gate, "reason": verdict.reason,
+            "dangerous_flags": list(verdict.dangerous_flags or []),
+        },
+    }
+
+
+@router.post("/discover", response_model=discover_mod.DiscoverJob)
+def start_discover(req: discover_mod.DiscoverRequest) -> discover_mod.DiscoverJob:
+    """Run ONE discovery job (params / content / historical) as a single approved job.
+
+    GATED, then runs: `executor.validate_request` runs against the mode's equivalent command BEFORE
+    anything spawns; the target host is scope-locked by construction; discovered items are
+    scope-filtered before they land. A SAFETY/scope refusal is 403; availability/engagement/input
+    is 409. The stop button (DELETE below) is the ungated panic switch.
+    """
+    try:
+        return discover_mod.start(req)
+    except discover_mod.DiscoverRefused as exc:
+        _discover_refusal(exc)
+
+
+@router.get("/discover/jobs", response_model=list[discover_mod.DiscoverJob])
+def list_discover_jobs(session_id: str | None = Query(None)) -> list[discover_mod.DiscoverJob]:
+    """Every discovery job, newest first. Read-only, ungated — the live view polls this."""
+    return discover_mod.list_jobs(session_id)
+
+
+@router.get("/discover/jobs/{job_id}", response_model=discover_mod.DiscoverJob)
+def get_discover_job(job_id: str) -> discover_mod.DiscoverJob:
+    """One job with its discovered params/endpoints + pre-filled hand-offs. Read-only, ungated."""
+    job = discover_mod.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no discover job {job_id!r}"})
+    return job
+
+
+@router.delete("/discover/jobs/{job_id}", response_model=discover_mod.DiscoverJob)
+def stop_discover_job(job_id: str) -> discover_mod.DiscoverJob:
+    """Stop an in-flight job. NOT GATED — the panic button, exactly like `stop_scan`."""
+    job = discover_mod.stop(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"reason": f"no discover job {job_id!r}"})
+    return job
 
 
 # --- Pivot / tunnel routing (Phase 4 item 4 — chisel / ligolo-ng) ------------------- #

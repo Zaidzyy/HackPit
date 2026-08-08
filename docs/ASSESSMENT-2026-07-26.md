@@ -6067,3 +6067,60 @@ surfaces (`:recon`/`:proxy`, `:cloud`, `:ad-graph`) as an engagement fills them,
 dedicated seam integrations (e.g. the existing SSRF→IMDS `/cloud/seed-imds` flow) carry the linkage. On synthetic data it
 is a diagram; its operational weight scales with how much real graph data sits behind it — which is exactly why it is the
 *capstone*.
+
+## Parameter / content discovery — hidden params + paths as a first-class `:recon` step (`:discover`) (2026-08-08)
+
+**The gap.** `:recon` builds a surface from a domain, but the step every hunt actually does next — mining an *endpoint's*
+hidden parameters and hidden paths — was manual. The tools (`arjun`, `ffuf`, `feroxbuster`, `paramspider`) were all
+catalogued in the arsenal; nothing wired them into a **discover → hand to `:intruder`/`:nuclei`/`:repeater`** workflow that
+feeds the ranked surface. This build is that sibling of `:recon`, modelled on it point for point.
+
+**One gated job, three modes (`backend/cockpit/discover.py`, mirrors `recon.py`).** The operator picks: **params** —
+`arjun` against one in-scope URL → hidden GET/POST/JSON parameters (where IDOR/SSRF/mass-assignment hide); **content** —
+`ffuf`/`feroxbuster` with a wordlist → hidden paths/dirs; **historical** — `paramspider` mines web archives for
+parameterised URLs, passively. Each is **one** approved job — the same `ffuf`/nuclei/intruder shape, **no new gate** —
+gated by the SAME `executor.validate_request` every command clears, run BEFORE anything spawns, with an ungated stop, in
+the open engagement sandbox. `x8` was in the spec's plan but is **absent from the sandbox image**, so it was dropped rather
+than cataloguing a broken invocation (the `zap_install_proof` discipline the spec itself cites); `arjun` — the must-have —
+carries parameter discovery.
+
+**Scope-safe by construction, two ways (the `:recon` property, not an extra gate).** The **target host is scope-locked
+before the job runs**: arjun/ffuf point at one URL and paramspider at one domain, checked against the engagement scope in
+`start()`, and the words only fill path/param positions so they can never move the host off-scope. And **every discovered
+URL/param is scope-filtered before it lands** (`filter_endpoints_in_scope`) — a paramspider result mined from an archive
+that spans other hosts is dropped and surfaced read-only, never handed off or stored. Both are AST-locked pure functions.
+
+**The content wordlist is in the approved surface WHOLE, intruder-style.** For content discovery the word list is the
+payload set, so — exactly like the intruder's Critical-2 — `content_gate_argv` puts EVERY word into the gated command line
+(`-w <word>` per word), not a count and not a sample, so a word carrying `| sh` is read by the danger heuristic rather than
+hiding behind a *"…and 4,993 more."* The worker writes the words to a loot file and runs the real tool; the two argvs, like
+the intruder's, are the honest declared one and the spawned one.
+
+**Discoveries are suggestions, never auto-fired.** Each hidden parameter becomes a **pre-filled `:intruder` position**
+(`?id=[[FUZZ]]`, reusing the intruder's own `[[…]]` marker), a `:nuclei` target and a `:repeater` request; each hidden
+path hands off to `:nuclei`/`:repeater`. The discovery job is the only thing approved — the attack itself is still
+approve-each on the surface it lands on. In-scope hits are upserted into engagement state as `Endpoint`s (parsed by two new
+hand-parsed, `urllib`-free parsers `parse_arjun`/`parse_feroxbuster` — the `state/parsers.py` ban held), so a param-rich
+endpoint also **raises its host's rank** in the `:recon` surface, and a sensitive hit (an admin endpoint, a `debug` param)
+becomes a low `Finding`.
+
+**Routes + frontend.** Six routes on the cockpit router (`/cockpit/discover` + `/status`/`/preview`/`/jobs…`), the same
+shape as `/recon`. The **discovery view lives on `/recon`** behind a tab toggle (`?view=discovery`), with a mode picker, a
+scope-locked URL/domain form, a full-wordlist textarea, a preview (the exact gate argv), and the discoveries rendered with
+their `discovery` tag, interesting params highlighted, the out-of-scope drops shown, and the `:intruder`/`:nuclei`/`:repeater`
+hand-offs on every row. Reused only existing `hp-tn-*` classes (no new phantom — `test_css_vocabulary` green).
+
+**Tests + screen.** `test_discover.py` (functional): both arjun JSON shapes → params; feroxbuster response-only lines;
+per-mode argv incl. the FUZZ-keyword insertion; **the whole content word list in the gate surface, nothing truncated**;
+`filter_endpoints_in_scope` with a control; a discovered param → a valid `[[FUZZ]]` intruder position; only interesting
+discoveries become findings. `test_discover_safety.py` (invariants, mirrors `test_recon_safety.py`): the pure half executes
+nothing by AST; `start`/`validate` reach the gate before any spawn; engagement-bound; **the target is scope-locked by
+construction with a control**; flags default False; stop ungated. Both registered in `run_safety_tests.sh` — **124 files
+green**, `next build` exits 0. Screen LOOKED AT: `42-discover.png` — the discovery view with hidden params (id/debug/role
+highlighted) and content hits (`/admin`, `/.git/config`) each carrying the tri-surface hand-off, an out-of-scope
+`cdn.thirdparty.net` dropped (not blank/error).
+
+**Assumptions (per §5), stated.** Parameter discovery (`arjun`) was the must-have and ships with the full hand-off;
+content (`ffuf`/`feroxbuster`) and historical (`paramspider`) round it out — all three shipped. `x8` was dropped as absent
+from the image (noted above). The hand-off pre-fills the target surface but never fires it; the discovery job itself is the
+only thing approved.

@@ -226,6 +226,90 @@ def parse_ffuf(text: str, session_id: str, run_id: str | None = None) -> Parsed:
 
 
 # --------------------------------------------------------------------------- #
+# arjun — discovered HTTP PARAMETERS (:discover, parameter mode)
+# --------------------------------------------------------------------------- #
+def parse_arjun(text: str, session_id: str, run_id: str | None = None) -> Parsed:
+    """arjun output (``-oJ`` JSON) -> Endpoint rows carrying the DISCOVERED parameter NAMES.
+
+    arjun has shipped two JSON shapes across versions and this reads both, hand-parsed (the state
+    package imports nothing network-capable — test_state.py bans ``urllib`` — and a param list is
+    just a dict lookup):
+
+      * a map keyed by URL:  ``{"https://h/x": {"method": "GET", "params": ["id", "debug"]}}``
+      * a flat object / list: ``{"url": "https://h/x", "params": [...]}`` (or a list of them)
+
+    The parameter NAMES are the whole point — the hidden IDOR/SSRF/mass-assignment surface — so they
+    become ``Endpoint.params``; a value never appears (arjun does not emit one). One Endpoint per URL.
+    """
+    out = Parsed()
+
+    def _emit(url: Any, method: Any, params: Any) -> None:
+        if not isinstance(url, str) or not url.lower().startswith("http"):
+            return
+        names: list[str] = []
+        if isinstance(params, list):
+            for p in params:
+                name = str(p).strip()
+                if name and name not in names:
+                    names.append(name)
+        # Merge any params already on the query string (arjun echoes the base URL) with the mined
+        # ones, names only, order-preserved.
+        for name in _query_params(url):
+            if name not in names:
+                names.append(name)
+        out.endpoints.append(
+            Endpoint(
+                session_id=session_id, url=url,
+                method=str(method or "GET").strip().upper() or "GET",
+                params=names, source_run_id=run_id,
+            )
+        )
+
+    for obj in _json_objects(text):
+        # Flat shape first: an object naming its own url.
+        if isinstance(obj.get("url"), str):
+            _emit(obj.get("url"), obj.get("method"), obj.get("params"))
+            continue
+        # Map shape: URL -> {method, params}. Keys that are not URLs are ignored.
+        for key, val in obj.items():
+            if isinstance(key, str) and key.lower().startswith("http") and isinstance(val, dict):
+                _emit(key, val.get("method"), val.get("params"))
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# feroxbuster — JSONL of discovered CONTENT (:discover, content mode)
+# --------------------------------------------------------------------------- #
+def parse_feroxbuster(text: str, session_id: str, run_id: str | None = None) -> Parsed:
+    """feroxbuster ``--json`` output -> Endpoint rows. One JSON object per line.
+
+    feroxbuster streams typed records; only ``type == "response"`` lines are hits (``configuration``
+    / ``statistics`` lines carry no found URL). ``url`` + ``status`` + ``content_length`` map
+    straight onto an Endpoint, with any query-string params mined by name. Duplicate URLs collapse.
+    """
+    out = Parsed()
+    seen: set[str] = set()
+    for obj in _json_objects(text):
+        if obj.get("type") not in (None, "response"):
+            continue
+        url = obj.get("url") or ""
+        if not isinstance(url, str) or not url.lower().startswith("http") or url in seen:
+            continue
+        seen.add(url)
+        status = obj.get("status")
+        length = obj.get("content_length")
+        out.endpoints.append(
+            Endpoint(
+                session_id=session_id, url=url,
+                status=status if isinstance(status, int) else None,
+                length=length if isinstance(length, int) else None,
+                params=_query_params(url), source_run_id=run_id,
+            )
+        )
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # nuclei — JSONL findings
 # --------------------------------------------------------------------------- #
 def parse_nuclei(text: str, session_id: str, run_id: str | None = None) -> Parsed:
@@ -666,6 +750,12 @@ STDOUT_PARSERS = {
     "httpx-toolkit": parse_httpx,
     "ffuf": parse_ffuf,
     "nuclei": parse_nuclei,
+    # :discover — parameter/content discovery tools. A plain terminal run of any of them ingests
+    # too, with no extra wiring, exactly as httpx/ffuf already do. paramspider emits a bare URL
+    # list, so parse_urls covers it.
+    "arjun": parse_arjun,
+    "feroxbuster": parse_feroxbuster,
+    "paramspider": parse_urls,
     # :recon discovery tools — so a plain terminal run of any of them ingests too, with no
     # extra wiring, exactly as httpx/netexec already do.
     "subfinder": parse_subfinder,

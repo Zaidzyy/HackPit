@@ -3599,6 +3599,136 @@ export const getReconSurface = (sessionId: string, signal?: AbortSignal) =>
   );
 
 /* -------------------------------------------------------------------------- */
+/* PARAMETER / CONTENT DISCOVERY (:discover) — a :recon sibling, feeds surface */
+/* -------------------------------------------------------------------------- */
+export type DiscoverRequest = {
+  /** params (arjun) | content (ffuf/feroxbuster) | historical (paramspider). */
+  mode: string;
+  /** params/content: the in-scope url. Its host is scope-locked before anything runs. */
+  url?: string;
+  /** historical: the in-scope domain (blank = the engagement target). */
+  domain?: string;
+  /** params: arjun -m (GET | POST | JSON). */
+  method?: string;
+  /** content: ffuf (default) | feroxbuster. */
+  tool?: string;
+  /** content: THE word list, verbatim — every entry rides in the approved surface. */
+  words?: string[];
+  /** content: a baked sandbox wordlist path, used when `words` is empty. */
+  wordlist?: string;
+  /** content: file extensions to append (php,bak,old). */
+  extensions?: string[];
+  /** params: arjun -w wordlist path (blank = arjun's bundled list). */
+  param_wordlist?: string;
+  rate_limit?: number | null;
+  timeout_seconds?: number | null;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  approved: boolean;
+  dangerous_ack: boolean;
+};
+
+export type DiscoverStage = {
+  tool: string;
+  argv: string[];
+  state: string;
+  note: string;
+};
+
+/** One endpoint with its discovered parameter names + the pre-filled hand-offs. Tagged discovery. */
+export type DiscoveredParam = {
+  url: string;
+  method: string;
+  params: string[];
+  /** Params matching the injection/SSRF/redirect magnet set. */
+  interesting: string[];
+  tag: string;
+  /** The url with the first param marked as an intruder `[[FUZZ]]` position. */
+  intruder_url: string;
+  nuclei_target: string;
+  repeater_url: string;
+};
+
+/** One discovered path/dir + the pre-filled hand-offs. Tagged discovery. */
+export type DiscoveredEndpoint = {
+  url: string;
+  status: number | null;
+  length: number | null;
+  interesting: boolean;
+  tag: string;
+  nuclei_target: string;
+  repeater_url: string;
+};
+
+export type DiscoverJob = {
+  id: string;
+  mode: string;
+  state: string;
+  argv: string[];
+  url: string;
+  domain: string;
+  container: string;
+  engagement_id?: string | null;
+  session_id?: string | null;
+  started_at: string;
+  finished_at: string;
+  stages: DiscoverStage[];
+  params: DiscoveredParam[];
+  endpoints: DiscoveredEndpoint[];
+  /** Surfaced READ-ONLY — never handed off, never upserted. */
+  discovered_out_of_scope: string[];
+  new_endpoints: number;
+  new_findings: number;
+  words_in_surface: number;
+  capped: boolean;
+  output_tail: string;
+  warnings: string[];
+  refused: string;
+  refused_gate: string;
+};
+
+export type DiscoverStatus = {
+  container: string;
+  up: boolean;
+  ready: boolean;
+  running: number;
+  detail: string;
+};
+
+export type DiscoverPreview = {
+  mode: string;
+  argv: string[];
+  words_in_surface: number;
+  capped: boolean;
+  gate: CredGate;
+};
+
+export const getDiscoverStatus = (signal?: AbortSignal) =>
+  getJSON<DiscoverStatus>("/cockpit/discover/status", signal);
+
+/** The entry argv + gate verdict for a discovery job, running nothing. */
+export const discoverPreview = (req: DiscoverRequest, signal?: AbortSignal) =>
+  postJSON<DiscoverPreview>("/cockpit/discover/preview", req, signal);
+
+/** Run ONE discovery job (params / content / historical) as a single approval. */
+export const startDiscover = (req: DiscoverRequest, signal?: AbortSignal) =>
+  postJSON<DiscoverJob>("/cockpit/discover", req, signal);
+
+export const listDiscoverJobs = (sessionId?: string, signal?: AbortSignal) =>
+  getJSON<DiscoverJob[]>(
+    "/cockpit/discover/jobs" +
+      (sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""),
+    signal
+  );
+
+export const getDiscoverJob = (id: string, signal?: AbortSignal) =>
+  getJSON<DiscoverJob>(`/cockpit/discover/jobs/${encodeURIComponent(id)}`, signal);
+
+/** Stop an in-flight discovery job. NOT GATED — the panic button. */
+export const stopDiscoverJob = (id: string, signal?: AbortSignal) =>
+  delJSON<DiscoverJob>(`/cockpit/discover/jobs/${encodeURIComponent(id)}`, signal);
+
+/* -------------------------------------------------------------------------- */
 /* THE WAF-BYPASS HEADER (build #18 item 1)                                    */
 /*                                                                             */
 /* THE VALUE IS A CREDENTIAL AND ONLY TRAVELS ONE WAY. `setBypassHeader` sends  */

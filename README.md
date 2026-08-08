@@ -53,6 +53,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 | 🎯 **Gated cockpit** | Real Kali execution, one approved command at a time, behind four ordered gates. |
 | ▤ **Interactive persistent sessions** | Named, parallel **tmux** sessions in the open box with per-session cwd — **automatic prompt detection** flips a session to *"interactive — send input"* when `msfconsole` / `sliver-client` / `evil-winrm` / a REPL is waiting, long scans **auto-background at 60s** with a notify-once completion, and wedge / pipe-degradation recovery. **Input stays human-only, every line.** |
 | ◈ **Guided recon** | Scoped domain → recon as approved jobs → ranked attack surface; discoveries can only widen the set *within* scope. |
+| 🔦 **Parameter / content discovery** | Mine an endpoint's **hidden params** (arjun), **hidden paths** (ffuf / feroxbuster) and **historical params** (paramspider) as one gated job — each discovery is a **pre-filled hand-off** to `:intruder` / `:nuclei` / `:repeater`, never auto-fired, and only in-scope items land, by construction. |
 | 🕸️ **Web app testing** | Recording proxy, repeater, intruder, GraphQL, browser interception, OOB callbacks. |
 | 🎟️ **Token workbench** | Decode / analyze / tamper **JWT**, **OAuth/OIDC** and **SAML** — alg-none, RS→HS confusion, kid/jku/jwk injection, redirect_uri & PKCE-downgrade builders, XSW1–8 — then send the mutated token through the repeater. The weak-secret crack is one gated job. |
 | ⇶ **Single-packet race** | Fire one request **N times so the copies arrive in the same instant** — HTTP/2 single-packet or HTTP/1.1 last-byte sync — to beat a check-then-act window (limit overrun, TOCTOU, coupon reuse, one-time-token replay). One approval buys the batch; the verdict is **"K of N won the race"** and a confirmed race becomes a High finding. |
@@ -235,6 +236,20 @@ The front door a bounty or pentest actually starts from. Give **`:recon`** a sco
 </p>
 
 > One approval per sweep, ungated stop; discoveries can only widen the allowed set *within* the declared scope. Above, the ranked surface against a scoped `example.com` lab puts `api.example.com` on top — its OpenSSH 7.4 / nginx / Apache 2.4.49 stack, param-rich endpoints and a High SQLi finding earning the score — with each target handing off cleanly into `:attack-paths` and `:nuclei`.
+
+### Parameter / content discovery
+
+The step every hunt does by hand, made a first-class **`:recon`** job. Point **params** (`arjun`) at one in-scope URL to surface the **hidden GET/POST/JSON parameters** an endpoint accepts but never advertises — where IDOR, SSRF and mass-assignment hide; **content** (`ffuf` / `feroxbuster`) brute-forces its **hidden paths and directories** against a wordlist; **historical** (`paramspider`) mines web archives for **parameterised URLs** without touching the target. Each mode is **one** approved job — the same `ffuf` / nuclei / intruder shape, **no new gate** — with an ungated stop, in the open engagement sandbox.
+
+**Scope-safe by construction, two ways:** the target host is scope-locked *before* the job runs (arjun/ffuf point at one URL; the words only fill path/param positions, so they can never move the host off-scope), and **every discovered URL/param is scope-filtered before it lands** — a paramspider result on a third-party CDN is dropped and shown read-only, never handed off or stored. The content wordlist rides in the approved surface **whole, intruder-style** — nothing truncated — so a word carrying a shell metacharacter can't hide behind a *"…and 4,993 more."*
+
+Discoveries are **suggestions, never auto-fired**: each hidden parameter becomes a pre-filled **`:intruder`** position (`?id=[[FUZZ]]`), a **`:nuclei`** target and a **`:repeater`** request; each hidden path hands off to `:nuclei` / `:repeater`. The discovery job is the only thing approved — the attack itself is still approve-each on the surface it lands on. In-scope hits are written into engagement state, so a param-rich endpoint also **raises its host's rank** in the sweep surface, and a sensitive hit (an admin endpoint, a `debug` param) becomes a low finding.
+
+<p align="center">
+  <img src="assets/screenshots/42-discover.png" alt="The :recon discovery view — a mode picker (params · arjun / content · ffuf-ferox / historical · paramspider), a scope-locked in-scope URL, and the discoveries tagged 'discovery': api.demo.example.com/v2/account with hidden params id/debug/role highlighted as injection magnets, each row a pre-filled hand-off to :intruder / :nuclei / :repeater; an out-of-scope cdn.thirdparty.net result dropped read-only; and content hits /admin and /.git/config flagged as sensitive" width="90%">
+</p>
+
+> No new gate, no autonomy: one approval buys the discovery job, the target is scope-locked by construction, and every discovered param/endpoint is a hand-off the operator sends themselves — approve-each, scope-checked on the wire.
 
 ### Credential attack
 

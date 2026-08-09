@@ -4,9 +4,9 @@
 <h1 align="center">HackPit</h1>
 
 <p align="center">
-  <em>Another AI that hacks?</em> Sort of. This one reads a career's worth of <strong>your own</strong> pentest notes,
+  <em>Another AI that hacks?</em> Not quite. It's grounded in your own notes, drives real <strong> Kali </strong> tooling
   plans the whole engagement, and drives real Kali tooling —<br>
-  and it never fires a single command you didn't approve.
+  , and it never fires a single command you didn't approve.
 </p>
 
 <p align="center">

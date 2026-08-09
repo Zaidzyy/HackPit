@@ -9212,8 +9212,14 @@ button.hp-tn-start:disabled, button.hp-tn-destroy:disabled { opacity: 0.45; curs
   background: var(--panel);
   backdrop-filter: blur(6px);
   margin-top: 30px;
-  overflow: hidden;
+  /* overflow stays VISIBLE so the model quick-switch dropdown can escape the rail; corner
+     clipping moves onto the end cells below. z-index lifts the rail (and the open menu) above
+     the surface bands that follow it in the DOM. */
+  position: relative;
+  z-index: 10;
 }
+.hp-st:first-child { border-radius: 12px 0 0 12px; }
+.hp-st:last-child { border-radius: 0 12px 12px 0; }
 /* single-cell states (loading / backend unreachable) */
 .hp-rail-msg {
   display: flex;

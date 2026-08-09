@@ -6225,3 +6225,48 @@ collect-from-target pass — no fetching outside scope, ever. Execution was mode
 external tools + install-proof (the most robust choice given the image rebuild is the operator's step and the built tools
 can't run in a hermetic session); the engine's own regex mining works without any external tool, and trufflehog only
 *upgrades* a hit to verified. Secrets go to loot, never finding text.
+
+## Dual-candidate "second opinion" on generated commands — foundation (2026-08-09)
+
+**What it is.** An operator-requested SECOND OPINION on a generated command: for any attack-path step, a **⇄ second
+opinion** control fetches, on demand, ONE AI-curated alternative candidate plus an advisory *which-is-better* verdict. The
+AI decides each time whether the alternative is a *different KB technique* (grounded) or a *tuned form* of the same command
+(ai_suggested). This does not weaken the grounding invariant — it strengthens the honest presentation of it: the primary is
+never touched, and every alternative is badged by kind.
+
+**The engine (`backend/alternatives.py`).** Read-only, **executes nothing** (AST safety test, like `proposals.py`).
+`best_alternative(primary, *, goal, target, scope, by_id, search_fn)` composes with the **global `/llm-config`**
+(`llm.load_config()`) — the second opinion runs on whatever model the operator has selected — and REUSES `attack_path`'s
+own grounding + scope machinery one-way (attack_path never imports it, so no cycle): a grounded alternative resolves a real
+cited `entry_id` (`_resolve_entry_id` + `is_step_eligible`) and uses that entry's commands **verbatim, target-substituted**
+(`entry_commands` + `substitute_target`); a tuned alternative is the model's own command **capped + marked `unverified`**
+(`_ai_commands`); both are then scope-flagged through the same `flag_foreign_refs` a primary step gets. The verdict is
+shaped by a **key-whitelist** — a stray gate field (`approved`/`dangerous_ack`) the model emits is dropped, so the verdict
+can never carry a machine-actionable flag, and it never reorders or auto-selects. It **never invents an `entry_id`** (an
+unresolvable citation demotes to a tuned form, or to no alternative). On any LLM failure it **soft-fails** (alternative
+null + a "model unreachable" verdict) so the plan view never breaks.
+
+**Surface (attack-path).** A new on-demand endpoint `POST /attack-path/alternative` (`AltStepIn` → `AlternativeOut`) wires
+the engine to `STATE.by_id` + the hybrid search. Because it is on-demand, the alternative comes back from its own endpoint
+and the frontend holds it in component state — so **`AttackStep` gained no fields** (the three-places schema trap is
+side-stepped entirely). The `Alternative` response model does declare `foreign_refs`, so that per-command scope annotation
+is not stripped. A self-contained `AlternativeDisclosure` component renders the alternative below the primary (never
+importing `PlannedCommand`, to avoid an import cycle): a `GROUNDED · kb:<id>` (accent) or `AI-SUGGESTED · VERIFY` (amber)
+badge, the command block, any foreign-host note, and the *which & why* verdict.
+
+**Verification.** 10 new tests: engine unit tests (grounded-verbatim, tuned capped+unverified, choice-none, verdict has no
+gate field, LLM-unreachable soft-fail, never-invents-an-entry-id, scope-adaptation) + the AST executes-nothing test + two
+endpoint tests. Full backend suite **1375 pass** (the one red — `PUT /cockpit/windows/profiles/{profile_id}` vs the CORS
+method contract — is **pre-existing and unrelated**, present at the parent commit; a windows-profiles route to convert
+PUT→PATCH separately). Frontend: **tsc 0, lint 11 (baseline held), `next build` exit 0**. Screen **LOOKED AT** live: on an
+exploitation step whose primary was a NoSQL attempt for a SQLi goal, the second opinion returned a **GROUNDED ·
+kb:tool-sqlmap** alternative with the entry's commands substituted to `target.test` and a verdict that correctly flagged
+the mismatch — exercised end-to-end on both `claude-agent-sdk/opus` (API) and local `qwen3:8b` (browser).
+
+**Scope of this build.** This is the FOUNDATION surface. The same engine is designed to extend, as short follow-on builds,
+to the cockpit orchestrator (proposals queue — fields added to the persisted `Proposal`, still no approval field) and the
+AD / cloud / killchain graph orchestrators (alternative = a different way to abuse the same edge/seam, via each surface's
+existing category-restricted grounder). A **home-screen model dropdown** (inline quick-switch for no-key providers,
+modal fallback for keyed ones, rail payload kept secret-free) is folded into the same spec. Chat is deliberately excluded
+(no discrete command object). Spec: `docs/superpowers/specs/2026-08-09-dual-candidate-commands-and-model-picker-design.md`;
+plan: `docs/superpowers/plans/2026-08-09-dual-candidate-foundation-engine-attackpath.md`.

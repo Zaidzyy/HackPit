@@ -634,6 +634,61 @@ export const getStepAlternative = (
   signal?: AbortSignal,
 ) => postJSON<AlternativeResult>("/attack-path/alternative", input, signal);
 
+/** The four-gate verdict a proposal WOULD meet, asked with approved=false. Status-only. */
+export type GatePreview = {
+  would_refuse: boolean;
+  gate: string;
+  reason: string;
+  dangerous_flags: string[];
+};
+
+/** One command on the approval queue. REVIEWED, NEVER RUN from here — see the queue viewer. */
+export type Proposal = {
+  id: string;
+  command: string;
+  args: string[];
+  rationale: string;
+  expected: string;
+  source: string;
+  session_id: string | null;
+  engagement_id: string | null;
+  status: string;
+  created_at: string;
+  reviewed_at: string;
+  reviewer_note: string;
+  command_line: string;
+  gate_preview: GatePreview;
+};
+
+/** The approval queue, newest first — each row with the gate verdict it would meet. */
+export const listProposals = (
+  opts?: { sessionId?: string; status?: string },
+  signal?: AbortSignal,
+) => {
+  const qs = new URLSearchParams();
+  if (opts?.sessionId) qs.set("session_id", opts.sessionId);
+  if (opts?.status) qs.set("status", opts.status);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return getJSON<Proposal[]>(`/cockpit/proposals${suffix}`, signal);
+};
+
+/** Mark a proposal reviewed. THIS RUNS NOTHING — approval to execute is expressed only in the
+ *  operator's own request to /cockpit/exec. */
+export const reviewProposal = (
+  pid: string,
+  status: "approved" | "rejected",
+  note = "",
+  signal?: AbortSignal,
+) => {
+  const qs = new URLSearchParams({ status });
+  if (note) qs.set("note", note);
+  return postJSON<Proposal & { note: string }>(
+    `/cockpit/proposals/${encodeURIComponent(pid)}/review?${qs.toString()}`,
+    {},
+    signal,
+  );
+};
+
 /** On-demand second opinion for one queued cockpit proposal. */
 export const getProposalAlternative = (pid: string, signal?: AbortSignal) =>
   postJSON<AlternativeResult>(

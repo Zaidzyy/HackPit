@@ -2341,6 +2341,161 @@ a.hp-card {
   color: var(--dim);
 }
 
+/* THE APPROVAL QUEUE VIEWER (:proposals) — reviews, never runs. */
+.hp-pq-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0;
+}
+.hp-pq-filters {
+  display: flex;
+  gap: 6px;
+}
+.hp-pq-filter,
+.hp-pq-refresh {
+  font-size: 12px;
+  background: none;
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  padding: 4px 10px;
+  color: var(--dim);
+  cursor: pointer;
+}
+.hp-pq-filter.is-active {
+  color: var(--accent);
+  border-color: var(--accent-line);
+}
+.hp-pq-note {
+  font-size: 12.5px;
+  color: var(--dim);
+  margin: 4px 0 14px;
+}
+.hp-pq-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--dim);
+  font-size: 13px;
+  border: 1px dashed var(--border-2);
+  border-radius: 10px;
+}
+.hp-pq-err {
+  color: #ff7a59;
+}
+.hp-pq-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.hp-pq-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-2);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.hp-pq-card.is-approved {
+  border-left-color: var(--accent);
+}
+.hp-pq-card.is-rejected {
+  border-left-color: #ff7a59;
+  opacity: 0.75;
+}
+.hp-pq-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.hp-pq-status {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--white) 8%, transparent);
+  color: var(--white);
+}
+.hp-pq-status.is-approved {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.hp-pq-status.is-rejected {
+  color: #ff7a59;
+  background: color-mix(in srgb, #ff7a59 12%, transparent);
+}
+.hp-pq-ts {
+  margin-left: auto;
+}
+.hp-pq-cmd {
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--white) 4%, transparent);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.hp-pq-cmd code {
+  font-family: var(--font-jetbrains-mono), "JetBrains Mono", monospace;
+  font-size: 12.5px;
+  color: var(--white);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.hp-pq-why,
+.hp-pq-gate {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--dim);
+  margin: 4px 0;
+}
+.hp-pq-lead {
+  font-weight: 600;
+  margin-right: 6px;
+  color: var(--white);
+  letter-spacing: 0.02em;
+}
+.hp-pq-gate.is-refuse {
+  color: #ff7a59;
+}
+.hp-pq-gate.is-refuse .hp-pq-lead {
+  color: #ff7a59;
+}
+.hp-pq-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.hp-pq-approve,
+.hp-pq-reject {
+  font-size: 12.5px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid var(--border-2);
+  background: none;
+  color: var(--white);
+}
+.hp-pq-approve {
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+.hp-pq-approve:disabled,
+.hp-pq-reject:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.hp-pq-reviewed {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
 /* …and the same verdict on the individual command, which is where it is actually
  * actionable. The block keeps its normal shape — this is a caution, not a refusal, and
  * the command stays fully readable and copyable so the operator can edit it. */

@@ -37,3 +37,27 @@ def test_proposal_model_still_has_no_approval_field():
     fields = set(cockpit_proposals.Proposal.model_fields)
     assert "approved" not in fields
     assert "dangerous_ack" not in fields
+
+
+def test_queue_list_and_review_shape_the_viewer_depends_on():
+    # The :proposals viewer reads command_line + gate_preview from the list, and calls review.
+    cockpit_proposals.clear()
+    p = cockpit_proposals.propose("nmap", ["-sV", "target.test"],
+                                  rationale="fingerprint", source="operator")
+    client = TestClient(main.app)
+
+    rows = client.get("/cockpit/proposals").json()
+    assert any(r["id"] == p.id for r in rows)
+    row = next(r for r in rows if r["id"] == p.id)
+    assert row["command_line"] == "nmap -sV target.test"
+    assert set(row["gate_preview"]) >= {"would_refuse", "gate", "reason", "dangerous_flags"}
+    assert row["status"] == "pending"
+
+    reviewed = client.post(f"/cockpit/proposals/{p.id}/review?status=approved&note=ok").json()
+    assert reviewed["status"] == "approved"
+    # reviewing does NOT run — the payload says so, and there is no execution state
+    assert "RUN" in reviewed["note"].upper()
+
+    approved = client.get("/cockpit/proposals?status=approved").json()
+    assert any(r["id"] == p.id for r in approved)
+    assert all(r["status"] == "approved" for r in approved)

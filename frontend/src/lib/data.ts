@@ -111,6 +111,13 @@ export const SURFACE_BANDS: SurfaceBand[] = [
         href: "/workflows",
         desc: "Compose reusable prompt-step playbooks over the code-audit fan-out.",
       },
+      {
+        key: "proposals",
+        icon: "⇄",
+        label: ":proposals",
+        href: "/cockpit/proposals",
+        desc: "The approval queue — agent-proposed commands, each with a ⇄ second opinion. Reviewed, never run.",
+      },
     ],
   },
   {

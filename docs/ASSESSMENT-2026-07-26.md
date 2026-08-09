@@ -6268,8 +6268,10 @@ structured surfaces plus the model picker in the same session:
 
 * **Cockpit orchestrator** — `POST /cockpit/proposals/{id}/alternative` in main.py (cross-cutting: it reads the KB, which
   the cockpit package must not). It reads the queued proposal and **does not touch the `Proposal` model** — the "exactly one
-  place approval is expressed" line is untouched, there is still no approval field. (The queue has no frontend viewer yet, so
-  the api client is in place awaiting one.)
+  place approval is expressed" line is untouched, there is still no approval field. The **`:proposals` queue viewer**
+  (`/cockpit/proposals`, in the launcher's plan band) lists the queue with each row's gate verdict and the ⇄ second opinion;
+  its review buttons record a decision and **run nothing** (the copy says so). Looked at live (empty state); list/review
+  contract locked by a test.
 * **AD / cloud / kill-chain graphs** — `POST /cockpit/{ad,cloud,killchain}/alternative`. The alternative is *a different way
   to abuse the SAME edge/seam*, grounded via a **category-filtered candidate set** (AD→active-directory/windows, cloud→cloud,
   kill-chain→unrestricted) — enforcing the same domain restriction each edge grounder does, while giving the model candidate

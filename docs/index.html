@@ -174,15 +174,15 @@ function boot(){
     const tail=ci>ln[0].length?ln[1].slice(0,ci-ln[0].length):'';
     const cls=ln[2]==='ok'?'ok':ln[2]==='a'?'a':'';
     log.innerHTML=buf+'<span class="d">'+esc(head)+'</span><span class="'+cls+'">'+esc(tail)+'</span>';
-    ci++;setTimeout(boot,tail?7:4);
+    ci++;setTimeout(boot,tail?5:3);
   } else {
     const cls=ln[2]==='ok'?'ok':ln[2]==='a'?'a':'d';
     buf+='<span class="d">'+esc(ln[0])+'</span><span class="'+cls+'">'+esc(ln[1])+'</span>\n';
-    bi++;ci=0;setTimeout(boot,55);
+    bi++;ci=0;setTimeout(boot,40);
   }
 }
 function finish(){document.getElementById('boot').classList.add('done');
   [...document.querySelectorAll('.reveal')].forEach((e,i)=>setTimeout(()=>e.classList.add('in'),90*i))}
-setTimeout(boot,200);
+setTimeout(boot,150);
 </script>
 </body></html>

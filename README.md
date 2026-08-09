@@ -4,8 +4,8 @@
 <h1 align="center">HackPit</h1>
 
 <p align="center">
-  <em>Another AI that hacks?</em> Not quite. It's grounded in your own notes, drives real <strong> Kali </strong> tooling
-  plans the whole engagement, and drives real Kali tooling —<br>
+  <em>Another AI that hacks?</em> Yawn — until you watch it cite every step from real technique knowledge, drive real <strong> Kali </strong> tooling,
+  plan the whole engagement,  —<br>
   , and it never fires a single command you didn't approve.
 </p>
 

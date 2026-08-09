@@ -642,6 +642,23 @@ export const getProposalAlternative = (pid: string, signal?: AbortSignal) =>
     signal,
   );
 
+/** A graph edge/seam's move, for a second opinion (AD / cloud / killchain share this shape). */
+export type EdgeAltInput = {
+  title?: string;
+  cmd?: string;
+  entry_id?: string;
+  context?: string;
+};
+
+export const getADAlternative = (input: EdgeAltInput, signal?: AbortSignal) =>
+  postJSON<AlternativeResult>("/cockpit/ad/alternative", input, signal);
+
+export const getCloudAlternative = (input: EdgeAltInput, signal?: AbortSignal) =>
+  postJSON<AlternativeResult>("/cockpit/cloud/alternative", input, signal);
+
+export const getKillchainAlternative = (input: EdgeAltInput, signal?: AbortSignal) =>
+  postJSON<AlternativeResult>("/cockpit/killchain/alternative", input, signal);
+
 export const getLLMConfig = (signal?: AbortSignal) =>
   getJSON<LLMConfig>("/llm-config", signal);
 

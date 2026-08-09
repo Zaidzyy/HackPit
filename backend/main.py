@@ -2172,6 +2172,62 @@ def proposal_alternative(pid: str) -> dict[str, Any]:
     )
 
 
+class EdgeAltIn(BaseModel):
+    """A graph edge/seam's proposed move, for a second opinion. The command, its technique
+    title, and any cited KB entry come straight from the proposal the graph already rendered."""
+    title: str = ""
+    cmd: str = ""
+    entry_id: str = ""
+    context: str = Field("", description="Edge kind / seam description — becomes the goal.")
+
+
+def _category_search(cats: frozenset[str]):
+    """A one-arg KB search restricted to the given categories — so a graph alternative is
+    grounded in the SAME domain the edge's own grounder is restricted to (AD/Windows, cloud),
+    and an off-topic hit can't mis-ground the abuse. An empty set means no restriction."""
+    def _s(q: str) -> list[dict[str, Any]]:
+        hits = _resilient_search(q, 16, "hybrid")
+        if not cats:
+            return hits[:8]
+        return [h for h in hits
+                if (STATE.by_id.get(h.get("id")) or {}).get("category") in cats][:8]
+    return _s
+
+
+@app.post("/cockpit/ad/alternative", response_model=AlternativeOut)
+def ad_alternative(req: EdgeAltIn = Body(...)) -> dict[str, Any]:
+    """Second opinion for one AD abuse edge — a different way to abuse the SAME edge (a grounded
+    AD/Windows technique, or an AI-tuned command marked unverified) + a verdict. EXECUTES NOTHING;
+    cross-cutting (needs the KB), so it lives here, not in the decoupled adgraph package."""
+    return alternatives.best_alternative(
+        {"title": req.title, "cmd": req.cmd, "entry_id": req.entry_id},
+        goal=(req.context or "abuse this Active Directory edge"), target=None, scope=None,
+        by_id=STATE.by_id, search_fn=_category_search(frozenset({"active-directory", "windows"})),
+    )
+
+
+@app.post("/cockpit/cloud/alternative", response_model=AlternativeOut)
+def cloud_alternative(req: EdgeAltIn = Body(...)) -> dict[str, Any]:
+    """Second opinion for one cloud IAM abuse edge — grounded in cloud-category entries only."""
+    return alternatives.best_alternative(
+        {"title": req.title, "cmd": req.cmd, "entry_id": req.entry_id},
+        goal=(req.context or "abuse this cloud IAM edge"), target=None, scope=None,
+        by_id=STATE.by_id, search_fn=_category_search(frozenset({"cloud"})),
+    )
+
+
+@app.post("/cockpit/killchain/alternative", response_model=AlternativeOut)
+def killchain_alternative(req: EdgeAltIn = Body(...)) -> dict[str, Any]:
+    """Second opinion for one cross-domain kill-chain seam — a different way to cross the SAME
+    seam. Unrestricted candidates, like the seam's own bridge grounder (which is not
+    category-restricted)."""
+    return alternatives.best_alternative(
+        {"title": req.title, "cmd": req.cmd, "entry_id": req.entry_id},
+        goal=(req.context or "cross this kill-chain seam"), target=None, scope=None,
+        by_id=STATE.by_id, search_fn=_category_search(frozenset()),
+    )
+
+
 # --------------------------------------------------------------------------- #
 # engagement sessions — save a composed path and work it interactively
 # --------------------------------------------------------------------------- #

@@ -1,13 +1,15 @@
 "use client";
 
+import { useState } from "react";
 import { motion } from "framer-motion";
 import { TopBar } from "./TopBar";
 import { StatCounter } from "./StatCounter";
 import { CategoryGrid } from "./CategoryGrid";
 import { StatusRail } from "./StatusRail";
 import { SurfaceBands } from "./SurfaceBands";
+import { LLMSettingsModal } from "./LLMSettingsModal";
 import { STAT_FIELDS } from "@/lib/data";
-import { getCategories, getHomeSummary, getStats } from "@/lib/api";
+import { getCategories, getHomeSummary, getLLMConfig, getStats } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { useReducedMotion } from "@/lib/useReducedMotion";
 
@@ -26,9 +28,13 @@ import { useReducedMotion } from "@/lib/useReducedMotion";
  */
 export function Home({ active }: { active: boolean }) {
   const reduced = useReducedMotion();
+  // Bumped after an inline model switch or a settings save, to refetch the rail + config.
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const stats = useApi(getStats, []);
   const categories = useApi(getCategories, []);
-  const summary = useApi(getHomeSummary, []);
+  const summary = useApi(getHomeSummary, [refreshKey]);
+  const llm = useApi(getLLMConfig, [refreshKey]);
 
   // Counters only start once revealed AND real numbers are in hand.
   const countersActive = active && !!stats.data;
@@ -71,6 +77,18 @@ export function Home({ active }: { active: boolean }) {
         rail={summary.data?.rail ?? null}
         loading={summary.loading}
         error={summary.error}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onModelChanged={() => setRefreshKey((k) => k + 1)}
+      />
+
+      <LLMSettingsModal
+        open={settingsOpen}
+        config={llm.data}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={() => {
+          setSettingsOpen(false);
+          setRefreshKey((k) => k + 1);
+        }}
       />
 
       <SurfaceBands

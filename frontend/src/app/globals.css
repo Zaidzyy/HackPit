@@ -2266,6 +2266,81 @@ a.hp-card {
   color: #ff7a59;
 }
 
+/* HOME MODEL QUICK-SWITCH — the launcher's llm cell as an inline model picker. Only no-key
+ * providers (claude-agent-sdk aliases, local ollama) switch here; keyed providers route to the
+ * settings modal via the last item. The rail payload stays status-only. */
+.hp-st-llm {
+  position: relative;
+}
+.hp-st-llm-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.hp-st-llm-caret {
+  font-size: 9px;
+  color: var(--dim);
+}
+.hp-st-llm-menu {
+  position: absolute;
+  top: 130%;
+  left: 0;
+  z-index: 20;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--bg-1, #0c0c0e);
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.hp-st-llm-group {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dim);
+  padding: 6px 8px 2px;
+}
+.hp-st-llm-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 6px 8px;
+  border-radius: 4px;
+  color: var(--white);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.hp-st-llm-item:hover {
+  background: color-mix(in srgb, var(--white) 6%, transparent);
+}
+.hp-st-llm-item.is-active {
+  color: var(--accent);
+}
+.hp-st-llm-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.hp-st-llm-more {
+  margin-top: 4px;
+  border-top: 1px solid var(--border-2);
+  color: var(--dim);
+  font-size: 12px;
+}
+.hp-st-llm-empty {
+  padding: 4px 8px 6px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
 /* …and the same verdict on the individual command, which is where it is actually
  * actionable. The block keeps its normal shape — this is a caution, not a refusal, and
  * the command stays fully readable and copyable so the operator can edit it. */

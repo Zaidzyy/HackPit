@@ -1,6 +1,7 @@
 "use client";
 
 import type { HomeRail } from "@/lib/api";
+import { ModelQuickSwitch } from "./ModelQuickSwitch";
 
 type Cell = {
   key: string;
@@ -29,10 +30,16 @@ export function StatusRail({
   rail,
   loading,
   error,
+  onOpenSettings,
+  onModelChanged,
 }: {
   rail: HomeRail | null;
   loading: boolean;
   error: string | null;
+  /** Opens the full LLM settings modal (owned by the caller) — for keyed providers. */
+  onOpenSettings?: () => void;
+  /** Called after an inline no-key model switch, so the caller can refresh the rail. */
+  onModelChanged?: () => void;
 }) {
   if (error) {
     return (
@@ -93,19 +100,30 @@ export function StatusRail({
 
   return (
     <div className="hp-rail">
-      {cells.map((c) => (
-        <div
-          key={c.key}
-          className={`hp-st${c.accent ? " hp-st-on" : ""}`}
-          title={`${c.label}: ${c.value}`}
-        >
-          <span className={`hp-dot hp-dot-${c.tone}`} aria-hidden />
-          <span>
-            {c.label}&nbsp; <b>{c.value}</b>
-            {c.sub ? <span className="hp-sub"> {c.sub}</span> : null}
-          </span>
-        </div>
-      ))}
+      {cells.map((c) =>
+        c.key === "llm" && onOpenSettings ? (
+          <ModelQuickSwitch
+            key="llm"
+            provider={rail.llm_provider}
+            model={rail.llm_model}
+            tone={c.tone}
+            onOpenSettings={onOpenSettings}
+            onModelChanged={onModelChanged}
+          />
+        ) : (
+          <div
+            key={c.key}
+            className={`hp-st${c.accent ? " hp-st-on" : ""}`}
+            title={`${c.label}: ${c.value}`}
+          >
+            <span className={`hp-dot hp-dot-${c.tone}`} aria-hidden />
+            <span>
+              {c.label}&nbsp; <b>{c.value}</b>
+              {c.sub ? <span className="hp-sub"> {c.sub}</span> : null}
+            </span>
+          </div>
+        )
+      )}
     </div>
   );
 }

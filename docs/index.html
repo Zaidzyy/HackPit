@@ -77,7 +77,7 @@
   <p class="lede reveal">An AI pentest cockpit that <b>plans the attack</b> and <b>runs it live</b> — with a human approving every command.</p>
   <p class="sub reveal">Recon to Domain Admin, grounded in real technique knowledge, gated at every step.</p>
   <div class="cta reveal"><a class="btn p" href="https://github.com/Zaidzyy/HackPit">View on GitHub</a><a class="btn s" href="#does">What it does ↓</a></div>
-  <div class="badges reveal"><span class="badge">CI <b>passing</b></span><span class="badge"><b>2,743</b> KB</span><span class="badge"><b>115</b> tools</span></div>
+  <div class="badges reveal"><span class="badge">CI <b>passing</b></span><span class="badge"><b>2,747</b> KB</span><span class="badge"><b>155</b> tools</span></div>
 </header>
 
 <section class="wrap reveal"><div class="h"><span>01</span> // demo</div>
@@ -98,7 +98,7 @@
   <div class="groups">
     <div class="group"><div class="gh"><span class="dot"></span><h3>Plan</h3><span class="tag">the companion</span></div>
       <ul>
-        <li><b>Search your knowledge</b> — semantic search over ~2,743 techniques, one keystroke away.</li>
+        <li><b>Search your knowledge</b> — semantic search over ~2,747 techniques, one keystroke away.</li>
         <li><b>Compose attack paths</b> — describe a target, get an ordered recon→privesc walkthrough, grounded in real commands.</li>
         <li><b>Run engagements</b> — a live checklist that remembers your steps, evidence and creds.</li>
         <li><b>Draft reports</b> — grounded write-ups (OSCP / CPTS / bug-bounty formats) built from what you actually did.</li>
@@ -112,15 +112,18 @@
         <li><b>Kill-chain map</b> — watch the attack path light up as it runs.</li>
         <li><b>Real shells</b> — a persistent <code>:kali</code> shell and a full <code>:terminal</code> (vim, msfconsole, evil-winrm).</li>
         <li><b>HTTP repeater</b> — compose, send, replay and diff web requests.</li>
+        <li><b>Web-vuln testers</b> — single-packet race conditions, request smuggling, cache poisoning, a JWT/OAuth token workbench — safe detect, gated confirm.</li>
         <li><b>CVE lookup</b> — <code>:exploits</code> maps a service + version to public exploits.</li>
       </ul>
     </div>
     <div class="group"><div class="gh"><span class="dot"></span><h3>Go deeper</h3><span class="tag">the hard stuff</span></div>
       <ul>
-        <li><b>Active Directory</b> — load BloodHound, see the route to Domain Admin, and let the AI walk it <b>live over WinRM</b> against a real Windows box.</li>
+        <li><b>Active Directory</b> — load BloodHound, see the route to Domain Admin, and let the AI walk it <b>live over WinRM</b> — Kerberoast, DCSync, AD CS (ESC1–8) and delegation abuse.</li>
+        <li><b>Cloud attack</b> — map a cloud account's IAM to the path to admin, and chain a web SSRF into cloud credentials via the metadata service.</li>
+        <li><b>Cross-domain kill-chain</b> — stitch web → cloud → on-prem into one route to the objective.</li>
         <li><b>C2 &amp; tunnels</b> — Sliver implants, DNS tunneling, chisel/ligolo pivoting — all behind the gates.</li>
-        <li><b>Tool arsenal</b> — 115 tools with ready-to-run commands, target already filled in.</li>
-        <li><b>Code scan</b> — static AppSec (Semgrep + Bandit) across 8 languages.</li>
+        <li><b>Tool arsenal</b> — 155 tools with ready-to-run commands, target already filled in.</li>
+        <li><b>Code scan</b> — static AppSec + AI code-audit (incl. Web3), across many languages.</li>
       </ul>
     </div>
     <div class="group"><div class="gh"><span class="dot"></span><h3>Stay safe</h3><span class="tag">safe by design</span></div>
@@ -154,9 +157,9 @@ requestAnimationFrame(rain)}rain();
 // boot then reveal
 const lines=[
  ['$ hackpit --init',''],
- ['[+] loading knowledge base ......... ','2,743 entries','ok'],
+ ['[+] loading knowledge base ......... ','2,747 entries','ok'],
  ['[+] sandboxes up .................. ','isolated lab · engage · :kali','ok'],
- ['[+] tools staged .................. ','115 catalogued','ok'],
+ ['[+] tools staged .................. ','155 catalogued','ok'],
  ['[+] gates armed ................... ','target-lock · approval · danger · isolation','ok'],
  ['[+] agent policy .................. ','propose-only · never-auto-run','ok'],
  ['[+] ready. every command is yours to approve.','','a'],
@@ -171,15 +174,15 @@ function boot(){
     const tail=ci>ln[0].length?ln[1].slice(0,ci-ln[0].length):'';
     const cls=ln[2]==='ok'?'ok':ln[2]==='a'?'a':'';
     log.innerHTML=buf+'<span class="d">'+esc(head)+'</span><span class="'+cls+'">'+esc(tail)+'</span>';
-    ci++;setTimeout(boot,tail?13:7);
+    ci++;setTimeout(boot,tail?7:4);
   } else {
     const cls=ln[2]==='ok'?'ok':ln[2]==='a'?'a':'d';
     buf+='<span class="d">'+esc(ln[0])+'</span><span class="'+cls+'">'+esc(ln[1])+'</span>\n';
-    bi++;ci=0;setTimeout(boot,110);
+    bi++;ci=0;setTimeout(boot,55);
   }
 }
 function finish(){document.getElementById('boot').classList.add('done');
   [...document.querySelectorAll('.reveal')].forEach((e,i)=>setTimeout(()=>e.classList.add('in'),90*i))}
-setTimeout(boot,350);
+setTimeout(boot,200);
 </script>
 </body></html>

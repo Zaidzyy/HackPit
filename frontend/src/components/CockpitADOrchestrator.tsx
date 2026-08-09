@@ -6,11 +6,13 @@ import {
   adOrchestrateAdvance,
   adOrchestratePropose,
   execCockpitStream,
+  getADAlternative,
   listWindowsProfiles,
   type ADProposal,
   type ExecEvent,
   type WindowsProfile,
 } from "@/lib/api";
+import { AlternativeDisclosure } from "./AlternativeDisclosure";
 
 type Line = { kind: "meta" | "stdout" | "stderr" | "err"; text: string };
 
@@ -341,6 +343,19 @@ export function CockpitADOrchestrator({
                 ))}
               </select>
             </label>
+          )}
+
+          {effCommand && (
+            <AlternativeDisclosure
+              fetcher={() =>
+                getADAlternative({
+                  title: p.technique.title ?? "",
+                  cmd: effCommand,
+                  entry_id: p.technique.entry_id ?? "",
+                  context: `${p.edge.source} —${p.edge.kind}→ ${p.edge.target}`,
+                })
+              }
+            />
           )}
 
           <div className="hp-ado-actions">

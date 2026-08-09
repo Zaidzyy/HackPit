@@ -6,9 +6,11 @@ import {
   cloudOrchestrateAdvance,
   cloudOrchestratePropose,
   execCockpitStream,
+  getCloudAlternative,
   type CloudProposal,
   type ExecEvent,
 } from "@/lib/api";
+import { AlternativeDisclosure } from "./AlternativeDisclosure";
 
 type Line = { kind: "meta" | "stdout" | "stderr" | "err"; text: string };
 
@@ -275,6 +277,19 @@ export function CockpitCloudOrchestrator({
                 this command and I am authorized to run it against this account.
               </span>
             </label>
+          )}
+
+          {p.command && (
+            <AlternativeDisclosure
+              fetcher={() =>
+                getCloudAlternative({
+                  title: p.technique.title ?? "",
+                  cmd: `${p.command} ${p.args.join(" ")}`.trim(),
+                  entry_id: p.technique.entry_id ?? "",
+                  context: `${p.edge.source_label} —${p.edge.kind}→ ${p.edge.target_label}`,
+                })
+              }
+            />
           )}
 
           <div className="hp-ado-actions">

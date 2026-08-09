@@ -6,6 +6,7 @@ import { DetectionDisclosure } from "./DetectionPanel";
 import {
   ApiError,
   execCockpitStream,
+  getKillchainAlternative,
   killchainAdvance,
   killchainGraph,
   killchainPropose,
@@ -16,6 +17,7 @@ import {
   type KillchainProposal,
   type KillchainTechnique,
 } from "@/lib/api";
+import { AlternativeDisclosure } from "./AlternativeDisclosure";
 
 /**
  * The cross-domain KILL-CHAIN graph — the capstone that stitches the web foothold, cloud IAM and
@@ -588,6 +590,18 @@ function HopDrawer({
       {isSeam ? (
         <>
           <pre className="hp-adg-cmd">{cmd}</pre>
+          {cmd && (
+            <AlternativeDisclosure
+              fetcher={() =>
+                getKillchainAlternative({
+                  title: tech.title,
+                  cmd,
+                  entry_id: tech.entry_id ?? "",
+                  context: `seam ${tech.domain_from}→${tech.domain_to}: ${edge.kind}`,
+                })
+              }
+            />
+          )}
           {tech.destructive && (
             <div className="hp-adg-danger" role="alert">
               <p className="hp-adg-danger-head">⚠ this crossing establishes control on the far side</p>

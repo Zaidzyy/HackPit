@@ -17,6 +17,7 @@ import {
   composeAttackPath,
   createSession,
   getLLMConfig,
+  getStepAlternative,
   type AttackPath,
   type AttackStep,
   type LLMConfig,
@@ -577,10 +578,16 @@ function StepCard({
 
       {step.commands.length > 0 && (
         <AlternativeDisclosure
-          goal={goal}
-          target={target}
-          scopeText={scopeText}
-          step={{ title: step.title, cmd: step.commands[0].cmd, entryId: step.entry_id }}
+          fetcher={() =>
+            getStepAlternative({
+              goal,
+              target: target ?? null,
+              scope_text: scopeText ?? null,
+              step_title: step.title,
+              step_cmd: step.commands[0].cmd,
+              step_entry_id: step.entry_id,
+            })
+          }
         />
       )}
 

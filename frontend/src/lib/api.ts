@@ -634,6 +634,14 @@ export const getStepAlternative = (
   signal?: AbortSignal,
 ) => postJSON<AlternativeResult>("/attack-path/alternative", input, signal);
 
+/** On-demand second opinion for one queued cockpit proposal. */
+export const getProposalAlternative = (pid: string, signal?: AbortSignal) =>
+  postJSON<AlternativeResult>(
+    `/cockpit/proposals/${encodeURIComponent(pid)}/alternative`,
+    {},
+    signal,
+  );
+
 export const getLLMConfig = (signal?: AbortSignal) =>
   getJSON<LLMConfig>("/llm-config", signal);
 

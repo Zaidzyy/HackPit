@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { getStepAlternative, type AlternativeResult } from "@/lib/api";
+import type { AlternativeResult } from "@/lib/api";
 
 /**
  * On-demand SECOND OPINION for one command. Fetches ONE alternative candidate + a
@@ -9,20 +9,16 @@ import { getStepAlternative, type AlternativeResult } from "@/lib/api";
  * is never touched here. A grounded alternative links its KB entry and is trusted; an
  * ai_suggested one is badged VERIFY (the model's own, unverified) command.
  *
- * Self-contained on purpose: it does NOT import the attack-path screen's PlannedCommand (that
- * would form an import cycle). Its command block is deliberately simpler — a copyable line plus
- * the honesty markers (VERIFY badge, foreign-host note).
+ * Surface-agnostic: the caller supplies a ``fetcher`` that returns {alternative, verdict}, so the
+ * same disclosure serves the attack path, the orchestrator queue, and the graph orchestrators.
+ * Self-contained on purpose: it does NOT import a screen's command renderer (that would form an
+ * import cycle). Its command block is deliberately simple — a copyable line plus the honesty
+ * markers (VERIFY badge, foreign-host note).
  */
 export function AlternativeDisclosure({
-  goal,
-  target,
-  scopeText,
-  step,
+  fetcher,
 }: {
-  goal: string;
-  target?: string | null;
-  scopeText?: string | null;
-  step: { title: string; cmd: string; entryId: string };
+  fetcher: () => Promise<AlternativeResult>;
 }) {
   const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [result, setResult] = useState<AlternativeResult | null>(null);
@@ -30,14 +26,7 @@ export function AlternativeDisclosure({
   async function load() {
     setState("loading");
     try {
-      const r = await getStepAlternative({
-        goal,
-        target: target ?? null,
-        scope_text: scopeText ?? null,
-        step_title: step.title,
-        step_cmd: step.cmd,
-        step_entry_id: step.entryId,
-      });
+      const r = await fetcher();
       setResult(r);
       setState("done");
     } catch {

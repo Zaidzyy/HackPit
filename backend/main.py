@@ -60,6 +60,7 @@ from cockpit import runstore as cockpit_runstore  # noqa: E402
 from cockpit import engagement as cockpit_engagement  # noqa: E402
 from cockpit import reconcile as cockpit_reconcile  # noqa: E402
 from cockpit import loot as cockpit_loot  # noqa: E402
+from cockpit import proposals as cockpit_proposals  # noqa: E402  (approval queue — executes nothing)
 from cockpit import winprofiles as cockpit_winprofiles  # noqa: E402  (Windows target store)
 from cockpit import sandbox as cockpit_sandbox  # noqa: E402  (read-only container probes)
 # The two evasion/exfil surfaces. Their ROUTES live here, not in cockpit/router.py, and NOT in
@@ -2146,6 +2147,27 @@ def attack_path_alternative(req: AltStepIn = Body(...)) -> dict[str, Any]:
         goal=goal, target=req.target, scope=req.scope_text,
         by_id=STATE.by_id,
         # the engine's search_fn contract is one-arg; _resilient_search needs (q, top, mode)
+        search_fn=lambda q: _resilient_search(q, 8, "hybrid"),
+    )
+
+
+@app.post("/cockpit/proposals/{pid}/alternative", response_model=AlternativeOut)
+def proposal_alternative(pid: str) -> dict[str, Any]:
+    """On-demand SECOND OPINION for one queued proposal. Returns one alternative candidate
+    (a grounded KB technique, or an AI-tuned command marked unverified) + an advisory verdict.
+
+    Lives in main.py, not the cockpit router, because it is CROSS-CUTTING — it needs the KB
+    (STATE.by_id + hybrid search), which the cockpit package must not reach into (the
+    cockpit/arsenal decoupling rule). It READS the proposal and EXECUTES NOTHING; it does not
+    touch the Proposal model, so the queue's "exactly one place approval is expressed" line is
+    untouched — there is still no approval field anywhere near this."""
+    p = cockpit_proposals.get(pid)
+    if p is None:
+        raise HTTPException(status_code=404, detail=f"no proposal {pid!r}")
+    return alternatives.best_alternative(
+        {"title": p.rationale or p.command, "cmd": p.command_line(), "entry_id": ""},
+        goal=(p.rationale or f"run {p.command}"), target=None, scope=None,
+        by_id=STATE.by_id,
         search_fn=lambda q: _resilient_search(q, 8, "hybrid"),
     )
 

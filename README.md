@@ -751,7 +751,8 @@ Honestly: the safety model is the part I'm most careful about, and it's also the
 ---
 
 <p align="center">
-  <img src="assets/screenshots/01-intro-splash.png" alt="HackPit — offensive security companion" width="70%">
+  <img src="assets/screenshots/01-intro-splash.png" alt="HackPit — offensive security companion" width="49%">
+  <img src="assets/screenshots/02-home.png" alt="HackPit home — category grid and live knowledge-base counters" width="49%">
 </p>
 
 <p align="center"><sub>Every technique you know, one keystroke away.</sub></p>

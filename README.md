@@ -4,10 +4,9 @@
 <h1 align="center">HackPit</h1>
 
 <p align="center">
-  <em>Another AI that hacks?</em> Yawn — until you watch it plan a whole engagement from real technique knowledge,
-  <br> drive real <strong> Kali </strong> tooling,
-  —<br>
-  , and never fire a single command you didn't approve.
+  <em>Another AI that hacks?</em> Yawn — until you watch it plan a whole engagement from real technique knowledge,<br>
+  drive real <strong>Kali</strong> tooling, and draft the report<br>
+  — all without firing a single command you didn't approve.
 </p>
 
 <p align="center">

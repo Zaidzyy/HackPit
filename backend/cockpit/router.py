@@ -390,7 +390,7 @@ def get_windows_profile(profile_id: str) -> dict[str, Any]:
     return pub
 
 
-@router.put("/windows/profiles/{profile_id}")
+@router.patch("/windows/profiles/{profile_id}")
 def update_windows_profile(profile_id: str, req: WindowsProfileUpdateIn) -> dict[str, Any]:
     """Update a profile. Fields left unset are unchanged; an empty secret keeps the stored one."""
     fields = {k: v for k, v in req.model_dump().items() if v is not None}

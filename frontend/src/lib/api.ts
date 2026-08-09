@@ -6135,11 +6135,11 @@ export type WindowsTestResult = {
   error?: string;
 };
 
-async function putJSON<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+async function patchJSON<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`${API_URL}${path}`, {
-      method: "PUT",
+      method: "PATCH",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(body),
       signal,
@@ -6180,7 +6180,7 @@ export const updateWindowsProfile = (
   input: Partial<WindowsProfileInput>,
   signal?: AbortSignal
 ) =>
-  putJSON<WindowsProfile>(
+  patchJSON<WindowsProfile>(
     `/cockpit/windows/profiles/${encodeURIComponent(profileId)}`,
     input,
     signal

@@ -567,7 +567,9 @@ def attack_path_alternative(req: AltStepIn = Body(...)) -> dict[str, Any]:
     return alternatives.best_alternative(
         {"title": req.step_title, "cmd": req.step_cmd, "entry_id": req.step_entry_id},
         goal=goal, target=req.target, scope=req.scope_text,
-        by_id=STATE.by_id, search_fn=_resilient_search,
+        by_id=STATE.by_id,
+        # engine's search_fn contract is one-arg; _resilient_search needs (q, top, mode)
+        search_fn=lambda q: _resilient_search(q, 8, "hybrid"),
     )
 ```
 

@@ -26,15 +26,8 @@
 > The knowledge sources the KB is built from — course notes, write-ups, cloned repos, PDFs, cheat sheets — are kept **local and git-ignored**. **a fresh clone starts with an empty knowledge base until you build one or get it from the author.**
 
 
-
 HackPit is an **AI-driven offensive-security companion with a gated execution cockpit**. It started as one thing — turn a scattered pile of pentest notes into a single searchable knowledge base — and grew into a second: a Kali cockpit where the AI plans the attack and you approve every command it runs.
 
-Two ideas make it different from "an LLM that hacks":
-
-- **Grounded, not generated.** Every answer cites a real technique from *your* library. Commands come from the knowledge base, never invented by the model — and anything the AI does add is clearly badged `AI-SUGGESTED · VERIFY`.
-- **Proposes, never fires.** The agent plans the whole kill-chain, but a human approves each command individually. There is no autonomous mode — and that's a deliberate design choice, enforced in code, not a missing feature.
-
-It runs **local-first** — the knowledge base, hybrid search, and every execution surface stay on your machine. The default AI composer is the **Claude Agent SDK (Opus)**, driven through your local Claude Code login with no API key; switch to local **Ollama** any time you want a fully-offline setup where nothing leaves at all.
 
 <p align="center">
   <img src="assets/screenshots/02-home.png" alt="HackPit home — category grid and live knowledge-base counters" width="100%">

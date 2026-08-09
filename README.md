@@ -53,6 +53,7 @@ It runs **local-first** — the knowledge base, hybrid search, and every executi
 |---|---|
 | 🔎 **Knowledge base + hybrid search** | 2,747 deduped, source-attributed techniques across 33 categories. `⌘K` finds them by meaning. |
 | 🧭 **Guided attack paths** | Recon → privesc walkthroughs, write-up-first, KB-grounded, AI gap-fill clearly marked. |
+| ⇄ **Second opinion on any command** | On demand, a step / proposal / graph-edge offers **one** AI-curated alternative + a plain *which-is-better* verdict — a different KB technique (grounded, verbatim) or a tuned command (badged `AI-SUGGESTED · VERIFY`). The primary is never touched; the verdict is advice, never a gate. On the attack path, orchestrator queue, and the AD / cloud / kill-chain graphs. |
 | 🎯 **Gated cockpit** | Real Kali execution, one approved command at a time, behind four ordered gates. |
 | ▤ **Interactive persistent sessions** | Named, parallel **tmux** sessions in the open box with per-session cwd — **automatic prompt detection** flips a session to *"interactive — send input"* when `msfconsole` / `sliver-client` / `evil-winrm` / a REPL is waiting, long scans **auto-background at 60s** with a notify-once completion, and wedge / pipe-degradation recovery. **Input stays human-only, every line.** |
 | ◈ **Guided recon** | Scoped domain → recon as approved jobs → ranked attack surface; discoveries can only widen the set *within* scope. |
@@ -110,6 +111,10 @@ Describe a target and HackPit composes an ordered **recon → enumeration → ex
   <img src="assets/screenshots/05-attack-path-writeup.png" alt="Write-up-first attack path with the green 'from your writeup' banner" width="49%">
   <img src="assets/screenshots/06-attack-path-profiled.jpg" alt="A profiled attack path showing inferred target class and priority bug classes" width="49%">
 </p>
+
+### ⇄ Second opinion — one alternative, honestly labelled
+
+Grounding is the default, not a ceiling. Any generated command — an attack-path step, a queued proposal, or an AD / cloud / kill-chain graph edge — carries an on-demand **⇄ second opinion**. Click it and a shared, **execute-nothing** engine returns exactly **one** alternative plus a plain *which-is-better* verdict, composed by whatever model you've selected. The AI decides each time whether the better move is **a different KB technique** (grounded, its real commands used **verbatim** and target-substituted) or **a tuned form of the same command** (the model's own, badged **`AI-SUGGESTED · VERIFY`** and marked unverified). Both go through the same scope check as any primary; the verdict is **advice only** — it never reorders, never auto-selects, and carries no approval field. The primary command is never modified.
 
 ### Engagements, assistant & grounded reports
 

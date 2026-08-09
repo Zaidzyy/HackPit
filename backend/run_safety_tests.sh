@@ -177,6 +177,7 @@ run_test test_workflows_safety.py "WORKFLOW BUILDER SAFETY (§0: AUTHORING EXECU
 run_test test_arsenal.py "tool arsenal tests (catalog / lookup / target-faithful render / provenance tags)"
 
 run_test test_arsenal_safety.py "tool arsenal SAFETY invariants (executes nothing / NO gate bypassed / gates unchanged)"
+run_test test_alternatives_safety.py "second-opinion engine SAFETY (alternatives.py executes nothing by AST — no subprocess / exec / eval)"
 
 run_test test_phase1_runtime.py "Phase-1 runtime (timeout clamp / background jobs / loot / tool reconciliation)"
 

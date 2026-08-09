@@ -6263,10 +6263,27 @@ exploitation step whose primary was a NoSQL attempt for a SQLi goal, the second 
 kb:tool-sqlmap** alternative with the entry's commands substituted to `target.test` and a verdict that correctly flagged
 the mismatch — exercised end-to-end on both `claude-agent-sdk/opus` (API) and local `qwen3:8b` (browser).
 
-**Scope of this build.** This is the FOUNDATION surface. The same engine is designed to extend, as short follow-on builds,
-to the cockpit orchestrator (proposals queue — fields added to the persisted `Proposal`, still no approval field) and the
-AD / cloud / killchain graph orchestrators (alternative = a different way to abuse the same edge/seam, via each surface's
-existing category-restricted grounder). A **home-screen model dropdown** (inline quick-switch for no-key providers,
-modal fallback for keyed ones, rail payload kept secret-free) is folded into the same spec. Chat is deliberately excluded
-(no discrete command object). Spec: `docs/superpowers/specs/2026-08-09-dual-candidate-commands-and-model-picker-design.md`;
-plan: `docs/superpowers/plans/2026-08-09-dual-candidate-foundation-engine-attackpath.md`.
+**Scope of this build.** This began as the FOUNDATION surface (engine + attack path) and was then completed to all five
+structured surfaces plus the model picker in the same session:
+
+* **Cockpit orchestrator** — `POST /cockpit/proposals/{id}/alternative` in main.py (cross-cutting: it reads the KB, which
+  the cockpit package must not). It reads the queued proposal and **does not touch the `Proposal` model** — the "exactly one
+  place approval is expressed" line is untouched, there is still no approval field. (The queue has no frontend viewer yet, so
+  the api client is in place awaiting one.)
+* **AD / cloud / kill-chain graphs** — `POST /cockpit/{ad,cloud,killchain}/alternative`. The alternative is *a different way
+  to abuse the SAME edge/seam*, grounded via a **category-filtered candidate set** (AD→active-directory/windows, cloud→cloud,
+  kill-chain→unrestricted) — enforcing the same domain restriction each edge grounder does, while giving the model candidate
+  diversity to pick a genuinely different technique. Wired into all three orchestrator screens.
+* **Home model dropdown** — the launcher's llm status cell became an inline quick-switch: no-key providers switch in place
+  (claude-agent-sdk opus/sonnet/haiku, local ollama models via `/ollama-models`) by writing the global `/llm-config`; keyed
+  providers route to the existing settings modal. The rail payload stays status-only, so `test_home_summary` is unchanged.
+  (A `overflow:hidden` on the rail clipped the dropdown — moved corner-clipping onto the end cells; caught by looking at it.)
+
+Also cleared a **pre-existing** unrelated red on the way: `PUT /cockpit/windows/profiles/{id}` → PATCH, to satisfy the
+CORS-method contract (the windows-profile route, not this feature).
+
+The shared engine (`alternatives.py`) is written once and reused by every surface via a `fetcher`-prop disclosure on the
+frontend. **Chat stays excluded** (no discrete command object). Verified: **16 new tests** (engine 8 · attack-path endpoint 2
+· proposal 3 · graph 3) + full suite **1382 pass**; tsc 0 · lint 11 · `next build` 0; the attack-path and home surfaces were
+looked at live. Spec: `docs/superpowers/specs/2026-08-09-dual-candidate-commands-and-model-picker-design.md`; plan:
+`docs/superpowers/plans/2026-08-09-dual-candidate-foundation-engine-attackpath.md`.

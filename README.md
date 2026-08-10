@@ -29,9 +29,6 @@
 > ### 📦 KB not shared here, Contact me for full access to this tool
 > The knowledge sources the KB is built from — course notes, write-ups, cloned repos, PDFs, cheat sheets — are kept **local and git-ignored**. **a fresh clone starts with an empty knowledge base until you build one or get it from the author.**
 
-
----
-
 <p align="center">
   <img src="assets/screenshots/01-intro-splash.png" alt="HackPit — offensive security companion" width="49%">
   <img src="assets/screenshots/02-home.png" alt="HackPit home — category grid and live knowledge-base counters" width="49%">

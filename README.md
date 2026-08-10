@@ -38,8 +38,6 @@
 </p>
 <p align="center"><sub>Every technique you know, one keystroke away.</sub></p>
 
----
-
 > ### ⚠️ Authorized use only
 > The cockpit runs **real offensive tools against real hosts** — with C2, evasion tooling, and a live Windows/AD path. Use it only where you're authorized: your own lab, an HTB/PG box, or a client with a signed scope. Every command is gated on your explicit approval, and in engagement mode on a target you declared in scope. **Engagement mode has no network containment** — human approval is the only thing standing between a command and the internet. Read the [Safety model](#-safety-model); it's the core of the design, not a footnote.
 

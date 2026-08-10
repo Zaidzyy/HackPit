@@ -2,7 +2,6 @@
 <!-- ▶ DEMO VIDEO — Zaid: drop the demo video / GIF embed here -->
 
 <h1 align="center">HackPit</h1>
-<h2 align="center">https://zaidzyy.github.io/HackPit/</h2>
 
 <p align="center">
   <em>Another AI that hacks?</em> Yawn — until you watch it plan a whole engagement from real technique knowledge,<br>

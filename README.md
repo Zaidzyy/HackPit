@@ -7,6 +7,7 @@
   <em>Another AI that hacks?</em> Yawn — until you watch it plan a whole engagement from real technique knowledge,<br>
   drive real <strong>Kali</strong> tooling, and draft the report<br>
   — all without firing a single command you didn't approve.
+  <br> <a href="https://zaidzyy.github.io/AIPCC/"><b>zaidzyy.github.io/AIPCC</b></a>
 </p>
 
 <p align="center">

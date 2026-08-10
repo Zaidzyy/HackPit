@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-<a href="https://zaidzyy.github.io/AIPCC/"><b>zaidzyy.github.io/AIPCC</b></a>
+<a href="https://zaidzyy.github.io/HackPit/"><b>zaidzyy.github.io/HackPit</b></a>
 </p>
 
 <p align="center">

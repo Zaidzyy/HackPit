@@ -340,7 +340,7 @@ def test_loop_may_propose_a_session_but_cannot_drive_one() -> None:
     )
     orig = O.llm.chat
     try:
-        O.llm.chat = lambda system, user, cfg, max_tokens=700: resp
+        O.llm.chat = lambda system, user, cfg, max_tokens=700, json_mode=False: resp
         out = O.propose_next(plan, [], {}, [])
     finally:
         O.llm.chat = orig

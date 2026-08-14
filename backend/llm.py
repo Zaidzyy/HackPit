@@ -243,7 +243,9 @@ def list_ollama_models(host: str | None = None) -> list[str]:
 # --------------------------------------------------------------------------- #
 # provider adapters — each takes (system, user, cfg) and returns raw text
 # --------------------------------------------------------------------------- #
-def _chat_ollama(system: str, user: str, cfg: dict, max_tokens: int = 2048) -> str:
+def _chat_ollama(
+    system: str, user: str, cfg: dict, max_tokens: int = 2048, json_mode: bool = False
+) -> str:
     host = str(cfg.get("host") or DEFAULTS["host"]).rstrip("/")
     # Reasoning models (qwen3 et al.) otherwise emit a long <think>…</think>
     # block that dominates the compose time. Suppress it two ways for
@@ -264,6 +266,12 @@ def _chat_ollama(system: str, user: str, cfg: dict, max_tokens: int = 2048) -> s
             "num_predict": max_tokens,
         },
     }
+    # GRAMMAR-CONSTRAINED JSON: when the caller needs a JSON object (a loop proposal, an
+    # attack-path, an alternative), force Ollama to emit syntactically valid JSON. This is what
+    # makes SMALL local models (qwen3:8b et al.) usable for structured output — without it they
+    # wrap the object in prose / a stray brace and the parse fails ("could not parse JSON").
+    if json_mode:
+        payload["format"] = "json"
     try:
         data = _post_json(f"{host}/api/chat", payload, {})
     except LLMError as e:
@@ -281,7 +289,7 @@ def _chat_ollama(system: str, user: str, cfg: dict, max_tokens: int = 2048) -> s
 
 
 def _chat_openai_compatible(
-    system: str, user: str, cfg: dict, url: str, max_tokens: int = 2048
+    system: str, user: str, cfg: dict, url: str, max_tokens: int = 2048, json_mode: bool = False
 ) -> str:
     """OpenAI Chat Completions shape — also used for OpenRouter."""
     key = cfg.get("api_key")
@@ -296,6 +304,9 @@ def _chat_openai_compatible(
         "temperature": 0.4,
         "max_tokens": max_tokens,
     }
+    # Constrained JSON, same purpose as Ollama's format:"json" — the OpenAI/OpenRouter way.
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
     data = _post_json(url, payload, {"Authorization": f"Bearer {key}"})
     try:
         return data["choices"][0]["message"]["content"]
@@ -443,6 +454,7 @@ def chat(
     cfg: dict | None = None,
     max_tokens: int = 2048,
     allow_fallback: bool = True,
+    json_mode: bool = False,
 ) -> str:
     """Route one system+user turn to the configured provider, return raw text.
 
@@ -458,10 +470,11 @@ def chat(
     cfg = cfg or load_config()
     provider = cfg["provider"]
     if provider == "ollama":
-        return _chat_ollama(system, user, cfg, max_tokens)
+        return _chat_ollama(system, user, cfg, max_tokens, json_mode=json_mode)
     if provider == "openai":
         return _chat_openai_compatible(
-            system, user, cfg, "https://api.openai.com/v1/chat/completions", max_tokens
+            system, user, cfg, "https://api.openai.com/v1/chat/completions", max_tokens,
+            json_mode=json_mode,
         )
     if provider == "openrouter":
         return _chat_openai_compatible(
@@ -470,6 +483,7 @@ def chat(
             cfg,
             "https://openrouter.ai/api/v1/chat/completions",
             max_tokens,
+            json_mode=json_mode,
         )
     if provider == "anthropic":
         return _chat_anthropic(system, user, cfg, max_tokens)
@@ -486,7 +500,7 @@ def chat(
             fb = {**DEFAULTS, "provider": "ollama",
                   "model": PROVIDER_DEFAULT_MODEL["ollama"]}
             try:
-                return _chat_ollama(system, user, fb, max_tokens)
+                return _chat_ollama(system, user, fb, max_tokens, json_mode=json_mode)
             except LLMError:
                 raise e  # surface the specific Agent-SDK reason, not Ollama's
     raise LLMError(f"unsupported provider '{provider}'")

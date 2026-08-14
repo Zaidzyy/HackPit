@@ -1673,7 +1673,7 @@ def profile_target(
         lines.append("SCOPE / RULES OF ENGAGEMENT (verbatim):")
         lines.append(scope[:4000])
     try:
-        raw = llm.chat(_PROFILE_SYSTEM, "\n".join(lines), cfg, max_tokens=700)
+        raw = llm.chat(_PROFILE_SYSTEM, "\n".join(lines), cfg, max_tokens=700, json_mode=True)
         parsed = llm.extract_json(raw)
     except llm.LLMError:
         return dict(_EMPTY_PROFILE)
@@ -2050,7 +2050,7 @@ def _augment_writeup(
     grouped = {p: t for p, t in grouped.items() if p in thin}  # offer library only for thin phases
     covered = {p["phase"]: [s["title"] for s in p["steps"]] for p in phases}
     user = build_augment_prompt(goal, ctx, covered, grouped, thin, context_block)
-    raw = llm.chat(_AUGMENT_SYSTEM, user, cfg)
+    raw = llm.chat(_AUGMENT_SYSTEM, user, cfg, json_mode=True)
     parsed = llm.extract_json(raw)
     supp = _ground(parsed, by_id, target, adapt_facts, scope)
     # deterministic backstop: keep supplements ONLY for genuinely thin phases, so a
@@ -2295,7 +2295,7 @@ def compose(
         goal, target_type, grouped, ctx, profile, scope_text, context_block,
         arsenal_block,
     )
-    raw = llm.chat(_SYSTEM, user, cfg)
+    raw = llm.chat(_SYSTEM, user, cfg, json_mode=True)
     parsed = llm.extract_json(raw)
     phases = _ground(parsed, by_id, target, adapt_facts, scope)
 

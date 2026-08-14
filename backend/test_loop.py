@@ -109,7 +109,7 @@ class _LLM:
         self._orig = O.llm.chat
 
     def __enter__(self):
-        O.llm.chat = lambda system, user, cfg, max_tokens=700: self.response
+        O.llm.chat = lambda system, user, cfg, max_tokens=700, json_mode=False: self.response
         return self
 
     def __exit__(self, *exc):
@@ -300,6 +300,35 @@ def test_ask_the_operator_proposal() -> None:
     print("  ask-the-operator: kind='ask' runs nothing; the answer feeds the next prompt: PASS")
 
 
+def test_json_mode_constrains_small_local_models() -> None:
+    """A structured call (a loop proposal) forces Ollama's grammar-constrained JSON so a SMALL
+    local model (qwen3:8b et al.) cannot emit unparseable output — the whole reason small models
+    failed the loop with 'could not parse JSON'. A prose call (a report) must NOT constrain."""
+    import llm
+
+    seen: dict = {}
+    orig = llm._post_json
+
+    def _fake(url, payload, headers):
+        seen["payload"] = payload
+        return {"message": {"content": '{"done": true}'}}
+
+    llm._post_json = _fake
+    try:
+        cfg = {"provider": "ollama", "model": "qwen3:8b", "host": "http://x"}
+        llm.chat("s", "u", cfg, json_mode=True)
+        assert seen["payload"].get("format") == "json", "a JSON call must force Ollama format:json"
+        llm.chat("s", "u", cfg)  # prose default — no constraint
+        assert "format" not in seen["payload"], "a prose call must NOT constrain the output"
+    finally:
+        llm._post_json = orig
+
+    # ...and the loop proposer actually requests it, so the guided loop works on small models.
+    src = Path(O.__file__).read_text(encoding="utf-8")
+    assert "json_mode=True" in src, "propose_next must call llm.chat(..., json_mode=True)"
+    print("  json_mode: a JSON call forces grammar-constrained Ollama output; prose does not: PASS")
+
+
 if __name__ == "__main__":
     test_proposer_cannot_execute()
     test_proposer_path_cannot_execute()
@@ -311,4 +340,5 @@ if __name__ == "__main__":
     test_precheck_direct()
     test_done_and_empty_handled()
     test_ask_the_operator_proposal()
+    test_json_mode_constrains_small_local_models()
     print("ALL orchestrator-loop L1 tests pass")

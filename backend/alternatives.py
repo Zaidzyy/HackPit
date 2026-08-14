@@ -101,7 +101,7 @@ def best_alternative(
         + "\n\nReturn the JSON described."
     )
     try:
-        parsed = llm.extract_json(llm.chat(_SYSTEM, user, cfg))
+        parsed = llm.extract_json(llm.chat(_SYSTEM, user, cfg, json_mode=True))
     except llm.LLMError:
         return _soft(cfg, "no second opinion available — model unreachable")
 

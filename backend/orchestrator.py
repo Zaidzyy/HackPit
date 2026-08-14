@@ -747,7 +747,7 @@ def propose_next(
     # 2.8 model-tier routing — inert unless ``reasoning_tiers`` is configured, in which case a
     # hard step (a foothold/finding to exploit) can be routed to a more capable model.
     step_cfg = _tiering.select(cfg, _step_kind(session_id))
-    raw = llm.chat(system, user, step_cfg, max_tokens=900)
+    raw = llm.chat(system, user, step_cfg, max_tokens=900, json_mode=True)
     parsed = llm.extract_json(raw)
     if not isinstance(parsed, dict):
         raise llm.LLMError("the model did not return a proposal object")

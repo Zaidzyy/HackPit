@@ -103,7 +103,7 @@ def _draft(system: str, user: str, max_tokens: int = 1400) -> dict[str, Any] | N
     returns nothing usable. Never raises; the caller falls back to a deterministic skeleton."""
     try:
         cfg = llm.load_config()
-        raw = llm.chat(system, user, cfg, max_tokens=max_tokens)
+        raw = llm.chat(system, user, cfg, max_tokens=max_tokens, json_mode=True)
         parsed = llm.extract_json(raw)
     except llm.LLMError:
         return None

@@ -8375,6 +8375,14 @@ a.hp-card {
   padding: 2px 9px; color: color-mix(in srgb, var(--white) 55%, transparent);
 }
 .hp-cs-peastoggle:hover { color: var(--white); }
+/* HTTP-endpoints collapse/expand toggle + the scroll-capped list when open. */
+.hp-cs-eptoggle {
+  font-size: 10.5px; cursor: pointer; background: none;
+  border: 1px solid color-mix(in srgb, var(--white) 15%, transparent); border-radius: 999px;
+  padding: 2px 10px; color: color-mix(in srgb, var(--white) 55%, transparent);
+}
+.hp-cs-eptoggle:hover { color: var(--white); }
+.hp-cs-eps-scroll { margin-top: 8px; max-height: 340px; overflow-y: auto; }
 .hp-cs-peas {
   width: 100%; resize: vertical; padding: 9px 11px; border-radius: 7px; font-size: 11.5px;
   font-family: var(--font-mono, ui-monospace), monospace; color: var(--white);

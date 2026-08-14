@@ -77,6 +77,9 @@ export function CockpitState({
   const [busy, setBusy] = useState(false);
   // Which credential secrets the operator has explicitly revealed, by row index.
   const [revealed, setRevealed] = useState<Set<number>>(new Set());
+  // The HTTP-endpoints list can be hundreds/thousands of rows (JS-recon on a big SPA), so it
+  // is collapsed by default; expanding it drops the rows into a scroll-capped container.
+  const [epsOpen, setEpsOpen] = useState(false);
   // A one-shot note under the credentials after a fill, e.g. "filled <user>, <password>".
   const [fillNote, setFillNote] = useState<string | null>(null);
   // Build #8 Task 3 — a drafted exploit per finding fingerprint. DATA only: the human
@@ -365,24 +368,39 @@ export function CockpitState({
         </div>
       )}
 
-      {/* --- endpoints ----------------------------------------------------------- */}
+      {/* --- endpoints (collapsed by default — the list can be huge) -------------- */}
       {state.endpoints.length > 0 && (
         <div className="hp-cs-block">
-          <h4>HTTP endpoints</h4>
-          <ul className="hp-cs-eps">
-            {state.endpoints.map((e) => (
-              <li key={`${e.method} ${e.url}`}>
-                {e.status !== null && (
-                  <span className={`hp-cs-status hp-cs-s${Math.floor(e.status / 100)}`}>
-                    {e.status}
-                  </span>
-                )}
-                <code>{e.url}</code>
-                {e.title && <span className="hp-cs-eptitle">{e.title}</span>}
-                {e.tech && <span className="hp-cs-eptech">{e.tech}</span>}
-              </li>
-            ))}
-          </ul>
+          <div className="hp-cs-blockhead">
+            <h4>
+              HTTP endpoints
+              <span className="hp-cs-progress">{state.endpoints.length}</span>
+            </h4>
+            <button
+              type="button"
+              className="hp-cs-eptoggle"
+              aria-expanded={epsOpen}
+              onClick={() => setEpsOpen((o) => !o)}
+            >
+              {epsOpen ? "collapse ▲" : "expand ▼"}
+            </button>
+          </div>
+          {epsOpen && (
+            <ul className="hp-cs-eps hp-cs-eps-scroll">
+              {state.endpoints.map((e) => (
+                <li key={`${e.method} ${e.url}`}>
+                  {e.status !== null && (
+                    <span className={`hp-cs-status hp-cs-s${Math.floor(e.status / 100)}`}>
+                      {e.status}
+                    </span>
+                  )}
+                  <code>{e.url}</code>
+                  {e.title && <span className="hp-cs-eptitle">{e.title}</span>}
+                  {e.tech && <span className="hp-cs-eptech">{e.tech}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 

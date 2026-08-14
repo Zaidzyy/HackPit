@@ -72,9 +72,14 @@ def set_kb_retriever(
 _RUN_OUTPUT_CHARS = 600
 _MAX_RUNS_FED = 12
 # A real engagement pivots on detail buried in tool output (service banners, subdomain lists,
-# parameter names), so it gets a wider window + a bigger excerpt than the lab loop.
-_RUN_OUTPUT_CHARS_REAL = 1600
-_MAX_RUNS_FED_REAL = 20
+# parameter names), so it gets a wider window + a bigger excerpt than the lab loop — but BOUNDED:
+# the structured STATE block is authoritative (it dedupes + keeps every endpoint), so the raw run
+# excerpts are only for detail the parsers miss. Feeding 20×1600 chars of raw tool output on top
+# of the state pushed the real-target prompt past ~8k tokens, which STARVED small local models
+# (an 8192-context model like a Llama-3 got a truncated prompt and no room to generate — it emitted
+# "{" and stopped). These keep the prompt inside a small model's window with room to answer.
+_RUN_OUTPUT_CHARS_REAL = 800
+_MAX_RUNS_FED_REAL = 12
 _MAX_PLAN_STEPS = 30
 _MAX_HOSTS_LISTED = 40
 

@@ -252,6 +252,13 @@ def _chat_ollama(
     # reliability: the API-level ``think: false`` flag AND qwen3's ``/no_think``
     # prompt convention. num_predict caps the output — small for short JSON,
     # larger for long-form output like reports (raised by the caller).
+    # SIZE THE CONTEXT WINDOW TO THE PROMPT. Ollama's num_ctx is INPUT+OUTPUT combined, so a
+    # fixed 8192 silently starved generation on a big prompt: a loop proposal over rich engagement
+    # state runs ~7.7k input tokens, leaving no room to emit the JSON — the model produced just
+    # "{" and stopped ("could not parse JSON"). Estimate ~4 chars/token, add the output budget +
+    # margin, and clamp to a ceiling so a huge prompt can't blow up KV-cache memory.
+    approx_in = (len(system) + len(user)) // 4
+    num_ctx = max(8192, min(32768, approx_in + max_tokens + 1024))
     payload = {
         "model": cfg["model"],
         "messages": [
@@ -262,7 +269,7 @@ def _chat_ollama(
         "think": False,
         "options": {
             "temperature": 0.4,
-            "num_ctx": 8192,
+            "num_ctx": num_ctx,
             "num_predict": max_tokens,
         },
     }

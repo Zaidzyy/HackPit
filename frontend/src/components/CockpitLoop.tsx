@@ -63,6 +63,9 @@ export function CockpitLoop({
   const [phase, setPhase] = useState<Phase>("idle");
   const [proposal, setProposal] = useState<LoopProposal | null>(null);
   const [dangerAck, setDangerAck] = useState(false);
+  // The engagement target-lock is a handrail: an off-scope proposal WARNS and runs only when
+  // this explicit override is ticked (mirrors dangerAck). Lab proposals never set it.
+  const [scopeOverride, setScopeOverride] = useState(false);
   const [doneReason, setDoneReason] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // HTTP status of the last failure, so the error UI can offer a model swap only when the
@@ -94,6 +97,7 @@ export function CockpitLoop({
     setErrStatus(undefined);
     setProposal(null);
     setDangerAck(false); // every new proposal must be re-confirmed if dangerous
+    setScopeOverride(false); // and the scope override is re-ticked consciously per proposal
     setAnswer(""); // a new proposal — clear any half-typed answer to a prior ask
     onStepActive?.(null);
 
@@ -130,7 +134,13 @@ export function CockpitLoop({
   }, [propose]);
 
   const approve = useCallback(() => {
-    if (!proposal || !proposal.gate_ok || phase !== "awaiting") return;
+    if (!proposal || phase !== "awaiting") return;
+    // The pre-check can fail for one recoverable reason in engagement mode: the target is off the
+    // program scope. That is a HANDRAIL, not a wall — it runs with the explicit scope override.
+    // Any other gate_ok=false (or lab mode) stays non-runnable.
+    const scopeBlocked =
+      !!engagementId && !proposal.gate_ok && /scope/i.test(proposal.gate_reason || "");
+    if (!proposal.gate_ok && !(scopeBlocked && scopeOverride)) return;
     const danger = proposal.dangerous_flags ?? [];
     if (danger.length > 0 && !dangerAck) return; // dangerous flags need the explicit confirm
     ctrlRef.current?.abort();
@@ -149,6 +159,7 @@ export function CockpitLoop({
         args: proposal.args,
         approved: true, // set ONLY here, after the human clicked approve on this proposal
         dangerous_ack: dangerAck, // true only after the explicit confirm; ignored if none
+        scope_override: scopeOverride, // true only after the explicit off-scope override tick
         session_id: sessionId,
         step_id: stepId ?? undefined,
         // In engagement mode this routes the run through _validate_engagement (target ->
@@ -207,7 +218,7 @@ export function CockpitLoop({
         // nothing runs without another explicit approve.
         propose();
       });
-  }, [proposal, phase, dangerAck, sessionId, engagementId, onStepDone, onRunRecorded, propose]);
+  }, [proposal, phase, dangerAck, scopeOverride, sessionId, engagementId, onStepDone, onRunRecorded, propose]);
 
   // Submit an answer to a kind==="ask" proposal: store it (plain context, not the vault) and
   // continue the loop so the next proposal sees it. Runs NOTHING — there is no command here.
@@ -403,7 +414,11 @@ export function CockpitLoop({
         }
         const danger = proposal.dangerous_flags ?? [];
         const isDanger = danger.length > 0;
-        const canApprove = proposal.gate_ok && (!isDanger || dangerAck);
+        // Engagement off-scope is a HANDRAIL: the pre-check fails but the operator can override.
+        const scopeBlocked =
+          !!engagementId && !proposal.gate_ok && /scope/i.test(proposal.gate_reason || "");
+        const canApprove =
+          (proposal.gate_ok || (scopeBlocked && scopeOverride)) && (!isDanger || dangerAck);
         return (
         <section
           className={`hp-loop-proposal${proposal.gate_ok ? "" : " is-blocked"}${
@@ -425,10 +440,31 @@ export function CockpitLoop({
             {cmdline(proposal)}
           </code>
 
-          {!proposal.gate_ok && (
+          {!proposal.gate_ok && !scopeBlocked && (
             <p className="hp-loop-gatewarn">
               ✕ this proposal can’t run — {proposal.gate_reason}. Skip it or stop.
             </p>
+          )}
+
+          {/* off-scope: a HANDRAIL, not a wall — warn + a one-tick override (reuses danger styles) */}
+          {scopeBlocked && (
+            <div className="hp-loop-danger" role="alert">
+              <p className="hp-loop-danger-head">⚠ off your program scope</p>
+              <p className="hp-loop-danger-note">
+                {proposal.gate_reason}. The scope lock only warns — tick to run it anyway; you’re
+                asserting you’re authorized for this host.
+              </p>
+              {phase === "awaiting" && (
+                <label className="hp-loop-danger-ack">
+                  <input
+                    type="checkbox"
+                    checked={scopeOverride}
+                    onChange={(e) => setScopeOverride(e.target.checked)}
+                  />
+                  <span>Override scope for this command.</span>
+                </label>
+              )}
+            </div>
           )}
 
           {/* dangerous flags: detected, shown RED, require an explicit confirm to approve */}
@@ -489,7 +525,9 @@ export function CockpitLoop({
                 onClick={approve}
                 disabled={!canApprove}
                 title={
-                  !proposal.gate_ok
+                  scopeBlocked && !scopeOverride
+                    ? "Off your program scope — tick 'override scope' above to run it"
+                    : !proposal.gate_ok && !scopeBlocked
                     ? "Blocked by a safety gate — cannot run"
                     : isDanger && !dangerAck
                     ? "Confirm the dangerous flag(s) above to enable approval"

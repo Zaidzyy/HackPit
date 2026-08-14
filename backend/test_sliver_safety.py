@@ -515,7 +515,7 @@ def test_refused_generate_is_scope_checked_and_produces_nothing() -> None:
     try:
         with _Spy() as spy:
             cases = {
-                "target": _req(target="evil.example.net"),
+                "scope": _req(target="evil.example.net"),  # engagement off-scope → scope handrail
                 "approval": _req(approved=False),
                 "danger": _req(dangerous_ack=False),
                 "engagement": _req(engagement_id="eng-gone000000"),
@@ -538,7 +538,7 @@ def test_refused_generate_is_scope_checked_and_produces_nothing() -> None:
             assert S.validate_generate(_req()) is None
     finally:
         restore()
-    print("  refused builds (target/approval/danger/engagement) run, record and build NOTHING: PASS")
+    print("  refused builds (scope/approval/danger/engagement) run, record and build NOTHING: PASS")
 
 
 # --------------------------------------------------------------------------- #

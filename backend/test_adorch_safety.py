@@ -449,11 +449,11 @@ def test_off_scope_ad_host_is_refused() -> None:
         rej = E.validate_request(ExecRequest(
             command="impacket-secretsdump", args=["-just-dc", "other.corp/u:p@dc.other.corp"],
             approved=True, dangerous_ack=True, engagement_id=eng.engagement_id))
-        assert rej is not None and rej.gate == "target", (
-            f"an off-scope DC must be refused at the target gate, got {getattr(rej, 'gate', None)}"
+        assert rej is not None and rej.gate == "scope", (
+            f"an off-scope DC must WARN at the scope gate (handrail), got {getattr(rej, 'gate', None)}"
         )
-        print("  an AD abuse aimed outside the engagement scope is refused at the target "
-              "gate, even fully approved + acked: PASS")
+        print("  an AD abuse aimed outside the engagement scope WARNS at the scope "
+              "gate (override-able), even fully approved + acked: PASS")
     finally:
         E.engagement.get_active = orig
 

@@ -277,18 +277,26 @@ def _validate_engagement(request: ExecRequest, eng: EngagementRecord) -> ExecRej
     ok, reason = check_target_lock(
         request.args, request.command, allowed=allowed, label=label, in_scope=in_scope
     )
-    if not ok:
-        return ExecRejected(reason=reason, gate="target")
 
     # NEVER-AUTO-RUN: on a real target every single command needs an INDIVIDUAL human approval.
-    # No batch, no approve-all, no autonomy. This is the ONLY bound on what runs (Wall A is
-    # down) — so it is more load-bearing than ever. Enforce hard.
+    # No batch, no approve-all, no autonomy. This is the load-bearing bound (Wall A is down) —
+    # checked FIRST so it can never be skipped. Enforce hard.
     if not request.approved:
         return ExecRejected(
             reason="engagement mode: every command needs an individual human approval "
             "(approved=true) — never hands-off / no batch approval on a real target",
             gate="approval",
         )
+
+    # TARGET-LOCK IS A HANDRAIL, NOT A WALL (accepted policy 2026-08-04: the target lock is a
+    # handrail, per-command human approval is the wall — see docs/hackpit-scope-model). An
+    # out-of-scope target does NOT dead-reject; it WARNS and refuses at the 'scope' gate until
+    # the operator ticks the explicit scope_override (mirroring the dangerous-command red-confirm),
+    # then runs — so going off the declared program scope stays a conscious act, never a reflex,
+    # but the operator is never dead-ended. The lab and Windows target-locks stay HARD (isolated /
+    # structurally-fixed hosts — different, contained models).
+    if not ok and not request.scope_override:
+        return _scope_rejection(reason)
 
     # Direct, for the same call-graph reason as _validate_lab above.
     dangerous = allowlist.dangerous_command_heuristic(request.command, request.args)
@@ -440,6 +448,35 @@ def _danger_rejection(reasons: list[str]) -> ExecRejected:
         gate="danger",
         dangerous_flags=reasons,
     )
+
+
+def _scope_rejection(reason: str) -> ExecRejected:
+    """Engagement OFF-SCOPE rejection — a WARNING that becomes runnable with ``scope_override``,
+    NOT a dead wall. Mirrors :func:`_danger_rejection`: the SAME command, re-approved with the
+    override ticked, runs. The engagement target-lock is a handrail (accepted policy: per-command
+    human approval is the only bound); this keeps going off-scope a conscious act, never a
+    reflex, without ever dead-ending the operator."""
+    return ExecRejected(
+        reason="OFF SCOPE (handrail, not a wall) — " + reason + ". Tick 'override scope' and "
+        "re-approve to run it anyway; you are asserting you are authorized for this host.",
+        gate="scope",
+    )
+
+
+def engagement_offscope_reason(request: ExecRequest) -> str | None:
+    """The off-scope warning for an engagement command, or None (in scope, or lab/Windows mode).
+    Read-only: it only reports whether the target is outside the program scope, so the run can be
+    annotated with a loud note when it proceeds under an override."""
+    if request.windows_profile_id or not request.engagement_id:
+        return None
+    eng = _engagement_for(request)
+    if eng is None:
+        return None
+    allowed, in_scope, label = _engagement_lock(eng)
+    ok, reason = check_target_lock(
+        request.args, request.command, allowed=allowed, label=label, in_scope=in_scope
+    )
+    return None if ok else reason
 
 
 class EngagementInactive(RuntimeError):
@@ -858,6 +895,11 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
     # ORIGINAL request first, because the messages that matter — "no proxy flag", "no throttle
     # flag", "lab run, not paced" — are precisely the ones where nothing was rewritten.
     notes = run_notes(request)
+    # A run that proceeds OFF the declared program scope (scope_override ticked) is annotated
+    # loudly, so the transcript and the record show it went outside scope — never silent.
+    _off_scope = engagement_offscope_reason(request)
+    if _off_scope and request.scope_override:
+        notes.append(f"⚠ RAN OFF SCOPE (override): {_off_scope}")
     request, proxy_note = apply_proxy_to_request(request)
     if proxy_note:
         prevalidated = False

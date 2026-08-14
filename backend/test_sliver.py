@@ -312,16 +312,17 @@ def test_generate_is_gated_and_scope_checked() -> None:
     restore = _patch_active(eng)
     try:
         with _Spy() as spy:
-            # OUT OF SCOPE -> target gate, nothing generated.
+            # OUT OF SCOPE -> WARNS at the scope gate (handrail, override-able), nothing generated
+            # without the override.
             rejected = S.validate_generate(_req(target="evil.com"))
-            assert rejected is not None and rejected.gate == "target", rejected
+            assert rejected is not None and rejected.gate == "scope", rejected
             assert "scope" in rejected.reason.lower(), rejected.reason
             raised = False
             try:
                 S.generate_implant(_req(target="evil.com"))
             except SliverRefused as exc:
                 raised = True
-                assert exc.gate == "target", exc.gate
+                assert exc.gate == "scope", exc.gate
             assert raised, "an out-of-scope implant generate MUST refuse"
             assert spy.run_argv is None, "a refused generate MUST NOT run anything"
             assert not spy.saved, "a refused generate MUST NOT be recorded"

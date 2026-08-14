@@ -104,13 +104,13 @@ def test_scope_lock_covers_the_collector() -> None:
         rej = E.validate_request(req)
         assert rej is None, f"an in-scope collector must pass all gates, got: {rej}"
 
-        # a DC OUTSIDE the scope is refused at the target gate, before anything runs
+        # a DC OUTSIDE the scope WARNS at the scope gate (handrail, override-able), nothing runs
         off = C.CollectorParams(domain="evil.corp", username="u", dc="dc.evil.corp",
                                 password="pw", nameserver="8.8.8.8")
         req2 = C.build_collector_request(off, eng.engagement_id)
         req2.approved = True
         rej2 = E.validate_request(req2)
-        assert rej2 is not None and rej2.gate == "target", rej2
+        assert rej2 is not None and rej2.gate == "scope", rej2
         print("  scope-lock covers the collector: in-scope DC passes, out-of-scope refused: PASS")
     finally:
         E.engagement.get_active = orig

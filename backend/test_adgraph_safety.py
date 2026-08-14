@@ -96,13 +96,13 @@ def test_collector_is_gated() -> None:
                               dc="dc01.sevenkingdoms.local", password="pw", nameserver="10.10.10.10")
         req = C.build_collector_request(p, eng.engagement_id)
         assert req.approved is False
-        # out-of-scope DC -> refused at target gate
+        # out-of-scope DC -> WARNS at the scope gate (handrail, override-able)
         off = C.build_collector_request(
             C.CollectorParams(domain="evil.corp", username="u", dc="dc.evil.corp", password="p"),
             eng.engagement_id)
         off.approved = True
         rej = E.validate_request(off)
-        assert rej is not None and rej.gate == "target", rej
+        assert rej is not None and rej.gate == "scope", rej
         print("  the collector is argv-only, unapproved + engagement scope-locked: PASS")
     finally:
         E.engagement.get_active = orig
@@ -120,11 +120,11 @@ def test_abuse_step_is_gated() -> None:
                            approved=False, engagement_id=eng.engagement_id)
         rej = E.validate_request(step)
         assert rej is not None and rej.gate == "approval", rej
-        # an abuse step against an OUT-OF-SCOPE host => refused at target, even if approved
+        # an abuse step against an OUT-OF-SCOPE host => WARNS at the scope gate (handrail), approved
         off = ExecRequest(command="nxc", args=["smb", "fileserver.other.corp", "-u", "a", "-p", "b"],
                           approved=True, engagement_id=eng.engagement_id)
         rej2 = E.validate_request(off)
-        assert rej2 is not None and rej2.gate == "target", rej2
+        assert rej2 is not None and rej2.gate == "scope", rej2
         print("  a walked abuse step is gated (never-auto-run + scope-lock) like any command: PASS")
     finally:
         E.engagement.get_active = orig

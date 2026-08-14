@@ -317,7 +317,7 @@ def test_engagement_never_auto_run_unchanged() -> None:
         off = ExecRequest(command="nmap", args=["-sV", "evil.example.net"], approved=True,
                           engagement_id=eng.engagement_id)
         rej2 = E.validate_request(off)
-        assert rej2 is not None and rej2.gate == "target", rej2
+        assert rej2 is not None and rej2.gate == "scope", rej2
     finally:
         E.engagement.get_active = orig
     print("  ENGAGEMENT never-auto-run + scope-lock unchanged after annotating: PASS")

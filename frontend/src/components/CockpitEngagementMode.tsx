@@ -69,6 +69,9 @@ export function CockpitEngagementMode({
   const [command, setCommand] = useState("nmap");
   const [argsText, setArgsText] = useState("");
   const [dangerAck, setDangerAck] = useState(false);
+  // The engagement target-lock is a HANDRAIL: an off-scope target WARNS at the 'scope' gate and
+  // runs only when this explicit override is ticked (mirrors the dangerous-command red-confirm).
+  const [scopeOverride, setScopeOverride] = useState(false);
   // Kept as TEXT, not a number: "" has to stay distinguishable from 0, and only a blank
   // field may mean "unpaced". Parsed once, at send time.
   const [paceText, setPaceText] = useState("");
@@ -169,6 +172,7 @@ export function CockpitEngagementMode({
         args,
         approved: true,
         dangerous_ack: dangerAck,
+        scope_override: scopeOverride,
         engagement_id: active.engagement_id,
         session_id: sessionId,
         // Number.isFinite, not a truthiness check: a blank field must send null rather
@@ -226,6 +230,7 @@ export function CockpitEngagementMode({
         if (ctrl.signal.aborted) return;
         setRunning(false);
         setDangerAck(false); // re-confirm consciously for the next command
+        setScopeOverride(false); // and re-tick the scope override consciously, per command
         onRunRecorded?.();
         refresh(); // pick up any hosts this run added to the live allowed set
       });
@@ -234,7 +239,7 @@ export function CockpitEngagementMode({
     // held when this was last rebuilt — a silently wrong rate, which is the one outcome the
     // whole feature exists to prevent.
   }, [
-    active, running, args, command, preview, dangerAck, paceText, sessionId,
+    active, running, args, command, preview, dangerAck, scopeOverride, paceText, sessionId,
     onRunRecorded, refresh,
   ]);
 
@@ -674,6 +679,19 @@ export function CockpitEngagementMode({
           <span>
             Confirm dangerous commands (interpreters, shells, frameworks) for this run — needed
             only if the server flags it.
+          </span>
+        </label>
+
+        <label className="hp-eng-ack">
+          <input
+            type="checkbox"
+            checked={scopeOverride}
+            onChange={(e) => setScopeOverride(e.target.checked)}
+          />
+          <span>
+            Override scope — run even if the target is <b>outside your program scope</b>. The
+            scope lock only warns; ticking this asserts you&rsquo;re authorized for that host.
+            Needed only if the server flags it OFF-SCOPE.
           </span>
         </label>
 

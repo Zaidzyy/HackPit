@@ -1184,6 +1184,11 @@ export type ExecPayload = {
   /** Explicit second confirmation for a command carrying dangerous flags. The executor's
    *  danger gate refuses (403) unless this is true when dangerous flags are present. */
   dangerous_ack?: boolean;
+  /** ENGAGEMENT MODE ONLY: explicit override to run a command whose target is OUTSIDE the
+   *  declared program scope. The engagement target-lock is a handrail, not a wall — an off-scope
+   *  target WARNS and refuses at the 'scope' gate unless this is true (mirrors dangerous_ack).
+   *  You are asserting you are authorized for that host. No effect in lab / Windows mode. */
+  scope_override?: boolean;
   session_id?: string | null;
   step_id?: string | null;
   /** When set to an ACTIVE engagement id, run in REAL-TARGET engagement mode (Wall-A

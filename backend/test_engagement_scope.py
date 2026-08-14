@@ -13,7 +13,10 @@ any of that widens past what the operator authorized:
      and STILL fail the target-lock afterwards. Expansion never widens the scope.
   4. NEVER-AUTO-RUN SURVIVES EXPANSION: a command against a freshly-discovered, in-scope host
      with approved=False is still refused at the approval gate — discovery approves nothing.
-  5. GATE ORDER unchanged: an out-of-scope host is refused at 'target' even when approved.
+  5. SCOPE IS A HANDRAIL, NOT A WALL (2026-08-14): an approved out-of-scope host WARNS at the
+     'scope' gate and RUNS when the operator ticks scope_override — a conscious act mirroring the
+     dangerous-command red-confirm, never a dead reject. (The low-level matcher still identifies
+     out-of-scope correctly; the change is at the gate, engagement mode only. Lab stays hard.)
   6. LAB MODE UNTOUCHED: with no engagement, the lab target-lock is byte-for-byte the same
      (lab host passes, everything else refused with the lab wording).
   7. THE PROPOSER drafts against the engagement's SCOPE, never the lab — and the lab prompt is
@@ -223,15 +226,29 @@ def test_never_auto_run_holds_for_a_discovered_host() -> None:
 
 
 def test_gate_order_target_before_approval() -> None:
+    """Engagement off-scope is a HANDRAIL: an approved off-scope command WARNS at the 'scope'
+    gate (not a dead 'target' reject) and RUNS with scope_override; approval is checked first."""
     eng = _eng()
     orig = _patch_active(eng)
     try:
+        # approved, off-scope, NO override → warns at the 'scope' gate (was a hard 'target' reject)
         rej = E.validate_request(ExecRequest(
             command="nmap", args=["-sV", "evil.com"], approved=True,
             engagement_id=eng.engagement_id,
         ))
-        assert rej is not None and rej.gate == "target", rej
-        print("  gate order: an out-of-scope target is refused at 'target' even if approved: PASS")
+        assert rej is not None and rej.gate == "scope" and "OFF SCOPE" in rej.reason, rej
+        # + scope_override → runs (the handrail is overridden by a conscious tick)
+        rej = E.validate_request(ExecRequest(
+            command="nmap", args=["-sV", "evil.com"], approved=True, scope_override=True,
+            engagement_id=eng.engagement_id,
+        ))
+        assert rej is None, "off-scope + scope_override must run"
+        # UNAPPROVED off-scope → approval leads (approval is checked before the scope handrail)
+        rej = E.validate_request(ExecRequest(
+            command="nmap", args=["-sV", "evil.com"], engagement_id=eng.engagement_id,
+        ))
+        assert rej is not None and rej.gate == "approval", rej
+        print("  scope handrail: off-scope WARNS at 'scope' when approved, RUNS with override: PASS")
     finally:
         E.engagement.get_active = orig
 

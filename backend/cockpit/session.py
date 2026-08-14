@@ -237,6 +237,10 @@ def _gate_request(req: SessionStartRequest) -> ExecRequest:
         args=[*req.args, req.target],
         approved=req.approved,
         dangerous_ack=req.dangerous_ack,
+        # A persistent interactive SESSION never gets the engagement scope-override escape that a
+        # single approved command has — an off-scope shell stays HARD-refused at the scope gate.
+        # SessionStartRequest carries no such field; pinning it False here makes that explicit.
+        scope_override=False,
         engagement_id=req.engagement_id,
         session_id=req.session_id,
         step_id=req.step_id,

@@ -348,11 +348,12 @@ def test_engagement_mode_with_no_target_is_permitted_by_design() -> None:
         assert G.validate_build(req) is None, \
             "engagement + empty target is PERMITTED — if this now refuses, fix the comment in " \
             "_gate_request that says so"
-        # ...but a target that IS named is still scope-checked.
+        # ...but a target that IS named is still scope-checked — it WARNS at the scope gate
+        # (handrail, override-able), so an out-of-scope build is still refused without the override.
         bad = _req(target="evil.example.com", engagement_id="eng-1")
         rejected = G.validate_build(bad)
-        assert rejected is not None and rejected.gate == "target", \
-            f"an out-of-scope target must still be refused, got {rejected}"
+        assert rejected is not None and rejected.gate == "scope", \
+            f"an out-of-scope target must still be refused (at the scope gate), got {rejected}"
     finally:
         CE.get_active = orig
     print("  engagement + no target is allowed by design; a named target is still gated: PASS")

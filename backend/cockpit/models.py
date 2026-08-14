@@ -49,6 +49,15 @@ class ExecRequest(BaseModel):
         "execution refuses at the danger gate unless this is true — you can't approve a "
         "shell by accident. Ignored (no effect) when the command has no dangerous flag.",
     )
+    scope_override: bool = Field(
+        False,
+        description="ENGAGEMENT MODE ONLY: explicit override to run a command whose target is "
+        "OUTSIDE the declared program scope. The engagement target-lock is a HANDRAIL, not a wall "
+        "(accepted policy: per-command human approval is the only bound) — so an off-scope target "
+        "WARNS and refuses at the 'scope' gate unless this is true, exactly mirroring the "
+        "dangerous-command red-confirm. Setting it asserts you are authorized for that host. No "
+        "effect in lab / Windows mode (those locks stay hard) or when the target is in scope.",
+    )
     session_id: str | None = Field(
         None, description="Optional engagement to attach the run-record to."
     )
@@ -114,7 +123,7 @@ class ExecRejected(BaseModel):
     # WINDOWS gates: windows (profile exists) -> target (host in engagement scope, if any)
     #   -> approval -> danger. No isolation gate (a real external box, like engagement).
     # (No wall_a gate — engagement mode is fully open; human-approve-each is the only bound.)
-    gate: Literal["target", "approval", "danger", "sandbox", "engagement", "windows"] = "target"
+    gate: Literal["target", "approval", "danger", "sandbox", "engagement", "windows", "scope"] = "target"
     # When gate == "danger": the heuristic reasons the command was flagged (for the confirm).
     dangerous_flags: list[str] = Field(default_factory=list)
 

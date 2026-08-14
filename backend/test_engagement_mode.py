@@ -138,11 +138,16 @@ def test_engagement_target_lock() -> None:
                 ExecRequest(command="nmap", args=args, engagement_id="eng-test000000", approved=True)
             )
             assert r is None, f"the named target must pass: {args}"
-        # a DIFFERENT host is rejected (locked to the named target)
+        # a DIFFERENT host now WARNS at the 'scope' gate (handrail, not a wall) rather than a
+        # dead reject — and RUNS once the operator ticks scope_override.
         r = E.validate_request(
             ExecRequest(command="nmap", args=["-sV", "example.com"], engagement_id="eng-test000000", approved=True)
         )
-        assert r is not None and r.gate == "target" and _REAL in r.reason, "a non-target host must reject at target"
+        assert r is not None and r.gate == "scope" and "OFF SCOPE" in r.reason, "off-scope must WARN at the scope gate, not dead-reject"
+        r = E.validate_request(
+            ExecRequest(command="nmap", args=["-sV", "example.com"], engagement_id="eng-test000000", approved=True, scope_override=True)
+        )
+        assert r is None, "off-scope + scope_override must RUN (handrail overridden, a conscious tick)"
         # a target-less command PASSES in engagement mode: its hosts (if any) live in a
         # file the lock can't read either way, so refusing protected nothing and only
         # blocked a legitimate, human-approved command. LAB still requires the lab target
@@ -175,7 +180,9 @@ def test_engagement_heuristic_red_confirm() -> None:
 
 
 def test_engagement_gate_order() -> None:
-    """engagement → target → approval → danger (first failing gate wins; danger is now last)."""
+    """engagement → approval → scope(handrail, override-able) → danger (first failing gate wins).
+    Approval is checked BEFORE the scope handrail, because scope_override is a post-approval
+    confirm like dangerous_ack — you approve, THEN consciously override scope if you mean to."""
     restore = _patch_active(_fake_engagement(_REAL))
     try:
         # unknown id + everything else wrong → engagement leads
@@ -183,11 +190,16 @@ def test_engagement_gate_order() -> None:
             ExecRequest(command="python3", args=["-c", "x", "example.com"], engagement_id="nope")
         )
         assert r.gate == "engagement", "engagement (explicit entry) leads"
-        # active id, wrong target, unapproved, dangerous → target beats approval+danger
+        # active id, wrong target, UNAPPROVED, dangerous → approval leads (checked first now)
         r = E.validate_request(
             ExecRequest(command="python3", args=["-c", "x", "example.com"], engagement_id="eng-test000000")
         )
-        assert r.gate == "target", "target beats approval/danger"
+        assert r.gate == "approval", "approval is checked before the scope handrail"
+        # active id, wrong target, APPROVED, no override, dangerous → scope beats danger
+        r = E.validate_request(
+            ExecRequest(command="python3", args=["-c", "x", "example.com"], engagement_id="eng-test000000", approved=True)
+        )
+        assert r.gate == "scope", "an approved off-scope command warns at the scope gate (before danger)"
         # active id, right target, unapproved, dangerous → approval beats danger
         r = E.validate_request(
             ExecRequest(command="python3", args=["-c", "x", _REAL], engagement_id="eng-test000000")
@@ -200,7 +212,7 @@ def test_engagement_gate_order() -> None:
         assert r.gate == "danger", "danger is the last engagement gate"
     finally:
         restore()
-    print("  GATE ORDER: engagement -> target -> approval -> danger (no wall_a): PASS")
+    print("  GATE ORDER: engagement -> approval -> scope(override-able) -> danger (no wall_a): PASS")
 
 
 def test_no_wall_a_gate() -> None:

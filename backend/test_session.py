@@ -467,10 +467,12 @@ def test_engagement_session_is_bounded_by_the_scope_lock() -> None:
             assert argv[3] != config.SANDBOX_CONTAINER, "must NOT reach the isolated lab box"
             assert argv[3] != config.KALI_OPEN_CONTAINER, "must NOT reach the :kali open box"
 
-            # Out of scope -> refused at the target gate, nothing starts.
+            # Out of scope -> refused at the SCOPE gate, nothing starts. The per-command exec loop
+            # can override scope with a conscious tick, but a persistent SESSION cannot (its
+            # start-request pins scope_override=False), so an off-scope shell stays hard-refused.
             out = _req(target="evil.com", engagement_id=eng.engagement_id)
             rejected = S.validate_start(out)
-            assert rejected is not None and rejected.gate == "target", rejected
+            assert rejected is not None and rejected.gate == "scope", rejected
             assert "scope" in rejected.reason.lower(), rejected.reason
 
             # An unknown/exited engagement is refused — never downgraded to lab.

@@ -6,6 +6,8 @@ import { PageShell } from "./PageShell";
 import { FindingPipelinePanel } from "./FindingPipelinePanel";
 import {
   deleteSession,
+  exitEngagement,
+  getEngagementStatus,
   listSessions,
   type SessionSummary,
 } from "@/lib/api";
@@ -29,10 +31,48 @@ export function EngagementsList() {
   const fetched = useApi(listSessions, []);
   const [rows, setRows] = useState<SessionSummary[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // session_id -> engagement_id for engagements that are LIVE right now, so a row can offer a
+  // non-destructive "stop" (end real-target mode, keep the saved path) instead of only delete.
+  const [activeBySession, setActiveBySession] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (fetched.data) setRows(fetched.data);
   }, [fetched.data]);
+
+  // Which saved engagement (if any) is currently live — one engagement is active at a time.
+  useEffect(() => {
+    const ctrl = new AbortController();
+    getEngagementStatus(ctrl.signal)
+      .then((st) => {
+        const map: Record<string, string> = {};
+        for (const e of st.active) {
+          if (e.session_id) map[e.session_id] = e.engagement_id;
+        }
+        setActiveBySession(map);
+      })
+      .catch(() => {
+        /* no status → no stop buttons; delete still works */
+      });
+    return () => ctrl.abort();
+  }, []);
+
+  // Stop = leave real-target mode for this engagement. Keeps the saved session (path, runs,
+  // findings) — the row stays, it just loses its "live" state and its stop button.
+  const stop = useCallback((engagementId: string, sessionId: string) => {
+    setBusy(sessionId);
+    exitEngagement(engagementId)
+      .then(() =>
+        setActiveBySession((prev) => {
+          const next = { ...prev };
+          delete next[sessionId];
+          return next;
+        })
+      )
+      .catch(() => {
+        /* leave it live; the user can retry */
+      })
+      .finally(() => setBusy(null));
+  }, []);
 
   const remove = useCallback((id: string) => {
     setBusy(id);
@@ -99,6 +139,9 @@ export function EngagementsList() {
                             {s.target_type}
                           </span>
                         ) : null}
+                        {activeBySession[s.id] ? (
+                          <span className="hp-chip hp-engs-live">● live</span>
+                        ) : null}
                         <span className="hp-engs-row-time">
                           updated {relTime(s.updated_at)}
                         </span>
@@ -117,6 +160,17 @@ export function EngagementsList() {
                       </span>
                     </div>
                   </Link>
+                  {activeBySession[s.id] ? (
+                    <button
+                      type="button"
+                      className="hp-engs-stop"
+                      onClick={() => stop(activeBySession[s.id], s.id)}
+                      disabled={busy === s.id}
+                      aria-label={`Stop the live engagement ${s.label} (keeps it saved)`}
+                    >
+                      {busy === s.id ? "…" : "stop"}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="hp-engs-del"

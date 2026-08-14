@@ -44,6 +44,8 @@ _HISTORY_CHARS = 700       # cap one prior turn when replaying it
 _SALIENT_CHARS = 600       # cap the session signal mixed into the search query
 _MAX_TOKENS = 1024         # replies are short and practical, not long-form
 _PATH_BASELINE = 0.1       # score floor so the path's own techniques stay candidates
+_LOOP_FINDINGS = 6         # recent findings shown from the live loop state
+_LOOP_ENDPOINTS = 12       # sample of discovered endpoints shown from the live loop state
 
 
 _SYSTEM = (
@@ -116,6 +118,49 @@ def build_session_context(session: dict) -> str:
                 lines.append(f"    RESULT: {snippet}")
         lines.append("")
     return "\n".join(lines).strip()
+
+
+def build_loop_state_block(loop_state: Any) -> str:
+    """Render the LIVE LOOP STATE the guided orchestrator has accumulated (counts, recent
+    findings, a sample of discovered endpoints) so the assistant can answer about what the
+    *loop* is doing — the loop reasons over ``state.store`` while the attack-path session above
+    reasons over pasted step results, and this bridges the two.
+
+    Duck-typed and fully guarded: ``loop_state`` is a ``state.models.StateSummary`` (or
+    anything with ``counts()`` + ``findings`` + ``endpoints``); any shape problem yields an
+    empty block rather than an error, so a chat turn never breaks on state.
+    """
+    if loop_state is None:
+        return ""
+    try:
+        counts = loop_state.counts()
+        if not any(counts.values()):
+            return ""
+        lines = [
+            "LIVE LOOP STATE (what the guided loop has discovered so far — its OWN accumulated "
+            "state; use it to answer about what the loop is doing or why it may be stuck):",
+            "  counts: " + ", ".join(f"{k}={v}" for k, v in counts.items()),
+        ]
+        findings = list(getattr(loop_state, "findings", []) or [])[:_LOOP_FINDINGS]
+        if findings:
+            lines.append("  findings:")
+            for f in findings:
+                sev = (getattr(f, "severity", "") or "").strip()
+                title = (getattr(f, "title", "") or "").strip()
+                tgt = (getattr(f, "target", "") or "").strip()
+                lines.append(f"    - [{sev}] {title}{(' @ ' + tgt) if tgt else ''}".rstrip())
+        endpoints = list(getattr(loop_state, "endpoints", []) or [])
+        if endpoints:
+            sample = endpoints[:_LOOP_ENDPOINTS]
+            lines.append(f"  endpoints ({len(endpoints)} total; first {len(sample)}):")
+            for e in sample:
+                method = (getattr(e, "method", "") or "GET").strip()
+                url = (getattr(e, "url", "") or "").strip()
+                if url:
+                    lines.append(f"    - {method} {url}")
+        return "\n".join(lines)
+    except Exception:  # noqa: BLE001 - grounding must never break a chat turn
+        return ""
 
 
 def _salient(session: dict) -> str:
@@ -197,8 +242,13 @@ def build_prompt(
     techniques: list[dict],
     history: list[dict],
     message: str,
+    loop_state_block: str = "",
 ) -> str:
     lines: list[str] = ["SESSION CONTEXT", build_session_context(session), ""]
+
+    if loop_state_block:
+        lines.append(loop_state_block)
+        lines.append("")
 
     lines.append(
         "RETRIEVED TECHNIQUES (from the tester's knowledge base — prefer these: "
@@ -289,9 +339,17 @@ def ground_citations(
 
 
 def answer(
-    by_id: dict[str, dict], session: dict, message: str, search_fn: SearchFn
+    by_id: dict[str, dict],
+    session: dict,
+    message: str,
+    search_fn: SearchFn,
+    loop_state: Any = None,
 ) -> tuple[str, list[str], str]:
     """Answer one engagement question. Returns (reply_markdown, cited_ids, model).
+
+    ``loop_state`` (optional) is the guided loop's live ``state.store`` summary; when passed,
+    the reply is grounded on what the LOOP has discovered (findings, endpoints), so the
+    assistant can talk about what the loop is doing — not only the attack-path steps.
 
     Raises ``llm.LLMError`` if the provider is unreachable or returns nothing —
     the API layer maps that to a 503 the frontend renders.
@@ -299,8 +357,9 @@ def answer(
     cfg = llm.load_config()
     techniques = retrieve(by_id, message, session, search_fn)
     history = session.get("chat_history") or []
+    loop_state_block = build_loop_state_block(loop_state)
 
-    user = build_prompt(session, techniques, history, message)
+    user = build_prompt(session, techniques, history, message, loop_state_block)
     raw = llm.chat(_SYSTEM, user, cfg, max_tokens=_MAX_TOKENS)
     reply = _unwrap_fence(llm.strip_think(raw))
     if not reply:

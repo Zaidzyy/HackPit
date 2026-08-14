@@ -32,9 +32,14 @@ const SUGGESTIONS = [
 export function EngagementAssistant({
   sessionId,
   initialHistory,
+  noteSignal = null,
 }: {
   sessionId: string;
   initialHistory: ChatTurn[];
+  /** A note the guided loop just left (thinking out loud / a doubt). When its `ts` changes the
+   *  note is appended to the transcript as a distinct turn and the drawer opens so it's seen.
+   *  The backend also persists the note, so it survives a reload without this signal. */
+  noteSignal?: { note: string; ts: number } | null;
 }) {
   const reduced = useReducedMotion();
 
@@ -51,9 +56,26 @@ export function EngagementAssistant({
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const ctrlRef = useRef<AbortController | null>(null);
+  const lastNoteTs = useRef<number | null>(null);
 
   // Re-seed from the persisted history when the session finishes loading.
   useEffect(() => setMessages(initialHistory), [initialHistory]);
+
+  // A note the loop left: append it as a distinct turn and open the drawer so the operator
+  // sees the agent talking. Guarded by `ts` so a re-render never double-appends it, and the
+  // note is also persisted server-side (it re-seeds via initialHistory on a reload).
+  useEffect(() => {
+    if (!noteSignal || noteSignal.ts === lastNoteTs.current) return;
+    lastNoteTs.current = noteSignal.ts;
+    const noteTurn: ChatTurn = {
+      role: "assistant",
+      kind: "note",
+      content: noteSignal.note,
+      ts: new Date().toISOString(),
+    };
+    setMessages((m) => [...m, noteTurn]);
+    setOpen(true);
+  }, [noteSignal]);
 
   // Model info for the "answered by …" line + the gear's default provider.
   useEffect(() => {
@@ -193,12 +215,21 @@ export function EngagementAssistant({
                 </div>
               ) : (
                 <ul className="hp-asst-msgs">
-                  {messages.map((m, i) => (
+                  {messages.map((m, i) => {
+                    const isNote = m.kind === "note";
+                    return (
                     <li
                       key={`${m.ts}-${i}`}
-                      className={`hp-asst-msg hp-asst-msg-${m.role}`}
+                      className={`hp-asst-msg hp-asst-msg-${isNote ? "note" : m.role}`}
                     >
-                      {m.role === "assistant" ? (
+                      {isNote ? (
+                        <div className="hp-asst-bubble hp-asst-bubble-note">
+                          <span className="hp-asst-note-tag" aria-hidden>
+                            agent note
+                          </span>
+                          <Markdown source={m.content} />
+                        </div>
+                      ) : m.role === "assistant" ? (
                         <div className="hp-asst-bubble hp-asst-bubble-ai">
                           <Markdown source={m.content} />
                           {m.cited_entry_ids &&
@@ -234,7 +265,8 @@ export function EngagementAssistant({
                         </div>
                       )}
                     </li>
-                  ))}
+                    );
+                  })}
 
                   {pending && (
                     <li className="hp-asst-msg hp-asst-msg-assistant">

@@ -1454,6 +1454,13 @@ class LoopProposal(BaseModel):
         "non-empty the UI shows them RED and approve requires an explicit confirmation; "
         "the executor's danger gate re-checks this at run time.",
     )
+    # --- talk-to-the-operator — a conversational note shown in the chat pane (build 2026-08-15) --- #
+    note: str = Field(
+        "",
+        description="Optional conversational remark from the loop to the operator (thinking "
+        "out loud / a doubt). Persisted as a chat 'note' turn, shown in the chat pane, and fed "
+        "into the next proposal — NOT the approval card. Distinct from rationale; runs nothing.",
+    )
     # --- ask-the-operator (kind == 'ask') — a request for a human-provided value, runs nothing --- #
     ask_instructions: str = Field(
         "", description="When kind=='ask': step-by-step for the operator to produce the value."
@@ -2866,11 +2873,23 @@ def loop_propose(session_id: str, req: LoopProposeIn = Body(default=None)) -> di
     try:
         # session_id is what grounds the proposal in accumulated STATE (hosts, services,
         # credentials, findings) and the live task tree, instead of stdout tails alone.
-        return orchestrator.propose_next(
+        result = orchestrator.propose_next(
             plan, runs, llm.load_config(), avoid, scope_ctx, session_id
         )
     except llm.LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
+    # A note the loop left for the operator is persisted as a single assistant 'note' turn, so
+    # it appears in the chat pane and steers the next turn (orchestrator._conversation_reference).
+    # Best-effort: a chat-store hiccup must never fail an otherwise-good proposal, and this
+    # persists a STRING only — it executes nothing (keeps the loop/propose surface inert).
+    prop = result.get("proposal") if isinstance(result, dict) else None
+    note = (prop or {}).get("note") if isinstance(prop, dict) else None
+    if note:
+        try:
+            sessions_db.append_agent_note(session_id, note)
+        except Exception:  # noqa: BLE001 - persistence is best-effort
+            pass
+    return result
 
 
 class LoopAnswerIn(BaseModel):
@@ -2972,9 +2991,12 @@ def session_chat(session_id: str, req: ChatIn = Body(...)) -> dict[str, Any]:
     session = sessions_db.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    # Ground the reply on the guided loop's live state too (findings, endpoints), so the
+    # assistant can answer about what the LOOP is doing — not only the pasted attack-path steps.
+    loop_state = state_store.load(session_id)
     try:
         reply, cited, model_used = chat_assistant.answer(
-            STATE.by_id, session, message, _resilient_search
+            STATE.by_id, session, message, _resilient_search, loop_state=loop_state
         )
     except llm.LLMError as e:
         # Ollama offline / no key / unparseable output.

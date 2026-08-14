@@ -37,12 +37,15 @@ export function CockpitEngagementMode({
   sessionId = null,
   goal = null,
   onRunRecorded,
+  onAgentNote,
 }: {
   sessionId?: string | null;
   /** The engagement goal, threaded to the guided loop only so its on-tap SECOND OPINION can
    *  weigh a proposed command against a KB alternative (target + scope come from the engagement). */
   goal?: string | null;
   onRunRecorded?: () => void;
+  /** Forwarded to the guided loop: a conversational note the loop left for the operator. */
+  onAgentNote?: (note: string) => void;
 }) {
   const [status, setStatus] = useState<EngagementStatus | null>(null);
   const [active, setActive] = useState<EngagementRecord | null>(null);
@@ -614,6 +617,7 @@ export function CockpitEngagementMode({
               onRunRecorded?.();
               refresh(); // a loop run may have expanded the live allowed set
             }}
+            onAgentNote={onAgentNote}
           />
         ) : (
           <p className="hp-cv-hint">

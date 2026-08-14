@@ -140,6 +140,7 @@ def _system_prompt(scope_ctx: ScopeContext | None = None) -> str:
         '"step_id": "<the plan step id this realizes, or omit>"'
         + _TASK_OPS_CONTRACT
         + _ASK_CONTRACT
+        + _NOTE_CONTRACT
         + _schema.SYSTEM_CONTRACT
     )
 
@@ -178,6 +179,24 @@ _ASK_CONTRACT = (
     "only for what a command genuinely cannot obtain — prefer a real command whenever one works."
 )
 
+#: How the model TALKS to the operator — a running-commentary note beside the proposal, not a
+#: blocker. Distinct from ``rationale`` (which explains the command on the approval card): a
+#: note is conversational, lands in the operator's chat pane, and is fed back into the next
+#: prompt (see :func:`_conversation_reference`) so the loop and the operator hold one thread.
+#: Optional and additive — omitting it leaves the proposal unchanged.
+_NOTE_CONTRACT = (
+    "\nTALK TO THE OPERATOR (optional) — you MAY add a top-level \"note\": \"<one plain-language "
+    "sentence>\", but ONLY when there is genuinely something worth flagging. Concretely, add one "
+    "when: a result is surprising or telling ('that 401 is app-key gated, not a login problem — "
+    "the key isn't in the web bundle'); you have a doubt or a judgement call the operator should "
+    "weigh ('not sure this host is in scope — worth a check?'); or you hit a decision point / "
+    "dead end worth surfacing. On ordinary routine steps, OMIT it — do not narrate every command "
+    "and never just restate the rationale (which already justifies the command on the approval "
+    "card). Skipping it saves tokens and keeps the channel signal, not noise. The note is "
+    "conversational and goes to the operator's CHAT. It never replaces the command — still "
+    "propose your best next step."
+)
+
 
 def _ask_proposal(
     *, instructions: str, label: str, rationale: str, step_id: str | None
@@ -190,6 +209,7 @@ def _ask_proposal(
         "kind": "ask",
         "ask_instructions": instructions,
         "ask_label": label,
+        "note": "",
         "command": "",
         "args": [],
         "rationale": rationale,
@@ -228,6 +248,47 @@ def _operator_context_reference(session_id: str | None) -> str:
         label = (it.get("label") or "answer").strip()
         lines.append(f"  - {label}: {it.get('text', '')}")
     return "\n".join(lines)
+
+
+#: How many recent chat turns to feed the proposer, and the per-turn cap. Small: the
+#: conversation STEERS the next step, it doesn't replace the state/plan grounding.
+_MAX_CHAT_TURNS = 6
+_CHAT_TURN_CHARS = 500
+
+
+def _conversation_reference(session_id: str | None) -> str:
+    """The recent operator<->loop chat, so a message the operator typed STEERS the next
+    proposal (and so the loop sees its OWN prior notes). Read-only; wrapped so a chat-store
+    hiccup can never break the loop — it just yields no steering block.
+
+    Both sides live in one transcript: operator messages (role 'user'), the assistant's chat
+    replies, and the loop's own notes (kind 'note'). A direct instruction here is treated as
+    authoritative — it is what makes the loop feel hands-on-the-wheel."""
+    if not session_id:
+        return ""
+    try:
+        import sessions as sessions_db
+
+        session = sessions_db.get_session(session_id)
+        history = (session or {}).get("chat_history") or []
+    except Exception:  # noqa: BLE001 - a reference block must never break the loop
+        return ""
+    if not history:
+        return ""
+    lines = [
+        "CONVERSATION WITH THE OPERATOR (most recent last — the operator may STEER you here; a "
+        "direct instruction is authoritative, weigh it above your default plan). Turns tagged "
+        "'YOU (note)' are your own earlier remarks:"
+    ]
+    for turn in history[-_MAX_CHAT_TURNS:]:
+        who = "OPERATOR" if turn.get("role") == "user" else "YOU"
+        tag = " (note)" if turn.get("kind") == "note" else ""
+        content = (turn.get("content") or "").strip().replace("\n", " ")
+        if len(content) > _CHAT_TURN_CHARS:
+            content = content[:_CHAT_TURN_CHARS] + " …"
+        if content:
+            lines.append(f"  {who}{tag}: {content}")
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 def _real_target_system_prompt(ctx: ScopeContext) -> str:
@@ -283,6 +344,7 @@ def _real_target_system_prompt(ctx: ScopeContext) -> str:
         '"step_id": "<the plan step id this realizes, or omit>"'
         + _TASK_OPS_CONTRACT
         + _ASK_CONTRACT
+        + _NOTE_CONTRACT
         + _schema.SYSTEM_CONTRACT
     )
 
@@ -536,6 +598,13 @@ def build_user_prompt(
     if ctx_block:
         lines.append(ctx_block)
         lines.append("")
+    # CONVERSATION — recent operator<->loop chat, placed high so a message the operator typed
+    # steers this step (and the loop sees its own prior notes). Below the authoritative
+    # ask-answers, above the plan/state grounding.
+    convo_block = _conversation_reference(session_id)
+    if convo_block:
+        lines.append(convo_block)
+        lines.append("")
     lines.append("THE PLAN (composed; use it to ground your next step):")
     lines.append(_plan_digest(plan))
     lines.append("")
@@ -757,6 +826,11 @@ def propose_next(
     if not isinstance(parsed, dict):
         raise llm.LLMError("the model did not return a proposal object")
 
+    # NOTE (build 2026-08-15): an optional conversational remark to the operator, carried on
+    # whatever proposal we return and persisted to the chat transcript by the API layer.
+    # Separate from ``rationale`` (which explains the command on the approval card).
+    note = str(parsed.get("note") or "").strip()
+
     # TASK TREE (D-PTT): the model may return operations that update the live plan. They
     # are VALIDATED AND APPLIED BY CODE, never trusted wholesale — an unknown id or a bad
     # status is rejected individually and the rest still apply. The tree is the durable
@@ -785,16 +859,18 @@ def propose_next(
     ask = parsed.get("ask")
     if isinstance(ask, dict) and str(ask.get("instructions") or "").strip():
         step_id = parsed.get("step_id")
+        ask_prop = _ask_proposal(
+            instructions=str(ask.get("instructions")).strip(),
+            label=str(ask.get("label") or "").strip(),
+            rationale=str(parsed.get("rationale") or "").strip(),
+            step_id=str(step_id).strip()
+            if isinstance(step_id, str) and step_id.strip()
+            else None,
+        )
+        ask_prop["note"] = note
         return {
             "done": False,
-            "proposal": _ask_proposal(
-                instructions=str(ask.get("instructions")).strip(),
-                label=str(ask.get("label") or "").strip(),
-                rationale=str(parsed.get("rationale") or "").strip(),
-                step_id=str(step_id).strip()
-                if isinstance(step_id, str) and step_id.strip()
-                else None,
-            ),
+            "proposal": ask_prop,
             "reason": None,
             "task_tree": tree_result,
         }
@@ -823,6 +899,7 @@ def propose_next(
         "gate_ok": gate_ok,
         "gate_reason": gate_reason,
         "dangerous_flags": dangerous,
+        "note": note,
     }
     # REASONING FIELDS (2.2): the hypothesis, expected signal and citations the model led with,
     # plus whether they satisfy the invariant-3 schema gate. Additive — the command/args/gate

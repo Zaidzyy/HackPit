@@ -10,6 +10,7 @@ import { CockpitLoop } from "./CockpitLoop";
 import { CockpitEngagement } from "./CockpitEngagement";
 import { CockpitState } from "./CockpitState";
 import { CockpitEngagementMode } from "./CockpitEngagementMode";
+import { EngagementAssistant } from "./EngagementAssistant";
 import { ComposingLoader } from "./ComposingLoader";
 import { CockpitResume } from "./CockpitResume";
 import { ModelRetry } from "./ModelRetry";
@@ -21,7 +22,9 @@ import {
   composeAttackPath,
   createSession,
   getLLMConfig,
+  getSession,
   type AttackPath,
+  type ChatTurn,
   type LLMConfig,
 } from "@/lib/api";
 
@@ -54,6 +57,10 @@ export function CockpitView() {
   // Loop progress, lifted so the kill-chain map can light nodes as steps complete.
   const [activeStep, setActiveStep] = useState<string | null>(null);
   const [doneSteps, setDoneSteps] = useState<Set<string>>(new Set());
+  // TALK-TO-ME: the chat pane's seed history, and a pulse the guided loop fires when it leaves
+  // a note. `noteSignal.ts` changes per note so the drawer appends it exactly once.
+  const [chatHistory, setChatHistory] = useState<ChatTurn[]>([]);
+  const [noteSignal, setNoteSignal] = useState<{ note: string; ts: number } | null>(null);
   const reduced = useReducedMotion();
 
   const ctrlRef = useRef<AbortController | null>(null);
@@ -68,6 +75,22 @@ export function CockpitView() {
       .catch(() => setConfig(null));
     return () => ctrl.abort();
   }, []);
+
+  // Seed the chat pane from the session's persisted transcript (loop notes + prior chat)
+  // whenever the session changes, so a resumed engagement shows its history. Live notes and
+  // replies then append on top; the backend persists both so this seed stays authoritative.
+  useEffect(() => {
+    if (!sessionId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate: clear on no session
+      setChatHistory([]);
+      return;
+    }
+    const ctrl = new AbortController();
+    getSession(sessionId, ctrl.signal)
+      .then((s) => setChatHistory(s.chat_history ?? []))
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, [sessionId]);
 
   const compose = useCallback(
     (e?: React.FormEvent) => {
@@ -331,6 +354,7 @@ export function CockpitView() {
                   sessionId={sessionId}
                   goal={path.goal}
                   onRunRecorded={() => setEngToken((t) => t + 1)}
+                  onAgentNote={(note) => setNoteSignal({ note, ts: Date.now() })}
                 />
                 {sessionId && (
                   <>
@@ -384,6 +408,7 @@ export function CockpitView() {
                           setActiveStep(null);
                         }}
                         onRunRecorded={() => setEngToken((t) => t + 1)}
+                        onAgentNote={(note) => setNoteSignal({ note, ts: Date.now() })}
                       />
                       <CockpitState
                         key={`state-${sessionId}`}
@@ -417,6 +442,16 @@ export function CockpitView() {
         onClose={() => setSettingsOpen(false)}
         onSaved={(c) => setConfig(c)}
       />
+
+      {/* TALK-TO-ME: a chat drawer beside the loop. You can message the agent any time (it
+          steers the next proposal), and the loop drops NOTES here on its own as it works. */}
+      {sessionId && (
+        <EngagementAssistant
+          sessionId={sessionId}
+          initialHistory={chatHistory}
+          noteSignal={noteSignal}
+        />
+      )}
     </PageShell>
   );
 }

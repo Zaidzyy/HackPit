@@ -786,6 +786,9 @@ export type ChatTurn = {
   ts: string;
   /** KB entries the assistant cited (assistant turns only) — link to /entry/{id}. */
   cited_entry_ids?: string[];
+  /** "note" = a turn the guided loop left on its own (thinking out loud / a doubt), rendered
+   *  distinctly from a chat reply. Absent for ordinary user/assistant turns. */
+  kind?: "note";
 };
 
 /** Full engagement session (GET /sessions/{id}). */
@@ -1484,6 +1487,9 @@ export type LoopProposal = {
   /** kind==="ask": step-by-step instructions for the operator + a short label for the value. */
   ask_instructions?: string;
   ask_label?: string;
+  /** Optional conversational remark from the loop to the operator (thinking out loud / a
+   *  doubt). Shown in the chat pane, not on the approval card; the backend also persists it. */
+  note?: string;
 };
 
 export type LoopProposeOut = {

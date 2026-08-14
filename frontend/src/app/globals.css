@@ -3432,6 +3432,32 @@ a.hp-card {
   opacity: 0.5;
   cursor: default;
 }
+/* non-destructive STOP — end the live engagement, keep the saved path (accent, not red) */
+.hp-engs-stop {
+  flex-shrink: 0;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 0 18px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.hp-engs-stop:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+.hp-engs-stop:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* "● live" chip on the row whose engagement is currently active */
+.hp-engs-live {
+  color: var(--accent);
+  border-color: var(--accent-line);
+}
 
 @media (max-width: 620px) {
   .hp-engs-open {
@@ -4041,6 +4067,32 @@ a.hp-card {
 }
 .hp-asst-bubble-ai .hp-code-pre {
   overflow-x: auto;
+}
+
+/* agent NOTE — the loop thinking out loud / a doubt, distinct from a chat reply */
+.hp-asst-bubble-note {
+  width: 100%;
+  padding: 10px 13px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-left: 2px solid var(--accent);
+}
+.hp-asst-note-tag {
+  display: inline-block;
+  margin-bottom: 5px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.hp-asst-bubble-note .hp-md {
+  font-size: 13px;
+}
+.hp-asst-bubble-note .hp-md > :first-child {
+  margin-top: 0;
+}
+.hp-asst-bubble-note .hp-md > :last-child {
+  margin-bottom: 0;
 }
 
 /* cited-technique chips */

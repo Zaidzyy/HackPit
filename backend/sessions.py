@@ -523,6 +523,36 @@ def append_chat(
     return ts
 
 
+def append_agent_note(session_id: str, note: str) -> str | None:
+    """Append ONE assistant 'note' turn — the guided loop thinking out loud or raising a
+    doubt — with no paired user turn.
+
+    Stored as ``{role:'assistant', kind:'note', content, ts}`` so the chat pane can style a
+    note apart from a reply, and so the next proposal's prompt can see the loop's own prior
+    notes (they flow back through ``orchestrator._conversation_reference``). Returns the ts,
+    or ``None`` if the session doesn't exist or the note is blank. The read-modify-write is
+    inside the writer lock, exactly like :func:`append_chat`, so a note and a chat reply
+    landing at once can't clobber each other's history.
+    """
+    text = (note or "").strip()
+    if not text:
+        return None
+    with _write_lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT chat_history FROM sessions WHERE id=?", (session_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        hist = _load_chat(row)
+        ts = _now()
+        hist.append({"role": "assistant", "kind": "note", "content": text, "ts": ts})
+        conn.execute(
+            "UPDATE sessions SET chat_history=?, updated_at=? WHERE id=?",
+            (json.dumps(hist, ensure_ascii=False), ts, session_id),
+        )
+    return ts
+
+
 def delete_session(session_id: str) -> bool:
     """Delete a session and its step state. Returns False if it didn't exist."""
     with _write_lock, _connect() as conn:

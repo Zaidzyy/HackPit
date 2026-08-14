@@ -42,6 +42,7 @@ export function CockpitLoop({
   onStepActive,
   onStepDone,
   onRunRecorded,
+  onAgentNote,
 }: {
   sessionId: string;
   /** When set, the agent DRAFTS against this engagement's real target + authorized scope, and
@@ -59,6 +60,9 @@ export function CockpitLoop({
   onStepActive?: (stepId: string | null) => void;
   onStepDone?: (stepId: string | null) => void;
   onRunRecorded?: () => void;
+  /** The loop left a conversational NOTE on this proposal (thinking out loud / a doubt). Fired
+   *  so a parent can surface it in the chat pane. The note is also persisted server-side. */
+  onAgentNote?: (note: string) => void;
 }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [proposal, setProposal] = useState<LoopProposal | null>(null);
@@ -114,6 +118,8 @@ export function CockpitLoop({
         setProposal(res.proposal);
         setPhase("awaiting");
         onStepActive?.(res.proposal.step_id);
+        // The loop may have left a note for the operator — surface it in the chat pane.
+        if (res.proposal.note) onAgentNote?.(res.proposal.note);
       })
       .catch((err: unknown) => {
         if (ctrl.signal.aborted) return;
@@ -123,7 +129,7 @@ export function CockpitLoop({
         setErrStatus(err instanceof ApiError ? err.status : undefined);
         setPhase("error");
       });
-  }, [sessionId, engagementId, onStepActive]);
+  }, [sessionId, engagementId, onStepActive, onAgentNote]);
 
   const start = useCallback(() => {
     avoidRef.current = [];

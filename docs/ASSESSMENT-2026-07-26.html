@@ -559,6 +559,11 @@ a { color: var(--accent); text-decoration: none; }
 <td>Session-aware, KB-grounded, deterministic citation extraction (scans the reply for ids that resolve).</td>
 </tr>
 <tr>
+<td>Cockpit live chat (2026-08-15)</td>
+<td><strong>Works</strong></td>
+<td>The assistant drawer now sits <strong>beside the guided loop</strong> (cockpit, engagement + lab). It is two-directional: what the operator types <strong>steers the next proposal</strong> (fed into <code>build_user_prompt</code> as a <code>CONVERSATION</code> block, authoritative like ask-answers), and the loop can <strong>talk back</strong> — an optional <code>note</code> on any proposal (thinking out loud / a doubt), persisted as a <code>kind:"note"</code> turn and surfaced in the drawer, no extra model call. Chat replies are also grounded on the loop's live <code>state.store</code> (findings/endpoints). Chat executes nothing; every command stays human-approved (NO-AUTONOMY lock intact).</td>
+</tr>
+<tr>
 <td>Scripts arsenal</td>
 <td><strong>Works</strong></td>
 <td>1,028 scripts deduped from the KB across 6 groups.</td>

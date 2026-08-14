@@ -329,6 +329,91 @@ def test_json_mode_constrains_small_local_models() -> None:
     print("  json_mode: a JSON call forces grammar-constrained Ollama output; prose does not: PASS")
 
 
+def test_note_and_chat_steering() -> None:
+    """The loop can TALK to the operator (an optional 'note' on any proposal) and the operator
+    can STEER the loop (a chat message feeds the next prompt). Both ride the one chat transcript;
+    neither makes the proposer able to run anything."""
+    lab = config.LAB_TARGET_HOST
+
+    # (1) a note rides on a command proposal — separate from rationale, attached verbatim.
+    cmd_json = (
+        '{"done": false, "command": "curl", "args": ["http://%s/"], '
+        '"rationale": "fetch root", "note": "this 401 looks app-key gated, not a login problem"}'
+        % lab
+    )
+    with _LLM(cmd_json):
+        out = O.propose_next(PLAN, [], {}, [])
+    p = out["proposal"]
+    assert p["kind"] == "command", p["kind"]
+    assert p["note"] == "this 401 looks app-key gated, not a login problem", p.get("note")
+    assert p["rationale"] == "fetch root", "the note must not overwrite the rationale"
+
+    # (2) a note also rides on an ask.
+    ask_json = (
+        '{"done": false, "ask": {"instructions": "paste your session cookie", "label": "cookie"}, '
+        '"note": "I need auth before I can test cross-account access"}'
+    )
+    with _LLM(ask_json):
+        out = O.propose_next(PLAN, [], {}, [])
+    assert out["proposal"]["kind"] == "ask"
+    assert out["proposal"]["note"] == "I need auth before I can test cross-account access"
+
+    # (3) an omitted note is simply empty — additive, never required.
+    with _LLM('{"done": false, "command": "curl", "args": ["http://%s/"]}' % lab):
+        out = O.propose_next(PLAN, [], {}, [])
+    assert out["proposal"]["note"] == "", "no note → empty string, not a missing field"
+
+    # (4) STEERING: an operator chat message AND the loop's own note both reach the NEXT prompt.
+    import sessions as sessions_db
+
+    sessions_db.init_db()
+    sid = sessions_db.create_session("recon the lab", "web", PLAN)
+    sessions_db.append_chat(sid, "focus on Fishbowl IDOR only, skip Glassdoor", "understood", [])
+    ts = sessions_db.append_agent_note(sid, "noting: the API key is app-side, not in the web bundle")
+    assert ts, "append_agent_note must persist and return a ts"
+
+    hist = sessions_db.get_session(sid)["chat_history"]
+    note_turns = [t for t in hist if t.get("kind") == "note"]
+    assert len(note_turns) == 1 and note_turns[0]["role"] == "assistant", note_turns
+    assert note_turns[0]["content"].startswith("noting:"), note_turns
+
+    prompt = O.build_user_prompt(PLAN, [], [], None, sid)
+    assert "CONVERSATION WITH THE OPERATOR" in prompt, "the chat block is missing from the prompt"
+    assert "focus on Fishbowl IDOR only" in prompt, "the operator's steer did not reach the prompt"
+    assert "app-side" in prompt, "the loop's own note did not round-trip into the next prompt"
+    print("  note rides any proposal; operator chat + loop notes steer the next prompt: PASS")
+
+
+def test_chat_grounds_on_live_loop_state() -> None:
+    """chat.answer folds the guided loop's live state (findings, endpoints) into the prompt so the
+    assistant can talk about what the LOOP is doing — not only the pasted attack-path steps. The
+    renderer is duck-typed and guarded: a None/empty state contributes nothing, never an error."""
+    import chat as chat_mod
+
+    class _F:
+        severity = "high"
+        title = "IDOR on /thread/{id}/messages"
+        target = "api.fishbowlapp.com"
+
+    class _E:
+        method = "GET"
+        url = "https://api.fishbowlapp.com/bowl/list"
+
+    class _State:
+        findings = [_F()]
+        endpoints = [_E()]
+
+        def counts(self):
+            return {"hosts": 0, "services": 0, "endpoints": 1, "credentials": 0, "findings": 1}
+
+    block = chat_mod.build_loop_state_block(_State())
+    assert "LIVE LOOP STATE" in block, block
+    assert "IDOR on /thread" in block and "api.fishbowlapp.com" in block, block
+    assert "GET https://api.fishbowlapp.com/bowl/list" in block, block
+    assert chat_mod.build_loop_state_block(None) == "", "None state must contribute nothing"
+    print("  chat grounds on the live loop state (findings + endpoints): PASS")
+
+
 if __name__ == "__main__":
     test_proposer_cannot_execute()
     test_proposer_path_cannot_execute()
@@ -340,5 +425,7 @@ if __name__ == "__main__":
     test_precheck_direct()
     test_done_and_empty_handled()
     test_ask_the_operator_proposal()
+    test_note_and_chat_steering()
+    test_chat_grounds_on_live_loop_state()
     test_json_mode_constrains_small_local_models()
     print("ALL orchestrator-loop L1 tests pass")

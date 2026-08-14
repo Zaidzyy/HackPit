@@ -557,13 +557,13 @@ This is the part worth reading first, because it constrains everything else.
 | Gate | What it does |
 |---|---|
 | **Human approval** | Every command needs an explicit approve. No batch approval, no risk-tiered auto-run, no autonomous loop. |
-| **Scope lock** | In engagement mode the target must be in a scope you declared. Default-deny — an out-of-scope host is refused, not warned about. |
+| **Scope lock** | In engagement mode an out-of-scope target **warns and refuses until you tick an explicit `scope_override`** — a deliberate second act, exactly like the red-confirm — then runs, loudly annotated `⚠ RAN OFF SCOPE (override)`. Approve alone won't do it; tick **and** approve will. Per-command approval is the real bound; scope is a handrail, not a wall. The **lab and Windows** locks stay **hard** — isolated and structurally-fixed hosts, no override. |
 | **Red confirm** | A heuristic flags dangerous commands (interpreters, reverse shells, payload generators, tunnels, RCE tooling) and demands a second acknowledgement that names *what* it flagged. |
 | **Audit** | Every action — including refusals that ran nothing — is recorded. |
 
 **No autonomy — enforced, not promised.** The agent proposes; it never executes. Source-scan tests assert that no orchestrator, loop, or agent module has any code path to an execution surface, and they **fail the build** if one appears. For Active Directory the agent picks an *edge index*, never a command — it can't invent a host or author a command outside the graph.
 
-**Three sandboxes, deliberately different.** The **lab** container is *egress-less* — no route to the internet, your LAN, or your host — proven by a live Docker isolation check the executor's fourth gate depends on. The **`:kali`** container is an open bridge for the human-only shell. The **engagement** container is fully open and privileged by design, because a real target is on the internet; there the bound is the scope lock and per-command approval, **not** network isolation.
+**Three sandboxes, deliberately different.** The **lab** container is *egress-less* — no route to the internet, your LAN, or your host — proven by a live Docker isolation check the executor's fourth gate depends on. The **`:kali`** container is an open bridge for the human-only shell. The **engagement** container is fully open and privileged by design, because a real target is on the internet; there the bound is **per-command approval** — with the scope lock an override-able handrail, not a hard wall — and **not** network isolation.
 
 **Describe, then prescribe — never one without the other.** The detection layer is describe-only and guarded against drifting into evasion advice. The OPSEC channel may be prescriptive, but only if every note names what still records the activity — and the blue-team footprint is always produced alongside and can't be suppressed.
 

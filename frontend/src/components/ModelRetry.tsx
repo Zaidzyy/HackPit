@@ -128,6 +128,7 @@ export function ModelRetry({
   }
 
   const currentLabel = cfg ? `${cfg.provider} · ${cfg.model}` : "the current model";
+  const currentIsLocal = cfg?.provider === "ollama";
   const noLocal = ollama !== null && ollama.length === 0;
 
   return (
@@ -136,8 +137,18 @@ export function ModelRetry({
         <span className="hp-mr-tag">model call failed</span> {error}
       </p>
       <p className="hp-mr-hint">
-        <b>{currentLabel}</b> was flagged or unreachable. A safeguard on a cloud model is not
-        lifted by another cloud tier — a <b>local</b> model is not subject to it.
+        {currentIsLocal ? (
+          <>
+            <b>{currentLabel}</b> is a <b>small local model</b> — it likely returned malformed
+            output (bad JSON) or was unreachable, not a safeguard. A more capable model (a cloud
+            tier, or a larger local one) is more reliable for the strict JSON the loop needs.
+          </>
+        ) : (
+          <>
+            <b>{currentLabel}</b> was flagged or unreachable. A safeguard on a cloud model is not
+            lifted by another cloud tier — a <b>local</b> model is not subject to it.
+          </>
+        )}
       </p>
 
       {noLocal ? (

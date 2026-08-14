@@ -158,7 +158,7 @@ Every runnable script and payload across the whole KB — **extracted, deduped, 
 
 ## 🎯 The cockpit — gated execution
 
-A Kali container driven from the UI, **one approved command at a time**. From here the AI plans a path, then you walk it — in an isolated lab, against a scoped real target, or on a Windows box over WinRM.
+A Kali container driven from the UI, **one approved command at a time**. From here the AI plans a path, then you walk it — in an isolated lab, against a scoped real target, or on a Windows box over WinRM. When a step needs something no command can fetch — a login cookie, a 2FA code, an authorization decision — the loop **asks you** instead of proposing a command, and runs nothing until you answer.
 
 <p align="center">
   <img src="assets/screenshots/12-cockpit.png" alt="The cockpit — plot a path, then run it one approved command at a time" width="100%">

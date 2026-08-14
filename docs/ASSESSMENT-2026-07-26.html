@@ -6347,6 +6347,12 @@ so the single wiring covers both; it reuses <code>getStepAlternative</code> (<co
 primary and the engagement goal/target/scope threaded through only for this (advisory, drives nothing). No new engine, no new
 endpoint. The <strong>manual builders stay excluded</strong> (human-typed, not model-generated) — the same reason chat is. <code>tsc</code> 0, lint at
 the 11-error baseline, <code>next build</code> 0, CSS-vocabulary clean.</p>
+<p><strong>Copy affordance on the alternative (2026-08-14).</strong> The disclosure previously only <em>showed</em> the alternative command; a
+grounded KB technique with <code>&lt;placeholder&gt;</code> args (e.g. cross-tenant testing with <code>&lt;TENANT_B_TOKEN&gt;</code>) couldn't be acted on. Each
+alternative command now has a <strong>copy</strong> button, so it can be pasted into the manual command box or <code>:kali</code>, its placeholders
+filled, and run. Because the disclosure is the one shared <code>fetcher</code>-prop component, this lands on <strong>all six</strong> surfaces at once
+(attack-path, AD/cloud/kill-chain graphs, the <code>:proposals</code> queue, the live loop) — no per-surface work. It does not auto-run:
+the loop stays approve-only and grounded commands carry placeholders, so copy-then-fill-then-approve is the deliberate flow.</p>
 <p>Also cleared a <strong>pre-existing</strong> unrelated red on the way: <code>PUT /cockpit/windows/profiles/{id}</code> → PATCH, to satisfy the
 CORS-method contract (the windows-profile route, not this feature).</p>
 <p>The shared engine (<code>alternatives.py</code>) is written once and reused by every surface via a <code>fetcher</code>-prop disclosure on the

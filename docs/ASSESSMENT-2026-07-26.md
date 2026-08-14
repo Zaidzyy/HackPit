@@ -6301,6 +6301,13 @@ primary and the engagement goal/target/scope threaded through only for this (adv
 endpoint. The **manual builders stay excluded** (human-typed, not model-generated) — the same reason chat is. `tsc` 0, lint at
 the 11-error baseline, `next build` 0, CSS-vocabulary clean.
 
+**Copy affordance on the alternative (2026-08-14).** The disclosure previously only *showed* the alternative command; a
+grounded KB technique with `<placeholder>` args (e.g. cross-tenant testing with `<TENANT_B_TOKEN>`) couldn't be acted on. Each
+alternative command now has a **copy** button, so it can be pasted into the manual command box or `:kali`, its placeholders
+filled, and run. Because the disclosure is the one shared `fetcher`-prop component, this lands on **all six** surfaces at once
+(attack-path, AD/cloud/kill-chain graphs, the `:proposals` queue, the live loop) — no per-surface work. It does not auto-run:
+the loop stays approve-only and grounded commands carry placeholders, so copy-then-fill-then-approve is the deliberate flow.
+
 Also cleared a **pre-existing** unrelated red on the way: `PUT /cockpit/windows/profiles/{id}` → PATCH, to satisfy the
 CORS-method contract (the windows-profile route, not this feature).
 

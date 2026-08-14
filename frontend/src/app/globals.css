@@ -2230,6 +2230,32 @@ a.hp-card {
   border-radius: 4px;
   overflow-x: auto;
 }
+/* A copyable alternative command: the code block + a copy button beside it. */
+.hp-ap-alt-cmdrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.hp-ap-alt-cmdrow .hp-ap-alt-cmd {
+  flex: 1;
+  min-width: 0;
+}
+.hp-ap-alt-copy {
+  flex-shrink: 0;
+  margin-top: 4px;
+  font-size: 10.5px;
+  cursor: pointer;
+  background: none;
+  border: 1px solid color-mix(in srgb, var(--white) 15%, transparent);
+  border-radius: 6px;
+  padding: 3px 9px;
+  color: color-mix(in srgb, var(--white) 55%, transparent);
+  white-space: nowrap;
+}
+.hp-ap-alt-copy:hover {
+  color: var(--white);
+  border-color: color-mix(in srgb, var(--white) 35%, transparent);
+}
 .hp-ap-alt-cmd code {
   font-family: var(--font-jetbrains-mono), "JetBrains Mono", monospace;
   font-size: 12px;

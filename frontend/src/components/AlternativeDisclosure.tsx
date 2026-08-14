@@ -22,6 +22,20 @@ export function AlternativeDisclosure({
 }) {
   const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [result, setResult] = useState<AlternativeResult | null>(null);
+  // Which alternative command was just copied, for the transient "copied ✓" label.
+  const [copied, setCopied] = useState<number | null>(null);
+
+  function copyCmd(i: number, cmd: string) {
+    navigator.clipboard
+      ?.writeText(cmd)
+      .then(() => {
+        setCopied(i);
+        window.setTimeout(() => setCopied((v) => (v === i ? null : v)), 1200);
+      })
+      .catch(() => {
+        /* clipboard blocked — the command is still visible to select by hand */
+      });
+  }
 
   async function load() {
     setState("loading");
@@ -67,9 +81,19 @@ export function AlternativeDisclosure({
             <b className="hp-ap-alt-title">{alt.title}</b>
           </div>
           {alt.commands.map((c, i) => (
-            <pre className="hp-ap-alt-cmd" key={i}>
-              <code>{c.cmd}</code>
-            </pre>
+            <div className="hp-ap-alt-cmdrow" key={i}>
+              <pre className="hp-ap-alt-cmd">
+                <code>{c.cmd}</code>
+              </pre>
+              <button
+                type="button"
+                className="hp-ap-alt-copy"
+                onClick={() => copyCmd(i, c.cmd)}
+                title="Copy this command — paste it into the manual command box or :kali, fill any <placeholders>, then approve + run"
+              >
+                {copied === i ? "copied ✓" : "copy"}
+              </button>
+            </div>
           ))}
           {alt.foreign_refs && alt.foreign_refs.length > 0 && (
             <p className="hp-ap-alt-foreign">

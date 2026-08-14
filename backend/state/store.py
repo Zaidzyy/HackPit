@@ -153,6 +153,20 @@ def init_db() -> None:
             )
             """
         )
+        # Operator-provided context — answers to an agent 'ask' step. Append-only (a log, not
+        # an upsert): the loop asks the human for something it cannot get itself (a session
+        # cookie, a 2FA code, an authorization decision), and the answer is fed back into the
+        # next proposal's prompt so the agent can continue. Nothing here executes.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS state_operator_context (
+                session_id TEXT NOT NULL,
+                label      TEXT NOT NULL DEFAULT '',
+                text       TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
         # MIGRATION-SAFE: proof/local flags (Phase 4 item 5) added to an existing hosts table.
         have = {r[1] for r in conn.execute("PRAGMA table_info(state_hosts)")}
         if "local_txt" not in have:
@@ -323,6 +337,33 @@ def upsert_credentials(items: Iterable[Credential]) -> int:
                 ),
             )
     return len(rows)
+
+
+def add_operator_context(session_id: str, text: str, label: str = "") -> bool:
+    """Record one operator answer to an agent 'ask'. Append-only; fed back into the next
+    proposal's prompt (see orchestrator.build_user_prompt). Executes nothing, stores a string."""
+    if not session_id or not text.strip():
+        return False
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO state_operator_context (session_id, label, text, created_at) "
+            "VALUES (?,?,?,?)",
+            (session_id, label.strip(), text.strip(), _now()),
+        )
+    return True
+
+
+def list_operator_context(session_id: str, limit: int = 20) -> list[dict[str, str]]:
+    """The most recent operator answers for a session, oldest-first (chronological reading)."""
+    if not session_id:
+        return []
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT label, text, created_at FROM state_operator_context "
+            "WHERE session_id = ? ORDER BY rowid DESC LIMIT ?",
+            (session_id, limit),
+        ).fetchall()
+    return [{"label": r["label"], "text": r["text"], "created_at": r["created_at"]} for r in reversed(rows)]
 
 
 def upsert_findings(items: Iterable[Finding]) -> int:

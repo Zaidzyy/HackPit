@@ -266,6 +266,40 @@ def test_done_and_empty_handled() -> None:
     print("  done / empty proposal handled: PASS")
 
 
+def test_ask_the_operator_proposal() -> None:
+    """The model can ASK THE OPERATOR for a value instead of a command. The proposal is kind
+    'ask', carries NO command (so nothing is runnable/executable), and the operator's answer
+    round-trips into the NEXT prompt so the loop can continue past a human-only blocker."""
+    ask_json = (
+        '{"done": false, "ask": {"instructions": "Log in and paste your session cookie", '
+        '"label": "session cookie"}, "rationale": "the endpoints need auth"}'
+    )
+    with _LLM(ask_json):
+        out = O.propose_next(PLAN, [], {}, [])
+    p = out["proposal"]
+    assert out["done"] is False and p is not None, "an ask is a live proposal, not done"
+    assert p["kind"] == "ask", p["kind"]
+    assert p["command"] == "" and p["args"] == [], "an ask carries no command"
+    assert p["gate_ok"] is False, "an ask is never runnable"
+    assert p["ask_label"] == "session cookie" and p["ask_instructions"], p
+
+    # A normal command proposal is tagged kind 'command' so the UI can tell them apart.
+    with _LLM('{"done": false, "command": "curl", "args": ["http://%s/"]}' % config.LAB_TARGET_HOST):
+        out = O.propose_next(PLAN, [], {}, [])
+    assert out["proposal"]["kind"] == "command", out["proposal"]["kind"]
+
+    # The operator's answer is stored and FED BACK into the next prompt (that is the whole point).
+    from state import store as state_store
+
+    state_store.init_db()
+    sid = "test-ask-loop-fixture"
+    state_store.add_operator_context(sid, "gdsid=SECRET123", "session cookie")
+    prompt = O.build_user_prompt(PLAN, [], [], None, sid)
+    assert "OPERATOR-PROVIDED CONTEXT" in prompt, "the answer block is missing from the prompt"
+    assert "gdsid=SECRET123" in prompt, "the operator's answer did not reach the next prompt"
+    print("  ask-the-operator: kind='ask' runs nothing; the answer feeds the next prompt: PASS")
+
+
 if __name__ == "__main__":
     test_proposer_cannot_execute()
     test_proposer_path_cannot_execute()
@@ -276,4 +310,5 @@ if __name__ == "__main__":
     test_metachar_arg_is_allowed_now()
     test_precheck_direct()
     test_done_and_empty_handled()
+    test_ask_the_operator_proposal()
     print("ALL orchestrator-loop L1 tests pass")

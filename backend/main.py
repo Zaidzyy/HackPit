@@ -1429,8 +1429,14 @@ class LoopProposeIn(BaseModel):
 
 
 class LoopProposal(BaseModel):
-    command: str = Field(description="Proposed allowlisted command (e.g. 'nmap').")
-    args: list[str] = Field(description="Proposed argv tokens (targeting the lab).")
+    kind: str = Field(
+        "command",
+        description="'command' (the default — a proposed command awaiting approval) or 'ask' "
+        "(a QUESTION FOR THE OPERATOR — the agent needs a value only a human can provide, e.g. "
+        "a session cookie. An 'ask' carries no command and executes nothing).",
+    )
+    command: str = Field("", description="Proposed allowlisted command (e.g. 'nmap'). Empty for an ask.")
+    args: list[str] = Field(default_factory=list, description="Proposed argv tokens (targeting the lab).")
     rationale: str = Field(description="Why the agent proposes this as the next step.")
     step_id: str | None = Field(
         None, description="The plan step id this realizes, if any."
@@ -1447,6 +1453,13 @@ class LoopProposal(BaseModel):
         description="Escalation flags DETECTED in this proposal (never blocked). When "
         "non-empty the UI shows them RED and approve requires an explicit confirmation; "
         "the executor's danger gate re-checks this at run time.",
+    )
+    # --- ask-the-operator (kind == 'ask') — a request for a human-provided value, runs nothing --- #
+    ask_instructions: str = Field(
+        "", description="When kind=='ask': step-by-step for the operator to produce the value."
+    )
+    ask_label: str = Field(
+        "", description="When kind=='ask': a short name for the value asked for (e.g. 'session cookie')."
     )
     # --- reasoning copilot (Task 2) — advisory only; the proposal still runs nothing --- #
     hypothesis: str = Field("", description="What the proposer believes it is testing (2.2).")
@@ -2858,6 +2871,31 @@ def loop_propose(session_id: str, req: LoopProposeIn = Body(default=None)) -> di
         )
     except llm.LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
+
+
+class LoopAnswerIn(BaseModel):
+    """The operator's answer to a kind=='ask' proposal. Stored as PLAIN CONTEXT (not the
+    credential vault) and fed into the next proposal's prompt so the loop can continue past a
+    human-only blocker (a login/session cookie, a 2FA code, an authorization call)."""
+
+    answer: str = Field(description="What the operator typed back (a cookie, a code, a decision).")
+    label: str = Field("", description="Short name for the value, echoed from the ask.")
+
+
+@app.post("/sessions/{session_id}/loop/answer")
+def loop_answer(session_id: str, req: LoopAnswerIn = Body(...)) -> dict[str, Any]:
+    """Record an operator answer to an agent 'ask'. Executes NOTHING — it stores a string that the
+    NEXT propose() call includes in the prompt (orchestrator.build_user_prompt), so the loop can
+    continue with what only the human could provide. Stored verbatim as plain context, so a secret
+    typed here does reach the model — the operator's deliberate choice, surfaced in the UI."""
+    session = sessions_db.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    text = (req.answer or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="answer is required")
+    ok = state_store.add_operator_context(session_id, text, req.label or "")
+    return {"stored": ok, "label": (req.label or "").strip()}
 
 
 # --- Task 3 / Task 4: web-exploit + privesc drafting (propose/ground only; human fires) ---

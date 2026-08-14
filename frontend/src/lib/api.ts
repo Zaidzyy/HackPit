@@ -1464,6 +1464,9 @@ export async function attachCockpitStream(
  *  pre-check against the M1 allowlist + target-lock; a false proposal is shown
  *  flagged and can't be approved (the executor would reject it anyway). */
 export type LoopProposal = {
+  /** "command" (a proposed command awaiting approval) or "ask" (a question for the operator —
+   *  the agent needs a value only a human can provide; it carries no command and runs nothing). */
+  kind?: "command" | "ask";
   command: string;
   args: string[];
   rationale: string;
@@ -1473,6 +1476,9 @@ export type LoopProposal = {
   /** Escalation flags DETECTED in this proposal (never blocked). When non-empty the
    *  approval surface shows them RED and APPROVE needs an explicit second confirm. */
   dangerous_flags: string[];
+  /** kind==="ask": step-by-step instructions for the operator + a short label for the value. */
+  ask_instructions?: string;
+  ask_label?: string;
 };
 
 export type LoopProposeOut = {
@@ -1500,6 +1506,20 @@ export const loopPropose = (
   postJSON<LoopProposeOut>(
     `/sessions/${encodeURIComponent(sessionId)}/loop/propose`,
     { avoid, engagement_id: engagementId ?? null },
+    signal
+  );
+
+/** Answer a kind==="ask" loop proposal. Stores the value as plain context (NOT the vault); the
+ *  next loopPropose() includes it in the prompt so the agent continues. Executes nothing. */
+export const submitLoopAnswer = (
+  sessionId: string,
+  answer: string,
+  label = "",
+  signal?: AbortSignal
+) =>
+  postJSON<{ stored: boolean; label: string }>(
+    `/sessions/${encodeURIComponent(sessionId)}/loop/answer`,
+    { answer, label },
     signal
   );
 

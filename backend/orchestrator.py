@@ -134,6 +134,7 @@ def _system_prompt(scope_ctx: ScopeContext | None = None) -> str:
         '"rationale": "<1-2 sentences: why this is the next step>", '
         '"step_id": "<the plan step id this realizes, or omit>"'
         + _TASK_OPS_CONTRACT
+        + _ASK_CONTRACT
         + _schema.SYSTEM_CONTRACT
     )
 
@@ -157,6 +158,71 @@ _TASK_OPS_CONTRACT = (
     "the evidence rules it out — a dead branch left open wastes later turns. Omit task_ops "
     "entirely when nothing changed."
 )
+
+#: How the model asks the OPERATOR for something a command cannot get. Appended to both prompts.
+#: The answer is stored and fed back into the next turn's prompt (build_user_prompt), so the
+#: loop can continue past a human-only blocker (a login/session cookie, a 2FA code, a CAPTCHA
+#: solved, an authorization call) instead of stalling or inventing a command that cannot work.
+_ASK_CONTRACT = (
+    "\nASK THE OPERATOR — some steps need something only the human can provide: a session "
+    "cookie or bearer token after they log in, a 2FA/OTP code, an anti-bot/CAPTCHA challenge "
+    "solved, or an authorization decision. When THAT is the blocker, do NOT invent a command. "
+    'Instead return {"done": false, "ask": {"instructions": "<clear step-by-step for the '
+    'operator to produce the value>", "label": "<short name, e.g. session cookie>"}} and NO '
+    '"command" field. The operator\'s answer is added to your context for the next turn. Ask '
+    "only for what a command genuinely cannot obtain — prefer a real command whenever one works."
+)
+
+
+def _ask_proposal(
+    *, instructions: str, label: str, rationale: str, step_id: str | None
+) -> dict[str, Any]:
+    """A proposal that is a QUESTION FOR THE OPERATOR, not a command. It carries no command and
+    EXECUTES NOTHING — the loop UI renders an input, and the answer is stored
+    (state.store.add_operator_context) and fed into the next prompt. Every LoopProposal field is
+    present so the response model validates; the command fields are empty and gate_ok is False."""
+    return {
+        "kind": "ask",
+        "ask_instructions": instructions,
+        "ask_label": label,
+        "command": "",
+        "args": [],
+        "rationale": rationale,
+        "step_id": step_id,
+        "gate_ok": False,
+        "gate_reason": "",
+        "dangerous_flags": [],
+        "hypothesis": "",
+        "expected_signal": "",
+        "citations": [],
+        "schema_valid": True,
+        "schema_problems": [],
+        "critique": {},
+        "specialist": "generalist",
+        "frontier": {},
+    }
+
+
+def _operator_context_reference(session_id: str | None) -> str:
+    """Answers the operator gave to earlier 'ask' steps, rendered for the next prompt. Read-only."""
+    if not session_id:
+        return ""
+    try:
+        from state import store as state_store
+
+        items = state_store.list_operator_context(session_id)
+    except Exception:  # noqa: BLE001 - a reference block must never break the loop
+        return ""
+    if not items:
+        return ""
+    lines = [
+        "OPERATOR-PROVIDED CONTEXT (you asked for these and the operator answered — use them "
+        "in the next command; a value here is authoritative):"
+    ]
+    for it in items:
+        label = (it.get("label") or "answer").strip()
+        lines.append(f"  - {label}: {it.get('text', '')}")
+    return "\n".join(lines)
 
 
 def _real_target_system_prompt(ctx: ScopeContext) -> str:
@@ -211,6 +277,7 @@ def _real_target_system_prompt(ctx: ScopeContext) -> str:
         + '"], "rationale": "<1-2 sentences: why this is the next step>", '
         '"step_id": "<the plan step id this realizes, or omit>"'
         + _TASK_OPS_CONTRACT
+        + _ASK_CONTRACT
         + _schema.SYSTEM_CONTRACT
     )
 
@@ -458,6 +525,12 @@ def build_user_prompt(
     if arsenal_block:
         lines.append(arsenal_block)
         lines.append("")
+    # OPERATOR-PROVIDED CONTEXT — answers to earlier 'ask' steps (a session cookie, a decision).
+    # Placed high so a value the human handed back steers the next command, not buried under runs.
+    ctx_block = _operator_context_reference(session_id)
+    if ctx_block:
+        lines.append(ctx_block)
+        lines.append("")
     lines.append("THE PLAN (composed; use it to ground your next step):")
     lines.append(_plan_digest(plan))
     lines.append("")
@@ -701,6 +774,26 @@ def propose_next(
             "task_tree": tree_result,
         }
 
+    # ASK THE OPERATOR (build 2026-08-14): the model can request a value only the human can
+    # provide (a session cookie, a 2FA code, a CAPTCHA solved, an authorization call) instead
+    # of a command. It executes nothing; the answer is stored and fed back into the next prompt.
+    ask = parsed.get("ask")
+    if isinstance(ask, dict) and str(ask.get("instructions") or "").strip():
+        step_id = parsed.get("step_id")
+        return {
+            "done": False,
+            "proposal": _ask_proposal(
+                instructions=str(ask.get("instructions")).strip(),
+                label=str(ask.get("label") or "").strip(),
+                rationale=str(parsed.get("rationale") or "").strip(),
+                step_id=str(step_id).strip()
+                if isinstance(step_id, str) and step_id.strip()
+                else None,
+            ),
+            "reason": None,
+            "task_tree": tree_result,
+        }
+
     command = str(parsed.get("command") or "").strip()
     args = _coerce_args(parsed.get("args"))
     if not command:
@@ -717,6 +810,7 @@ def propose_next(
     dangerous = allowlist.dangerous_command_heuristic(command, args)
     step_id = parsed.get("step_id")
     proposal = {
+        "kind": "command",
         "command": command,
         "args": args,
         "rationale": str(parsed.get("rationale") or "").strip(),

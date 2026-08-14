@@ -6,6 +6,7 @@ import {
   execCockpitStream,
   getStepAlternative,
   loopPropose,
+  submitLoopAnswer,
   type ExecEvent,
   type LoopProposal,
 } from "@/lib/api";
@@ -67,6 +68,10 @@ export function CockpitLoop({
   // HTTP status of the last failure, so the error UI can offer a model swap only when the
   // failure is actually a model failure (503 = the backend's mapping of llm.LLMError).
   const [errStatus, setErrStatus] = useState<number | undefined>(undefined);
+  // ASK-THE-OPERATOR: the answer being typed for a kind==="ask" proposal, and whether it's in
+  // flight. Submitting stores it as context and continues the loop; it runs nothing.
+  const [answer, setAnswer] = useState("");
+  const [answering, setAnswering] = useState(false);
   const [lines, setLines] = useState<Line[]>([]);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [stepCount, setStepCount] = useState(0);
@@ -89,6 +94,7 @@ export function CockpitLoop({
     setErrStatus(undefined);
     setProposal(null);
     setDangerAck(false); // every new proposal must be re-confirmed if dangerous
+    setAnswer(""); // a new proposal — clear any half-typed answer to a prior ask
     onStepActive?.(null);
 
     // In engagement mode the proposer drafts against the REAL target + its authorized scope
@@ -202,6 +208,23 @@ export function CockpitLoop({
         propose();
       });
   }, [proposal, phase, dangerAck, sessionId, engagementId, onStepDone, onRunRecorded, propose]);
+
+  // Submit an answer to a kind==="ask" proposal: store it (plain context, not the vault) and
+  // continue the loop so the next proposal sees it. Runs NOTHING — there is no command here.
+  const submitAnswer = useCallback(() => {
+    if (!proposal || proposal.kind !== "ask" || answering || !answer.trim()) return;
+    setAnswering(true);
+    submitLoopAnswer(sessionId, answer.trim(), proposal.ask_label ?? "")
+      .then(() => {
+        setAnswer("");
+        onRunRecorded?.(); // the answer landed in engagement context
+        propose(); // continue — the next draft reads the answer from the prompt
+      })
+      .catch(() => {
+        /* leave the text so the operator can retry */
+      })
+      .finally(() => setAnswering(false));
+  }, [proposal, answering, answer, sessionId, onRunRecorded, propose]);
 
   const skip = useCallback(() => {
     if (proposal) avoidRef.current = [...avoidRef.current, cmdline(proposal)];
@@ -320,6 +343,64 @@ export function CockpitLoop({
 
       {/* the proposal — shown while awaiting approval or during the run */}
       {proposal && (phase === "awaiting" || phase === "running") && (() => {
+        // ASK THE OPERATOR: a proposal that is a QUESTION, not a command. Render an input +
+        // "submit & continue" instead of approve/run — submitting stores the answer as context
+        // and re-proposes. There is no command here, so nothing can be approved or executed.
+        if (proposal.kind === "ask") {
+          return (
+            <section className="hp-loop-proposal hp-loop-ask">
+              <div className="hp-loop-proposal-head">
+                <span className="hp-loop-proposal-tag hp-loop-ask-tag" aria-hidden>
+                  agent asks you
+                </span>
+                {proposal.step_id && (
+                  <span className="hp-loop-proposal-step">{proposal.step_id}</span>
+                )}
+              </div>
+              {proposal.rationale && (
+                <p className="hp-loop-rationale">{proposal.rationale}</p>
+              )}
+              <p className="hp-loop-ask-instructions">{proposal.ask_instructions}</p>
+              {phase === "awaiting" && (
+                <>
+                  <textarea
+                    className="hp-loop-ask-input"
+                    value={answer}
+                    onChange={(e) => setAnswer(e.target.value)}
+                    placeholder={
+                      proposal.ask_label
+                        ? `paste the ${proposal.ask_label} here…`
+                        : "type your answer…"
+                    }
+                    rows={3}
+                    spellCheck={false}
+                    disabled={answering}
+                  />
+                  <p className="hp-loop-ask-note">
+                    Stored as plain context and fed to the next step — a secret you paste here is
+                    sent to the model. Nothing runs.
+                  </p>
+                  <div className="hp-loop-controls">
+                    <button
+                      type="button"
+                      className="hp-ck-approve"
+                      onClick={submitAnswer}
+                      disabled={answering || !answer.trim()}
+                    >
+                      {answering ? "submitting…" : "submit answer & continue"}
+                    </button>
+                    <button type="button" className="hp-loop-skip" onClick={skip}>
+                      skip <kbd className="hp-loop-kbd">S</kbd>
+                    </button>
+                    <button type="button" className="hp-loop-skip" onClick={stop}>
+                      stop <kbd className="hp-loop-kbd">Esc</kbd>
+                    </button>
+                  </div>
+                </>
+              )}
+            </section>
+          );
+        }
         const danger = proposal.dangerous_flags ?? [];
         const isDanger = danger.length > 0;
         const canApprove = proposal.gate_ok && (!isDanger || dangerAck);

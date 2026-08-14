@@ -6334,6 +6334,14 @@ structured surfaces plus the model picker in the same session:</p>
   providers route to the existing settings modal. The rail payload stays status-only, so <code>test_home_summary</code> is unchanged.
   (A <code>overflow:hidden</code> on the rail clipped the dropdown — moved corner-clipping onto the end cells; caught by looking at it.)</li>
 </ul>
+<p><strong>Extended to the live guided loop (2026-08-14).</strong> The one generated-command surface the foundation left out was the <em>live</em>
+orchestrator loop — the second opinion existed on the <em>queued</em> proposals in <code>:proposals</code> but not on the command in front of
+you as the loop proposes it. <code>CockpitLoop</code>'s proposal card now carries the same <strong>⇄ second opinion</strong>, so a drafted command can
+be weighed against a KB alternative <em>before</em> you approve it. <code>CockpitLoop</code> is shared by the lab loop and the engagement loop,
+so the single wiring covers both; it reuses <code>getStepAlternative</code> (<code>/attack-path/alternative</code>) with the proposed command as the
+primary and the engagement goal/target/scope threaded through only for this (advisory, drives nothing). No new engine, no new
+endpoint. The <strong>manual builders stay excluded</strong> (human-typed, not model-generated) — the same reason chat is. <code>tsc</code> 0, lint at
+the 11-error baseline, <code>next build</code> 0, CSS-vocabulary clean.</p>
 <p>Also cleared a <strong>pre-existing</strong> unrelated red on the way: <code>PUT /cockpit/windows/profiles/{id}</code> → PATCH, to satisfy the
 CORS-method contract (the windows-profile route, not this feature).</p>
 <p>The shared engine (<code>alternatives.py</code>) is written once and reused by every surface via a <code>fetcher</code>-prop disclosure on the

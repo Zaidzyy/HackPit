@@ -35,9 +35,13 @@ type Line = { kind: "stdout" | "stderr" | "meta" | "err" | "disc"; text: string 
 
 export function CockpitEngagementMode({
   sessionId = null,
+  goal = null,
   onRunRecorded,
 }: {
   sessionId?: string | null;
+  /** The engagement goal, threaded to the guided loop only so its on-tap SECOND OPINION can
+   *  weigh a proposed command against a KB alternative (target + scope come from the engagement). */
+  goal?: string | null;
   onRunRecorded?: () => void;
 }) {
   const [status, setStatus] = useState<EngagementStatus | null>(null);
@@ -598,6 +602,9 @@ export function CockpitEngagementMode({
             sessionId={sessionId}
             engagementId={active.engagement_id}
             scopeLabel={active.scope || active.target}
+            goal={goal}
+            target={active.target}
+            scopeText={active.scope || active.target}
             onRunRecorded={() => {
               onRunRecorded?.();
               refresh(); // a loop run may have expanded the live allowed set

@@ -4,10 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
   execCockpitStream,
+  getStepAlternative,
   loopPropose,
   type ExecEvent,
   type LoopProposal,
 } from "@/lib/api";
+import { AlternativeDisclosure } from "./AlternativeDisclosure";
 import { ModelRetry } from "./ModelRetry";
 
 /**
@@ -33,6 +35,9 @@ export function CockpitLoop({
   sessionId,
   engagementId = null,
   scopeLabel = null,
+  goal = null,
+  target = null,
+  scopeText = null,
   onStepActive,
   onStepDone,
   onRunRecorded,
@@ -44,6 +49,12 @@ export function CockpitLoop({
   engagementId?: string | null;
   /** The authorized scope, shown so the operator can see what the agent may draft against. */
   scopeLabel?: string | null;
+  /** The engagement goal + target + scope, threaded through only so the on-tap SECOND OPINION
+   *  can weigh a proposed command against a KB alternative. Advisory; drives nothing. When goal
+   *  is absent the disclosure is simply not shown. */
+  goal?: string | null;
+  target?: string | null;
+  scopeText?: string | null;
   onStepActive?: (stepId: string | null) => void;
   onStepDone?: (stepId: string | null) => void;
   onRunRecorded?: () => void;
@@ -370,6 +381,22 @@ export function CockpitLoop({
                   </span>
                 </label>
               )}
+            </div>
+          )}
+
+          {phase === "awaiting" && goal && goal.trim() && (
+            <div className="hp-loop-alt">
+              <AlternativeDisclosure
+                fetcher={() =>
+                  getStepAlternative({
+                    goal,
+                    target,
+                    scope_text: scopeText ?? scopeLabel,
+                    step_title: proposal.rationale || proposal.step_id || proposal.command,
+                    step_cmd: cmdline(proposal),
+                  })
+                }
+              />
             </div>
           )}
 

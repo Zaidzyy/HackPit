@@ -329,6 +329,7 @@ export function CockpitView() {
               <>
                 <CockpitEngagementMode
                   sessionId={sessionId}
+                  goal={path.goal}
                   onRunRecorded={() => setEngToken((t) => t + 1)}
                 />
                 {sessionId && (
@@ -374,6 +375,9 @@ export function CockpitView() {
                     <>
                       <CockpitLoop
                         sessionId={sessionId}
+                        goal={path.goal}
+                        target={path.target}
+                        scopeText={scopeText.trim() || null}
                         onStepActive={setActiveStep}
                         onStepDone={(id) => {
                           if (id) setDoneSteps((s) => new Set(s).add(id));

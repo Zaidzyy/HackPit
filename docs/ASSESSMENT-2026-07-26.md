@@ -6286,6 +6286,15 @@ structured surfaces plus the model picker in the same session:
   providers route to the existing settings modal. The rail payload stays status-only, so `test_home_summary` is unchanged.
   (A `overflow:hidden` on the rail clipped the dropdown — moved corner-clipping onto the end cells; caught by looking at it.)
 
+**Extended to the live guided loop (2026-08-14).** The one generated-command surface the foundation left out was the *live*
+orchestrator loop — the second opinion existed on the *queued* proposals in `:proposals` but not on the command in front of
+you as the loop proposes it. `CockpitLoop`'s proposal card now carries the same **⇄ second opinion**, so a drafted command can
+be weighed against a KB alternative *before* you approve it. `CockpitLoop` is shared by the lab loop and the engagement loop,
+so the single wiring covers both; it reuses `getStepAlternative` (`/attack-path/alternative`) with the proposed command as the
+primary and the engagement goal/target/scope threaded through only for this (advisory, drives nothing). No new engine, no new
+endpoint. The **manual builders stay excluded** (human-typed, not model-generated) — the same reason chat is. `tsc` 0, lint at
+the 11-error baseline, `next build` 0, CSS-vocabulary clean.
+
 Also cleared a **pre-existing** unrelated red on the way: `PUT /cockpit/windows/profiles/{id}` → PATCH, to satisfy the
 CORS-method contract (the windows-profile route, not this feature).
 

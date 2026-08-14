@@ -5145,6 +5145,11 @@ a.hp-card {
   margin: 10px 0 0;
 }
 
+/* On-tap second opinion on the live loop proposal (reuses the hp-ap-alt* disclosure styles). */
+.hp-loop-alt {
+  margin: 11px 0 2px;
+}
+
 /* --- dangerous-flag red-confirm (active tools) --------------------------- */
 .hp-loop-proposal.is-danger {
   border-color: rgba(240, 60, 60, 0.6);

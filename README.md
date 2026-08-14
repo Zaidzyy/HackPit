@@ -10,6 +10,10 @@
 </p>
 
 <p align="center">
+<a href="https://zaidzyy.github.io/HackPit/"><b>zaidzyy.github.io/HackPit</b></a>
+</p>
+
+<p align="center">
   <a href="https://github.com/Zaidzyy/HackPit/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Zaidzyy/HackPit/ci.yml?branch=main&label=CI&style=flat-square"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.14-3776AB?style=flat-square&logo=python&logoColor=white">
   <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=nextdotjs&logoColor=white">
@@ -25,10 +29,6 @@
 > ### 📦 KB not shared here, Contact me for full access to this tool
 > The knowledge sources the KB is built from — course notes, write-ups, cloned repos, PDFs, cheat sheets — are kept **local and git-ignored**. **a fresh clone starts with an empty knowledge base until you build one or get it from the author.**
 
-
-> ### ⚠️ Authorized use only
-> The cockpit runs **real offensive tools against real hosts** — with C2, evasion tooling, and a live Windows/AD path. Use it only where you're authorized: your own lab, an HTB/PG box, or a client with a signed scope. Every command is gated on your explicit approval, and in engagement mode on a target you declared in scope. **Engagement mode has no network containment** — human approval is the only thing standing between a command and the internet. Read the [Safety model](#-safety-model); it's the core of the design, not a footnote.
-
 ---
 
 <p align="center">
@@ -36,6 +36,9 @@
   <img src="assets/screenshots/02-home.png" alt="HackPit home — category grid and live knowledge-base counters" width="49%">
 </p>
 <p align="center"><sub>Every technique you know, one keystroke away.</sub></p>
+
+> ### ⚠️ Authorized use only
+> The cockpit runs **real offensive tools against real hosts** — with C2, evasion tooling, and a live Windows/AD path. Use it only where you're authorized: your own lab, an HTB/PG box, or a client with a signed scope. Every command is gated on your explicit approval, and in engagement mode on a target you declared in scope. **Engagement mode has no network containment** — human approval is the only thing standing between a command and the internet. Read the [Safety model](#-safety-model); it's the core of the design, not a footnote.
 
 ---
 

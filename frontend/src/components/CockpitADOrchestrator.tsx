@@ -13,6 +13,7 @@ import {
   type WindowsProfile,
 } from "@/lib/api";
 import { AlternativeDisclosure } from "./AlternativeDisclosure";
+import { ModelRetry } from "./ModelRetry";
 
 type Line = { kind: "meta" | "stdout" | "stderr" | "err"; text: string };
 
@@ -59,6 +60,7 @@ export function CockpitADOrchestrator({
   const [done, setDone] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errStatus, setErrStatus] = useState<number | undefined>(undefined);
 
   const [ack, setAck] = useState(false);
   const [running, setRunning] = useState(false);
@@ -81,6 +83,7 @@ export function CockpitADOrchestrator({
     async (avoid: string[] = skipped) => {
       setThinking(true);
       setError(null);
+      setErrStatus(undefined);
       setProposal(null);
       setReason(null);
       setAdvanced(null);
@@ -106,6 +109,7 @@ export function CockpitADOrchestrator({
         setError(
           err instanceof ApiError ? err.message : "Couldn’t reach the reasoning model."
         );
+        setErrStatus(err instanceof ApiError ? err.status : undefined);
       } finally {
         setThinking(false);
       }
@@ -253,7 +257,9 @@ export function CockpitADOrchestrator({
       )}
 
       {thinking && <p className="hp-ado-thinking">reading the graph…</p>}
-      {error && <p className="hp-ado-err">{error}</p>}
+      {error && (
+        <ModelRetry error={error} status={errStatus} onRetry={() => void ask()} />
+      )}
       {done && <p className="hp-ado-done">{reason ?? "nothing further to propose."}</p>}
       {!p && !done && reason && !thinking && <p className="hp-ado-err">{reason}</p>}
 

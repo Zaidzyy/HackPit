@@ -11,6 +11,8 @@ import { CockpitEngagement } from "./CockpitEngagement";
 import { CockpitState } from "./CockpitState";
 import { CockpitEngagementMode } from "./CockpitEngagementMode";
 import { ComposingLoader } from "./ComposingLoader";
+import { CockpitResume } from "./CockpitResume";
+import { ModelRetry } from "./ModelRetry";
 import { LLMSettingsModal } from "./LLMSettingsModal";
 import { ModelBadge } from "./ModelBadge";
 import { TargetTypeChips } from "./TargetTypeChips";
@@ -41,6 +43,7 @@ export function CockpitView() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errStatus, setErrStatus] = useState<number | undefined>(undefined);
   const [config, setConfig] = useState<LLMConfig | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [execMode, setExecMode] = useState<"loop" | "manual">("loop");
@@ -78,6 +81,7 @@ export function CockpitView() {
 
       setLoading(true);
       setError(null);
+      setErrStatus(undefined);
 
       composeAttackPath(g, targetType, scopeText.trim() || null, ctrl.signal)
         .then((p) => {
@@ -105,10 +109,24 @@ export function CockpitView() {
           setError(
             err instanceof ApiError ? err.message : "Couldn’t plot an attack path."
           );
+          setErrStatus(err instanceof ApiError ? err.status : undefined);
         });
     },
     [goal, targetType, scopeText, loading]
   );
+
+  // Resume a saved engagement WITHOUT re-plotting: load its stored path + session id straight
+  // into the exec surface, exactly as compose() does on a fresh plot. Same engine, no new plan.
+  const resumeInto = useCallback((p: AttackPath, sid: string) => {
+    ctrlRef.current?.abort();
+    setPath(p);
+    setSessionId(sid);
+    setError(null);
+    setErrStatus(undefined);
+    setLoading(false);
+    setActiveStep(null);
+    setDoneSteps(new Set());
+  }, []);
 
   // Sections reveal in once a path exists; skip the motion under reduced-motion.
   const reveal = reduced
@@ -221,6 +239,11 @@ export function CockpitView() {
             )}
           </div>
 
+          {/* Resume a saved engagement without re-plotting — a peer to the plot bar. Only shows
+              on the entry screen (before a path exists) and only when there is something to
+              resume; CockpitResume renders nothing otherwise. */}
+          {!path && !loading && <CockpitResume onResume={resumeInto} />}
+
           <ModelBadge
             config={config}
             onOpenSettings={() => setSettingsOpen(true)}
@@ -233,7 +256,18 @@ export function CockpitView() {
               as though nothing were happening. */}
           {loading && <ComposingLoader config={config} />}
 
-          {error && !loading && <p className="hp-cv-error">{error}</p>}
+          {error && !loading && (
+            <ModelRetry
+              error={error}
+              status={errStatus}
+              onRetry={() => compose()}
+              onModelChanged={() =>
+                getLLMConfig()
+                  .then(setConfig)
+                  .catch(() => {})
+              }
+            />
+          )}
 
           {!path && !error && !loading && (
             <p className="hp-cv-hint">plot a path to begin</p>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Markdown } from "./Markdown";
 import { DetectionDisclosure } from "./DetectionPanel";
+import { ModelRetry } from "./ModelRetry";
 import {
   ApiError,
   detectionRuns,
@@ -36,6 +37,7 @@ export function CockpitEngagement({
   const [reportMd, setReportMd] = useState<string | null>(null);
   const [reportBusy, setReportBusy] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
+  const [reportStatus, setReportStatus] = useState<number | undefined>(undefined);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -60,13 +62,15 @@ export function CockpitEngagement({
     if (reportBusy) return;
     setReportBusy(true);
     setReportError(null);
+    setReportStatus(undefined);
     generateReport(sessionId)
       .then((r) => setReportMd(r.report_md))
-      .catch((err: unknown) =>
+      .catch((err: unknown) => {
         setReportError(
           err instanceof ApiError ? err.message : "Couldn’t generate the report."
-        )
-      )
+        );
+        setReportStatus(err instanceof ApiError ? err.status : undefined);
+      })
       .finally(() => setReportBusy(false));
   }, [sessionId, reportBusy]);
 
@@ -155,7 +159,13 @@ export function CockpitEngagement({
         </>
       )}
 
-      {reportError && <p className="hp-cv-error">{reportError}</p>}
+      {reportError && (
+        <ModelRetry
+          error={reportError}
+          status={reportStatus}
+          onRetry={makeReport}
+        />
+      )}
 
       {reportMd && (
         <div className="hp-ck-report">

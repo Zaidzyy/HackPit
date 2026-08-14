@@ -8,6 +8,7 @@ import { PageShell } from "./PageShell";
 import { CopyButton } from "./CopyButton";
 import { LLMSettingsModal } from "./LLMSettingsModal";
 import { ModelBadge } from "./ModelBadge";
+import { ModelRetry } from "./ModelRetry";
 import { TargetTypeChips } from "./TargetTypeChips";
 import { ComposingLoader } from "./ComposingLoader";
 import { DetectionDisclosure } from "./DetectionPanel";
@@ -46,6 +47,7 @@ export function AttackPathScreen() {
   const [result, setResult] = useState<AttackPath | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errStatus, setErrStatus] = useState<number | undefined>(undefined);
 
   const [config, setConfig] = useState<LLMConfig | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -79,6 +81,7 @@ export function AttackPathScreen() {
 
       setLoading(true);
       setError(null);
+      setErrStatus(undefined);
       setResult(null);
 
       composeAttackPath(g, targetType, scopeText.trim() || null, ctrl.signal)
@@ -95,6 +98,7 @@ export function AttackPathScreen() {
               ? err.message
               : "Couldn’t compose an attack path."
           );
+          setErrStatus(err instanceof ApiError ? err.status : undefined);
         });
     },
     [goal, targetType, scopeText, loading]
@@ -201,7 +205,16 @@ export function AttackPathScreen() {
 
         {error && !loading && (
           <div className="hp-ap-error">
-            <p className="hp-note-err">{error}</p>
+            <ModelRetry
+              error={error}
+              status={errStatus}
+              onRetry={() => submit()}
+              onModelChanged={() =>
+                getLLMConfig()
+                  .then(setConfig)
+                  .catch(() => {})
+              }
+            />
             <p className="hp-ap-error-hint">
               The default provider is local Ollama — make sure{" "}
               <code>ollama serve</code> is running and{" "}
@@ -211,7 +224,7 @@ export function AttackPathScreen() {
                 className="hp-ap-linklike"
                 onClick={() => setSettingsOpen(true)}
               >
-                switch provider
+                open full settings
               </button>
               .
             </p>

@@ -14,6 +14,7 @@ import {
 } from "@/lib/api";
 import { sourceTint } from "@/lib/source";
 import { useReducedMotion } from "@/lib/useReducedMotion";
+import { ModelRetry } from "./ModelRetry";
 
 /** Prefill-only prompts to get a tester moving. */
 const SUGGESTIONS = [
@@ -42,6 +43,7 @@ export function EngagementAssistant({
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errStatus, setErrStatus] = useState<number | undefined>(undefined);
 
   const [config, setConfig] = useState<LLMConfig | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -84,6 +86,7 @@ export function EngagementAssistant({
     setInput("");
     setPending(true);
     setError(null);
+    setErrStatus(undefined);
 
     ctrlRef.current?.abort();
     const ctrl = new AbortController();
@@ -114,6 +117,7 @@ export function EngagementAssistant({
             ? err.message
             : "The assistant couldn’t reply. Is the model running?"
         );
+        setErrStatus(err instanceof ApiError ? err.status : undefined);
       });
   }
 
@@ -249,7 +253,18 @@ export function EngagementAssistant({
                 </ul>
               )}
 
-              {error && <p className="hp-asst-error">{error}</p>}
+              {error && (
+                <ModelRetry
+                  error={error}
+                  status={errStatus}
+                  onRetry={() => send()}
+                  onModelChanged={() =>
+                    getLLMConfig()
+                      .then(setConfig)
+                      .catch(() => {})
+                  }
+                />
+              )}
             </div>
 
             <div className="hp-asst-foot">

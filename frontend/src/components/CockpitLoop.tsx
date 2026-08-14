@@ -8,6 +8,7 @@ import {
   type ExecEvent,
   type LoopProposal,
 } from "@/lib/api";
+import { ModelRetry } from "./ModelRetry";
 
 /**
  * The guided orchestrator loop (docs/cockpit-loop.md), human-gated.
@@ -52,6 +53,9 @@ export function CockpitLoop({
   const [dangerAck, setDangerAck] = useState(false);
   const [doneReason, setDoneReason] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // HTTP status of the last failure, so the error UI can offer a model swap only when the
+  // failure is actually a model failure (503 = the backend's mapping of llm.LLMError).
+  const [errStatus, setErrStatus] = useState<number | undefined>(undefined);
   const [lines, setLines] = useState<Line[]>([]);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [stepCount, setStepCount] = useState(0);
@@ -71,6 +75,7 @@ export function CockpitLoop({
     ctrlRef.current = ctrl;
     setPhase("proposing");
     setError(null);
+    setErrStatus(undefined);
     setProposal(null);
     setDangerAck(false); // every new proposal must be re-confirmed if dangerous
     onStepActive?.(null);
@@ -94,6 +99,7 @@ export function CockpitLoop({
         setError(
           err instanceof ApiError ? err.message : "Couldn’t get a proposal."
         );
+        setErrStatus(err instanceof ApiError ? err.status : undefined);
         setPhase("error");
       });
   }, [sessionId, engagementId, onStepActive]);
@@ -284,12 +290,11 @@ export function CockpitLoop({
       )}
 
       {phase === "error" && (
-        <div className="hp-loop-idle">
-          <p className="hp-cv-error">{error}</p>
-          <button type="button" className="hp-ck-approve" onClick={propose}>
-            try again
-          </button>
-        </div>
+        <ModelRetry
+          error={error ?? "The proposer is unavailable."}
+          status={errStatus}
+          onRetry={propose}
+        />
       )}
 
       {phase === "done" && (

@@ -10439,3 +10439,212 @@ button.hp-tn-start:disabled, button.hp-tn-destroy:disabled { opacity: 0.45; curs
   .hp-kc-overview { grid-template-columns: 1fr; }
   .hp-kc-summary { flex-direction: column; }
 }
+
+/* --- model repick-on-failure (ModelRetry) -------------------------------- */
+/* Rendered wherever a model-backed action failed. For a real model failure (503) it offers a
+   model switch + retry; otherwise it degrades to a plain "try again". */
+.hp-mr {
+  margin: 12px 0 0;
+  border: 1px solid rgba(240, 104, 74, 0.4);
+  border-radius: 10px;
+  background: color-mix(in srgb, #f0684a 6%, var(--panel));
+  padding: 13px 15px;
+}
+.hp-mr-reason {
+  margin: 0;
+  font-size: 12.5px;
+  color: #f0684a;
+  line-height: 1.5;
+}
+.hp-mr-tag {
+  display: inline-block;
+  margin-right: 7px;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: rgba(240, 104, 74, 0.16);
+  color: #ff8a6f;
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.hp-mr-hint {
+  margin: 9px 0 0;
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.55;
+}
+.hp-mr-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.hp-mr-field > span {
+  white-space: nowrap;
+  letter-spacing: 0.3px;
+}
+.hp-mr-select {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--fg, #e8e8e8);
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 12.5px;
+}
+.hp-mr-select:focus {
+  outline: none;
+  border-color: rgba(240, 104, 74, 0.6);
+}
+.hp-mr-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 13px;
+  flex-wrap: wrap;
+}
+.hp-mr-again {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 7px;
+  color: var(--dim);
+  padding: 8px 13px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.hp-mr-again:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.35);
+  color: var(--fg, #e8e8e8);
+}
+.hp-mr-again:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- resume-an-engagement picker (CockpitResume) ------------------------- */
+/* A peer to the plot bar on the cockpit entry screen: pick a saved engagement and load it back
+   into the exec surface without re-plotting. */
+.hp-cr {
+  margin: 14px 0 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--fg, #e8e8e8) 3%, var(--panel));
+  padding: 12px 13px;
+}
+.hp-cr-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 9px;
+}
+.hp-cr-title {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--fg, #e8e8e8);
+}
+.hp-cr-sub {
+  font-size: 12px;
+  color: var(--dim);
+  opacity: 0.8;
+}
+.hp-cr-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hp-cr-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.hp-cr-resume {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  padding: 8px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--fg, #e8e8e8);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.hp-cr-resume:hover:not(:disabled) {
+  border-color: rgba(240, 168, 74, 0.5);
+  background: color-mix(in srgb, #f0a84a 5%, var(--panel));
+}
+.hp-cr-resume:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.hp-cr-label {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hp-cr-meta {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.hp-cr-chip {
+  padding: 1px 7px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.2px;
+}
+.hp-cr-count {
+  font-family: var(--font-jetbrains-mono), monospace;
+  color: var(--fg, #e8e8e8);
+  opacity: 0.85;
+}
+.hp-cr-time {
+  white-space: nowrap;
+}
+.hp-cr-del {
+  flex-shrink: 0;
+  width: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.hp-cr-del:hover:not(:disabled) {
+  border-color: rgba(240, 82, 82, 0.5);
+  color: #f0684a;
+}
+.hp-cr-del:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.hp-cr-err {
+  margin: 9px 0 0;
+  font-size: 12px;
+  color: #f0684a;
+}

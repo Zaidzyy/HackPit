@@ -18,6 +18,7 @@ import {
   type KillchainTechnique,
 } from "@/lib/api";
 import { AlternativeDisclosure } from "./AlternativeDisclosure";
+import { ModelRetry } from "./ModelRetry";
 
 /**
  * The cross-domain KILL-CHAIN graph — the capstone that stitches the web foothold, cloud IAM and
@@ -98,6 +99,10 @@ export function CockpitKillchain({
   const [proposing, setProposing] = useState(false);
   const [proposal, setProposal] = useState<KillchainProposal | null>(null);
   const [proposeNote, setProposeNote] = useState<string | null>(null);
+  // A model failure of the proposer, kept apart from proposeNote (which also carries the
+  // success note) so the repick control shows ONLY on a real error.
+  const [proposeErr, setProposeErr] = useState<string | null>(null);
+  const [proposeErrStatus, setProposeErrStatus] = useState<number | undefined>(undefined);
 
   // walk-the-seam exec stream
   const [running, setRunning] = useState<number | null>(null);
@@ -174,6 +179,8 @@ export function CockpitKillchain({
     if (!data) return;
     setProposing(true);
     setProposeNote(null);
+    setProposeErr(null);
+    setProposeErrStatus(undefined);
     try {
       const owned = data.start ? [data.start] : data.graph.nodes.filter((n) => n.owned).map((n) => n.id);
       const res = await killchainPropose({
@@ -195,7 +202,8 @@ export function CockpitKillchain({
         if (idx >= 0) setOpenEdge(idx);
       }
     } catch (err: unknown) {
-      setProposeNote(err instanceof ApiError ? err.message : "The proposer is unavailable.");
+      setProposeErr(err instanceof ApiError ? err.message : "The proposer is unavailable.");
+      setProposeErrStatus(err instanceof ApiError ? err.status : undefined);
     } finally {
       setProposing(false);
     }
@@ -422,7 +430,15 @@ export function CockpitKillchain({
             {proposing ? "thinking…" : "propose next edge"}
           </button>
         </div>
-        {proposeNote && <p className="hp-kc-orch-note">{proposeNote}</p>}
+        {proposeErr ? (
+          <ModelRetry
+            error={proposeErr}
+            status={proposeErrStatus}
+            onRetry={() => void propose()}
+          />
+        ) : (
+          proposeNote && <p className="hp-kc-orch-note">{proposeNote}</p>
+        )}
         {proposal && (
           <p className="hp-kc-orch-pick">
             → <b>{proposal.edge.kind}</b>{" "}

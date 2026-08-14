@@ -56,6 +56,24 @@ def test_timeout_is_not_a_gate_bypass() -> None:
     print("  timeout is a resource bound, never part of a gate decision: PASS")
 
 
+def test_idle_timeout_never_kills_a_streaming_run() -> None:
+    """The per-run timeout on the streaming path is an IDLE window, not a wall-clock cap: a
+    command that keeps producing output is 'properly running' and must never be timed out. This
+    pins the pure watchdog policy so the streaming exec can't silently regress to a flat cap
+    that killed a gau/ffuf/nuclei run mid-stream."""
+    from cockpit.executor import _timeout_verdict
+
+    # Actively streaming, well past the old flat 180s cap but under the ceiling -> keep running.
+    assert _timeout_verdict(idle=2.0, total=3000.0, idle_limit=180, ceiling=3600) == ""
+    # Gone silent past the idle window -> looks stuck, killed.
+    assert _timeout_verdict(idle=181.0, total=181.0, idle_limit=180, ceiling=3600) == "idle"
+    # Streaming forever (idle tiny) but at the absolute ceiling -> runaway backstop fires.
+    assert _timeout_verdict(idle=1.0, total=3600.0, idle_limit=180, ceiling=3600) == "ceiling"
+    # Just under both bounds -> keep running.
+    assert _timeout_verdict(idle=179.9, total=3599.9, idle_limit=180, ceiling=3600) == ""
+    print("  idle timeout: a streaming run is never killed; silence + ceiling still reap: PASS")
+
+
 # --------------------------------------------------------------------------- #
 # step 4 — loot
 # --------------------------------------------------------------------------- #
@@ -312,6 +330,7 @@ def test_the_ui_can_actually_reach_the_new_run_controls() -> None:
 if __name__ == "__main__":
     test_timeout_is_clamped_never_unbounded()
     test_timeout_is_not_a_gate_bypass()
+    test_idle_timeout_never_kills_a_streaming_run()
     test_loot_names_are_validated_not_sanitised()
     test_lab_runs_get_no_workdir_and_no_loot_mount()
     test_engagement_runs_get_their_own_loot_dir()

@@ -59,11 +59,16 @@ LAB_TARGET_ALIASES: frozenset[str] = frozenset(
 ISOLATED_NETWORK = os.environ.get("HACKPIT_ISOLATED_NET", "hackpit-isolated")
 
 # --- Execution bounds --------------------------------------------------------
-# DEFAULT time a single command gets before it is killed. A request may ask for more
+# DEFAULT timeout for a single command. A request may ask for more
 # (ExecRequest.timeout_seconds / KaliRequest.timeout_seconds) up to MAX_TIMEOUT_SECONDS.
-# 180s is a sensible default for interactive work; it is NOT a safety property — the
-# safety gates are target-lock, approval, danger-confirm and (lab only) isolation, none
-# of which a longer timeout weakens.
+#
+# For the streaming docker-exec path (executor.iter_run) this is an IDLE window, NOT a
+# wall-clock cap: a command that keeps producing output is "properly running" and is never
+# killed — the clock resets on every line, and only silence past this many seconds counts as
+# "stuck". (The absolute wall-clock backstop is MAX_TIMEOUT_SECONDS below.) The non-streaming
+# paths that cannot observe progress — WinRM, the cache engine — still treat it as wall-clock.
+# 180s is a sensible default either way; it is NOT a safety property — the safety gates are
+# target-lock, approval, danger-confirm and (lab only) isolation, none of which a timeout weakens.
 EXEC_TIMEOUT_SECONDS = int(os.environ.get("HACKPIT_EXEC_TIMEOUT", "180"))
 
 # HARD ceiling a per-request timeout is clamped to. Real work needs it: a full TCP sweep

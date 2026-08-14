@@ -811,6 +811,26 @@ def apply_proxy_to_request(request: ExecRequest) -> tuple[ExecRequest, str]:
     return request.model_copy(update={"args": new_args}), note
 
 
+def _timeout_verdict(idle: float, total: float, idle_limit: int, ceiling: int) -> str:
+    """Whether (and why) a streaming run should be killed. Pure, so the watchdog POLICY is
+    testable without a subprocess.
+
+    A command that is actively producing output is "properly running" and must NOT be killed —
+    so the per-run timeout is an IDLE window (time with NO output), not a wall-clock cap: a scan
+    that keeps printing resets it every line and runs to completion. A separate absolute
+    ``ceiling`` still reaps a runaway that streams forever. Neither is a safety property — the
+    safety gates are target-lock, approval and danger-confirm, none of which a timeout touches.
+
+    Returns ``"idle"`` (silent too long — looks stuck), ``"ceiling"`` (absolute cap hit), or
+    ``""`` (keep running).
+    """
+    if idle >= idle_limit:
+        return "idle"
+    if total >= ceiling:
+        return "ceiling"
+    return ""
+
+
 def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[str, Any]]:
     """Validate then stream a run as events.
 
@@ -960,8 +980,13 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
         yield {"type": "error", "reason": "docker CLI not found on PATH"}
         return
 
+    # Last time this run produced ANY output. The watchdog treats a run that keeps printing as
+    # "properly running" and never kills it — only silence past the idle window is "stuck".
+    last_activity = {"t": time.monotonic()}
+
     def _pump(stream, kind: str, buf: list[str]) -> None:
         for line in iter(stream.readline, ""):
+            last_activity["t"] = time.monotonic()
             buf.append(line)
             events.put({"type": kind, "line": line.rstrip("\n")})
         stream.close()
@@ -973,15 +998,25 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
     for t in threads:
         t.start()
 
-    # Hard timeout: kill the docker exec client if it overruns.
-    timed_out = {"v": False}
+    # IDLE timeout, not wall-clock (build 2026-08-14): a command actively producing output is
+    # "properly running" and is never killed — `timeout_seconds` is the max time with NO output
+    # before it looks stuck. A separate absolute ceiling (MAX_TIMEOUT_SECONDS) still reaps a
+    # runaway that streams forever. The timeout is a resource bound, never a safety property.
+    timed_out = {"v": ""}  # "" | "idle" | "ceiling"
+    ceiling = max(timeout_seconds, config.MAX_TIMEOUT_SECONDS)
+    start_mono = time.monotonic()
 
     def _watchdog() -> None:
-        try:
-            proc.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            timed_out["v"] = True
-            proc.kill()
+        while proc.poll() is None:
+            now = time.monotonic()
+            verdict = _timeout_verdict(
+                now - last_activity["t"], now - start_mono, timeout_seconds, ceiling
+            )
+            if verdict:
+                timed_out["v"] = verdict
+                proc.kill()
+                return
+            time.sleep(1.0)
 
     wd = threading.Thread(target=_watchdog, daemon=True)
     wd.start()
@@ -1001,8 +1036,19 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
 
     exit_code = proc.poll()
     finished_at = _now()
-    if timed_out["v"]:
-        yield {"type": "error", "reason": f"timed out after {timeout_seconds}s"}
+    if timed_out["v"] == "idle":
+        yield {
+            "type": "error",
+            "reason": (
+                f"no output for {timeout_seconds}s — looked stuck, killed. "
+                "A command that keeps producing output is never timed out."
+            ),
+        }
+    elif timed_out["v"] == "ceiling":
+        yield {
+            "type": "error",
+            "reason": f"hit the {ceiling}s absolute ceiling (HACKPIT_MAX_TIMEOUT) and was killed",
+        }
 
     record = RunRecord(
         run_id=run_id,

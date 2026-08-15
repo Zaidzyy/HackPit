@@ -482,6 +482,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#the-loop-can-invoke-hackpit-surfaces-not-just-raw-commands-2026-08-15">The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)</a></li>
 <li><a href="#egress-control-a-rotating-attributable-source-ip-so-one-ban-doesnt-strand-the-engagement-2026-08-15">Egress control — a rotating, attributable source IP so one ban doesn't strand the engagement (2026-08-15)</a></li>
 <li><a href="#autonomy-modes-the-auto-runner-spine-manual-assisted-full-2026-08-15">Autonomy modes — the auto-runner spine (manual / assisted / full) (2026-08-15)</a></li>
+<li><a href="#continuous-hunting-being-first-to-see-a-new-asset-2026-08-15">Continuous hunting — being first to see a new asset (2026-08-15)</a></li>
 </ul>
 </li>
 </ul>
@@ -6682,7 +6683,20 @@ autonomous fire: a per-engagement <strong>budget</strong> caps total autonomous 
 the RoE's <code>max_autonomous_fires</code>), the RoE deny-list/blackout applies, and an <strong>unreadable RoE fails
 closed</strong> (refuse to auto-fire). A mode-allowed fire the RoE forbids is <strong>downgraded to a queue</strong>, not
 dropped, so the operator sees it — <code>test_roe_wall_safety.py</code> locks the predicate, the gate, and the
-teeth (a full-mode exploitation the RoE excludes is queued, never fired). <em>Still ahead: the
-continuous-hunting diff/alert, and the frontend 3-way toggle + decision queue + egress fields.</em></p>
+teeth (a full-mode exploitation the RoE excludes is queued, never fired).</p>
+<h2 id="continuous-hunting-being-first-to-see-a-new-asset-2026-08-15">Continuous hunting — being first to see a new asset (2026-08-15)</h2>
+<p>The highest-ROI use of a standing autonomous engagement: on a mature program everyone has already
+scanned the known surface, so the bounties live in what appeared <em>since</em> — a new subdomain, a fresh
+staging host, a JS bundle that leaked a new endpoint. <code>cockpit/watch.py</code> <strong>snapshots</strong> the
+engagement's discovered assets (<code>state.store.load</code> — hosts, services, endpoints, findings),
+<strong>diffs</strong> against the previous snapshot, and raises a <strong>new-asset alert</strong> when something appears.
+The scheduler calls <code>watch.check</code> after each autonomous step, so the auto-runner's next propose
+naturally targets whatever is new. The FIRST check is a silent baseline (alerting on "everything is
+new the first time" is noise); after that only genuine deltas alert. It is <strong>read-only</strong> — it reads
+what recon/scan already ingested and writes only its own snapshot + alert rows, fires nothing, and
+imports no execution surface (an AST test asserts as much). Alerts are read at
+<code>GET /cockpit/watch/{id}</code>. <code>test_watch_diff.py</code> locks the silent-baseline → diff+alert → no-change
+lifecycle and the read-only-imports invariant. <em>Still ahead: the frontend (3-way toggle, decision
+queue, live feed, egress + RoE fields, new-asset alerts) and container-level egress routing.</em></p>
 </body>
 </html>

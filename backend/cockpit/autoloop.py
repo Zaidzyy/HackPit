@@ -116,6 +116,17 @@ def tick() -> dict[str, Any]:
                             "reason": r.get("reason")}
         except Exception as exc:  # noqa: BLE001 — one engagement's fire error never stops the rest
             stepped[eid] = {"action": "error", "reason": str(exc)}
+        # CONTINUOUS HUNTING: a read-only diff of what recon/scan has ingested, so a newly-appeared
+        # asset raises an alert the operator (and the next propose) can act on. Never load-bearing —
+        # a diff hiccup must not disturb the step above.
+        try:
+            from . import watch
+
+            delta = watch.check(eid, sid).get("new") or {}
+            if delta:
+                stepped.setdefault(eid, {})["new_assets"] = {k: len(v) for k, v in delta.items()}
+        except Exception:  # noqa: BLE001
+            pass
     return {"stepped": stepped}
 
 

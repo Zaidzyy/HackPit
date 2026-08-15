@@ -6646,5 +6646,20 @@ autonomous fire: a per-engagement **budget** caps total autonomous fires (defaul
 the RoE's `max_autonomous_fires`), the RoE deny-list/blackout applies, and an **unreadable RoE fails
 closed** (refuse to auto-fire). A mode-allowed fire the RoE forbids is **downgraded to a queue**, not
 dropped, so the operator sees it — `test_roe_wall_safety.py` locks the predicate, the gate, and the
-teeth (a full-mode exploitation the RoE excludes is queued, never fired). *Still ahead: the
-continuous-hunting diff/alert, and the frontend 3-way toggle + decision queue + egress fields.*
+teeth (a full-mode exploitation the RoE excludes is queued, never fired).
+
+## Continuous hunting — being first to see a new asset (2026-08-15)
+
+The highest-ROI use of a standing autonomous engagement: on a mature program everyone has already
+scanned the known surface, so the bounties live in what appeared *since* — a new subdomain, a fresh
+staging host, a JS bundle that leaked a new endpoint. `cockpit/watch.py` **snapshots** the
+engagement's discovered assets (`state.store.load` — hosts, services, endpoints, findings),
+**diffs** against the previous snapshot, and raises a **new-asset alert** when something appears.
+The scheduler calls `watch.check` after each autonomous step, so the auto-runner's next propose
+naturally targets whatever is new. The FIRST check is a silent baseline (alerting on "everything is
+new the first time" is noise); after that only genuine deltas alert. It is **read-only** — it reads
+what recon/scan already ingested and writes only its own snapshot + alert rows, fires nothing, and
+imports no execution surface (an AST test asserts as much). Alerts are read at
+`GET /cockpit/watch/{id}`. `test_watch_diff.py` locks the silent-baseline → diff+alert → no-change
+lifecycle and the read-only-imports invariant. *Still ahead: the frontend (3-way toggle, decision
+queue, live feed, egress + RoE fields, new-asset alerts) and container-level egress routing.*

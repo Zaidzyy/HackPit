@@ -3088,6 +3088,15 @@ def get_autorun() -> dict[str, Any]:
     }
 
 
+@router.get("/watch/{engagement_id}")
+def get_watch(engagement_id: str, limit: int = 50) -> dict[str, Any]:
+    """Continuous-hunting NEW-ASSET alerts for an engagement (newest first) — subdomains/hosts/
+    endpoints/findings that appeared since the previous snapshot. Read-only."""
+    from . import watch
+
+    return {"engagement_id": engagement_id, "alerts": watch.alerts(engagement_id, limit)}
+
+
 @router.post("/proxy/bypass-headers")
 def sync_bypass_headers(
     container: str = Query(..., description="Sandbox container the proxy runs in."),

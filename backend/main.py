@@ -1461,6 +1461,13 @@ class LoopProposal(BaseModel):
         "out loud / a doubt). Persisted as a chat 'note' turn, shown in the chat pane, and fed "
         "into the next proposal — NOT the approval card. Distinct from rationale; runs nothing.",
     )
+    # --- run-a-surface (kind == 'surface') — a first-class HackPit surface call (build 2026-08-15) --- #
+    surface: str = Field(
+        "", description="When kind=='surface': the surface to run (recon|discover|jsrecon|nuclei). "
+        "On approve the FRONTEND routes it to that surface's own gated endpoint; nothing runs here.")
+    surface_params: dict[str, Any] = Field(
+        default_factory=dict, description="When kind=='surface': the surface-specific params the "
+        "model chose (e.g. {mode,url,impersonate} for discover); the frontend adds ids + approval.")
     # --- ask-the-operator (kind == 'ask') — a request for a human-provided value, runs nothing --- #
     ask_instructions: str = Field(
         "", description="When kind=='ask': step-by-step for the operator to produce the value."

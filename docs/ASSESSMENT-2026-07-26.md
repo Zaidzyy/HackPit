@@ -6390,3 +6390,21 @@ tooled:
 
 This is the deliberate 80/20: automate the stable plumbing and the header classification, leave the
 login (the fragile, ToS-touching, expiring-token step) to the human.
+
+## The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)
+
+The orchestrator proposed ONE raw command at a time — so it could run the underlying engines
+(`curl_chrome116`, `ffuf`, `nuclei`, `js-mine`) but never HackPit's own wrapped SURFACES, which add
+scope-filtering, state-ingest, secret→loot and the impersonation setup. Now it can, without denting
+the "proposer never executes" invariant:
+
+A new proposal kind **`surface`** — the model may return
+`{"surface": {"name": "recon|discover|jsrecon|nuclei", "params": {…}}}` (taught by
+`_SURFACE_CONTRACT`), parsed into a `_surface_proposal` the loop renders as a distinct card. The
+safety-preserving move: the proposer still executes nothing — on approve the **frontend** routes the
+call to that surface's OWN gated endpoint (`startReconActive`/`startDiscover`/`startJsRecon`/
+`startNucleiScan`), which re-checks scope/approval/danger, and the surface ingests to state so the
+next propose sees what it found. `test_surface_action_proposal` locks it (kind='surface' runs
+nothing; an unknown surface name falls through to the command path); the loop/propose surface scans
+(`test_sliver_safety` / `test_obfuscation_safety`) still hold. v1 = the job-style recon/scan
+surfaces; the interactive `:repeater`/`:intruder` stay human-composed.

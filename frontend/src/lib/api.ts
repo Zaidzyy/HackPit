@@ -1474,7 +1474,7 @@ export async function attachCockpitStream(
 export type LoopProposal = {
   /** "command" (a proposed command awaiting approval) or "ask" (a question for the operator —
    *  the agent needs a value only a human can provide; it carries no command and runs nothing). */
-  kind?: "command" | "ask";
+  kind?: "command" | "ask" | "surface";
   command: string;
   args: string[];
   rationale: string;
@@ -1490,6 +1490,10 @@ export type LoopProposal = {
   /** Optional conversational remark from the loop to the operator (thinking out loud / a
    *  doubt). Shown in the chat pane, not on the approval card; the backend also persists it. */
   note?: string;
+  /** kind==="surface": a first-class HackPit surface to run (recon|discover|jsrecon|nuclei) with
+   *  the model-chosen params. On approve the UI routes it to that surface's own gated endpoint. */
+  surface?: string;
+  surface_params?: Record<string, unknown>;
 };
 
 export type LoopProposeOut = {

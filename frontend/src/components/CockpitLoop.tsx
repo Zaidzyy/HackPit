@@ -7,6 +7,10 @@ import {
   getStepAlternative,
   loopPropose,
   submitLoopAnswer,
+  startReconActive,
+  startDiscover,
+  startJsRecon,
+  startNucleiScan,
   type ExecEvent,
   type LoopProposal,
 } from "@/lib/api";
@@ -243,6 +247,87 @@ export function CockpitLoop({
       .finally(() => setAnswering(false));
   }, [proposal, answering, answer, sessionId, onRunRecorded, propose]);
 
+  // Approve a kind==="surface" proposal: route it to that surface's OWN gated endpoint (which
+  // re-checks scope/approval/danger), then advance the loop. The proposer executed nothing; this
+  // dispatch fires only on the human's approve. The surface ingests to state, so the next propose
+  // sees what it found.
+  const runSurface = useCallback(() => {
+    if (!proposal || proposal.kind !== "surface" || phase !== "awaiting") return;
+    const surface = proposal.surface ?? "";
+    const p = (proposal.surface_params ?? {}) as Record<string, unknown>;
+    const ids = {
+      engagement_id: engagementId ?? null,
+      session_id: sessionId,
+      approved: true, // set ONLY here, on the human's approve
+      dangerous_ack: true, // the loop approve IS the confirm; the surface re-gates anyway
+    };
+    const stepId = proposal.step_id;
+    const str = (v: unknown, d = "") => (typeof v === "string" ? v : d);
+    const arr = (v: unknown) => (Array.isArray(v) ? (v as string[]) : undefined);
+    setPhase("running");
+    setExitCode(null);
+    setLines([{ kind: "meta", text: `▶ run :${surface} ${JSON.stringify(p)}` }]);
+    const push = (l: Line) => setLines((prev) => [...prev, l]);
+
+    let call: Promise<{ id?: string }>;
+    switch (surface) {
+      case "recon":
+        call = startReconActive({ domain: str(p.domain), ...ids });
+        break;
+      case "discover":
+        call = startDiscover({
+          mode: str(p.mode, "params"),
+          url: str(p.url),
+          domain: str(p.domain),
+          method: str(p.method, "GET"),
+          tool: str(p.tool),
+          words: arr(p.words) ?? [],
+          wordlist: str(p.wordlist),
+          extensions: arr(p.extensions) ?? [],
+          impersonate: Boolean(p.impersonate),
+          ...ids,
+        });
+        break;
+      case "jsrecon":
+        call = startJsRecon({
+          target: p.target ? str(p.target) : undefined,
+          js_urls: arr(p.js_urls),
+          include_state: p.include_state === undefined ? true : Boolean(p.include_state),
+          ...ids,
+        });
+        break;
+      case "nuclei":
+        call = startNucleiScan({
+          targets: arr(p.targets) ?? [],
+          severities: arr(p.severities) ?? ["low", "medium", "high", "critical"],
+          tags: arr(p.tags) ?? [],
+          templates: arr(p.templates) ?? [],
+          ...ids,
+        });
+        break;
+      default:
+        push({ kind: "err", text: `unknown surface: ${surface}` });
+        setPhase("awaiting");
+        return;
+    }
+    call
+      .then((j) =>
+        push({
+          kind: "meta",
+          text: `■ :${surface} job started${j?.id ? ` (${j.id})` : ""} — results land in state`,
+        })
+      )
+      .catch((err: unknown) =>
+        push({ kind: "err", text: err instanceof ApiError ? err.message : `:${surface} failed` })
+      )
+      .finally(() => {
+        setStepCount((c) => c + 1);
+        onStepDone?.(stepId);
+        onRunRecorded?.();
+        propose();
+      });
+  }, [proposal, phase, sessionId, engagementId, onStepDone, onRunRecorded, propose]);
+
   const skip = useCallback(() => {
     if (proposal) avoidRef.current = [...avoidRef.current, cmdline(proposal)];
     propose();
@@ -414,6 +499,46 @@ export function CockpitLoop({
                     </button>
                   </div>
                 </>
+              )}
+            </section>
+          );
+        }
+        // RUN A SURFACE: a proposal to run a first-class HackPit surface (a gated job) instead of a
+        // raw command. Approve routes it to the surface's OWN gates; nothing runs until you click.
+        if (proposal.kind === "surface") {
+          return (
+            <section className="hp-loop-proposal hp-loop-ask">
+              <div className="hp-loop-proposal-head">
+                <span className="hp-loop-proposal-tag hp-loop-ask-tag" aria-hidden>
+                  run surface :{proposal.surface}
+                </span>
+                {proposal.step_id && (
+                  <span className="hp-loop-proposal-step">{proposal.step_id}</span>
+                )}
+              </div>
+              {proposal.rationale && <p className="hp-loop-rationale">{proposal.rationale}</p>}
+              <pre
+                className="hp-loop-ask-instructions"
+                style={{ whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: "12px" }}
+              >
+                {`:${proposal.surface} ${JSON.stringify(proposal.surface_params ?? {})}`}
+              </pre>
+              <p className="hp-loop-ask-note">
+                Runs the <b>:{proposal.surface}</b> surface through its own gates (scope · approval ·
+                danger) and ingests results into state. Nothing runs until you approve.
+              </p>
+              {phase === "awaiting" && (
+                <div className="hp-loop-controls">
+                  <button type="button" className="hp-ck-approve" onClick={runSurface}>
+                    approve &amp; run surface ⏎
+                  </button>
+                  <button type="button" className="hp-loop-skip" onClick={skip}>
+                    skip <kbd className="hp-loop-kbd">S</kbd>
+                  </button>
+                  <button type="button" className="hp-loop-skip" onClick={stop}>
+                    stop <kbd className="hp-loop-kbd">Esc</kbd>
+                  </button>
+                </div>
               )}
             </section>
           );

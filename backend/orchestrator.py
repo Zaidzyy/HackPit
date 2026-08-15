@@ -141,6 +141,7 @@ def _system_prompt(scope_ctx: ScopeContext | None = None) -> str:
         + _TASK_OPS_CONTRACT
         + _ASK_CONTRACT
         + _NOTE_CONTRACT
+        + _SURFACE_CONTRACT
         + _schema.SYSTEM_CONTRACT
     )
 
@@ -209,6 +210,67 @@ def _ask_proposal(
         "kind": "ask",
         "ask_instructions": instructions,
         "ask_label": label,
+        "note": "",
+        "command": "",
+        "args": [],
+        "rationale": rationale,
+        "step_id": step_id,
+        "gate_ok": False,
+        "gate_reason": "",
+        "dangerous_flags": [],
+        "hypothesis": "",
+        "expected_signal": "",
+        "citations": [],
+        "schema_valid": True,
+        "schema_problems": [],
+        "critique": {},
+        "specialist": "generalist",
+        "frontier": {},
+    }
+
+
+#: HackPit surfaces the loop may invoke as a first-class action (v1 = the job-style,
+#: state-ingesting recon/scan surfaces). The FRONTEND routes an APPROVED surface call to that
+#: surface's own gated endpoint; the proposer still executes nothing.
+_SURFACE_NAMES = {"recon", "discover", "jsrecon", "nuclei"}
+
+_SURFACE_CONTRACT = (
+    "\nRUN A HACKPIT SURFACE — instead of a raw command you MAY propose a first-class HackPit "
+    "surface. A surface SCOPE-FILTERS its results and INGESTS findings/endpoints into state (a raw "
+    "command does not), so prefer it when one fits. Return "
+    '{"done": false, "surface": {"name": "<recon|discover|jsrecon|nuclei>", "params": {…}}} and NO '
+    '"command". The surfaces + their params:\n'
+    '  - "recon": broad attack-surface enumeration of a scoped DOMAIN (resolve, port/service scan, '
+    'HTTP fingerprint, subdomain + content discovery, ranked). params: {"domain": "<in-scope '
+    'apex>"} (empty = the engagement target). Prefer this to hand-running subfinder/httpx.\n'
+    '  - "discover": parameter or content discovery on ONE in-scope URL. params: {"mode": '
+    '"params|content|historical", "url": "<in-scope url>", "impersonate": <true when the host is '
+    'WAF/Cloudflare-fronted>, and for content also "tool": "ffuf|feroxbuster" + "words": [..] or '
+    '"wordlist": "<baked path>"}.\n'
+    "  - \"jsrecon\": mine a page's JavaScript for endpoints + secrets (writes secrets to loot). "
+    'params: {"target": "<in-scope page/host>"} OR {"js_urls": ["<in-scope .js>"]}, optionally '
+    '{"include_state": true} to mine JS already in state. Prefer this to hand-run curl+grep on JS.\n'
+    '  - "nuclei": template-scan for known CVEs / misconfig. params: {"targets": ["<in-scope url>"] '
+    '(empty = seed from state), "severities": ["low","medium","high","critical"], "tags": [], '
+    '"templates": []}.\n'
+    "The human still approves the surface call, and the surface re-checks its OWN scope/approval/"
+    "danger before running. Use a raw command for anything these four do not cover."
+)
+
+
+def _surface_proposal(
+    *, name: str, params: dict[str, Any], rationale: str, step_id: str | None
+) -> dict[str, Any]:
+    """A proposal to run a first-class HackPit SURFACE (a gated job that ingests to state), not a
+    raw command. It carries no command and EXECUTES NOTHING here — the loop UI renders it, and on
+    APPROVE the frontend routes it to that surface's own gated endpoint. Every LoopProposal field
+    is present so the response model validates."""
+    return {
+        "kind": "surface",
+        "surface": name,
+        "surface_params": params,
+        "ask_instructions": "",
+        "ask_label": "",
         "note": "",
         "command": "",
         "args": [],
@@ -345,6 +407,7 @@ def _real_target_system_prompt(ctx: ScopeContext) -> str:
         + _TASK_OPS_CONTRACT
         + _ASK_CONTRACT
         + _NOTE_CONTRACT
+        + _SURFACE_CONTRACT
         + _schema.SYSTEM_CONTRACT
     )
 
@@ -874,6 +937,22 @@ def propose_next(
             "reason": None,
             "task_tree": tree_result,
         }
+
+    # RUN A HACKPIT SURFACE (build 2026-08-15): the model can propose a first-class surface (a
+    # gated job that scope-filters + ingests to state) instead of a raw command. Nothing runs here
+    # — the FRONTEND routes an approved surface call to that surface's own gated endpoint.
+    surface = parsed.get("surface")
+    if isinstance(surface, dict) and str(surface.get("name") or "").strip().lower() in _SURFACE_NAMES:
+        params = surface.get("params") if isinstance(surface.get("params"), dict) else {}
+        step_id = parsed.get("step_id")
+        surf_prop = _surface_proposal(
+            name=str(surface.get("name")).strip().lower(),
+            params=params,
+            rationale=str(parsed.get("rationale") or "").strip(),
+            step_id=str(step_id).strip() if isinstance(step_id, str) and step_id.strip() else None,
+        )
+        surf_prop["note"] = note
+        return {"done": False, "proposal": surf_prop, "reason": None, "task_tree": tree_result}
 
     command = str(parsed.get("command") or "").strip()
     args = _coerce_args(parsed.get("args"))

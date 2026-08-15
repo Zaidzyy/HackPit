@@ -300,6 +300,29 @@ def test_ask_the_operator_proposal() -> None:
     print("  ask-the-operator: kind='ask' runs nothing; the answer feeds the next prompt: PASS")
 
 
+def test_surface_action_proposal() -> None:
+    """The model can propose a first-class SURFACE (a gated job) instead of a raw command. It
+    carries no command (executes nothing here), names an allowed surface, and passes params
+    through for the frontend to route to that surface's own gated endpoint. An UNKNOWN surface
+    name must NOT become a surface proposal — it falls through to the command path."""
+    sj = ('{"done": false, "surface": {"name": "discover", "params": {"mode": "content", '
+          '"url": "https://api.target.com/", "impersonate": true}}, "rationale": "content-discover"}')
+    with _LLM(sj):
+        out = O.propose_next(PLAN, [], {}, [])
+    p = out["proposal"]
+    assert out["done"] is False and p is not None
+    assert p["kind"] == "surface" and p["surface"] == "discover", p
+    assert p["command"] == "" and p["args"] == [], "a surface carries no command"
+    assert p["surface_params"]["mode"] == "content" and p["surface_params"]["impersonate"] is True, p
+    assert p["gate_ok"] is False, "a surface is not an executor command"
+
+    with _LLM('{"done": false, "surface": {"name": "nope", "params": {}}, "command": "curl", '
+              '"args": ["http://%s/"]}' % config.LAB_TARGET_HOST):
+        out = O.propose_next(PLAN, [], {}, [])
+    assert out["proposal"]["kind"] == "command", "an unknown surface must fall through to command"
+    print("  surface action: kind='surface' runs nothing; unknown surface falls through: PASS")
+
+
 def test_json_mode_constrains_small_local_models() -> None:
     """A structured call (a loop proposal) forces Ollama's grammar-constrained JSON so a SMALL
     local model (qwen3:8b et al.) cannot emit unparseable output — the whole reason small models
@@ -427,5 +450,6 @@ if __name__ == "__main__":
     test_ask_the_operator_proposal()
     test_note_and_chat_steering()
     test_chat_grounds_on_live_loop_state()
+    test_surface_action_proposal()
     test_json_mode_constrains_small_local_models()
     print("ALL orchestrator-loop L1 tests pass")

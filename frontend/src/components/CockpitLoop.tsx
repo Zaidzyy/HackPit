@@ -9,9 +9,19 @@ import {
   submitLoopAnswer,
   startReconActive,
   startBench,
+  startCache,
+  startCrack,
   startDiscover,
   startJsRecon,
   startNucleiScan,
+  startRace,
+  startSliverServer,
+  startSmuggle,
+  startSpray,
+  startTokenCrack,
+  startTunnel,
+  mintOOBToken,
+  runCodeScan,
   repeaterSend,
   startIntruder,
   type ExecEvent,
@@ -359,6 +369,109 @@ export function CockpitLoop({
           avd: str(p.avd) || undefined,
           port: typeof p.port === "number" ? p.port : 8080,
           frida: Boolean(p.frida),
+        });
+        break;
+      case "credentials":
+        call =
+          str(p.mode) === "crack"
+            ? startCrack({
+                principals: arr(p.principals) ?? [],
+                wordlist: str(p.wordlist),
+                rule: str(p.rule),
+                ...ids,
+              })
+            : startSpray({
+                service: str(p.service, "http-form"),
+                target: str(p.target),
+                usernames: arr(p.usernames) ?? [],
+                passwords: arr(p.passwords) ?? [],
+                domain: str(p.domain),
+                http_form: str(p.http_form),
+                delay: typeof p.delay === "number" ? p.delay : 0,
+                stop_on_lockouts: typeof p.stop_on_lockouts === "number" ? p.stop_on_lockouts : 0,
+                ...ids,
+              });
+        break;
+      case "smuggle":
+        call = startSmuggle({
+          url: str(p.url),
+          method: str(p.method, "POST"),
+          headers: (Array.isArray(p.headers) ? p.headers : []) as { name: string; value: string }[],
+          body: str(p.body),
+          mutations: arr(p.mutations) ?? [],
+          stage: str(p.stage, "detect"),
+          insecure: Boolean(p.insecure),
+          follow_redirects: Boolean(p.follow_redirects),
+          use_cookie_jar: p.use_cookie_jar === undefined ? true : Boolean(p.use_cookie_jar),
+          ...ids,
+        });
+        break;
+      case "cache":
+        call = startCache({
+          url: str(p.url),
+          method: str(p.method, "GET"),
+          headers: (Array.isArray(p.headers) ? p.headers : []) as { name: string; value: string }[],
+          body: str(p.body),
+          inputs: arr(p.inputs) ?? [],
+          stage: str(p.stage, "detect"),
+          deception: Boolean(p.deception),
+          insecure: Boolean(p.insecure),
+          follow_redirects: Boolean(p.follow_redirects),
+          use_cookie_jar: p.use_cookie_jar === undefined ? true : Boolean(p.use_cookie_jar),
+          ...ids,
+        });
+        break;
+      case "race":
+        call = startRace({
+          url: str(p.url),
+          method: str(p.method, "POST"),
+          headers: (Array.isArray(p.headers) ? p.headers : []) as { name: string; value: string }[],
+          body: str(p.body),
+          mode: str(p.mode, "single-packet"),
+          count: typeof p.count === "number" ? p.count : 20,
+          follow_redirects: Boolean(p.follow_redirects),
+          insecure: Boolean(p.insecure),
+          use_cookie_jar: p.use_cookie_jar === undefined ? true : Boolean(p.use_cookie_jar),
+          ...ids,
+        });
+        break;
+      case "tokens":
+        call = startTokenCrack({
+          token: str(p.token),
+          wordlist: str(p.wordlist) || undefined,
+          rule: str(p.rule) || undefined,
+          ...ids,
+        });
+        break;
+      case "codescan":
+        // a static scan result, not a pollable job — resolve to no job id
+        call = runCodeScan({ path: str(p.path) }).then(() => ({}));
+        break;
+      case "oob":
+        // minting a canary returns a payload URL, not a job — the token lands in :oob / state
+        call = mintOOBToken({
+          engagement_id: engagementId ?? sessionId ?? "",
+          note: str(p.note) || undefined,
+          vuln_class: str(p.vuln_class) || undefined,
+        }).then(() => ({}));
+        break;
+      case "tunnels":
+        call = startTunnel({
+          kind: str(p.kind, "ssh-remote"),
+          lhost: str(p.lhost),
+          listen_port: typeof p.listen_port === "number" ? p.listen_port : undefined,
+          subnets: arr(p.subnets) ?? [],
+          engagement_id: engagementId ?? null,
+          approved: true,
+          dangerous_ack: true,
+        });
+        break;
+      case "c2":
+        call = startSliverServer({
+          port: typeof p.port === "number" ? p.port : undefined,
+          engagement_id: engagementId ?? sessionId ?? "",
+          approved: true,
+          dangerous_ack: true,
         });
         break;
       default:

@@ -6570,5 +6570,14 @@ nothing; an unknown surface name falls through to the command path); the loop/pr
 path (a captured request with one id swapped), and its <strong>human-only lock still holds</strong>
 (<code>test_repeater_is_human_only</code>): the send fires only on the operator's approve, through the same
 route a manual send uses — the backend agent path has no <code>repeater.send</code>.</p>
+<p><strong>Expanded to sixteen surfaces (2026-08-15, operator's standing choice).</strong> The set now also includes
+<code>:capture</code> (the gated host-bench launcher) and the runnable test surfaces <code>:credentials</code>, <code>:smuggle</code>,
+<code>:cache</code>, <code>:race</code>, <code>:tokens</code>, <code>:codescan</code>, plus the live-infra <code>:oob</code>, <code>:tunnels</code>, <code>:c2</code>. Every one
+keeps the same invariant — <strong>the proposer executes nothing, the human approves each proposal, and the
+frontend routes the approved call to that surface's own gated endpoint.</strong> Deliberately left OUT: the
+read-only graphs (<code>:cloud</code>, <code>:ad-graph</code>, <code>:killchain</code>) — they have their own propose/advance and no
+single "run"; <code>:windows</code>, whose execution is already the raw-command path with a <code>windows_profile_id</code>
+the loop reaches; and <code>:kali</code> / <code>:terminal</code>, which stay human-only (the raw-command path already
+covers arbitrary commands).</p>
 </body>
 </html>

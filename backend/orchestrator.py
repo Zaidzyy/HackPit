@@ -232,7 +232,11 @@ def _ask_proposal(
 #: HackPit surfaces the loop may invoke as a first-class action (v1 = the job-style,
 #: state-ingesting recon/scan surfaces). The FRONTEND routes an APPROVED surface call to that
 #: surface's own gated endpoint; the proposer still executes nothing.
-_SURFACE_NAMES = {"recon", "discover", "jsrecon", "nuclei", "repeater", "intruder", "capture"}
+_SURFACE_NAMES = {
+    "recon", "discover", "jsrecon", "nuclei", "repeater", "intruder", "capture",
+    "credentials", "smuggle", "cache", "race", "tokens", "codescan",
+    "oob", "tunnels", "c2",
+}
 
 _SURFACE_CONTRACT = (
     "\nRUN A HACKPIT SURFACE — instead of a raw command you MAY propose a first-class HackPit "
@@ -265,6 +269,25 @@ _SURFACE_CONTRACT = (
     'params: {"apk": "<bundle path>", "pkg": "<app match, e.g. fishbowl>", "avd": "<name>", "port": '
     '<mitm port>, "frida": <true only for a pinned app>}. Propose it when the target is a mobile app '
     'and no capture exists yet — the human approves it and logs in; you never hold a session.\n'
+    '  - "credentials": password attack (LIVE, gated). params: {"mode": "spray|crack"; for spray also '
+    '"service": "http-form|ssh|winrm|…", "target": "<in-scope host/url>", "usernames": [..], '
+    '"passwords": [..], "http_form": "path:user=^USER^&pass=^PASS^:F=failtext", "domain": ""; for '
+    'crack also "principals": ["<hash or user:hash>"], "wordlist": "<baked path>", "rule": ""}.\n'
+    '  - "smuggle": HTTP request-smuggling DETECTION on ONE in-scope url. params: {"url": "<in-scope>", '
+    '"method": "POST", "body": "…", "mutations": ["cl.te","te.cl"], "stage": "detect"}. The socket '
+    'CONFIRM stays a human step.\n'
+    '  - "cache": web-cache-poisoning DETECTION on ONE in-scope url. params: {"url": "<in-scope>", '
+    '"inputs": ["x-forwarded-host","x-forwarded-scheme"], "stage": "detect"}. The gated poison-plant '
+    'stays human.\n'
+    '  - "race": single-packet RACE — fire ONE request many times synchronized (TOCTOU). params: '
+    '{"url": "<in-scope>", "method": "POST", "body": "…", "count": <N>, "mode": "single-packet"}.\n'
+    '  - "tokens": crack a JWT/token HMAC secret. params: {"token": "<jwt>", "wordlist": "<baked path>"}.\n'
+    '  - "codescan": static code audit of a path (semgrep/bandit). params: {"path": "<repo path>"}.\n'
+    '  - "oob": MINT an out-of-band canary URL for a blind bug (SSRF/XXE/RCE); it lands in :oob to '
+    'watch for callbacks. params: {"note": "…", "vuln_class": "ssrf|xxe|rce"}.\n'
+    '  - "tunnels": start a pivot/forward (LIVE infra, gated). params: {"kind": "ssh-remote|…", '
+    '"lhost": "<callback host>", "listen_port": <n>, "subnets": ["10.0.0.0/24"]}.\n'
+    '  - "c2": start the Sliver C2 listener (LIVE infra, gated). params: {"port": <n>}.\n'
     'AUTHENTICATED: discover / jsrecon / nuclei / repeater / intruder accept "attach_session": true '
     "to run AS the logged-in operator — the engagement's stored session (saved by the operator in "
     ":repeater) is merged in, so endpoints behind login are actually tested. Most bounty bugs live "

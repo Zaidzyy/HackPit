@@ -6685,6 +6685,25 @@ scheduler POST returned only `{enabled, interval}` (the UI showed "min undefined
 verbs now return the full status; and the panel's number/text fields wore `hp-ck-field`/`hp-ck-args`,
 which are WRAPPER classes whose CSS targets a child `input` — put on the element directly they
 mis-laid the fields out (a raised interval number), fixed with explicit inline styles matching
-`.hp-ck-field input`. *Still ahead: a durable decision-queue store + approve-from-queue UI (queued
-items are visible in the activity feed but re-firing one is not yet wired), and container-level
-egress routing.*
+`.hp-ck-field input`.
+
+## The decision queue — approve-from-queue completes assisted mode (2026-08-15)
+
+Assisted mode's promise is "the machine does the passive work; it hands YOU the dangerous
+decisions." Until now a queued exploitation action was only *observable* (an audit line + the feed)
+— you could see it but not act on it, because the audit deliberately strips param values and cannot
+re-fire. `cockpit/decisionqueue.py` closes that: it persists the **full proposal** so the operator
+can review it and **approve (fire) or skip** it from the panel. Dedup on a stable key makes the
+daemon re-proposing a held action every tick one queue row, not one per tick; and the runner passes
+the queued actions to the proposer as `avoid`, so assisted mode keeps doing NEW passive work while
+decisions pile up instead of getting stuck on the first one. **Approving fires through the same
+`autorun.fire` path the operator's own approve uses — the human clicking approve IS the
+human-in-the-loop gate, so it fires even where the RoE would have blocked an *autonomous* fire**
+(human approval is HackPit's ultimate authority). Routes: `GET /cockpit/decision-queue/{id}`,
+`POST …/{qid}/approve` (404/409-guarded), `POST …/{qid}/skip`. The panel's "HELD FOR YOU (n)"
+section renders each item with its params + approve/skip. `test_decisionqueue_safety.py` locks the
+enqueue/dedup/pending round-trip, the mark lifecycle, and the teeth (approve fires, skip does not,
+404/409 hold). **Live-verified end-to-end (2026-08-15):** two seeded held actions rendered, skip
+removed one without firing, approve fired the other — the audit recorded `('human-approved',
+'recon', 'started')` and the queue emptied. *Still ahead: container-level egress routing (proxychains
+in the sandbox, so unmapped tools also ride the pool).*

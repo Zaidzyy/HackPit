@@ -3117,6 +3117,50 @@ def get_autorun_audit(engagement_id: str = "", limit: int = 50) -> dict[str, Any
     return {"engagement_id": engagement_id, "entries": list(reversed(rows))[: max(1, int(limit))]}
 
 
+# --------------------------------------------------------------------------- #
+# THE DECISION QUEUE — the exploitation actions assisted mode held for the human. Reviewing them is
+# read-only; APPROVING one FIRES it through the same self-approving path the operator's own approve
+# uses (the human clicking approve IS the human-in-the-loop gate). SKIP just dismisses it.
+# --------------------------------------------------------------------------- #
+@router.get("/decision-queue/{engagement_id}")
+def get_decision_queue(engagement_id: str, limit: int = 50) -> dict[str, Any]:
+    """Pending held actions for an engagement (full proposals), newest first."""
+    from . import decisionqueue
+
+    return {"engagement_id": engagement_id, "pending": decisionqueue.pending(engagement_id, limit)}
+
+
+@router.post("/decision-queue/{qid}/approve")
+def approve_decision(qid: str) -> dict[str, Any]:
+    """HUMAN-approve a held action and FIRE it. Human approval is the authority, so this fires even
+    where the RoE would have blocked an AUTONOMOUS fire. 404 unknown, 409 already decided."""
+    from . import autorun, decisionqueue
+
+    item = decisionqueue.get(qid)
+    if item is None:
+        raise HTTPException(status_code=404, detail="decision not found")
+    if item["status"] != decisionqueue.PENDING:
+        raise HTTPException(status_code=409, detail=f"decision already {item['status']}")
+    try:
+        result = autorun.fire(item["proposal"], item["session_id"] or "", item["engagement_id"],
+                              mode="human-approved", tier=item["tier"])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"fire failed: {exc}")
+    decisionqueue.mark(qid, decisionqueue.APPROVED)
+    return {"id": qid, "status": "approved", "result": result}
+
+
+@router.post("/decision-queue/{qid}/skip")
+def skip_decision(qid: str) -> dict[str, Any]:
+    """Dismiss a held action without firing it. Idempotent-ish: 404 only when the id is unknown."""
+    from . import decisionqueue
+
+    item = decisionqueue.mark(qid, decisionqueue.SKIPPED)
+    if item is None:
+        raise HTTPException(status_code=404, detail="decision not found")
+    return {"id": qid, "status": "skipped"}
+
+
 @router.post("/proxy/bypass-headers")
 def sync_bypass_headers(
     container: str = Query(..., description="Sandbox container the proxy runs in."),

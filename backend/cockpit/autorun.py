@@ -194,6 +194,7 @@ def step_session(session_id: str, engagement_id: str) -> dict[str, Any]:
     import orchestrator
     import sessions as sessions_db
 
+    from . import decisionqueue
     from . import engagement as engagement_mod
     from . import runstore
 
@@ -208,8 +209,11 @@ def step_session(session_id: str, engagement_id: str) -> dict[str, Any]:
     plan = session.get("path") or {}
     runs = [r.model_dump() for r in runstore.list_runs_for_session(session_id)]
     scope_ctx = _resolve_scope(engagement_id)
+    # AVOID what is already waiting for the human: pass the queued actions to the proposer so the
+    # runner keeps doing NEW work instead of re-proposing an item already in the decision queue.
+    avoid = decisionqueue.pending_action_classes(engagement_id)
     try:
-        result = orchestrator.propose_next(plan, runs, llm.load_config(), [], scope_ctx, session_id)
+        result = orchestrator.propose_next(plan, runs, llm.load_config(), avoid, scope_ctx, session_id)
     except Exception as exc:  # noqa: BLE001 — LLM/propose failure: skip this cycle, don't crash
         return {"mode": mode, "action": "skip", "reason": f"propose failed: {exc}"}
     if not isinstance(result, dict) or result.get("done"):
@@ -222,14 +226,18 @@ def step_session(session_id: str, engagement_id: str) -> dict[str, Any]:
                            "reason": decision.reason, "proposal": proposal}
     if decision.action == "fire":
         # THE MODE said fire; now the BUDGET + RoE get a veto. A blocked fire becomes a queue, so
-        # the operator sees it rather than it vanishing.
+        # the operator sees it — durably, so they can approve or skip it — rather than it vanishing.
         allowed, why = permitted_to_fire(proposal, session_id, engagement_id)
         if not allowed:
             blocked = Decision("queue", decision.tier, f"blocked by policy: {why}")
             note_non_fire(blocked, proposal, session_id, engagement_id, mode)
-            out.update({"action": "queue", "reason": blocked.reason, "policy_blocked": True})
+            out.update({"action": "queue", "reason": blocked.reason, "policy_blocked": True,
+                        "queue_id": decisionqueue.enqueue(engagement_id, session_id, proposal, decision.tier)})
             return out
         out["result"] = fire(proposal, session_id, engagement_id, mode=mode, tier=decision.tier)
+    elif decision.action == "queue":
+        note_non_fire(decision, proposal, session_id, engagement_id, mode)
+        out["queue_id"] = decisionqueue.enqueue(engagement_id, session_id, proposal, decision.tier)
     else:
         note_non_fire(decision, proposal, session_id, engagement_id, mode)
     return out

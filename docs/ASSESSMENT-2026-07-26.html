@@ -484,6 +484,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#autonomy-modes-the-auto-runner-spine-manual-assisted-full-2026-08-15">Autonomy modes — the auto-runner spine (manual / assisted / full) (2026-08-15)</a></li>
 <li><a href="#continuous-hunting-being-first-to-see-a-new-asset-2026-08-15">Continuous hunting — being first to see a new asset (2026-08-15)</a></li>
 <li><a href="#the-autonomy-cockpit-driving-all-of-it-from-the-ui-2026-08-15">The autonomy cockpit — driving all of it from the UI (2026-08-15)</a></li>
+<li><a href="#the-decision-queue-approve-from-queue-completes-assisted-mode-2026-08-15">The decision queue — approve-from-queue completes assisted mode (2026-08-15)</a></li>
 </ul>
 </li>
 </ul>
@@ -6718,8 +6719,25 @@ scheduler POST returned only <code>{enabled, interval}</code> (the UI showed "mi
 verbs now return the full status; and the panel's number/text fields wore <code>hp-ck-field</code>/<code>hp-ck-args</code>,
 which are WRAPPER classes whose CSS targets a child <code>input</code> — put on the element directly they
 mis-laid the fields out (a raised interval number), fixed with explicit inline styles matching
-<code>.hp-ck-field input</code>. <em>Still ahead: a durable decision-queue store + approve-from-queue UI (queued
-items are visible in the activity feed but re-firing one is not yet wired), and container-level
-egress routing.</em></p>
+<code>.hp-ck-field input</code>.</p>
+<h2 id="the-decision-queue-approve-from-queue-completes-assisted-mode-2026-08-15">The decision queue — approve-from-queue completes assisted mode (2026-08-15)</h2>
+<p>Assisted mode's promise is "the machine does the passive work; it hands YOU the dangerous
+decisions." Until now a queued exploitation action was only <em>observable</em> (an audit line + the feed)
+— you could see it but not act on it, because the audit deliberately strips param values and cannot
+re-fire. <code>cockpit/decisionqueue.py</code> closes that: it persists the <strong>full proposal</strong> so the operator
+can review it and <strong>approve (fire) or skip</strong> it from the panel. Dedup on a stable key makes the
+daemon re-proposing a held action every tick one queue row, not one per tick; and the runner passes
+the queued actions to the proposer as <code>avoid</code>, so assisted mode keeps doing NEW passive work while
+decisions pile up instead of getting stuck on the first one. <strong>Approving fires through the same
+<code>autorun.fire</code> path the operator's own approve uses — the human clicking approve IS the
+human-in-the-loop gate, so it fires even where the RoE would have blocked an <em>autonomous</em> fire</strong>
+(human approval is HackPit's ultimate authority). Routes: <code>GET /cockpit/decision-queue/{id}</code>,
+<code>POST …/{qid}/approve</code> (404/409-guarded), <code>POST …/{qid}/skip</code>. The panel's "HELD FOR YOU (n)"
+section renders each item with its params + approve/skip. <code>test_decisionqueue_safety.py</code> locks the
+enqueue/dedup/pending round-trip, the mark lifecycle, and the teeth (approve fires, skip does not,
+404/409 hold). <strong>Live-verified end-to-end (2026-08-15):</strong> two seeded held actions rendered, skip
+removed one without firing, approve fired the other — the audit recorded <code>('human-approved',
+'recon', 'started')</code> and the queue emptied. <em>Still ahead: container-level egress routing (proxychains
+in the sandbox, so unmapped tools also ride the pool).</em></p>
 </body>
 </html>

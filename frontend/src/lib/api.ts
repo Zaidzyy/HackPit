@@ -1376,6 +1376,44 @@ export const getAutorunAudit = (engagementId: string, limit = 50, signal?: Abort
     signal
   );
 
+/** One exploitation action assisted mode HELD for the operator — the FULL proposal, so it can be
+ *  re-fired on approval. */
+export type QueuedDecision = {
+  id: string;
+  tier: string;
+  at: string;
+  proposal: {
+    kind: string;
+    surface?: string;
+    surface_params?: Record<string, unknown>;
+    command?: string;
+    args?: string[];
+  };
+};
+
+export const getDecisionQueue = (engagementId: string, signal?: AbortSignal) =>
+  getJSON<{ engagement_id: string; pending: QueuedDecision[] }>(
+    `/cockpit/decision-queue/${encodeURIComponent(engagementId)}`,
+    signal
+  );
+
+/** HUMAN-approve a held action and FIRE it (human approval is the authority — fires even where the
+ *  RoE would have blocked an autonomous fire). */
+export const approveDecision = (qid: string, signal?: AbortSignal) =>
+  postJSON<{ id: string; status: string; result?: unknown }>(
+    `/cockpit/decision-queue/${encodeURIComponent(qid)}/approve`,
+    {},
+    signal
+  );
+
+/** Dismiss a held action without firing it. */
+export const skipDecision = (qid: string, signal?: AbortSignal) =>
+  postJSON<{ id: string; status: string }>(
+    `/cockpit/decision-queue/${encodeURIComponent(qid)}/skip`,
+    {},
+    signal
+  );
+
 /** New-asset alerts from continuous hunting — assets that appeared since the previous snapshot. */
 export type WatchAlert = { at: string; new_assets: Record<string, string[]> };
 

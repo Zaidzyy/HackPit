@@ -64,6 +64,7 @@ from cockpit import proposals as cockpit_proposals  # noqa: E402  (approval queu
 from cockpit import autorun as cockpit_autorun  # noqa: E402  (auto-runner — modes 2/3 decide+fire)
 from cockpit import autoloop as cockpit_autoloop  # noqa: E402  (auto-runner scheduler — default OFF)
 from cockpit import watch as cockpit_watch  # noqa: E402  (continuous hunting — snapshot/diff/alert)
+from cockpit import decisionqueue as cockpit_decisionqueue  # noqa: E402  (held-action approve queue)
 from cockpit import winprofiles as cockpit_winprofiles  # noqa: E402  (Windows target store)
 from cockpit import sandbox as cockpit_sandbox  # noqa: E402  (read-only container probes)
 # The two evasion/exfil surfaces. Their ROUTES live here, not in cockpit/router.py, and NOT in
@@ -347,6 +348,8 @@ async def lifespan(app: FastAPI):
     cockpit_autoloop.init_db()
     # continuous-hunting snapshots + new-asset alerts share it too.
     cockpit_watch.init_db()
+    # the decision queue (held exploitation actions awaiting human approval) shares it too.
+    cockpit_decisionqueue.init_db()
     # saved Windows-target connection profiles (WinRM driver) share it too.
     cockpit_winprofiles.init_db()
     # parsed AD attack-path graphs share it too.

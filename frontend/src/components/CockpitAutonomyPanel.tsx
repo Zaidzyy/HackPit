@@ -2,18 +2,22 @@
 
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import {
+  approveDecision,
   getAutorun,
   getAutorunAudit,
+  getDecisionQueue,
   getEgress,
   getWatch,
   setAutonomyMode,
   setAutorun,
   setEgress,
+  skipDecision,
   type AutonomyMode,
   type AutorunAuditEntry,
   type AutorunStatus,
   type EgressConfig,
   type EngagementRecord,
+  type QueuedDecision,
   type WatchAlert,
 } from "@/lib/api";
 
@@ -75,15 +79,18 @@ export function CockpitAutonomyPanel({
 
   const [alerts, setAlerts] = useState<WatchAlert[]>([]);
   const [feed, setFeed] = useState<AutorunAuditEntry[]>([]);
+  const [queue, setQueue] = useState<QueuedDecision[]>([]);
+  const [decidingId, setDecidingId] = useState<string | null>(null);
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
       try {
-        const [ar, eg, w, au] = await Promise.all([
+        const [ar, eg, w, au, dq] = await Promise.all([
           getAutorun(signal).catch(() => null),
           getEgress(eid, signal).catch(() => null),
           getWatch(eid, 20, signal).catch(() => null),
           getAutorunAudit(eid, 20, signal).catch(() => null),
+          getDecisionQueue(eid, signal).catch(() => null),
         ]);
         if (ar) {
           setAutorunState(ar);
@@ -92,11 +99,24 @@ export function CockpitAutonomyPanel({
         if (eg) setEgressState(eg);
         if (w) setAlerts(w.alerts);
         if (au) setFeed(au.entries);
+        if (dq) setQueue(dq.pending);
       } catch {
         /* a status hiccup is not worth an error banner — the controls still work */
       }
     },
     [eid]
+  );
+
+  const decide = useCallback(
+    (qid: string, approve: boolean) => {
+      setDecidingId(qid);
+      setErr(null);
+      (approve ? approveDecision(qid) : skipDecision(qid))
+        .then(() => load())
+        .catch((e) => setErr(e?.message ?? "could not act on the decision"))
+        .finally(() => setDecidingId(null));
+    },
+    [load]
   );
 
   useEffect(() => {
@@ -229,6 +249,70 @@ export function CockpitAutonomyPanel({
             : "Both switches must be on for anything to run without your approval. Currently one is off."}
         </span>
       </div>
+
+      {/* ---- DECISION QUEUE: exploitation actions assisted mode HELD for you -------------- */}
+      {queue.length > 0 && (
+        <div className="hp-eng-scope-row">
+          <span className="hp-eng-scope-key" style={{ color: "#e0a92b" }}>
+            held for you ({queue.length})
+          </span>
+          <span
+            className="hp-eng-scope-vals"
+            style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}
+          >
+            {queue.map((q) => {
+              const p = q.proposal;
+              const label = p.surface ?? p.command ?? p.kind;
+              const params =
+                p.surface_params && Object.keys(p.surface_params).length
+                  ? Object.entries(p.surface_params)
+                      .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+                      .join("  ")
+                  : (p.args ?? []).join(" ");
+              return (
+                <div
+                  key={q.id}
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    border: "1px solid var(--border-2)",
+                    borderRadius: 7,
+                    padding: "6px 9px",
+                    background: "#0a0b0b",
+                  }}
+                >
+                  <span style={{ color: "#e0632b", fontWeight: 700 }}>{label}</span>
+                  <span
+                    className="hp-ck-hint"
+                    style={{ flex: 1, minWidth: 120, opacity: 0.85, wordBreak: "break-all" }}
+                  >
+                    {params}
+                  </span>
+                  <button
+                    type="button"
+                    className="hp-ck-report-btn"
+                    disabled={decidingId === q.id}
+                    onClick={() => decide(q.id, true)}
+                    style={{ borderColor: "#3bbf6b", color: "#3bbf6b", fontWeight: 700 }}
+                  >
+                    {decidingId === q.id ? "..." : "approve → fire"}
+                  </button>
+                  <button
+                    type="button"
+                    className="hp-ck-report-btn"
+                    disabled={decidingId === q.id}
+                    onClick={() => decide(q.id, false)}
+                  >
+                    skip
+                  </button>
+                </div>
+              );
+            })}
+          </span>
+        </div>
+      )}
 
       {/* ---- egress: rotating source IP + identify header -------------------------------- */}
       <div className="hp-eng-scope-row">

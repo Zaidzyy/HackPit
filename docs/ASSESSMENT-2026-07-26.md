@@ -6580,8 +6580,22 @@ every note masks the URL's userinfo (`_mask_proxy_url`). Config is set write-onl
 engagement-mode-only + opt-in, the honest "went direct" paths, credential masking everywhere it could
 be recorded, rotation (wrap / skip-banned / exhaustion), and the credential never landing on the
 record. New: `cockpit/egress.py` (rotation) + `engagement.set_egress`/`egress_config` +
-`executor.apply_egress`/`apply_identify_header` + the two routes. *Container-level egress routing
-(proxychains in the sandbox, to cover unmapped binaries too) is the next step and not yet built.*
+`executor.apply_egress`/`apply_identify_header` + the two routes.
+
+**Container-level egress (2026-08-15) closes the unmapped-tool gap.** The per-tool flag covers
+tools with a known `-proxy`; a raw `python`, an unmapped binary, or a `curl` invoked without the
+flag used to egress from the sandbox's real IP. Now, when a run picks a pool IP,
+`executor._egress_exec` also injects `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` (both cases) into the
+`docker exec` — **curl, wget, python-requests/urllib, git and most CLIs honour these**, so they ride
+the pool with **no image rebuild, no config files, and no `argv[0]` change** (the gates still
+classify the real command). The URL travels in the SUBPROCESS ENV via bare `docker exec -e NAME`
+(value forwarded from the client env), never on the docker argv, so a credentialled pool URL is not
+exposed in `ps`. `apply_egress_to_request` now returns the picked URL so the tool-flag and the
+container env use the SAME rotation slot (no double-advance). Mechanism live-proved: a bare `curl`
+with no `-x`, given only the env `_egress_exec` builds, rode a real proxy to a real echo.
+`test_egress_safety` gains the unmapped-tool case (argv unchanged, URL still returned, credential
+off the flags). Residual: a tool that ignores proxy env vars (rare) still goes direct — smaller than
+before and honestly noted in the start event.
 
 ## Autonomy modes — the auto-runner spine (manual / assisted / full) (2026-08-15)
 
@@ -6705,5 +6719,4 @@ section renders each item with its params + approve/skip. `test_decisionqueue_sa
 enqueue/dedup/pending round-trip, the mark lifecycle, and the teeth (approve fires, skip does not,
 404/409 hold). **Live-verified end-to-end (2026-08-15):** two seeded held actions rendered, skip
 removed one without firing, approve fired the other — the audit recorded `('human-approved',
-'recon', 'started')` and the queue emptied. *Still ahead: container-level egress routing (proxychains
-in the sandbox, so unmapped tools also ride the pool).*
+'recon', 'started')` and the queue emptied.

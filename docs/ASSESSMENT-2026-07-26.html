@@ -6625,8 +6625,21 @@ every note masks the URL's userinfo (<code>_mask_proxy_url</code>). Config is se
 engagement-mode-only + opt-in, the honest "went direct" paths, credential masking everywhere it could
 be recorded, rotation (wrap / skip-banned / exhaustion), and the credential never landing on the
 record. New: <code>cockpit/egress.py</code> (rotation) + <code>engagement.set_egress</code>/<code>egress_config</code> +
-<code>executor.apply_egress</code>/<code>apply_identify_header</code> + the two routes. <em>Container-level egress routing
-(proxychains in the sandbox, to cover unmapped binaries too) is the next step and not yet built.</em></p>
+<code>executor.apply_egress</code>/<code>apply_identify_header</code> + the two routes.</p>
+<p><strong>Container-level egress (2026-08-15) closes the unmapped-tool gap.</strong> The per-tool flag covers
+tools with a known <code>-proxy</code>; a raw <code>python</code>, an unmapped binary, or a <code>curl</code> invoked without the
+flag used to egress from the sandbox's real IP. Now, when a run picks a pool IP,
+<code>executor._egress_exec</code> also injects <code>HTTP_PROXY</code>/<code>HTTPS_PROXY</code>/<code>ALL_PROXY</code> (both cases) into the
+<code>docker exec</code> — <strong>curl, wget, python-requests/urllib, git and most CLIs honour these</strong>, so they ride
+the pool with <strong>no image rebuild, no config files, and no <code>argv[0]</code> change</strong> (the gates still
+classify the real command). The URL travels in the SUBPROCESS ENV via bare <code>docker exec -e NAME</code>
+(value forwarded from the client env), never on the docker argv, so a credentialled pool URL is not
+exposed in <code>ps</code>. <code>apply_egress_to_request</code> now returns the picked URL so the tool-flag and the
+container env use the SAME rotation slot (no double-advance). Mechanism live-proved: a bare <code>curl</code>
+with no <code>-x</code>, given only the env <code>_egress_exec</code> builds, rode a real proxy to a real echo.
+<code>test_egress_safety</code> gains the unmapped-tool case (argv unchanged, URL still returned, credential
+off the flags). Residual: a tool that ignores proxy env vars (rare) still goes direct — smaller than
+before and honestly noted in the start event.</p>
 <h2 id="autonomy-modes-the-auto-runner-spine-manual-assisted-full-2026-08-15">Autonomy modes — the auto-runner spine (manual / assisted / full) (2026-08-15)</h2>
 <p>Until now the loop was propose-one-step, human-approves-every-command — deliberately. This adds a
 per-engagement <strong><code>autonomy_mode</code></strong> switch with three settings, so the same loop can run hands-off
@@ -6737,7 +6750,6 @@ section renders each item with its params + approve/skip. <code>test_decisionque
 enqueue/dedup/pending round-trip, the mark lifecycle, and the teeth (approve fires, skip does not,
 404/409 hold). <strong>Live-verified end-to-end (2026-08-15):</strong> two seeded held actions rendered, skip
 removed one without firing, approve fired the other — the audit recorded <code>('human-approved',
-'recon', 'started')</code> and the queue emptied. <em>Still ahead: container-level egress routing (proxychains
-in the sandbox, so unmapped tools also ride the pool).</em></p>
+'recon', 'started')</code> and the queue emptied.</p>
 </body>
 </html>

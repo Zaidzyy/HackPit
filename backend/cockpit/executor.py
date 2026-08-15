@@ -11,6 +11,7 @@ Only then is the command run, argv-style (never through a shell), with a hard ti
 
 from __future__ import annotations
 
+import os
 import queue
 import re
 import subprocess
@@ -979,7 +980,7 @@ def apply_proxy_to_request(request: ExecRequest) -> tuple[ExecRequest, str]:
     return request.model_copy(update={"args": new_args}), note
 
 
-def apply_egress_to_request(request: ExecRequest) -> tuple[ExecRequest, str]:
+def apply_egress_to_request(request: ExecRequest) -> tuple[ExecRequest, str, str | None]:
     """Route this run through the engagement's egress pool, if it asked and one is usable.
 
     ENGAGEMENT MODE ONLY, like pacing and for the same reason: egress control exists to keep a
@@ -989,32 +990,62 @@ def apply_egress_to_request(request: ExecRequest) -> tuple[ExecRequest, str]:
     identify header if one is set. Skipped when the recording proxy is already in play — two
     proxy flags on one command line is a contradiction the tool resolves silently.
 
-    Returns the request UNCHANGED (empty note) whenever nothing was rewritten — same contract as
-    the sibling helpers, so the caller only discards a prevalidated verdict when the argv changed.
-    The honest "no pool / no flag / lab / captured instead" messages are produced by
-    :func:`run_notes`, which needs no rotation pick to word them.
+    Returns ``(request, note, url)``. The NOTE is empty whenever the argv was not rewritten — same
+    contract as the sibling helpers, so the caller only discards a prevalidated verdict when the
+    argv changed. The URL is the pool IP this run picked (None when egress did not apply): the
+    caller uses it for CONTAINER-LEVEL egress — a tool with no native proxy flag (curl/python/an
+    unmapped binary) still rode the pool via the proxy ENV, so an empty note does NOT mean "went
+    direct" here. The honest per-tool "no pool / no flag / lab / captured" messages are produced by
+    :func:`run_notes`.
     """
     if not getattr(request, "egress", False):
-        return request, ""
+        return request, "", None
     if request.windows_profile_id or not request.engagement_id:
-        return request, ""
+        return request, "", None
     if getattr(request, "proxy", False):  # recording proxy wins; don't stack a second proxy flag
-        return request, ""
+        return request, "", None
     from . import egress as egress_mod
     from . import engagement as engagement_mod
 
     url = egress_mod.pick(request.engagement_id)
     if url is None:
-        return request, ""
+        return request, "", None
     new_args, _ = apply_egress(request.command, list(request.args), url)
     _, header = engagement_mod.egress_config(request.engagement_id)
     if header:
         new_args, _ = apply_identify_header(request.command, new_args, header)
     if new_args == list(request.args):
-        return request, ""
+        # No native proxy flag for this tool — argv unchanged (note empty, prevalidated survives) —
+        # but the URL is still returned so the container-level proxy ENV routes it through the pool.
+        return request, "", url
     return request.model_copy(update={"args": new_args}), (
         f"{request.command} egressing via {_mask_proxy_url(url)}"
-    )
+    ), url
+
+
+#: The env vars nearly every CLI honours for an outbound proxy. Both cases, because tools disagree
+#: on which they read (curl/wget/python-requests read the lower-case ones; many read UPPER).
+_PROXY_ENV_NAMES: tuple[str, ...] = (
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
+)
+
+
+def _egress_exec(url: str) -> tuple[dict[str, str], list[str]]:
+    """CONTAINER-LEVEL egress: the ``docker exec -e`` flags + the env values that route every
+    env-respecting tool (curl, wget, python-requests/urllib, git, most CLIs) through the pool —
+    the belt under the per-tool-flag suspenders, so a tool with no native ``-proxy`` flag no longer
+    leaks the sandbox IP. Returns ``(env, flags)``. PURE.
+
+    THE URL MAY BE A CREDENTIAL, so it travels in the SUBPROCESS ENV, never in the docker argv:
+    ``docker exec -e NAME`` (bare, no ``=value``) forwards NAME from the docker CLIENT's environment
+    — which is the Popen subprocess we hand this ``env`` to — so ``ps`` on the host never shows the
+    userinfo. Same rule that keeps the bypass-header value and AD passwords off the command line.
+    """
+    env = {name: url for name in _PROXY_ENV_NAMES}
+    flags: list[str] = []
+    for name in _PROXY_ENV_NAMES:
+        flags += ["-e", name]
+    return env, flags
 
 
 def _timeout_verdict(idle: float, total: float, idle_limit: int, ceiling: int) -> str:
@@ -1079,9 +1110,17 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
     # identify header), so the argv the gates classify must be the argv that runs. Adding an
     # argument can only make the danger classifier fire MORE, never less, so re-validating the
     # rewritten request is strictly safe.
-    request, egress_note = apply_egress_to_request(request)
+    request, egress_note, egress_url = apply_egress_to_request(request)
     if egress_note:
         prevalidated = False
+    if egress_url:
+        # CONTAINER-LEVEL egress: a tool with no native proxy flag (curl/python/unmapped) still
+        # rides the pool, via the proxy ENV injected at spawn. Tell the operator so an empty
+        # per-tool note is not read as "went direct".
+        notes.append(
+            f"container-level egress on — env-respecting tools (curl/python/wget/git/…) route via "
+            f"{_mask_proxy_url(egress_url)}"
+        )
 
     if not prevalidated:
         rejected = validate_request(request)
@@ -1163,7 +1202,12 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
     # what it was before loot existed. See cockpit/loot.py for why the lab is excluded.
     workdir = loot.workdir_for(mode, eng.engagement_id if eng is not None else None)
     timeout_seconds = config.clamp_timeout(request.timeout_seconds)
-    argv = ["docker", "exec", *loot.exec_flags(workdir), container, request.command, *request.args]
+    # CONTAINER-LEVEL egress: forward proxy env into the container so env-respecting tools ride the
+    # pool. The `-e NAME` flags carry no value (the value rides the subprocess env below), so a
+    # credentialled pool URL never reaches the docker argv / `ps`.
+    egress_env, egress_flags = _egress_exec(egress_url) if egress_url else ({}, [])
+    argv = ["docker", "exec", *egress_flags, *loot.exec_flags(workdir), container,
+            request.command, *request.args]
 
     yield {
         "type": "start",
@@ -1193,6 +1237,10 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            # The proxy URL (possibly credentialled) rides HERE, in the child env that `docker exec
+            # -e NAME` forwards — never on the argv. {} when egress is off, so a normal run is
+            # byte-identical to before.
+            env={**os.environ, **egress_env} if egress_env else None,
         )
     except FileNotFoundError:
         yield {"type": "error", "reason": "docker CLI not found on PATH"}

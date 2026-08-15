@@ -101,3 +101,4 @@ docker/redirector-profile.json
 
 # :workflows operator store (runtime; built-ins seed from code)
 /backend/data/workflows.json
+backend/autorun-audit.jsonl

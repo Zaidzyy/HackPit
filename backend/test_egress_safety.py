@@ -101,41 +101,62 @@ def test_the_egress_rewrite_cancels_a_prevalidated_verdict() -> None:
 def test_egress_is_engagement_mode_only_and_opt_in() -> None:
     args = ["-u", f"http://{_LAB}/FUZZ"]
     with _StubPool(["http://p1:9"]):
-        # not asked for -> untouched
+        # not asked for -> untouched, no url
         plain = ExecRequest(command="ffuf", args=args, approved=True, engagement_id="e1")
-        out, note = E.apply_egress_to_request(plain)
-        assert out is plain and note == "", "a run that did not ask for egress was rewritten"
+        out, note, url = E.apply_egress_to_request(plain)
+        assert out is plain and note == "" and url is None, "a run that did not ask was rewritten"
 
         # lab (no engagement_id) -> untouched
         lab = ExecRequest(command="ffuf", args=args, approved=True, egress=True)
-        out_l, note_l = E.apply_egress_to_request(lab)
-        assert out_l is lab and note_l == "", "a LAB run was egressed"
+        out_l, note_l, url_l = E.apply_egress_to_request(lab)
+        assert out_l is lab and note_l == "" and url_l is None, "a LAB run was egressed"
 
         # WinRM -> untouched (no argv to rewrite)
         win = ExecRequest(command="Get-Process", args=[], approved=True, egress=True,
                           windows_profile_id="w1")
-        out_w, note_w = E.apply_egress_to_request(win)
-        assert out_w is win and note_w == "", "a WinRM run was rewritten"
+        out_w, note_w, url_w = E.apply_egress_to_request(win)
+        assert out_w is win and note_w == "" and url_w is None, "a WinRM run was rewritten"
 
-        # recording proxy already in play -> egress skipped (no double proxy flag)
+        # recording proxy already in play -> egress skipped (no double proxy flag), no url
         cap = ExecRequest(command="ffuf", args=args, approved=True, egress=True,
                           engagement_id="e1", proxy=True)
-        out_c, note_c = E.apply_egress_to_request(cap)
-        assert out_c is cap and note_c == "", "egress stacked a second proxy flag over capture"
+        out_c, note_c, url_c = E.apply_egress_to_request(cap)
+        assert out_c is cap and note_c == "" and url_c is None, "egress stacked over capture"
 
-        # the real engagement path DOES rewrite
+        # the real engagement path DOES rewrite and returns the picked url
         eng = ExecRequest(command="ffuf", args=args, approved=True, egress=True, engagement_id="e1")
-        out_e, note_e = E.apply_egress_to_request(eng)
+        out_e, note_e, url_e = E.apply_egress_to_request(eng)
         assert out_e is not eng and out_e.args[:2] == ["-x", "http://p1:9"], out_e.args
-        assert "egressing via http://p1:9" in note_e, note_e
+        assert "egressing via http://p1:9" in note_e and url_e == "http://p1:9", (note_e, url_e)
     print("  egressed in engagement mode; lab, WinRM, capture and unasked runs untouched: PASS")
+
+
+def test_a_tool_with_no_native_flag_still_returns_the_url_for_container_egress() -> None:
+    """THE #1 GAP CLOSED: curl/python/an unmapped tool has no native proxy flag, so the argv is
+    unchanged (empty note) — but the URL is returned so the container-level proxy ENV routes it
+    through the pool. An empty note here must NOT mean 'went direct'."""
+    with _StubPool(["http://p1:9"]):
+        eng = ExecRequest(command="python3", args=["x.py"], approved=True, egress=True,
+                          engagement_id="e1")
+        out, note, url = E.apply_egress_to_request(eng)
+        assert out is eng and note == "", "an unmapped tool's argv must be unchanged"
+        assert url == "http://p1:9", "the picked url must still come back for the container env"
+
+    # and _egress_exec turns it into the docker -e flags + env, credential kept OFF the argv
+    env, flags = E._egress_exec("http://joe:hunter2@10.0.0.9:3128")
+    assert env["HTTP_PROXY"] == "http://joe:hunter2@10.0.0.9:3128"
+    assert env["ALL_PROXY"] == env["http_proxy"], "both cases must be set"
+    # flags are BARE `-e NAME` (value comes from the env), so no credential on the docker argv
+    assert "-e" in flags and "HTTP_PROXY" in flags
+    assert not any("hunter2" in f for f in flags), "a pool credential leaked onto the docker argv"
+    print("  an unmapped tool still rides the pool via the container proxy env, creds off argv: PASS")
 
 
 def test_identify_header_is_pinned_when_configured() -> None:
     args = ["-u", f"http://{_LAB}/FUZZ"]
     with _StubPool(["http://p1:9"], header="X-BugBounty: acme-h1-zaid"):
         eng = ExecRequest(command="ffuf", args=args, approved=True, egress=True, engagement_id="e1")
-        out, _ = E.apply_egress_to_request(eng)
+        out, _, _ = E.apply_egress_to_request(eng)
         assert "-H" in out.args and "X-BugBounty: acme-h1-zaid" in out.args, out.args
     print("  the program identify header is pinned while the IP rotates: PASS")
 
@@ -188,7 +209,7 @@ def test_a_proxy_url_credential_is_masked_everywhere_it_could_be_recorded() -> N
     with _StubPool(["http://joe:hunter2@10.0.0.9:3128"]):
         eng = ExecRequest(command="ffuf", args=["-u", "http://x"], approved=True, egress=True,
                           engagement_id="e1")
-        _, rnote = E.apply_egress_to_request(eng)
+        _, rnote, _ = E.apply_egress_to_request(eng)
         assert "hunter2" not in rnote and "joe" not in rnote, rnote
         assert "10.0.0.9:3128" in rnote, rnote
     print("  a proxy URL's credentials never reach a note or a record: PASS")
@@ -266,6 +287,7 @@ if __name__ == "__main__":
     test_egress_only_ever_prepends_and_still_faces_every_gate()
     test_the_egress_rewrite_cancels_a_prevalidated_verdict()
     test_egress_is_engagement_mode_only_and_opt_in()
+    test_a_tool_with_no_native_flag_still_returns_the_url_for_container_egress()
     test_identify_header_is_pinned_when_configured()
     test_a_direct_run_says_so()
     test_a_proxy_url_credential_is_masked_everywhere_it_could_be_recorded()

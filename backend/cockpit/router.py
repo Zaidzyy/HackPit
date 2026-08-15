@@ -71,6 +71,7 @@ from . import kali as kali_mod
 from . import repeater as repeater_mod
 from . import reqimport as reqimport_mod
 from . import session_store as session_store_mod
+from . import hostbench as hostbench_mod
 from . import terminal as terminal_mod
 from . import proxy as proxy_mod
 from . import tunnels as tunnels_mod
@@ -888,6 +889,31 @@ def get_repeater_session(engagement_id: str) -> dict[str, Any]:
 def delete_repeater_session(engagement_id: str) -> dict[str, Any]:
     """Forget the engagement's attached session (it is memory-only anyway)."""
     return {"engagement_id": engagement_id, "cleared": session_store_mod.clear_session(engagement_id)}
+
+
+# --- :capture — the gated, HUMAN-ONLY host-bench launcher --------------------------- #
+# THE ONE SURFACE THAT RUNS A HOST COMMAND, NOT A SANDBOXED ONE. OFF by default (HACKPIT_HOST_BENCH),
+# never reachable by the orchestrator/loop, and it launches ONE fixed script with whitelisted argv.
+@router.get("/bench/status")
+def bench_status() -> dict[str, Any]:
+    """Whether the host-bench launcher is enabled + the current job (if any). Read-only."""
+    return hostbench_mod.status()
+
+
+@router.post("/bench/start")
+def bench_start(req: hostbench_mod.BenchStartRequest) -> dict[str, Any]:
+    """Launch the capture bench on the host — 403 when the env flag is off or an arg is refused;
+    nothing spawns in either case. HUMAN-ONLY (there is no loop path to this route)."""
+    try:
+        return hostbench_mod.start(req).model_dump()
+    except hostbench_mod.BenchRefused as exc:
+        raise HTTPException(status_code=403, detail={"gate": "host-bench", "reason": exc.reason})
+
+
+@router.post("/bench/stop")
+def bench_stop() -> dict[str, Any]:
+    """Ungated stop — kill the running bench process."""
+    return hostbench_mod.stop()
 
 
 # --- GraphQL: the repeater's round trip (build #20 item 3) -------------------------- #

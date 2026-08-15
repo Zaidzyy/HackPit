@@ -2186,6 +2186,42 @@ export const clearRepeaterSession = (engagementId: string, signal?: AbortSignal)
     signal
   );
 
+/* ---- :capture — the gated, HUMAN-ONLY host-bench launcher ---------------------------- */
+export type BenchStartRequest = {
+  apk?: string;
+  pkg?: string;
+  avd?: string;
+  port?: number;
+  frida?: boolean;
+};
+
+export type BenchJob = {
+  id: string;
+  argv: string[];
+  state: string; // running | finished
+  lines: string[];
+  exit_code: number | null;
+  started_at: string;
+};
+
+export type BenchStatus = {
+  /** Whether HACKPIT_HOST_BENCH is set. OFF by default — the backend then runs no host command. */
+  enabled: boolean;
+  enable_env: string;
+  bench_path: string;
+  job: BenchJob | null;
+};
+
+export const getBenchStatus = (signal?: AbortSignal) =>
+  getJSON<BenchStatus>("/cockpit/bench/status", signal);
+
+/** Launch the capture bench on the host. 403 when disabled or an arg is refused (nothing spawns). */
+export const startBench = (req: BenchStartRequest, signal?: AbortSignal) =>
+  postJSON<BenchJob>("/cockpit/bench/start", req, signal);
+
+export const stopBench = (signal?: AbortSignal) =>
+  postJSON<{ stopped: boolean }>("/cockpit/bench/stop", {}, signal);
+
 export const getRepeaterHistory = (
   sessionId?: string | null,
   signal?: AbortSignal

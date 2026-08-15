@@ -252,6 +252,14 @@ export const SURFACE_BANDS: SurfaceBand[] = [
     color: "#c98bff",
     surfaces: [
       {
+        key: "capture",
+        icon: "◱",
+        label: ":capture",
+        href: "/capture",
+        desc: "Launch the mobile-capture bench on the host from cockpit (boot → install → cert → proxy), then log in and grab the request for :repeater. HUMAN-ONLY; OFF by default (HACKPIT_HOST_BENCH=1).",
+        needsStack: false,
+      },
+      {
         key: "c2",
         icon: "◉",
         label: ":c2",

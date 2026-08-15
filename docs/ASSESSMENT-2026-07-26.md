@@ -6473,6 +6473,23 @@ still hold. The jsrecon half needed a `docker/js_mine.py` engine change (it now 
 so **that surface's auth is live only after an image rebuild** — nuclei/discover/intruder use standard
 tool flags and are live immediately.
 
+## `:capture` — a gated, human-only host-bench launcher (2026-08-15)
+
+The mobile-capture bench was a host terminal script; `:capture` makes it one cockpit action — launch
+`tools/capture-bench.sh` (boot → install → cert → proxy), stream its output, and stop at the script's
+"log in now" pause. It is the ONE surface that runs a **host** command, not a sandboxed one (the
+emulator/adb/frida/KVM cannot live in the sandbox), so it is boxed three ways: **(1) OFF BY DEFAULT** —
+enabled only by `HACKPIT_HOST_BENCH=1` (the same opt-in shape as `HACKPIT_MCP_EXECUTE`), so the default
+build has zero host-exec capability and an audit of it finds none; **(2) HUMAN-ONLY** — like
+`:kali`/`run_kali`, the orchestrator/loop can never reach it (not in the invokable surface set, no
+reference in `orchestrator.py`, regression-locked); **(3) a FIXED SCRIPT with WHITELISTED argv** — it
+can launch only `capture-bench.sh`, its path/name args validated against an allowlist and passed as
+argv, never a shell string, so there is no injection and no second command it could run. Login and the
+capture-paste into `:repeater` stay human — this automates only the setup half. `cockpit/hostbench.py` +
+`GET/POST /cockpit/bench/{status,start,stop}` + a `:capture` screen; `test_hostbench_safety.py` locks
+off-by-default-refuses-and-spawns-nothing, the fixed-script/no-injection argv, and the
+orchestrator-cannot-invoke-it line.
+
 ## The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)
 
 The orchestrator proposed ONE raw command at a time — so it could run the underlying engines

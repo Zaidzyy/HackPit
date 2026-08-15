@@ -478,6 +478,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#mobile-apps-are-first-class-in-the-scope-model-app-2026-08-15">Mobile apps are first-class in the scope model — app: (2026-08-15)</a></li>
 <li><a href="#authenticated-testing-in-cockpit-attach-the-operators-session-2026-08-15">Authenticated testing in-cockpit: attach the operator's session (2026-08-15)</a></li>
 <li><a href="#authenticated-automated-scanning-the-session-reaches-every-scan-surface-2026-08-15">Authenticated automated scanning — the session reaches every scan surface (2026-08-15)</a></li>
+<li><a href="#capture-a-gated-human-only-host-bench-launcher-2026-08-15">:capture — a gated, human-only host-bench launcher (2026-08-15)</a></li>
 <li><a href="#the-loop-can-invoke-hackpit-surfaces-not-just-raw-commands-2026-08-15">The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)</a></li>
 </ul>
 </li>
@@ -6523,6 +6524,21 @@ loop that keeps probing the surface. <code>test_authenticated_scanning.py</code>
 still hold. The jsrecon half needed a <code>docker/js_mine.py</code> engine change (it now reads a <code>headers</code> field),
 so <strong>that surface's auth is live only after an image rebuild</strong> — nuclei/discover/intruder use standard
 tool flags and are live immediately.</p>
+<h2 id="capture-a-gated-human-only-host-bench-launcher-2026-08-15"><code>:capture</code> — a gated, human-only host-bench launcher (2026-08-15)</h2>
+<p>The mobile-capture bench was a host terminal script; <code>:capture</code> makes it one cockpit action — launch
+<code>tools/capture-bench.sh</code> (boot → install → cert → proxy), stream its output, and stop at the script's
+"log in now" pause. It is the ONE surface that runs a <strong>host</strong> command, not a sandboxed one (the
+emulator/adb/frida/KVM cannot live in the sandbox), so it is boxed three ways: <strong>(1) OFF BY DEFAULT</strong> —
+enabled only by <code>HACKPIT_HOST_BENCH=1</code> (the same opt-in shape as <code>HACKPIT_MCP_EXECUTE</code>), so the default
+build has zero host-exec capability and an audit of it finds none; <strong>(2) HUMAN-ONLY</strong> — like
+<code>:kali</code>/<code>run_kali</code>, the orchestrator/loop can never reach it (not in the invokable surface set, no
+reference in <code>orchestrator.py</code>, regression-locked); <strong>(3) a FIXED SCRIPT with WHITELISTED argv</strong> — it
+can launch only <code>capture-bench.sh</code>, its path/name args validated against an allowlist and passed as
+argv, never a shell string, so there is no injection and no second command it could run. Login and the
+capture-paste into <code>:repeater</code> stay human — this automates only the setup half. <code>cockpit/hostbench.py</code> +
+<code>GET/POST /cockpit/bench/{status,start,stop}</code> + a <code>:capture</code> screen; <code>test_hostbench_safety.py</code> locks
+off-by-default-refuses-and-spawns-nothing, the fixed-script/no-injection argv, and the
+orchestrator-cannot-invoke-it line.</p>
 <h2 id="the-loop-can-invoke-hackpit-surfaces-not-just-raw-commands-2026-08-15">The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)</h2>
 <p>The orchestrator proposed ONE raw command at a time — so it could run the underlying engines
 (<code>curl_chrome116</code>, <code>ffuf</code>, <code>nuclei</code>, <code>js-mine</code>) but never HackPit's own wrapped SURFACES, which add

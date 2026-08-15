@@ -58,8 +58,9 @@ def test_bench_argv_is_the_one_fixed_script() -> None:
     argv = hostbench.bench_argv(
         hostbench.BenchStartRequest(apk="C:/x/app.apkm", pkg="fishbowl", port=8080, frida=True)
     )
-    assert argv[0] == "bash"
-    assert argv[1].replace("\\", "/").endswith("tools/capture-bench.sh")
+    assert argv[0].lower().endswith(("bash", "bash.exe")), argv[0]  # resolved bash (Git Bash on Windows)
+    assert "\\" not in argv[1], argv[1]  # forward-slash path so bash can open it
+    assert argv[1].endswith("tools/capture-bench.sh")
     assert "--apk" in argv and "--pkg" in argv and "--frida" in argv
     assert "8080" in argv
     print("  bench_argv is always `bash tools/capture-bench.sh …` with the operator's args: PASS")

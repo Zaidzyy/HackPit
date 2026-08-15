@@ -6502,7 +6502,11 @@ just a kill-switch), and the loop-can't-reach-it containment is relaxed — the 
 `capture` surface in the loop's contract. `test_hostbench_safety.py` locks: **on by default** +
 `HACKPIT_HOST_BENCH=0` refuses-and-spawns-nothing, the fixed-script/no-injection argv, and the
 proposer-executes-nothing line (the loop may name `capture`, but `orchestrator.py` never imports or
-calls the launcher).
+calls the launcher). **Verified live (2026-08-15):** the enabled gate + endpoint work and a real
+launch executes `capture-bench.sh` through to the emulator-boot step — and the live run *caught a
+Windows bug the string-only test missed*: the launcher must run under **Git Bash**, not the `bash` on
+PATH (which can resolve to WSL's bash, unable to open a `C:/…` path), and the script path must use
+forward slashes. Fixed in `hostbench.py` (`_bash()` + slash-normalised path), regression-locked.
 
 ## The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)
 

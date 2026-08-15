@@ -6551,7 +6551,11 @@ just a kill-switch), and the loop-can't-reach-it containment is relaxed — the 
 <code>capture</code> surface in the loop's contract. <code>test_hostbench_safety.py</code> locks: <strong>on by default</strong> +
 <code>HACKPIT_HOST_BENCH=0</code> refuses-and-spawns-nothing, the fixed-script/no-injection argv, and the
 proposer-executes-nothing line (the loop may name <code>capture</code>, but <code>orchestrator.py</code> never imports or
-calls the launcher).</p>
+calls the launcher). <strong>Verified live (2026-08-15):</strong> the enabled gate + endpoint work and a real
+launch executes <code>capture-bench.sh</code> through to the emulator-boot step — and the live run <em>caught a
+Windows bug the string-only test missed</em>: the launcher must run under <strong>Git Bash</strong>, not the <code>bash</code> on
+PATH (which can resolve to WSL's bash, unable to open a <code>C:/…</code> path), and the script path must use
+forward slashes. Fixed in <code>hostbench.py</code> (<code>_bash()</code> + slash-normalised path), regression-locked.</p>
 <h2 id="the-loop-can-invoke-hackpit-surfaces-not-just-raw-commands-2026-08-15">The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)</h2>
 <p>The orchestrator proposed ONE raw command at a time — so it could run the underlying engines
 (<code>curl_chrome116</code>, <code>ffuf</code>, <code>nuclei</code>, <code>js-mine</code>) but never HackPit's own wrapped SURFACES, which add

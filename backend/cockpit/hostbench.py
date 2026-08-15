@@ -87,6 +87,22 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _bash() -> str:
+    """The bash to run the bench with. On Windows, PREFER Git Bash — it accepts ``C:/…`` paths and
+    ships the unix userland the harness needs; the ``bash`` on PATH can resolve to WSL's bash, which
+    needs ``/mnt/c/…`` and a different userland and so fails to even open the script. Falls back to
+    whatever ``bash`` is found (correct on Linux/macOS)."""
+    import shutil
+    for cand in (
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+    ):
+        if os.path.exists(cand):
+            return cand
+    return shutil.which("bash") or "bash"
+
+
 def bench_argv(req: BenchStartRequest) -> list[str]:
     """The FIXED script + whitelisted args, as argv. PURE — validates, spawns nothing. Rejects any
     arg that is not on the allowlist (the one place operator text reaches the host)."""
@@ -96,7 +112,9 @@ def bench_argv(req: BenchStartRequest) -> list[str]:
             raise BenchRefused(f"illegal characters in {what} — refused")
         return v
 
-    argv = ["bash", str(_BENCH)]
+    # Git Bash (resolved above) + forward slashes: bash must not eat a native Windows path's
+    # backslashes as escapes, and WSL's bash cannot open a `C:/…` path at all.
+    argv = [_bash(), str(_BENCH).replace("\\", "/")]
     apk, pkg, avd = ok(req.apk, "apk path"), ok(req.pkg, "pkg"), ok(req.avd, "avd name")
     if apk:
         argv += ["--apk", apk]

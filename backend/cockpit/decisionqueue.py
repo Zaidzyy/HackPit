@@ -95,6 +95,10 @@ def enqueue(engagement_id: str, session_id: str | None, proposal: dict[str, Any]
     """Add a held action to the queue, or return the existing PENDING row's id (idempotent per
     dedup_key). Returns the queue id."""
     key = dedup_key(proposal)
+    # Self-init: step_session (endpoint AND the scheduler daemon) calls this, and a test / a
+    # TestClient that skipped the app lifespan would otherwise hit "no such table". CREATE TABLE
+    # IF NOT EXISTS is idempotent and cheap, and enqueue is rare (once per held action).
+    init_db()
     with _write_lock, _connect() as conn:
         row = conn.execute(
             "SELECT id FROM decision_queue WHERE engagement_id=? AND dedup_key=? AND status=?",
@@ -146,9 +150,13 @@ def pending_action_classes(engagement_id: str) -> list[str]:
 
 
 def get(qid: str) -> dict[str, Any] | None:
-    """One queue row (any status), with its full proposal, or None."""
-    with _connect() as conn:
-        r = conn.execute("SELECT * FROM decision_queue WHERE id=?", (qid,)).fetchone()
+    """One queue row (any status), with its full proposal, or None (incl. when the table does not
+    exist yet — an approve/skip on a fresh DB is a 404, never a 500)."""
+    try:
+        with _connect() as conn:
+            r = conn.execute("SELECT * FROM decision_queue WHERE id=?", (qid,)).fetchone()
+    except sqlite3.OperationalError:
+        return None
     if r is None:
         return None
     try:

@@ -12,6 +12,7 @@ import {
   repeaterCookies,
   getRepeaterShapes,
   importCapturedRequest,
+  diffCaptures,
   repeaterPreview,
   repeaterSend,
   splitGraphQLBody,
@@ -57,7 +58,9 @@ export function RepeaterScreen() {
   // and flags which header is the app key vs the session token (the mobile-token workflow).
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
+  const [importTextB, setImportTextB] = useState("");
   const [importInfo, setImportInfo] = useState<string | null>(null);
+  const [diffInfo, setDiffInfo] = useState<string[] | null>(null);
   const [follow, setFollow] = useState(false);
   const [insecure, setInsecure] = useState(false);
   const [impersonate, setImpersonate] = useState(false);
@@ -385,6 +388,31 @@ export function RepeaterScreen() {
       .catch((e) => setImportInfo(e instanceof ApiError ? e.message : String(e)));
   }, [importText]);
 
+  const doDiff = useCallback(() => {
+    const a = importText.trim();
+    const b = importTextB.trim();
+    if (!a || !b) return;
+    diffCaptures(a, b)
+      .then((r) => {
+        if (r.error) {
+          setDiffInfo([`couldn't compare: ${r.error}`]);
+          return;
+        }
+        const lines: string[] = [];
+        if (r.likely_app_key)
+          lines.push(`SHARED app key (identical across accounts): ${r.likely_app_key}`);
+        if (r.likely_session_token)
+          lines.push(`PER-USER session token (differs — swap this for IDOR): ${r.likely_session_token}`);
+        lines.push(...r.notes);
+        setDiffInfo(
+          lines.length
+            ? lines
+            : ["no credential header differed — are both captures the same account?"]
+        );
+      })
+      .catch((e) => setDiffInfo([e instanceof ApiError ? e.message : String(e)]));
+  }, [importText, importTextB]);
+
   const up = status?.up ?? false;
 
   return (
@@ -445,6 +473,48 @@ export function RepeaterScreen() {
                     >
                       clear
                     </button>
+                  </div>
+                  <div
+                    style={{
+                      marginTop: "10px",
+                      borderTop: "1px dashed var(--border)",
+                      paddingTop: "8px",
+                    }}
+                  >
+                    <div style={{ fontSize: "12px", color: "var(--dim)", marginBottom: "4px" }}>
+                      compare two accounts — paste <b>account B</b>&apos;s capture (A is above) to find
+                      which header is the shared app key vs the per-user session token:
+                    </div>
+                    <textarea
+                      value={importTextB}
+                      onChange={(e) => setImportTextB(e.target.value)}
+                      placeholder="account B's captured request (raw or curl)"
+                      rows={5}
+                      spellCheck={false}
+                      style={{ width: "100%", fontFamily: "monospace", fontSize: "12px" }}
+                    />
+                    <button
+                      type="button"
+                      onClick={doDiff}
+                      disabled={!importText.trim() || !importTextB.trim()}
+                      style={{ marginTop: "6px" }}
+                    >
+                      compare A vs B
+                    </button>
+                    {diffInfo && (
+                      <ul
+                        style={{
+                          fontSize: "12px",
+                          color: "var(--accent)",
+                          marginTop: "6px",
+                          paddingLeft: "18px",
+                        }}
+                      >
+                        {diffInfo.map((l, i) => (
+                          <li key={i}>{l}</li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 </div>
               )}

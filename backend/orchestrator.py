@@ -232,7 +232,7 @@ def _ask_proposal(
 #: HackPit surfaces the loop may invoke as a first-class action (v1 = the job-style,
 #: state-ingesting recon/scan surfaces). The FRONTEND routes an APPROVED surface call to that
 #: surface's own gated endpoint; the proposer still executes nothing.
-_SURFACE_NAMES = {"recon", "discover", "jsrecon", "nuclei"}
+_SURFACE_NAMES = {"recon", "discover", "jsrecon", "nuclei", "repeater", "intruder"}
 
 _SURFACE_CONTRACT = (
     "\nRUN A HACKPIT SURFACE — instead of a raw command you MAY propose a first-class HackPit "
@@ -253,8 +253,16 @@ _SURFACE_CONTRACT = (
     '  - "nuclei": template-scan for known CVEs / misconfig. params: {"targets": ["<in-scope url>"] '
     '(empty = seed from state), "severities": ["low","medium","high","critical"], "tags": [], '
     '"templates": []}.\n'
+    '  - "repeater": replay ONE specific HTTP request (structured send). Use it to test a single '
+    "request — e.g. a captured authenticated request with one object id swapped (cross-account "
+    'IDOR/BOLA). params: {"method": "GET|POST|…", "url": "<in-scope url>", "headers": '
+    '[{"name":"..","value":".."}], "body": "<raw body>", "impersonate": <true if WAF-fronted>}.\n'
+    '  - "intruder": fuzz ONE request across a payload set (one marked position). params: {"url": '
+    '"<in-scope url; put FUZZ where the payload goes>", "method": "…", "headers": [..], "body": '
+    '"…", "payloads": ["..",".."], "mode": "sniper|battering-ram", "impersonate": <bool>}.\n'
     "The human still approves the surface call, and the surface re-checks its OWN scope/approval/"
-    "danger before running. Use a raw command for anything these four do not cover."
+    "danger before running (the repeater send stays human-approved). Use a raw command for anything "
+    "these surfaces do not cover."
 )
 
 

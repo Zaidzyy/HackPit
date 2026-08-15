@@ -11,6 +11,8 @@ import {
   startDiscover,
   startJsRecon,
   startNucleiScan,
+  repeaterSend,
+  startIntruder,
   type ExecEvent,
   type LoopProposal,
 } from "@/lib/api";
@@ -302,6 +304,43 @@ export function CockpitLoop({
           severities: arr(p.severities) ?? ["low", "medium", "high", "critical"],
           tags: arr(p.tags) ?? [],
           templates: arr(p.templates) ?? [],
+          ...ids,
+        });
+        break;
+      case "repeater":
+        // The send stays human-approved: this fires on YOUR approve, through the same /repeater/send
+        // route a manual send uses. RepeaterRequest has no gate fields — the click is the approval.
+        call = repeaterSend({
+          method: str(p.method, "GET"),
+          url: str(p.url),
+          headers: Array.isArray(p.headers)
+            ? (p.headers as { name: string; value: string }[])
+            : [],
+          body: str(p.body),
+          follow_redirects: Boolean(p.follow_redirects),
+          insecure: Boolean(p.insecure),
+          http2: false,
+          impersonate: Boolean(p.impersonate),
+          engagement_id: engagementId ?? null,
+          session_id: sessionId,
+        });
+        break;
+      case "intruder":
+        call = startIntruder({
+          url: str(p.url),
+          method: str(p.method, "GET"),
+          headers: Array.isArray(p.headers)
+            ? (p.headers as { name: string; value: string }[])
+            : [],
+          body: str(p.body),
+          payloads: arr(p.payloads) ?? [],
+          mode: str(p.mode, "sniper"),
+          shapes: [],
+          follow_redirects: false,
+          insecure: false,
+          impersonate: Boolean(p.impersonate),
+          delay_ms: typeof p.delay_ms === "number" ? p.delay_ms : 0,
+          use_cookie_jar: true,
           ...ids,
         });
         break;

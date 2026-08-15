@@ -316,6 +316,13 @@ def test_surface_action_proposal() -> None:
     assert p["surface_params"]["mode"] == "content" and p["surface_params"]["impersonate"] is True, p
     assert p["gate_ok"] is False, "a surface is not an executor command"
 
+    # repeater + intruder are also invokable surfaces (v2). The repeater send stays human-approved
+    # (fired by the frontend on approve, through the same route a manual send uses).
+    with _LLM('{"done": false, "surface": {"name": "repeater", "params": {"method": "GET", '
+              '"url": "https://api.target.com/thread/1/messages"}}, "rationale": "replay"}'):
+        out = O.propose_next(PLAN, [], {}, [])
+    assert out["proposal"]["kind"] == "surface" and out["proposal"]["surface"] == "repeater", out["proposal"]
+
     with _LLM('{"done": false, "surface": {"name": "nope", "params": {}}, "command": "curl", '
               '"args": ["http://%s/"]}' % config.LAB_TARGET_HOST):
         out = O.propose_next(PLAN, [], {}, [])

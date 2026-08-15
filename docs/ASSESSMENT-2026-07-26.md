@@ -6406,5 +6406,8 @@ call to that surface's OWN gated endpoint (`startReconActive`/`startDiscover`/`s
 `startNucleiScan`), which re-checks scope/approval/danger, and the surface ingests to state so the
 next propose sees what it found. `test_surface_action_proposal` locks it (kind='surface' runs
 nothing; an unknown surface name falls through to the command path); the loop/propose surface scans
-(`test_sliver_safety` / `test_obfuscation_safety`) still hold. v1 = the job-style recon/scan
-surfaces; the interactive `:repeater`/`:intruder` stay human-composed.
+(`test_sliver_safety` / `test_obfuscation_safety`) still hold. The set is `:recon`, `:discover`,
+`:jsrecon`, `:nuclei`, plus `:repeater` and `:intruder` — the repeater is the cross-account-replay
+path (a captured request with one id swapped), and its **human-only lock still holds**
+(`test_repeater_is_human_only`): the send fires only on the operator's approve, through the same
+route a manual send uses — the backend agent path has no `repeater.send`.

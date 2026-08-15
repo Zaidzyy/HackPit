@@ -285,6 +285,7 @@ export function ReconScreen() {
   const [extText, setExtText] = useState("");
   const [paramWordlist, setParamWordlist] = useState("");
   const [discApproved, setDiscApproved] = useState(false);
+  const [discImpersonate, setDiscImpersonate] = useState(false);
   const [discAck, setDiscAck] = useState(false);
   const [discPreview, setDiscPreview] = useState<DiscoverPreview | null>(null);
   const [discStarting, setDiscStarting] = useState(false);
@@ -331,12 +332,13 @@ export function ReconScreen() {
       extensions: extText.split(",").map((e) => e.trim()).filter(Boolean),
       param_wordlist: paramWordlist.trim(),
       rate_limit: Number.parseInt(rate, 10) || null,
+      impersonate: discImpersonate,
       engagement_id: sessionId.trim() || null,
       session_id: sessionId.trim() || null,
       approved: discApproved,
       dangerous_ack: discAck,
     }),
-    [discMode, url, domain, method, tool, words, wordlist, extText, paramWordlist, rate, sessionId, discApproved, discAck]
+    [discMode, url, domain, method, tool, words, wordlist, extText, paramWordlist, rate, discImpersonate, sessionId, discApproved, discAck]
   );
 
   const jsUrls = useMemo(
@@ -971,6 +973,20 @@ export function ReconScreen() {
                   (paramspider only queries archives). The target host is scope-locked before anything
                   runs. Preview first — the gate&rsquo;s answer is shown above.
                 </div>
+                {discMode !== "historical" && (
+                  <label
+                    className="hp-tn-danger-why"
+                    style={{ display: "flex", gap: "0.4rem", alignItems: "flex-start" }}
+                    title="Route the tool through the in-sandbox JA3 MITM proxy (curl_cffi/Chrome fingerprint) so a Cloudflare/Akamai-fronted target serves it instead of 403-ing a plain fuzzer. Beats JA3, not a JS challenge."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={discImpersonate}
+                      onChange={(e) => setDiscImpersonate(e.target.checked)}
+                    />
+                    impersonate browser (WAF bypass — routes through the JA3 proxy)
+                  </label>
+                )}
                 <label className="hp-tn-danger-why" style={{ display: "flex", gap: "0.4rem", alignItems: "flex-start" }}>
                   <input type="checkbox" checked={discApproved} onChange={(e) => setDiscApproved(e.target.checked)} />
                   I approve this discovery job

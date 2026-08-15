@@ -155,6 +155,25 @@ def test_findings_only_for_interesting_discoveries() -> None:
     print("  only interesting discoveries (admin endpoint / debug param) become low findings: PASS")
 
 
+def test_impersonate_routes_active_tools_through_the_ja3_proxy() -> None:
+    """The WAF fix for :discover: impersonate=True routes each active tool through the in-sandbox
+    JA3 MITM proxy (feroxbuster also gets -k for the proxy's cert). Default off leaves the argv
+    byte-for-byte as before. paramspider is passive (archives) and takes no impersonate."""
+    px = discover.IMPERSONATE_PROXY
+
+    a = discover.arjun_argv("https://cf.example.com/x", "GET", "/loot/o.json", impersonate=True)
+    assert "--proxy" in a and px in a, a
+    assert "--proxy" not in discover.arjun_argv("https://cf.example.com/x", "GET", "/loot/o.json"), "default off"
+
+    f = discover.ffuf_argv("https://cf.example.com/", "/loot/w.txt", "/loot/o.json", [], impersonate=True)
+    assert "-x" in f and px in f, f
+    assert "-x" not in discover.ffuf_argv("https://cf.example.com/", "/loot/w.txt", "/loot/o.json", []), "default off"
+
+    x = discover.feroxbuster_argv("https://cf.example.com/", "/loot/w.txt", "/loot/o.json", [], impersonate=True)
+    assert "--proxy" in x and px in x and "-k" in x, x
+    print("  impersonate routes arjun/ffuf/feroxbuster through the JA3 proxy; default off unchanged: PASS")
+
+
 if __name__ == "__main__":
     test_parse_arjun_map_and_flat_shapes()
     test_parse_feroxbuster_only_response_lines()
@@ -165,4 +184,5 @@ if __name__ == "__main__":
     test_filter_endpoints_in_scope_keeps_in_drops_out()
     test_mark_param_builds_a_valid_intruder_position()
     test_findings_only_for_interesting_discoveries()
+    test_impersonate_routes_active_tools_through_the_ja3_proxy()
     print("\nall discover tests pass.")

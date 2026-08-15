@@ -54,6 +54,7 @@ export function RepeaterScreen() {
   const [body, setBody] = useState("");
   const [follow, setFollow] = useState(false);
   const [insecure, setInsecure] = useState(false);
+  const [impersonate, setImpersonate] = useState(false);
   const [engagementId, setEngagementId] = useState("");
   // The cookie jar (build #19 item 2). `jarCount` is null until it has been read once — "we
   // have not looked" is a different thing from "the jar is empty", and the button says so.
@@ -148,6 +149,7 @@ export function RepeaterScreen() {
       follow_redirects: follow,
       insecure,
       http2: false,
+      impersonate,
       engagement_id: engagementId.trim() || null,
       session_id: engagementId.trim() || null,
       shapes,
@@ -163,7 +165,7 @@ export function RepeaterScreen() {
     } finally {
       setSending(false);
     }
-  }, [method, url, headers, body, follow, insecure, engagementId, sending, shapes, useJar]);
+  }, [method, url, headers, body, follow, insecure, impersonate, engagementId, sending, shapes, useJar]);
 
   /** Empty this session's jar. Ungated — clearing state removes capability, never adds it. */
   const clearJar = useCallback(async () => {
@@ -210,6 +212,7 @@ export function RepeaterScreen() {
           follow_redirects: follow,
           insecure,
           http2: false,
+          impersonate,
           engagement_id: null,
           session_id: null,
           shapes,
@@ -218,7 +221,7 @@ export function RepeaterScreen() {
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     }
-  }, [method, url, headers, body, follow, insecure, shapes]);
+  }, [method, url, headers, body, follow, insecure, impersonate, shapes]);
 
   const toggleShape = (name: string) =>
     setShapes((cur) =>
@@ -339,6 +342,7 @@ export function RepeaterScreen() {
     setBody(ex.request.body);
     setFollow(ex.request.follow_redirects);
     setInsecure(ex.request.insecure);
+    setImpersonate(ex.request.impersonate);
     setEngagementId(ex.request.engagement_id ?? "");
     setSelected(ex.id);
   }, []);
@@ -573,6 +577,17 @@ export function RepeaterScreen() {
                   onChange={(e) => setInsecure(e.target.checked)}
                 />
                 accept invalid TLS
+              </label>
+              <label
+                className="hp-rp-opt"
+                title="Send as a real browser (curl-impersonate): Chrome's TLS/JA3 + header set, to get past a WAF (Cloudflare/Akamai) that 403s a plain client. Adds browser headers, so the wire is no longer byte-exact to what you typed."
+              >
+                <input
+                  type="checkbox"
+                  checked={impersonate}
+                  onChange={(e) => setImpersonate(e.target.checked)}
+                />
+                impersonate browser (WAF bypass)
               </label>
               {/* THE COOKIE JAR (build #19 item 2). ON by default, because the thing it fixes —
                   every authenticated flow breaking on the SECOND request — is the common case.

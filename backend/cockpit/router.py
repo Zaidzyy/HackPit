@@ -2320,6 +2320,11 @@ class GraphQLProbeRequest(BaseModel):
         "between `disabled` and `ok`, because plenty of APIs allow introspection to staff only.",
     )
     engagement_id: str | None = None
+    impersonate: bool = Field(
+        False,
+        description="Fetch via curl-impersonate (curl_chrome116, browser JA3) to reach a "
+        "Cloudflare/Akamai-fronted endpoint that 403s a plain client.",
+    )
 
 
 class GraphQLImportRequest(BaseModel):
@@ -2357,7 +2362,7 @@ def graphql_probe(req: GraphQLProbeRequest) -> graphql_zap_mod.SchemaProbe:
     """
     return graphql_zap_mod.probe_schema(
         _recon_container(req.container), req.url, req.headers,
-        engagement_id=req.engagement_id)
+        engagement_id=req.engagement_id, impersonate=req.impersonate)
 
 
 def _recon_container(container: str) -> str:
@@ -2380,6 +2385,11 @@ class GraphQLFingerprintRequest(BaseModel):
     url: str
     headers: list[repeater_mod.RepeaterHeader] = Field(default_factory=list)
     engagement_id: str | None = None
+    impersonate: bool = Field(
+        False,
+        description="Fetch via curl-impersonate (curl_chrome116, browser JA3) to reach a "
+        "Cloudflare/Akamai-fronted endpoint that 403s a plain client.",
+    )
 
 
 class GraphQLEnumerateRequest(BaseModel):
@@ -2387,6 +2397,11 @@ class GraphQLEnumerateRequest(BaseModel):
     url: str
     headers: list[repeater_mod.RepeaterHeader] = Field(default_factory=list)
     engagement_id: str | None = None
+    impersonate: bool = Field(
+        False,
+        description="Fetch via curl-impersonate (curl_chrome116, browser JA3) to reach a "
+        "Cloudflare/Akamai-fronted endpoint that 403s a plain client.",
+    )
     wordlist: list[str] = Field(
         default_factory=list,
         description="Candidate names. Empty uses DEFAULT_WORDLIST, whose name and size are "
@@ -2417,7 +2432,7 @@ def graphql_fingerprint(req: GraphQLFingerprintRequest) -> graphql_enum_mod.Engi
     """
     return graphql_zap_mod.fingerprint_engine(
         _recon_container(req.container), req.url, req.headers,
-        engagement_id=req.engagement_id)
+        engagement_id=req.engagement_id, impersonate=req.impersonate)
 
 
 @router.post("/proxy/graphql/enumerate",
@@ -2452,7 +2467,8 @@ def graphql_enumerate(req: GraphQLEnumerateRequest) -> graphql_enum_mod.Enumerat
     return graphql_zap_mod.enumerate_schema(
         _recon_container(req.container), req.url,
         list(req.wordlist) or list(graphql_enum_mod.DEFAULT_WORDLIST),
-        bounds=bounds, headers=req.headers, engagement_id=req.engagement_id)
+        bounds=bounds, headers=req.headers, engagement_id=req.engagement_id,
+        impersonate=req.impersonate)
 
 
 class GraphQLComposeRecoveredRequest(BaseModel):

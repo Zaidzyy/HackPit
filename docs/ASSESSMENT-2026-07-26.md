@@ -6317,3 +6317,53 @@ frontend. **Chat stays excluded** (no discrete command object). Verified: **16 n
 · proposal 3 · graph 3) + full suite **1382 pass**; tsc 0 · lint 11 · `next build` 0; the attack-path and home surfaces were
 looked at live. Spec: `docs/superpowers/specs/2026-08-09-dual-candidate-commands-and-model-picker-design.md`; plan:
 `docs/superpowers/plans/2026-08-09-dual-candidate-foundation-engine-attackpath.md`.
+
+## WAF-interaction hardening — browser impersonation across the web surfaces (2026-08-15)
+
+A live-fire pass against a Cloudflare-fronted program surfaced the SAME defect in five places:
+every web surface fetched with a PLAIN client, and a WAF that fingerprints the TLS handshake (JA3)
+403s a plain client before request one — the wall build #18's curl-impersonate item documented,
+but only the manual `:kali` path had the cure. This pass gives every affected surface a browser
+fingerprint, each proven live or test-locked.
+
+- **`:jsrecon` — fixed, proven live.** The baked `js-mine` engine fetched with stdlib `urllib`, so
+  against a Cloudflare bundle `collect` got 403 → empty `js_urls` → `mine` returned a silent
+  `results: []`. `_fetch` now prefers `curl_chrome116` (already baked) with a `urllib` fallback; a
+  real 403 is returned, not retried. Proof `jsrecon_cf_fix_proof.sh`: collect+mine the real bundle,
+  **68 endpoints** (was 0).
+
+- **`:recon` / nuclei — fixed, proven live.** nuclei v3 reads `$HOME/nuclei-templates`, but the
+  image only symlinked the baked repo into `$HOME/.local/…` and nothing for `/root` (the engage
+  sandbox runs as root) — so nuclei found nothing, tried to install with no egress, exited 1. The
+  symlink is now created for the home-root AND `.local` paths for BOTH users, gated at build time
+  by `test -d $HOME/nuclei-templates/http`. Proof `nuclei_templates_fix_proof.sh` validates offline
+  (`--network none`) as root. Arsenal note corrected (baked/offline; never `-update`; real category
+  dir, not a guessed `-t` file path).
+
+- **`:repeater` / `:intruder` — opt-in `impersonate`.** `_build_curl` swaps `curl` →
+  `curl_chrome116` and drops the bot UA; intruder's per-payload probes inherit it. Opt-in because
+  impersonation adds browser headers (the wire is no longer byte-exact — the repeater's core
+  promise). ffuf bulk fuzzing can't JA3-impersonate; the UI says so. `test_repeater` covers it. No
+  rebuild (binary baked).
+
+- **`:graphql` — opt-in `impersonate` on probe/fingerprint/enumerate.** `_curl_json` swaps the
+  binary, threaded through all three fetch functions + their 3 router models/endpoints — the direct
+  unblock for a Cloudflare-fronted `/graph`. `test_graphql` swap test.
+
+- **`:discover` — a baked JA3 MITM proxy (new component).** ffuf/feroxbuster/arjun speak their own
+  TLS and can't impersonate, so the impersonation went into a proxy they route through:
+  `impersonate-proxy` = mitmproxy (own venv) + `impersonate_proxy.py`, an addon that re-issues each
+  request via `curl_cffi` with Chrome's JA3. The tools get `-x`/`--proxy` (+`-k` where they verify)
+  when the operator ticks impersonate; the `:discover` worker starts the proxy lazily and waits for
+  it to bind. paramspider is untouched (passive/archives). Beats JA3, NOT a JS challenge (needs a
+  real browser, impractical for bulk fuzzing) — stated in the UI. **Trap that cost a proof cycle:**
+  the addon passed `curl_cffi`'s `str` response headers to mitmproxy's `Response.make`, which wants
+  BYTES; the hook threw, and mitmproxy SILENTLY fell back to a non-impersonated upstream → a 403
+  that looked like the target's answer. Fixed by encoding to bytes AND guarding the hook to fail
+  LOUD (502) rather than silently un-impersonate. Verified live: proxied Fishbowl fetch = 200, plain
+  = 403. Proof `discover_impersonate_proxy_proof.sh`.
+
+Also this session: **operator live-chat beside the loop** (its own row above), a non-destructive
+**stop** on the engagements list (exit ≠ delete), a launcher rebalance (`:workflows`/`:proposals` →
+infrastructure so both bands fill the 4-wide grid), and a plain-language rewrite of all 28 launcher
+card descriptions. Full backend suite **131 files pass**; tsc 0 · lint 11 · build 0.

@@ -470,6 +470,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#parameter-content-discovery-hidden-params-paths-as-a-first-class-recon-step-discover-2026-08-08">Parameter / content discovery — hidden params + paths as a first-class :recon step (:discover) (2026-08-08)</a></li>
 <li><a href="#js-recon-secret-endpoint-mining-the-s3bundlesecret-chain-live-jsrecon-2026-08-08">JS recon → secret / endpoint mining — the S3→bundle→secret chain, live (:jsrecon) (2026-08-08)</a></li>
 <li><a href="#dual-candidate-second-opinion-on-generated-commands-foundation-2026-08-09">Dual-candidate "second opinion" on generated commands — foundation (2026-08-09)</a></li>
+<li><a href="#waf-interaction-hardening-browser-impersonation-across-the-web-surfaces-2026-08-15">WAF-interaction hardening — browser impersonation across the web surfaces (2026-08-15)</a></li>
 </ul>
 </li>
 </ul>
@@ -6365,5 +6366,59 @@ frontend. <strong>Chat stays excluded</strong> (no discrete command object). Ver
 · proposal 3 · graph 3) + full suite <strong>1382 pass</strong>; tsc 0 · lint 11 · <code>next build</code> 0; the attack-path and home surfaces were
 looked at live. Spec: <code>docs/superpowers/specs/2026-08-09-dual-candidate-commands-and-model-picker-design.md</code>; plan:
 <code>docs/superpowers/plans/2026-08-09-dual-candidate-foundation-engine-attackpath.md</code>.</p>
+<h2 id="waf-interaction-hardening-browser-impersonation-across-the-web-surfaces-2026-08-15">WAF-interaction hardening — browser impersonation across the web surfaces (2026-08-15)</h2>
+<p>A live-fire pass against a Cloudflare-fronted program surfaced the SAME defect in five places:
+every web surface fetched with a PLAIN client, and a WAF that fingerprints the TLS handshake (JA3)
+403s a plain client before request one — the wall build #18's curl-impersonate item documented,
+but only the manual <code>:kali</code> path had the cure. This pass gives every affected surface a browser
+fingerprint, each proven live or test-locked.</p>
+<ul>
+<li>
+<p><strong><code>:jsrecon</code> — fixed, proven live.</strong> The baked <code>js-mine</code> engine fetched with stdlib <code>urllib</code>, so
+  against a Cloudflare bundle <code>collect</code> got 403 → empty <code>js_urls</code> → <code>mine</code> returned a silent
+  <code>results: []</code>. <code>_fetch</code> now prefers <code>curl_chrome116</code> (already baked) with a <code>urllib</code> fallback; a
+  real 403 is returned, not retried. Proof <code>jsrecon_cf_fix_proof.sh</code>: collect+mine the real bundle,
+  <strong>68 endpoints</strong> (was 0).</p>
+</li>
+<li>
+<p><strong><code>:recon</code> / nuclei — fixed, proven live.</strong> nuclei v3 reads <code>$HOME/nuclei-templates</code>, but the
+  image only symlinked the baked repo into <code>$HOME/.local/…</code> and nothing for <code>/root</code> (the engage
+  sandbox runs as root) — so nuclei found nothing, tried to install with no egress, exited 1. The
+  symlink is now created for the home-root AND <code>.local</code> paths for BOTH users, gated at build time
+  by <code>test -d $HOME/nuclei-templates/http</code>. Proof <code>nuclei_templates_fix_proof.sh</code> validates offline
+  (<code>--network none</code>) as root. Arsenal note corrected (baked/offline; never <code>-update</code>; real category
+  dir, not a guessed <code>-t</code> file path).</p>
+</li>
+<li>
+<p><strong><code>:repeater</code> / <code>:intruder</code> — opt-in <code>impersonate</code>.</strong> <code>_build_curl</code> swaps <code>curl</code> →
+  <code>curl_chrome116</code> and drops the bot UA; intruder's per-payload probes inherit it. Opt-in because
+  impersonation adds browser headers (the wire is no longer byte-exact — the repeater's core
+  promise). ffuf bulk fuzzing can't JA3-impersonate; the UI says so. <code>test_repeater</code> covers it. No
+  rebuild (binary baked).</p>
+</li>
+<li>
+<p><strong><code>:graphql</code> — opt-in <code>impersonate</code> on probe/fingerprint/enumerate.</strong> <code>_curl_json</code> swaps the
+  binary, threaded through all three fetch functions + their 3 router models/endpoints — the direct
+  unblock for a Cloudflare-fronted <code>/graph</code>. <code>test_graphql</code> swap test.</p>
+</li>
+<li>
+<p><strong><code>:discover</code> — a baked JA3 MITM proxy (new component).</strong> ffuf/feroxbuster/arjun speak their own
+  TLS and can't impersonate, so the impersonation went into a proxy they route through:
+  <code>impersonate-proxy</code> = mitmproxy (own venv) + <code>impersonate_proxy.py</code>, an addon that re-issues each
+  request via <code>curl_cffi</code> with Chrome's JA3. The tools get <code>-x</code>/<code>--proxy</code> (+<code>-k</code> where they verify)
+  when the operator ticks impersonate; the <code>:discover</code> worker starts the proxy lazily and waits for
+  it to bind. paramspider is untouched (passive/archives). Beats JA3, NOT a JS challenge (needs a
+  real browser, impractical for bulk fuzzing) — stated in the UI. <strong>Trap that cost a proof cycle:</strong>
+  the addon passed <code>curl_cffi</code>'s <code>str</code> response headers to mitmproxy's <code>Response.make</code>, which wants
+  BYTES; the hook threw, and mitmproxy SILENTLY fell back to a non-impersonated upstream → a 403
+  that looked like the target's answer. Fixed by encoding to bytes AND guarding the hook to fail
+  LOUD (502) rather than silently un-impersonate. Verified live: proxied Fishbowl fetch = 200, plain
+  = 403. Proof <code>discover_impersonate_proxy_proof.sh</code>.</p>
+</li>
+</ul>
+<p>Also this session: <strong>operator live-chat beside the loop</strong> (its own row above), a non-destructive
+<strong>stop</strong> on the engagements list (exit ≠ delete), a launcher rebalance (<code>:workflows</code>/<code>:proposals</code> →
+infrastructure so both bands fill the 4-wide grid), and a plain-language rewrite of all 28 launcher
+card descriptions. Full backend suite <strong>131 files pass</strong>; tsc 0 · lint 11 · build 0.</p>
 </body>
 </html>

@@ -285,6 +285,27 @@ def test_history_is_per_session_and_newest_first() -> None:
     print("  history is per-session and newest-first: PASS")
 
 
+def test_impersonate_swaps_binary_and_drops_bot_ua() -> None:
+    """The WAF-bypass toggle: impersonate=True sends via curl_chrome116 (browser JA3) and does
+    NOT force the HackPit bot UA (the wrapper carries a real browser UA). Default plain curl is
+    unchanged (still byte-exact to what was typed). A UA the operator TYPED is honored either way."""
+    req = RepeaterRequest(method="GET", url="https://cf.example.com/x")
+
+    plain = RP._build_curl(req, "S", url=req.url, has_body=False)
+    assert plain[0] == "curl", plain[0]
+    assert "-A" in plain and RP._DEFAULT_UA in plain, "plain curl forces the default UA when none typed"
+
+    imp = RP._build_curl(req, "S", url=req.url, has_body=False, impersonate=True)
+    assert imp[0] == "curl_chrome116", imp[0]
+    assert RP._DEFAULT_UA not in imp, "impersonation must not force the bot UA over the browser UA"
+
+    req_ua = RepeaterRequest(method="GET", url="https://cf.example.com/x",
+                             headers=[RepeaterHeader(name="User-Agent", value="custom/9")])
+    imp_ua = RP._build_curl(req_ua, "S", url=req_ua.url, has_body=False, impersonate=True)
+    assert imp_ua[0] == "curl_chrome116" and any("custom/9" in t for t in imp_ua), imp_ua
+    print("  impersonate -> curl_chrome116, no forced bot UA, typed UA still honored; plain unchanged: PASS")
+
+
 if __name__ == "__main__":
     test_container_is_hardcoded_never_from_the_request()
     test_no_shell_and_body_goes_on_stdin()
@@ -297,4 +318,5 @@ if __name__ == "__main__":
     test_response_is_parsed()
     test_redirect_takes_the_final_response_headers()
     test_history_is_per_session_and_newest_first()
+    test_impersonate_swaps_binary_and_drops_bot_ua()
     print("ALL repeater tests pass")

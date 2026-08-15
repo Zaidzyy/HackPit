@@ -286,7 +286,28 @@ def parse_source_map(text: str, map_url: str) -> dict[str, Any]:
 
 # --------------------------------------------------------------------------- #
 # fetch — the only I/O. Not used by the selftest, which mines fixture text.
+#
+# A Cloudflare/WAF-fronted target FINGERPRINTS THE TLS HANDSHAKE (JA3), so stdlib urllib is
+# 403'd no matter the User-Agent — which is exactly why :jsrecon returned empty against a
+# Cloudflare-fronted bundle. When curl-impersonate (curl_chrome116, this project's CF-bypass
+# tool) is on PATH we fetch through it — it presents a real browser's JA3 — and fall back to
+# urllib only where it is absent (a hermetic test box with no impersonate binary).
 # --------------------------------------------------------------------------- #
+def _find_curl_impersonate() -> str:
+    """The curl-impersonate wrapper to fetch with, or '' when none is installed. Each chromeXXX
+    wrapper pins one browser's TLS+HTTP/2 fingerprint; any recent one defeats the JA3 check."""
+    for name in ("curl_chrome116", "curl_chrome110", "curl_chrome104",
+                 "curl-impersonate-chrome", "curl-impersonate"):
+        exe = shutil.which(name)
+        if exe:
+            return exe
+    return ""
+
+
+#: Resolved once at import. A module global so a hermetic test can force either path.
+_CURL_IMPERSONATE = _find_curl_impersonate()
+
+
 def _ctx(insecure: bool) -> "ssl.SSLContext | None":
     if not insecure:
         return None
@@ -296,9 +317,9 @@ def _ctx(insecure: bool) -> "ssl.SSLContext | None":
     return c
 
 
-def _fetch(url: str, timeout: float, insecure: bool) -> tuple[str, str]:
-    """Fetch a URL -> (text, error). NEVER follows to a new host is not enforced here — the backend
-    only ever hands in-scope URLs — but the read is byte-capped and time-bounded. Never raises."""
+def _fetch_urllib(url: str, timeout: float, insecure: bool) -> tuple[str, str]:
+    """Fetch via stdlib urllib. Works for a plain origin; a JA3-fingerprinting WAF will 403 this,
+    which is why :func:`_fetch` prefers curl-impersonate. Byte-capped, time-bounded, never raises."""
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "hackpit-js-mine/1.0"})
         with urllib.request.urlopen(req, timeout=timeout, context=_ctx(insecure)) as resp:
@@ -312,6 +333,58 @@ def _fetch(url: str, timeout: float, insecure: bool) -> tuple[str, str]:
         return "", str(getattr(exc, "reason", exc))[:200]
     except Exception as exc:  # noqa: BLE001 - a fetch must never take the engine down
         return "", str(exc)[:200]
+
+
+def _fetch_curl(exe: str, url: str, timeout: float, insecure: bool) -> "tuple[str, str] | None":
+    """Fetch via curl-impersonate (browser JA3 — defeats Cloudflare/WAF TLS fingerprinting).
+
+    Body goes to a temp file (``-o``); curl writes ONLY the HTTP status to stdout (``-w``), so the
+    two never mix. Returns (text, error): a real HTTP error like ``('', 'HTTP 403')`` is a RESULT —
+    NOT a reason to retry with urllib, which the same WAF would block too. Returns ``None`` only
+    when curl could not be executed at all, so the caller falls back to urllib. Never raises.
+    """
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            body_path = f"{d}/body"
+            args = [exe, "-sS", "-L", "--max-redirs", "5", "--compressed",
+                    "-m", str(int(max(1.0, timeout))), "-o", body_path, "-w", "%{http_code}"]
+            if insecure:
+                args.append("-k")
+            args.append(url)
+            proc = subprocess.run(args, capture_output=True, text=True,
+                                  timeout=max(20.0, timeout * 2))
+            try:
+                with open(body_path, "rb") as fh:
+                    raw = fh.read(MAX_BYTES + 1)
+            except OSError:
+                raw = b""
+    except OSError:
+        return None  # cannot exec curl — let the caller fall back to urllib
+    except subprocess.TimeoutExpired:
+        return "", "timeout"
+    except Exception:  # noqa: BLE001 - a fetch must never take the engine down
+        return None
+    code = "".join(ch for ch in (proc.stdout or "") if ch.isdigit())[-3:]
+    if not code:
+        # curl ran but produced no status (DNS/connection failure) — surface its stderr.
+        return "", (proc.stderr or "").strip()[:200] or "curl: no response"
+    if len(raw) > MAX_BYTES:
+        raw = raw[:MAX_BYTES]
+    n = int(code)
+    if 200 <= n < 400:
+        return raw.decode("utf-8", "replace"), ""
+    return "", f"HTTP {n}"
+
+
+def _fetch(url: str, timeout: float, insecure: bool) -> tuple[str, str]:
+    """Fetch a URL -> (text, error). Prefers curl-impersonate (Cloudflare/WAF-capable) and falls
+    back to urllib where it is absent. The backend only ever hands in-scope URLs; the read is
+    byte-capped and time-bounded. NEVER raises — every failure is returned as the error string."""
+    if _CURL_IMPERSONATE:
+        got = _fetch_curl(_CURL_IMPERSONATE, url, timeout, insecure)
+        if got is not None:
+            return got
+    return _fetch_urllib(url, timeout, insecure)
 
 
 def _trufflehog_verify(js_url: str, text: str, timeout: float) -> list[dict[str, Any]]:

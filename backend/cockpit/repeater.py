@@ -99,6 +99,14 @@ class RepeaterRequest(BaseModel):
         False, description="curl -k — accept a self-signed / invalid TLS cert (labs, staging)."
     )
     http2: bool = Field(False, description="Offer HTTP/2 (curl --http2).")
+    impersonate: bool = Field(
+        False,
+        description="Send as a real browser via curl-impersonate (curl_chrome116): Chrome's "
+        "TLS/JA3 handshake + HTTP/2 fingerprint + header set, to get past a WAF (Cloudflare/"
+        "Akamai) that fingerprints the handshake and 403s a plain client. It DELIBERATELY adds "
+        "browser headers (Sec-CH-UA etc.), so the wire is no longer byte-exact to what you typed "
+        "— opt in per request when the target is WAF-fronted.",
+    )
     timeout_seconds: int | None = Field(
         None, ge=1, description="Per-send timeout; omitted uses the 180s default, clamped to 3600."
     )
@@ -323,17 +331,23 @@ def typed_cookie_names(req: RepeaterRequest) -> frozenset[str]:
 
 
 def _build_curl(req: RepeaterRequest, sentinel: str, *, url: str, has_body: bool,
-                chunked: bool = False, cookie_header: str = "") -> list[str]:
+                chunked: bool = False, cookie_header: str = "",
+                impersonate: bool = False) -> list[str]:
     """The curl argv for one request. Every request field is a discrete argv token.
 
     ``url`` and ``has_body`` are PASSED IN rather than read off ``req``, because after build #18
     they are the SHAPED values and the request object still holds what the operator typed. One
     derivation, one thing on the wire — the same reason ``server_argv_for`` in proxy.py is the
     single source for the daemon's argv.
+
+    ``impersonate`` swaps the binary for ``curl_chrome116`` (curl-impersonate, baked in the
+    sandbox): a real browser's TLS/JA3 + header set, so a WAF that fingerprints the handshake
+    serves the request instead of 403-ing a plain client. The wrappers carry their own browser
+    User-Agent, so the ``HackPit-Repeater/1.0`` default is NOT forced when impersonating.
     """
     method = req.method.strip().upper()
     argv = [
-        "curl", "-sS",           # silent but show errors
+        "curl_chrome116" if impersonate else "curl", "-sS",  # silent but show errors
         "-D", "-",               # dump response headers to stdout, ahead of the body
         "-o", "-",               # body to stdout too (explicit; the two interleave predictably)
         "--max-time", str(config.clamp_timeout(req.timeout_seconds)),
@@ -347,7 +361,8 @@ def _build_curl(req: RepeaterRequest, sentinel: str, *, url: str, has_body: bool
         argv.append("--http2")
 
     has_ua = any(h.name.strip().lower() == "user-agent" for h in req.headers)
-    if not has_ua:
+    if not has_ua and not impersonate:
+        # curl_chrome116 brings its own browser UA; forcing the bot UA would undo the disguise.
         argv += ["-A", _DEFAULT_UA]
     # *** ONE `Cookie:` HEADER, NEVER TWO, AND THAT IS NOT A STYLE CHOICE. ***
     # RFC 6265 §5.4 is explicit that a user agent MUST NOT attach more than one Cookie header,
@@ -549,7 +564,7 @@ def send(req: RepeaterRequest) -> RepeaterExchange:
             config.KALI_OPEN_CONTAINER,
             *_build_curl(req, sentinel, url=sent_url, has_body=bool(sent_body),
                          chunked="chunked" in shapes_applied,
-                         cookie_header=selection.header)]
+                         cookie_header=selection.header, impersonate=req.impersonate)]
 
     resp = RepeaterResponse()
     timeout = config.clamp_timeout(req.timeout_seconds) + 15  # curl enforces --max-time; this is a backstop

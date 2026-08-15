@@ -262,15 +262,20 @@ def parse_introspection(payload: Any) -> SchemaProbe:
 
 
 def _curl_json(container: str, url: str, body: str, headers: list[tuple[str, str]],
-               timeout: int = 25) -> tuple[int | None, str, str]:
+               timeout: int = 25, impersonate: bool = False) -> tuple[int | None, str, str]:
     """POST a JSON body from inside the sandbox. ``(http_status, text, transport_error)``.
 
     The body goes over STDIN, never an argv. A GraphQL request routinely carries an
     Authorization header and a token-shaped argument, and a `docker exec … curl … --data '…'`
     argv is readable by `ps` on this host — build #18's bypass-header reasoning and build #19's
     intercept reasoning, applied to a third body.
+
+    ``impersonate`` swaps curl for ``curl_chrome116`` (curl-impersonate, baked in the sandbox):
+    a real browser's TLS/JA3, so a Cloudflare/Akamai-fronted GraphQL endpoint serves the request
+    instead of 403-ing a plain client — the exact wall behind a WAF'd ``/graph`` returning 403.
     """
-    argv = ["docker", "exec", "-i", container, "curl", "-s", "--max-time", str(timeout),
+    argv = ["docker", "exec", "-i", container,
+            "curl_chrome116" if impersonate else "curl", "-s", "--max-time", str(timeout),
             "-o", "-", "-w", "\\n__HACKPIT_GQL_STATUS__%{http_code}",
             "-X", "POST", "--data-binary", "@-",
             "-H", "Content-Type: application/json"]
@@ -301,7 +306,8 @@ def _curl_json(container: str, url: str, body: str, headers: list[tuple[str, str
 
 
 def probe_schema(container: str, url: str, headers: Any = (),
-                 engagement_id: str | None = None, timeout: int = 25) -> SchemaProbe:
+                 engagement_id: str | None = None, timeout: int = 25,
+                 impersonate: bool = False) -> SchemaProbe:
     """Ask an endpoint for its schema and CLASSIFY the answer. See :class:`SchemaProbe`.
 
     UNGATED, in the repeater's position: one request to a URL a human typed and pressed. Where a
@@ -324,7 +330,8 @@ def probe_schema(container: str, url: str, headers: Any = (),
     out.scope_note = _scope_warning(url, engagement_id)
 
     status, text, transport = _curl_json(container, url, json.dumps(
-        {"query": INTROSPECTION_QUERY, "operationName": "IntrospectionQuery"}), pairs, timeout)
+        {"query": INTROSPECTION_QUERY, "operationName": "IntrospectionQuery"}), pairs, timeout,
+        impersonate=impersonate)
     out.http_status = status
     if transport:
         out.status = "unreachable"
@@ -727,7 +734,8 @@ def scan_plan_for(exchange: Any) -> GraphQLScanPlan:
 
 def fingerprint_engine(container: str, url: str, headers: Any = (),
                        engagement_id: str | None = None,
-                       timeout: int = 25) -> graphql_enum.EngineFingerprint:
+                       timeout: int = 25,
+                       impersonate: bool = False) -> graphql_enum.EngineFingerprint:
     """Which core formats this endpoint's errors. Four requests, then a PURE classification.
 
     Native rather than driving ``graphw00f``, and the choice is deliberate:
@@ -750,7 +758,8 @@ def fingerprint_engine(container: str, url: str, headers: Any = (),
     responses: dict[str, str] = {}
     for name, document in graphql_enum.FINGERPRINT_PROBES:
         _status, text, transport = _curl_json(
-            container, url, json.dumps({"query": document}), pairs, timeout)
+            container, url, json.dumps({"query": document}), pairs, timeout,
+            impersonate=impersonate)
         responses[name] = "" if transport else text
     out = graphql_enum.classify_fingerprint(responses)
     scope = _scope_warning(url, engagement_id)
@@ -779,7 +788,8 @@ def enumerate_schema(container: str, url: str, wordlist: list[str],
                      bounds: graphql_enum.EnumerationBounds | None = None,
                      headers: Any = (), engagement_id: str | None = None,
                      fingerprint: graphql_enum.EngineFingerprint | None = None,
-                     timeout: int = 25) -> graphql_enum.EnumerationResult:
+                     timeout: int = 25,
+                     impersonate: bool = False) -> graphql_enum.EnumerationResult:
     """Mine a schema out of the server's own error messages.
 
     *** IT REFUSES TO GUESS THE PARSER, AND THAT IS NOT A GATE. *** When the core is unknown the
@@ -820,7 +830,8 @@ def enumerate_schema(container: str, url: str, wordlist: list[str],
         if not document:
             continue
         _status, text, transport = _curl_json(
-            container, url, json.dumps({"query": document}), pairs, timeout)
+            container, url, json.dumps({"query": document}), pairs, timeout,
+            impersonate=impersonate)
         out.requests_sent += 1
         if transport:
             continue

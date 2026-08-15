@@ -586,7 +586,7 @@
         {
           "label": "Full template run",
           "template": "nuclei -u <target> -severity low,medium,high,critical -o <output>",
-          "note": "Update templates first; results are leads to verify, not findings."
+          "note": "Templates are BAKED into the sandbox (offline) — never -update-templates, it has no egress. Prefer -severity/-tags; if you narrow with -t, point it at a real category DIR (e.g. http/cves/, http/exposures/, http/misconfiguration/), never a guessed file path like templates/bugs/x.yaml. Results are leads to verify, not findings."
         },
         {
           "label": "Against a host list",

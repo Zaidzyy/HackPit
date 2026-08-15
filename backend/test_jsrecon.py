@@ -103,6 +103,46 @@ def test_engine_selftest_passes() -> None:
     print("  engine --selftest returns 0 (mines the planted endpoint/param/secret + map): PASS")
 
 
+def test_engine_fetch_prefers_curl_impersonate() -> None:
+    """The fix for the Cloudflare-403 empty result: a JA3-fingerprinting WAF 403s stdlib urllib, so
+    _fetch goes through curl-impersonate (browser JA3) when present, returns a real HTTP error
+    WITHOUT retrying urllib (the WAF blocks that too), and falls back to urllib only when no
+    impersonate binary exists. Hermetic — curl is mocked, no network."""
+    orig_run, orig_curl, orig_urllib = jm.subprocess.run, jm._CURL_IMPERSONATE, jm._fetch_urllib
+
+    def fake_curl(status: int, body: str):
+        def run(args, capture_output=True, text=True, timeout=None):  # noqa: ANN001
+            out_path = args[args.index("-o") + 1]  # curl writes the body to the -o file
+            with open(out_path, "wb") as fh:
+                fh.write(body.encode())
+            return type("P", (), {"stdout": str(status), "stderr": "", "returncode": 0})()
+        return run
+
+    def _urllib_must_not_run(*a, **k):
+        raise AssertionError("urllib fallback ran even though curl-impersonate answered")
+
+    try:
+        jm._CURL_IMPERSONATE = "/usr/bin/curl_chrome116"
+        jm._fetch_urllib = _urllib_must_not_run
+        # 200 via curl → body returned, urllib never touched
+        jm.subprocess.run = fake_curl(200, "fetch('/api/v2/orders?oid=7');")
+        text, err = jm._fetch("https://cf.example.com/app.js", 5.0, False)
+        assert err == "" and "/api/v2/orders" in text, (err, text[:80])
+        # 403 via curl → surfaced as HTTP 403, NOT retried on urllib (the WAF blocks it too)
+        jm.subprocess.run = fake_curl(403, "<html>blocked by cloudflare</html>")
+        text, err = jm._fetch("https://cf.example.com/app.js", 5.0, False)
+        assert text == "" and err == "HTTP 403", (text[:80], err)
+        # no impersonate binary on PATH → urllib fallback is used
+        jm._CURL_IMPERSONATE = ""
+        jm._fetch_urllib = lambda u, t, i: ("URLLIB-BODY", "")
+        text, err = jm._fetch("https://plain.example.com/app.js", 5.0, False)
+        assert text == "URLLIB-BODY" and err == "", (text, err)
+    finally:
+        jm.subprocess.run, jm._CURL_IMPERSONATE, jm._fetch_urllib = orig_run, orig_curl, orig_urllib
+    print("  engine: _fetch uses curl-impersonate (CF-capable), 403 not retried on urllib, "
+          "urllib fallback when absent: PASS")
+
+
 # --------------------------------------------------------------------------- #
 # the backend parses the engine JSON
 # --------------------------------------------------------------------------- #
@@ -230,6 +270,7 @@ if __name__ == "__main__":
     test_engine_recovers_source_map()
     test_engine_collect_lists_script_srcs()
     test_engine_selftest_passes()
+    test_engine_fetch_prefers_curl_impersonate()
     test_parse_mine_output_splits_endpoints_secrets_maps()
     test_filter_urls_in_scope_keeps_in_drops_out()
     test_filter_endpoints_in_scope_keeps_in_drops_out()

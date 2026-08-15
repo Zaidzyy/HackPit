@@ -388,10 +388,11 @@ RUN curl -fsSL "https://github.com/ticarpi/jwt_tool/archive/refs/tags/v${JWT_TOO
     && /usr/local/bin/jwt_tool --help > /dev/null
 
 # --- 9. nuclei templates (baked — the sandbox can never fetch them) ----------
-# Cloned to a shared path, then symlinked into BOTH possible home directories, because
-# nuclei looks in $HOME/.local/nuclei-templates and the engagement sandbox runs as root
-# while the lab/:kali sandboxes run as `sandbox`. Symlinks rather than config files so
-# this does not depend on nuclei's config-key naming staying stable.
+# Cloned to a shared path here; the per-home symlinks that let nuclei FIND them are created in
+# the user-setup layer below (once /root and /home/sandbox both exist). nuclei v3 resolves
+# $HOME/nuclei-templates (and, on some builds, $HOME/.local/nuclei-templates), and the engage
+# sandbox runs as root while lab/:kali run as `sandbox`, so BOTH paths for BOTH homes are linked.
+# Symlinks rather than a config file so this does not depend on nuclei's config-key naming.
 # Pin NUCLEI_TEMPLATES_REF to a tag for a fully reproducible build.
 ARG NUCLEI_TEMPLATES_REF=main
 RUN git clone --depth 1 --branch "${NUCLEI_TEMPLATES_REF}" \
@@ -893,6 +894,28 @@ RUN set -eux; \
     ls /usr/local/bin/curl_ff* >/dev/null; \
     echo "curl-impersonate ${CURL_IMPERSONATE_VERSION}: binaries AND browser wrappers present"
 
+# --- 9g2. impersonating discovery proxy (JA3 MITM forward proxy for :discover) --
+# ffuf / feroxbuster / arjun speak their own TLS, so a JA3-fingerprinting WAF (Cloudflare/Akamai)
+# 403s them before request one — the wall curl-impersonate clears for js-mine/repeater/graphql.
+# Those tools can't impersonate themselves, so the impersonation goes in a MITM proxy they route
+# through: mitmproxy terminates the tool's TLS (its own on-the-fly cert; the fuzzers skip verify /
+# run -k) and impersonate_proxy.py re-issues each request via curl_cffi with Chrome's JA3. Own
+# venv (heavy, pinned), same reason pwntools/angr get theirs. Started LAZILY by the :discover
+# worker only when the operator ticks 'impersonate' — never an always-on service. Beats JA3, NOT a
+# JS challenge / Turnstile (that needs a real browser, impractical for bulk fuzzing).
+RUN python3 -m venv /opt/impersonate-proxy/venv \
+    && /opt/impersonate-proxy/venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/impersonate-proxy/venv/bin/pip install --no-cache-dir \
+         "mitmproxy>=10,<12" "curl_cffi>=0.7"
+COPY impersonate_proxy.py /opt/impersonate-proxy/impersonate_proxy.py
+RUN printf '#!/bin/sh\nexec /opt/impersonate-proxy/venv/bin/mitmdump -q --listen-host 127.0.0.1 --listen-port 8899 --set connection_strategy=lazy -s /opt/impersonate-proxy/impersonate_proxy.py "$@"\n' \
+        > /usr/local/bin/impersonate-proxy \
+    && chmod 0755 /usr/local/bin/impersonate-proxy \
+    && /opt/impersonate-proxy/venv/bin/mitmdump --version | grep -qi mitmproxy \
+    && /opt/impersonate-proxy/venv/bin/python -c "from curl_cffi import requests" \
+    && /opt/impersonate-proxy/venv/bin/python -c "import ast; ast.parse(open('/opt/impersonate-proxy/impersonate_proxy.py').read())" \
+    && echo "impersonate-proxy: mitmproxy + curl_cffi venv ready, addon parses"
+
 # --- 9h. binary-RE / exploit-dev tooling (binary-ctf-arsenal build) -----------
 # The reversing / pwn toolset the binary-re catalog entries propose as approve-each tools. apt
 # covers most; pwntools + angr get their OWN venvs (heavy, conflicting pins) and the catalog
@@ -1233,11 +1256,20 @@ RUN useradd -m -s /bin/bash sandbox \
     && chmod 0755 /home/sandbox \
     && mkdir -p /root/.local /home/sandbox/.local /home/sandbox/.config \
                 /root/.ZAP /home/sandbox/.ZAP \
-    && ln -s /usr/share/nuclei-templates /root/.local/nuclei-templates \
-    && ln -s /usr/share/nuclei-templates /home/sandbox/.local/nuclei-templates \
+    # nuclei v3 resolves templates at $HOME/nuclei-templates (runtime PROVED it looked in
+    # /root/nuclei-templates, NOT .local). Link BOTH the home-root and .local paths for BOTH
+    # users (root = engage sandbox, sandbox = lab/:kali). The missing /root/nuclei-templates link
+    # is exactly why :recon's nuclei said "templates are not installed" and exited 1 with no egress.
+    && ln -sfn /usr/share/nuclei-templates /root/nuclei-templates \
+    && ln -sfn /usr/share/nuclei-templates /root/.local/nuclei-templates \
+    && ln -sfn /usr/share/nuclei-templates /home/sandbox/nuclei-templates \
+    && ln -sfn /usr/share/nuclei-templates /home/sandbox/.local/nuclei-templates \
     && ln -sfn /usr/share/gf-patterns /home/sandbox/.gf \
-    && chown -h sandbox:sandbox /home/sandbox/.gf \
-    && chown -R sandbox:sandbox /home/sandbox/.local /home/sandbox/.config /home/sandbox/.ZAP
+    && chown -h sandbox:sandbox /home/sandbox/.gf /home/sandbox/nuclei-templates \
+    && chown -R sandbox:sandbox /home/sandbox/.local /home/sandbox/.config /home/sandbox/.ZAP \
+    # build-time gate: nuclei's default dir now resolves to the baked templates for BOTH users,
+    # so a future path/version drift breaks the BUILD rather than silently shipping empty nuclei.
+    && test -d /root/nuclei-templates/http && test -d /home/sandbox/nuclei-templates/http
 
 # A tiny baked wordlist kept from the pre-Kali image so any command still referencing it
 # keeps working. For real work use /usr/share/seclists.

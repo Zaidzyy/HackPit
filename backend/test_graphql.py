@@ -264,6 +264,29 @@ def test_the_scan_plan_names_the_arguments_and_demands_recursion() -> None:
     print("  plan names 2 arguments, strips the query string, requires recurse: PASS")
 
 
+def test_impersonate_swaps_the_fetch_binary_to_curl_chrome116() -> None:
+    """The WAF fix: _curl_json fetches through curl_chrome116 (browser JA3) when impersonate is
+    set, so a Cloudflare-fronted /graph serves the request instead of 403-ing plain curl. Default
+    stays plain curl. Hermetic — subprocess is mocked, no docker/network."""
+    seen: dict = {}
+
+    class _P:
+        stdout = b'{"data":{}}\n__HACKPIT_GQL_STATUS__200'
+        stderr = b""
+        returncode = 0
+
+    orig = graphql_zap.subprocess.run
+    graphql_zap.subprocess.run = lambda argv, **k: (seen.__setitem__("argv", argv), _P())[1]
+    try:
+        graphql_zap._curl_json("c", "https://cf/graph", "{}", [], impersonate=False)
+        assert "curl" in seen["argv"] and "curl_chrome116" not in seen["argv"], seen["argv"]
+        graphql_zap._curl_json("c", "https://cf/graph", "{}", [], impersonate=True)
+        assert "curl_chrome116" in seen["argv"] and "curl" not in seen["argv"], seen["argv"]
+    finally:
+        graphql_zap.subprocess.run = orig
+    print("  _curl_json: impersonate -> curl_chrome116, default -> plain curl: PASS")
+
+
 if __name__ == "__main__":
     test_it_is_recognised_by_body_shape_not_by_path()
     test_every_envelope_shape_is_found()
@@ -279,4 +302,5 @@ if __name__ == "__main__":
     test_disabled_empty_and_broken_are_THREE_DIFFERENT_ANSWERS()
     test_a_real_schema_yields_fields_and_argument_names()
     test_the_scan_plan_names_the_arguments_and_demands_recursion()
+    test_impersonate_swaps_the_fetch_binary_to_curl_chrome116()
     print("ALL GraphQL tests pass")

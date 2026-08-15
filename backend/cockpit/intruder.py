@@ -167,6 +167,13 @@ class IntruderRequest(BaseModel):
     )
     follow_redirects: bool = False
     insecure: bool = False
+    impersonate: bool = Field(
+        False,
+        description="Send each payload as a real browser via curl-impersonate (curl_chrome116) to "
+        "get past a WAF that fingerprints the TLS handshake and 403s a plain client. The ffuf "
+        "'shape' shown for approval is a representation — the real sends are per-payload curl, "
+        "which this impersonates; ffuf bulk fuzzing itself cannot JA3-impersonate.",
+    )
     timeout_seconds: int | None = None
     delay_ms: int = Field(
         0, ge=0, le=60_000,
@@ -405,7 +412,7 @@ def _send_one(req: IntruderRequest, url: str, body: str, cookie_header: str) -> 
     argv = ["docker", "exec", "-i", *loot.exec_flags(loot.kali_workdir()),
             config.KALI_OPEN_CONTAINER,
             *repeater_mod._build_curl(probe, sentinel, url=url, has_body=bool(body),
-                                      cookie_header=cookie_header)]
+                                      cookie_header=cookie_header, impersonate=req.impersonate)]
     timeout = config.clamp_timeout(req.timeout_seconds) + 15
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,

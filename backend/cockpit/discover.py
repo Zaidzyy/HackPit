@@ -46,6 +46,7 @@ from __future__ import annotations
 import re
 import subprocess
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -154,6 +155,13 @@ class DiscoverRequest(BaseModel):
     rate_limit: int | None = Field(
         None, ge=1, le=100000, description="Requests/sec cap. Pacing, not a gate."
     )
+    impersonate: bool = Field(
+        False,
+        description="params/content: route the active tool (arjun/ffuf/feroxbuster) through the "
+        "in-sandbox JA3 MITM proxy so a Cloudflare/Akamai-fronted target serves a browser "
+        "handshake instead of 403-ing a plain fuzzer. Ignored for historical (paramspider is "
+        "passive/archive-based). Beats JA3, not a JS challenge.",
+    )
     timeout_seconds: int | None = None
     engagement_id: str | None = None
     session_id: str | None = None
@@ -250,8 +258,28 @@ class DiscoverRefused(RuntimeError):
 # --------------------------------------------------------------------------- #
 # PURE: argv builders — the commands a job is EQUIVALENT TO. Never a shell.
 # --------------------------------------------------------------------------- #
+#: The in-sandbox JA3 MITM proxy (impersonate-proxy, baked in the image) the active discovery
+#: tools route through when the operator ticks 'impersonate', so a Cloudflare/Akamai-fronted target
+#: serves them a browser handshake instead of 403-ing a plain fuzzer. Same host+port for all tools.
+IMPERSONATE_PROXY = "http://127.0.0.1:8899"
+
+
+def _impersonate_flags(tool: str) -> list[str]:
+    """Proxy flags that route ``tool`` through impersonate-proxy. The proxy presents its own MITM
+    cert, so a tool that verifies TLS is told to accept it (ffuf ignores cert errors already)."""
+    t = (tool or "").lower()
+    if t == "ffuf":
+        return ["-x", IMPERSONATE_PROXY]
+    if t == "feroxbuster":
+        return ["--proxy", IMPERSONATE_PROXY, "-k"]
+    if t == "arjun":
+        return ["--proxy", IMPERSONATE_PROXY]
+    return []
+
+
 def arjun_argv(
-    url: str, method: str, out_path: str, param_wordlist: str = "", rate_limit: int | None = None
+    url: str, method: str, out_path: str, param_wordlist: str = "", rate_limit: int | None = None,
+    impersonate: bool = False,
 ) -> list[str]:
     """arjun worker argv: probe ONE url for hidden params, JSON to a loot file (`-oJ`).
 
@@ -263,6 +291,8 @@ def arjun_argv(
         argv += ["-w", param_wordlist.strip()]
     if rate_limit:
         argv += ["--rate-limit", str(int(rate_limit))]
+    if impersonate:
+        argv += _impersonate_flags("arjun")
     return argv
 
 
@@ -282,7 +312,8 @@ def _fuzz_url(url: str) -> str:
 
 
 def ffuf_argv(
-    url: str, words_path: str, out_path: str, extensions: list[str], rate_limit: int | None = None
+    url: str, words_path: str, out_path: str, extensions: list[str], rate_limit: int | None = None,
+    impersonate: bool = False,
 ) -> list[str]:
     """ffuf worker argv: fuzz `FUZZ` in the url against a loot word file, JSON to a loot file."""
     argv = ["ffuf", "-u", _fuzz_url(url), "-w", words_path, "-mc", "all", "-o", out_path, "-of", "json"]
@@ -291,11 +322,14 @@ def ffuf_argv(
         argv += ["-e", "," .join("." + e for e in exts)]
     if rate_limit:
         argv += ["-rate", str(int(rate_limit))]
+    if impersonate:
+        argv += _impersonate_flags("ffuf")
     return argv
 
 
 def feroxbuster_argv(
-    url: str, words_path: str, out_path: str, extensions: list[str], rate_limit: int | None = None
+    url: str, words_path: str, out_path: str, extensions: list[str], rate_limit: int | None = None,
+    impersonate: bool = False,
 ) -> list[str]:
     """feroxbuster worker argv: recursive content discovery, JSONL to a loot file (`--json -o`)."""
     argv = ["feroxbuster", "-u", (url or "").strip(), "-w", words_path, "-d", "2",
@@ -305,6 +339,8 @@ def feroxbuster_argv(
         argv += ["-x", ",".join(exts)]
     if rate_limit:
         argv += ["--rate-limit", str(int(rate_limit))]
+    if impersonate:
+        argv += _impersonate_flags("feroxbuster")
     return argv
 
 
@@ -651,10 +687,16 @@ def _run(job_id: str, req: DiscoverRequest, record, workdir: str, mode: str,
     parsed = Parsed()
     last_text = ""
 
+    # Bring the JA3 MITM proxy up before an impersonated fuzz — the active tools route through it.
+    # paramspider (historical) is passive/archive-based, so it never needs the proxy.
+    if req.impersonate and mode in ("params", "content"):
+        _ensure_impersonate_proxy(config.ENGAGE_SANDBOX_CONTAINER)
+
     if mode == "params":
         out_name = f"discover-{job_id}-arjun.json"
         argv = arjun_argv((req.url or "").strip(), req.method,
-                          f"{loot.container_dir(eng_id)}/{out_name}", req.param_wordlist, req.rate_limit)
+                          f"{loot.container_dir(eng_id)}/{out_name}", req.param_wordlist,
+                          req.rate_limit, impersonate=req.impersonate)
         last_text = _spawn(job_id, argv, workdir, _timeout(req))
         file_text = _read_loot(eng_id, out_name)
         parsed.extend(parse_arjun(file_text or last_text, session_id, job_id))
@@ -669,7 +711,8 @@ def _run(job_id: str, req: DiscoverRequest, record, workdir: str, mode: str,
         out_name = f"discover-{job_id}-{'ferox' if tool == 'feroxbuster' else 'ffuf'}.json"
         out_path = f"{loot.container_dir(eng_id)}/{out_name}"
         builder = feroxbuster_argv if tool == "feroxbuster" else ffuf_argv
-        argv = builder((req.url or "").strip(), words_path, out_path, req.extensions, req.rate_limit)
+        argv = builder((req.url or "").strip(), words_path, out_path, req.extensions,
+                       req.rate_limit, impersonate=req.impersonate)
         last_text = _spawn(job_id, argv, workdir, _timeout(req) * 2)
         file_text = _read_loot(eng_id, out_name)
         p = parse_feroxbuster if tool == "feroxbuster" else parse_ffuf
@@ -709,6 +752,34 @@ def _run(job_id: str, req: DiscoverRequest, record, workdir: str, mode: str,
 # --------------------------------------------------------------------------- #
 def _timeout(req: DiscoverRequest) -> int:
     return config.clamp_timeout(req.timeout_seconds) * 3
+
+
+def _ensure_impersonate_proxy(container: str) -> None:
+    """Start impersonate-proxy in the sandbox if it isn't already up, then wait for it to bind 8899.
+
+    Idempotent + best-effort: a second launch just fails to bind and is ignored; a start failure
+    degrades to the tool going direct (and 403-ing), never a crashed job. Never raises."""
+    try:
+        subprocess.run(
+            ["docker", "exec", "-d", container, "sh", "-c",
+             "pgrep -f impersonate_proxy.py >/dev/null 2>&1 || "
+             "impersonate-proxy >/tmp/impersonate-proxy.log 2>&1"],
+            capture_output=True, timeout=15,
+        )
+    except Exception:  # noqa: BLE001 - a proxy start must never take the job down
+        return
+    for _ in range(20):  # mitmproxy takes ~1s to bind; wait up to 10s
+        try:
+            probe = subprocess.run(
+                ["docker", "exec", container, "sh", "-c",
+                 "ss -ltn 2>/dev/null | grep -q ':8899' && echo up"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if "up" in (probe.stdout or ""):
+                return
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(0.5)
 
 
 def _stopped(job_id: str) -> bool:

@@ -122,6 +122,7 @@ export function GraphQLPanel({
   engagementId?: string | null;
 }) {
   const [endpoint, setEndpoint] = useState("");
+  const [impersonate, setImpersonate] = useState(false);
   const [probe, setProbe] = useState<SchemaProbe | null>(null);
   const [probing, setProbing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -149,7 +150,7 @@ export function GraphQLPanel({
     setError(null);
     try {
       setProbe(
-        await probeGraphQLSchema(container ?? "", endpoint.trim(), [], engagementId ?? null)
+        await probeGraphQLSchema(container ?? "", endpoint.trim(), [], engagementId ?? null, impersonate)
       );
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
@@ -157,7 +158,7 @@ export function GraphQLPanel({
     } finally {
       setProbing(false);
     }
-  }, [container, endpoint, engagementId, probing]);
+  }, [container, endpoint, engagementId, impersonate, probing]);
 
   /** The wordlist as the operator typed it. Blank means the built-in list, whose NAME and SIZE
    *  come back in the result — a run that could not say which list produced a schema has not
@@ -178,6 +179,7 @@ export function GraphQLPanel({
           container: container ?? "",
           url: endpoint.trim(),
           engagement_id: engagementId ?? null,
+          impersonate,
         })
       );
     } catch (e) {
@@ -186,7 +188,7 @@ export function GraphQLPanel({
     } finally {
       setEnumerating(false);
     }
-  }, [container, endpoint, engagementId, enumerating]);
+  }, [container, endpoint, engagementId, impersonate, enumerating]);
 
   const runEnumerate = useCallback(async () => {
     if (!endpoint.trim() || enumerating) return;
@@ -198,6 +200,7 @@ export function GraphQLPanel({
         container: container ?? "",
         url: endpoint.trim(),
         engagement_id: engagementId ?? null,
+        impersonate,
         wordlist: custom,
         wordlist_name: custom.length ? "operator" : "",
         max_requests: Number(maxRequests) || 0,
@@ -211,7 +214,7 @@ export function GraphQLPanel({
     } finally {
       setEnumerating(false);
     }
-  }, [batchSize, container, endpoint, engagementId, enumerating, maxRequests, words]);
+  }, [batchSize, container, endpoint, engagementId, impersonate, enumerating, maxRequests, words]);
 
   const readBounds = useCallback(async () => {
     setError(null);
@@ -291,6 +294,17 @@ export function GraphQLPanel({
         <button type="button" onClick={readBounds} disabled={!container}>
           read ZAP&rsquo;s bounds
         </button>
+        <label
+          className="hp-tn-opt"
+          title="Fetch via curl-impersonate (curl_chrome116, browser JA3) to reach a Cloudflare/Akamai-fronted GraphQL endpoint that 403s a plain client. Applies to probe, fingerprint and enumerate."
+        >
+          <input
+            type="checkbox"
+            checked={impersonate}
+            onChange={(e) => setImpersonate(e.target.checked)}
+          />{" "}
+          impersonate browser (WAF bypass)
+        </label>
       </div>
 
       {error ? <p className="hp-tn-error">{error}</p> : null}

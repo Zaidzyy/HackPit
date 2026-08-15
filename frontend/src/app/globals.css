@@ -8815,6 +8815,7 @@ a.hp-card {
 .hp-rp-body { width: 100%; resize: vertical; box-sizing: border-box; }
 .hp-rp-opts { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 12px; }
 .hp-rp-opt { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
+.hp-tn-opt { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); cursor: pointer; }
 .hp-rp-eng { flex: 1 1 240px; min-width: 200px; }
 .hp-rp-error {
   margin-top: 10px; padding: 8px 10px; border-radius: 6px; font-size: 12px;

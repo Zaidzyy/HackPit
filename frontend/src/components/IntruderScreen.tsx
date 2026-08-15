@@ -44,6 +44,7 @@ function blankRequest(): IntruderRequest {
     shapes: [],
     follow_redirects: false,
     insecure: false,
+    impersonate: false,
     delay_ms: 0,
     engagement_id: null,
     session_id: null,
@@ -74,6 +75,7 @@ export function IntruderScreen() {
   const [delayMs, setDelayMs] = useState("0");
   const [engagementId, setEngagementId] = useState("");
   const [useJar, setUseJar] = useState(true);
+  const [impersonate, setImpersonate] = useState(false);
   const [approved, setApproved] = useState(false);
   const [ack, setAck] = useState(false);
   const [preview, setPreview] = useState<IntruderPreview | null>(null);
@@ -97,10 +99,11 @@ export function IntruderScreen() {
       engagement_id: engagementId.trim() || null,
       session_id: engagementId.trim() || null,
       use_cookie_jar: useJar,
+      impersonate,
       approved,
       dangerous_ack: ack,
     }),
-    [url, method, body, payloads, mode, shapes, delayMs, engagementId, useJar, approved, ack]
+    [url, method, body, payloads, mode, shapes, delayMs, engagementId, useJar, impersonate, approved, ack]
   );
 
   useEffect(() => {
@@ -254,6 +257,14 @@ export function IntruderScreen() {
                 onChange={(e) => setUseJar(e.target.checked)}
               />{" "}
               use the repeater&rsquo;s cookie jar
+            </label>
+            <label title="Send each payload as a real browser (curl-impersonate) to get past a WAF that fingerprints the TLS handshake. Note: ffuf bulk fuzzing can't impersonate — the per-payload curl sends do.">
+              <input
+                type="checkbox"
+                checked={impersonate}
+                onChange={(e) => setImpersonate(e.target.checked)}
+              />{" "}
+              impersonate browser (WAF bypass)
             </label>
             <input
               value={engagementId}

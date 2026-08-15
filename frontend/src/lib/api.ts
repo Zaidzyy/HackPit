@@ -1979,6 +1979,10 @@ export type RepeaterRequest = {
   follow_redirects: boolean;
   insecure: boolean;
   http2: boolean;
+  /** Send as a real browser via curl-impersonate (curl_chrome116) to get past a WAF that
+   *  fingerprints the TLS handshake. Deliberately adds browser headers, so the wire is no
+   *  longer byte-exact — opt in per request when the target is Cloudflare/Akamai-fronted. */
+  impersonate: boolean;
   timeout_seconds?: number | null;
   engagement_id?: string | null;
   session_id?: string | null;
@@ -2516,11 +2520,12 @@ export const probeGraphQLSchema = (
   url: string,
   headers: { name: string; value: string }[] = [],
   engagement_id?: string | null,
+  impersonate = false,
   signal?: AbortSignal
 ) =>
   postJSON<SchemaProbe>(
     "/cockpit/proxy/graphql/probe",
-    { container, url, headers, engagement_id: engagement_id ?? null },
+    { container, url, headers, engagement_id: engagement_id ?? null, impersonate },
     signal
   );
 
@@ -2836,6 +2841,7 @@ export const fingerprintGraphQLEngine = (
     url: string;
     headers?: RepeaterHeader[];
     engagement_id?: string | null;
+    impersonate?: boolean;
   },
   signal?: AbortSignal
 ) => postJSON<EngineFingerprint>("/cockpit/proxy/graphql/fingerprint", body, signal);
@@ -2846,6 +2852,7 @@ export const enumerateGraphQLSchema = (
     url: string;
     headers?: RepeaterHeader[];
     engagement_id?: string | null;
+    impersonate?: boolean;
     wordlist?: string[];
     wordlist_name?: string;
     max_requests?: number;
@@ -2957,6 +2964,10 @@ export type IntruderRequest = {
   shapes: string[];
   follow_redirects: boolean;
   insecure: boolean;
+  /** Send each payload as a real browser via curl-impersonate (curl_chrome116) to get past a
+   *  TLS-fingerprinting WAF. Note: ffuf bulk fuzzing can't impersonate — the per-payload curl
+   *  sends do. */
+  impersonate: boolean;
   delay_ms: number;
   engagement_id?: string | null;
   session_id?: string | null;
@@ -3771,6 +3782,10 @@ export type DiscoverRequest = {
   /** params: arjun -w wordlist path (blank = arjun's bundled list). */
   param_wordlist?: string;
   rate_limit?: number | null;
+  /** params/content: route the active tool through the in-sandbox JA3 MITM proxy so a
+   *  Cloudflare/Akamai-fronted target serves a browser handshake instead of 403-ing a plain
+   *  fuzzer. Ignored for historical (paramspider is passive). Beats JA3, not a JS challenge. */
+  impersonate?: boolean;
   timeout_seconds?: number | null;
   engagement_id?: string | null;
   session_id?: string | null;

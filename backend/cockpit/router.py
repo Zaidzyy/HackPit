@@ -892,8 +892,9 @@ def delete_repeater_session(engagement_id: str) -> dict[str, Any]:
 
 
 # --- :capture — the gated, HUMAN-ONLY host-bench launcher --------------------------- #
-# THE ONE SURFACE THAT RUNS A HOST COMMAND, NOT A SANDBOXED ONE. OFF by default (HACKPIT_HOST_BENCH),
-# never reachable by the orchestrator/loop, and it launches ONE fixed script with whitelisted argv.
+# THE ONE SURFACE THAT RUNS A HOST COMMAND, NOT A SANDBOXED ONE. ON by default (HACKPIT_HOST_BENCH=0
+# disables). The loop MAY propose it (the proposer executes nothing; the human approves and the
+# frontend routes the call here), and it launches ONE fixed script with whitelisted argv.
 @router.get("/bench/status")
 def bench_status() -> dict[str, Any]:
     """Whether the host-bench launcher is enabled + the current job (if any). Read-only."""

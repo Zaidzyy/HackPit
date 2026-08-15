@@ -478,7 +478,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#mobile-apps-are-first-class-in-the-scope-model-app-2026-08-15">Mobile apps are first-class in the scope model — app: (2026-08-15)</a></li>
 <li><a href="#authenticated-testing-in-cockpit-attach-the-operators-session-2026-08-15">Authenticated testing in-cockpit: attach the operator's session (2026-08-15)</a></li>
 <li><a href="#authenticated-automated-scanning-the-session-reaches-every-scan-surface-2026-08-15">Authenticated automated scanning — the session reaches every scan surface (2026-08-15)</a></li>
-<li><a href="#capture-a-gated-human-only-host-bench-launcher-2026-08-15">:capture — a gated, human-only host-bench launcher (2026-08-15)</a></li>
+<li><a href="#capture-a-host-bench-launcher-on-by-default-human-approved-2026-08-15">:capture — a host-bench launcher (on by default, human-approved) (2026-08-15)</a></li>
 <li><a href="#the-loop-can-invoke-hackpit-surfaces-not-just-raw-commands-2026-08-15">The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)</a></li>
 </ul>
 </li>
@@ -6523,22 +6523,35 @@ loop that keeps probing the surface. <code>test_authenticated_scanning.py</code>
 (auth header present when attached, token absent from every persisted argv); the three <code>_safety</code> suites
 still hold. The jsrecon half needed a <code>docker/js_mine.py</code> engine change (it now reads a <code>headers</code> field),
 so <strong>that surface's auth is live only after an image rebuild</strong> — nuclei/discover/intruder use standard
-tool flags and are live immediately.</p>
-<h2 id="capture-a-gated-human-only-host-bench-launcher-2026-08-15"><code>:capture</code> — a gated, human-only host-bench launcher (2026-08-15)</h2>
+tool flags and are live immediately. <strong>Verified live</strong> (2026-08-15) against the running stack: entering
+an engagement, attaching a session and starting a <code>nuclei</code> scan through the HTTP endpoint spawned a
+REAL job into the up sandbox whose argv carried the session as <code>-H</code> — with the token <strong>masked</strong> in the
+persisted record (the value never present).</p>
+<h2 id="capture-a-host-bench-launcher-on-by-default-human-approved-2026-08-15"><code>:capture</code> — a host-bench launcher (on by default, human-approved) (2026-08-15)</h2>
 <p>The mobile-capture bench was a host terminal script; <code>:capture</code> makes it one cockpit action — launch
 <code>tools/capture-bench.sh</code> (boot → install → cert → proxy), stream its output, and stop at the script's
 "log in now" pause. It is the ONE surface that runs a <strong>host</strong> command, not a sandboxed one (the
-emulator/adb/frida/KVM cannot live in the sandbox), so it is boxed three ways: <strong>(1) OFF BY DEFAULT</strong> —
-enabled only by <code>HACKPIT_HOST_BENCH=1</code> (the same opt-in shape as <code>HACKPIT_MCP_EXECUTE</code>), so the default
-build has zero host-exec capability and an audit of it finds none; <strong>(2) HUMAN-ONLY</strong> — like
-<code>:kali</code>/<code>run_kali</code>, the orchestrator/loop can never reach it (not in the invokable surface set, no
-reference in <code>orchestrator.py</code>, regression-locked); <strong>(3) a FIXED SCRIPT with WHITELISTED argv</strong> — it
-can launch only <code>capture-bench.sh</code>, its path/name args validated against an allowlist and passed as
-argv, never a shell string, so there is no injection and no second command it could run. Login and the
-capture-paste into <code>:repeater</code> stay human — this automates only the setup half. <code>cockpit/hostbench.py</code> +
-<code>GET/POST /cockpit/bench/{status,start,stop}</code> + a <code>:capture</code> screen; <code>test_hostbench_safety.py</code> locks
-off-by-default-refuses-and-spawns-nothing, the fixed-script/no-injection argv, and the
-orchestrator-cannot-invoke-it line.</p>
+emulator/adb/frida/KVM cannot live in the sandbox). <strong>A deliberate operator-posture note (2026-08-15):</strong>
+this shipped off-by-default and human-only, and the operator then chose to make host-exec <strong>on by
+default</strong> and to let the <strong>loop propose it</strong>. Both were explicit decisions; here is exactly what that
+leaves standing and what it removes.</p>
+<p>Removed by choice: the env gate is no longer the wall (<strong>on by default</strong>; <code>HACKPIT_HOST_BENCH=0</code> is now
+just a kill-switch), and the loop-can't-reach-it containment is relaxed — the loop MAY now propose
+<code>:capture</code> as a surface action. What still holds, and is what the safety now rests on:</p>
+<ul>
+<li><strong>The proposer executes nothing, and a human approves every launch.</strong> A loop proposal is just a
+  proposal; the human approves it and the FRONTEND routes the approved call to <code>/cockpit/bench/start</code>.
+  There is no backend path from the proposer to the launcher and no MCP tool — a human is always in
+  the loop before the bench boots.</li>
+<li><strong>A FIXED SCRIPT with WHITELISTED argv.</strong> It can launch only <code>capture-bench.sh</code>; path/name args are
+  validated against an allowlist and passed as argv, never a shell string — no injection, no second
+  command it could run. This is now the primary hard constraint, and it does not depend on any flag.</li>
+</ul>
+<p><code>cockpit/hostbench.py</code> + <code>GET/POST /cockpit/bench/{status,start,stop}</code> + a <code>:capture</code> screen + the
+<code>capture</code> surface in the loop's contract. <code>test_hostbench_safety.py</code> locks: <strong>on by default</strong> +
+<code>HACKPIT_HOST_BENCH=0</code> refuses-and-spawns-nothing, the fixed-script/no-injection argv, and the
+proposer-executes-nothing line (the loop may name <code>capture</code>, but <code>orchestrator.py</code> never imports or
+calls the launcher).</p>
 <h2 id="the-loop-can-invoke-hackpit-surfaces-not-just-raw-commands-2026-08-15">The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)</h2>
 <p>The orchestrator proposed ONE raw command at a time — so it could run the underlying engines
 (<code>curl_chrome116</code>, <code>ffuf</code>, <code>nuclei</code>, <code>js-mine</code>) but never HackPit's own wrapped SURFACES, which add

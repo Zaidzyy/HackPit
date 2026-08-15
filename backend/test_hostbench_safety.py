@@ -2,8 +2,8 @@
 
 The host-bench is the ONE surface that runs a HOST command, not a sandboxed one, so it is boxed:
 
-  1. OFF BY DEFAULT. With HACKPIT_HOST_BENCH unset, start() REFUSES and nothing spawns — the backend
-     has zero host-exec capability in the default build.
+  1. ON BY DEFAULT (operator's standing choice) — unset => enabled. The kill-switch
+     HACKPIT_HOST_BENCH=0 disables it: start() then REFUSES and nothing spawns.
   2. FIXED SCRIPT + WHITELISTED ARGV. bench_argv() always yields `bash <tools/capture-bench.sh> …`;
      an arg carrying a shell metacharacter is REFUSED. It can launch only that one known script.
   3. HUMAN-ONLY. The orchestrator/loop cannot reach it — no surface-proposal name, no reference in
@@ -30,8 +30,15 @@ def _with_env(value: str | None):
     return prev
 
 
-def test_off_by_default_refuses_and_spawns_nothing() -> None:
-    prev = _with_env(None)  # ensure unset
+def test_on_by_default_and_kill_switch_refuses_and_spawns_nothing() -> None:
+    # ON by default: unset => enabled. (We do NOT call start() here — enabled, it would really spawn.)
+    prev = _with_env(None)
+    try:
+        assert hostbench.enabled() is True
+    finally:
+        _with_env(prev)
+    # kill-switch: HACKPIT_HOST_BENCH=0 disables -> start() refuses, nothing spawns.
+    prev = _with_env("0")
     try:
         assert hostbench.enabled() is False
         try:
@@ -39,13 +46,12 @@ def test_off_by_default_refuses_and_spawns_nothing() -> None:
         except hostbench.BenchRefused:
             pass
         else:
-            raise AssertionError("start() must refuse when the env flag is unset")
-        # the refusal happens BEFORE any spawn, so no job/process was created
-        assert hostbench.status()["job"] is None
+            raise AssertionError("start() must refuse when disabled via HACKPIT_HOST_BENCH=0")
+        assert hostbench.status()["job"] is None  # refusal is BEFORE any spawn
         assert hostbench.status()["enabled"] is False
     finally:
         _with_env(prev)
-    print("  OFF by default: start() refuses, nothing spawns: PASS")
+    print("  ON by default; HACKPIT_HOST_BENCH=0 disables -> start refuses, nothing spawns: PASS")
 
 
 def test_bench_argv_is_the_one_fixed_script() -> None:
@@ -69,20 +75,21 @@ def test_injection_in_args_is_refused() -> None:
     print("  an arg carrying a shell metacharacter is refused (no injection): PASS")
 
 
-def test_orchestrator_cannot_invoke_the_host_bench() -> None:
-    # the loop's invokable surfaces must NOT include the host bench
-    assert "bench" not in orchestrator._SURFACE_NAMES, orchestrator._SURFACE_NAMES
-    assert "capture" not in orchestrator._SURFACE_NAMES
-    # and the orchestrator source must not reference it at all
+def test_loop_may_propose_capture_but_the_proposer_executes_nothing() -> None:
+    # Operator's standing choice: the loop MAY propose :capture as a surface action.
+    assert "capture" in orchestrator._SURFACE_NAMES, orchestrator._SURFACE_NAMES
+    # But the proposer still EXECUTES NOTHING — it emits a proposal; the human approves it and the
+    # frontend routes the approved call to the gated /cockpit/bench/start. The orchestrator must
+    # never import or call the host-bench itself (proposer-executes-nothing holds even here).
     src = Path(orchestrator.__file__).read_text(encoding="utf-8")
-    for needle in ("hostbench", "bench_argv", "/bench/start", "capture-bench"):
-        assert needle not in src, f"orchestrator must not reference {needle!r}"
-    print("  HUMAN-ONLY: the orchestrator/loop cannot reach the host bench: PASS")
+    for needle in ("hostbench", "bench_argv", "hostbench.start", "/bench/start"):
+        assert needle not in src, f"the PROPOSER must not execute the host bench ({needle})"
+    print("  loop may PROPOSE :capture; the proposer executes nothing (human-approved frontend does): PASS")
 
 
 if __name__ == "__main__":
-    test_off_by_default_refuses_and_spawns_nothing()
+    test_on_by_default_and_kill_switch_refuses_and_spawns_nothing()
     test_bench_argv_is_the_one_fixed_script()
     test_injection_in_args_is_refused()
-    test_orchestrator_cannot_invoke_the_host_bench()
+    test_loop_may_propose_capture_but_the_proposer_executes_nothing()
     print("host-bench safety: all invariants hold.")

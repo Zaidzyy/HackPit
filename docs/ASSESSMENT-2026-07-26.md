@@ -6471,24 +6471,38 @@ loop that keeps probing the surface. `test_authenticated_scanning.py` locks the 
 (auth header present when attached, token absent from every persisted argv); the three `_safety` suites
 still hold. The jsrecon half needed a `docker/js_mine.py` engine change (it now reads a `headers` field),
 so **that surface's auth is live only after an image rebuild** — nuclei/discover/intruder use standard
-tool flags and are live immediately.
+tool flags and are live immediately. **Verified live** (2026-08-15) against the running stack: entering
+an engagement, attaching a session and starting a `nuclei` scan through the HTTP endpoint spawned a
+REAL job into the up sandbox whose argv carried the session as `-H` — with the token **masked** in the
+persisted record (the value never present).
 
-## `:capture` — a gated, human-only host-bench launcher (2026-08-15)
+## `:capture` — a host-bench launcher (on by default, human-approved) (2026-08-15)
 
 The mobile-capture bench was a host terminal script; `:capture` makes it one cockpit action — launch
 `tools/capture-bench.sh` (boot → install → cert → proxy), stream its output, and stop at the script's
 "log in now" pause. It is the ONE surface that runs a **host** command, not a sandboxed one (the
-emulator/adb/frida/KVM cannot live in the sandbox), so it is boxed three ways: **(1) OFF BY DEFAULT** —
-enabled only by `HACKPIT_HOST_BENCH=1` (the same opt-in shape as `HACKPIT_MCP_EXECUTE`), so the default
-build has zero host-exec capability and an audit of it finds none; **(2) HUMAN-ONLY** — like
-`:kali`/`run_kali`, the orchestrator/loop can never reach it (not in the invokable surface set, no
-reference in `orchestrator.py`, regression-locked); **(3) a FIXED SCRIPT with WHITELISTED argv** — it
-can launch only `capture-bench.sh`, its path/name args validated against an allowlist and passed as
-argv, never a shell string, so there is no injection and no second command it could run. Login and the
-capture-paste into `:repeater` stay human — this automates only the setup half. `cockpit/hostbench.py` +
-`GET/POST /cockpit/bench/{status,start,stop}` + a `:capture` screen; `test_hostbench_safety.py` locks
-off-by-default-refuses-and-spawns-nothing, the fixed-script/no-injection argv, and the
-orchestrator-cannot-invoke-it line.
+emulator/adb/frida/KVM cannot live in the sandbox). **A deliberate operator-posture note (2026-08-15):**
+this shipped off-by-default and human-only, and the operator then chose to make host-exec **on by
+default** and to let the **loop propose it**. Both were explicit decisions; here is exactly what that
+leaves standing and what it removes.
+
+Removed by choice: the env gate is no longer the wall (**on by default**; `HACKPIT_HOST_BENCH=0` is now
+just a kill-switch), and the loop-can't-reach-it containment is relaxed — the loop MAY now propose
+`:capture` as a surface action. What still holds, and is what the safety now rests on:
+
+* **The proposer executes nothing, and a human approves every launch.** A loop proposal is just a
+  proposal; the human approves it and the FRONTEND routes the approved call to `/cockpit/bench/start`.
+  There is no backend path from the proposer to the launcher and no MCP tool — a human is always in
+  the loop before the bench boots.
+* **A FIXED SCRIPT with WHITELISTED argv.** It can launch only `capture-bench.sh`; path/name args are
+  validated against an allowlist and passed as argv, never a shell string — no injection, no second
+  command it could run. This is now the primary hard constraint, and it does not depend on any flag.
+
+`cockpit/hostbench.py` + `GET/POST /cockpit/bench/{status,start,stop}` + a `:capture` screen + the
+`capture` surface in the loop's contract. `test_hostbench_safety.py` locks: **on by default** +
+`HACKPIT_HOST_BENCH=0` refuses-and-spawns-nothing, the fixed-script/no-injection argv, and the
+proposer-executes-nothing line (the loop may name `capture`, but `orchestrator.py` never imports or
+calls the launcher).
 
 ## The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)
 

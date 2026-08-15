@@ -289,6 +289,21 @@ The bug-bounty staple, wired the HackPit way. Point **nuclei's** template engine
 
 > One approval buys the whole scan; results land severity-ranked in `:cockpit` state and the report. Above, a real run against the lab surfaced a medium Prometheus-metrics exposure plus tech-fingerprint and Swagger findings — each deduped and upserted as an engagement finding.
 
+### 🔐 Authenticated testing — session-attach, authenticated scans & mobile capture
+
+Most real bugs live **behind auth**, so HackPit tests authenticated end to end. You log in yourself (login stays human), hand the cockpit the session — parsed from a captured request via **`:repeater` import**, with a **two-account diff** that deterministically pins which header is the shared app key vs. the **per-user session token** — and it is stored **in memory only, masked**, on the engagement. From there, **every scan surface runs _as the logged-in operator_**: tick **attach session** and `nuclei`, `arjun`/`ffuf`/`feroxbuster` (discovery), `js-mine` (JS recon) and the `intruder` all carry the session (`-H`, `--headers`, or the engine's stdin spec). The token is **masked in every job record** — it reaches only the exec — and a **typed header always wins** over the attached one. The orchestrator loop can *propose* an authenticated sweep, but it never holds the secret.
+
+<p align="center">
+  <img src="assets/screenshots/48-nuclei-authenticated.png" alt="The nuclei surface with the 'attach session — scan as the logged-in operator' toggle; the scan carries the engagement's stored session as -H, masked in the job record" width="49%">
+  <img src="assets/screenshots/49-intruder-authenticated.png" alt="The intruder surface with the 'attach session (authenticated)' toggle beside the cookie-jar and impersonate options; every payload send goes out as the logged-in operator" width="49%">
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/50-recon-discovery.png" alt="The recon / discovery surface — parameter and content discovery run as approved jobs, with authenticated discovery available per tool" width="80%">
+</p>
+
+> **`:capture`** turns the mobile-capture bench into one cockpit action — boot the emulator, install the app, trust the proxy cert, point the device at mitmproxy, then stop at *"log in now."* It is the **one surface that runs a host command** (the emulator can't live in the sandbox), and the safety rests on two things that don't move: a **human approves every launch** (the loop may _propose_ it, but the proposer executes nothing — the approved call is routed to the gated endpoint), and it launches **one fixed script with whitelisted argv** — no injection, no second command. It is on by default (`HACKPIT_HOST_BENCH=0` is the kill-switch). The capture-paste back into `:repeater` stays human; the bench just makes the setup one click.
+
 ### Out-of-band callbacks
 
 Blind vulnerabilities (SSRF, blind XXE, some RCE) only prove themselves with a callback. HackPit gives you **two backends at once**: a self-hosted **OOB canary** and a zero-infrastructure **interact.sh** session — mint a payload URL, then watch DNS/HTTP interactions land, decrypted and correlated.

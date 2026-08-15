@@ -75,15 +75,15 @@ export function CaptureScreen() {
     <PageShell crumbs={[{ label: "cockpit", href: "/cockpit" }, { label: "capture" }]}>
       <div className="hp-tn">
         <header className="hp-tn-head">
-          <div className="hp-ap-kicker">host bench · human-only · off by default</div>
+          <div className="hp-ap-kicker">host bench · human-approved · on by default</div>
           <h1 className="hp-tn-title">:capture</h1>
           <p className="hp-tn-sub">
             Launch the mobile-capture bench <strong>on the host</strong> from cockpit — boot the
             emulator, install the app, trust the proxy cert, point the device at mitmproxy — then it
             stops and asks you to <strong>log in</strong>. Grab the request in mitmweb and paste it
             into <Link href="/repeater">:repeater</Link> import. This is the one surface that runs a{" "}
-            <strong>host</strong> command, so it is <strong>off by default</strong>, human-only, and
-            launches one fixed script.
+            <strong>host</strong> command; it is <strong>on by default</strong>, a human approves each
+            launch, and it runs only one fixed script.
           </p>
         </header>
 
@@ -92,11 +92,10 @@ export function CaptureScreen() {
         {!enabled ? (
           <section className="hp-tn-card">
             <p className="hp-tn-note">
-              The host-bench launcher is <strong>OFF</strong>. It runs a command on your host (the
-              emulator can&rsquo;t live in the sandbox), so it is opt-in — the backend has no
-              host-exec capability until you enable it. Start the backend with{" "}
-              <code>{status?.enable_env ?? "HACKPIT_HOST_BENCH"}=1</code> to turn it on. Everything
-              here is otherwise inert.
+              The host-bench launcher is <strong>disabled</strong>. It is <strong>on by default</strong>,
+              but the backend was started with the kill-switch{" "}
+              <code>{status?.enable_env ?? "HACKPIT_HOST_BENCH"}=0</code>. Remove that (or set it to{" "}
+              <code>1</code>) and restart the backend to re-enable it. Everything here is otherwise inert.
             </p>
           </section>
         ) : (

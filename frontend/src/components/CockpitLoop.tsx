@@ -8,6 +8,7 @@ import {
   loopPropose,
   submitLoopAnswer,
   startReconActive,
+  startBench,
   startDiscover,
   startJsRecon,
   startNucleiScan,
@@ -347,6 +348,17 @@ export function CockpitLoop({
           use_cookie_jar: true,
           attach_session: Boolean(p.attach_session),
           ...ids,
+        });
+        break;
+      case "capture":
+        // Host mobile-capture bench — the human approves this proposal (as with every surface),
+        // then the frontend routes it to the gated /cockpit/bench/start; the proposer runs nothing.
+        call = startBench({
+          apk: str(p.apk) || undefined,
+          pkg: str(p.pkg) || undefined,
+          avd: str(p.avd) || undefined,
+          port: typeof p.port === "number" ? p.port : 8080,
+          frida: Boolean(p.frida),
         });
         break;
       default:

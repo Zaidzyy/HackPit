@@ -232,7 +232,7 @@ def _ask_proposal(
 #: HackPit surfaces the loop may invoke as a first-class action (v1 = the job-style,
 #: state-ingesting recon/scan surfaces). The FRONTEND routes an APPROVED surface call to that
 #: surface's own gated endpoint; the proposer still executes nothing.
-_SURFACE_NAMES = {"recon", "discover", "jsrecon", "nuclei", "repeater", "intruder"}
+_SURFACE_NAMES = {"recon", "discover", "jsrecon", "nuclei", "repeater", "intruder", "capture"}
 
 _SURFACE_CONTRACT = (
     "\nRUN A HACKPIT SURFACE — instead of a raw command you MAY propose a first-class HackPit "
@@ -260,6 +260,11 @@ _SURFACE_CONTRACT = (
     '  - "intruder": fuzz ONE request across a payload set (one marked position). params: {"url": '
     '"<in-scope url; put FUZZ where the payload goes>", "method": "…", "headers": [..], "body": '
     '"…", "payloads": ["..",".."], "mode": "sniper|battering-ram", "impersonate": <bool>}.\n'
+    '  - "capture": launch the HOST mobile-capture bench (boot emulator -> install app -> trust the '
+    'proxy cert -> point the device at mitmproxy), which then STOPS for the operator to LOG IN. '
+    'params: {"apk": "<bundle path>", "pkg": "<app match, e.g. fishbowl>", "avd": "<name>", "port": '
+    '<mitm port>, "frida": <true only for a pinned app>}. Propose it when the target is a mobile app '
+    'and no capture exists yet — the human approves it and logs in; you never hold a session.\n'
     'AUTHENTICATED: discover / jsrecon / nuclei / repeater / intruder accept "attach_session": true '
     "to run AS the logged-in operator — the engagement's stored session (saved by the operator in "
     ":repeater) is merged in, so endpoints behind login are actually tested. Most bounty bugs live "

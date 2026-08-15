@@ -4,12 +4,15 @@
 ``docker exec``s into a sandbox; the capture bench needs the host's emulator / adb / frida / KVM,
 which the sandbox does not have. Because it shells out to the host, it is boxed in three ways:
 
-  * OFF BY DEFAULT. Enabled only when ``HACKPIT_HOST_BENCH=1`` (the same opt-in shape as
-    ``HACKPIT_MCP_EXECUTE``). With it unset, :func:`start` refuses and NOTHING spawns — the backend
-    has ZERO host-exec capability by default, so an audit of the default build finds none.
-  * HUMAN-ONLY. Like ``:kali`` / ``run_kali``, the orchestrator/loop can NEVER reach this: there is
-    no surface-proposal kind and no MCP tool for it. A human clicks the button; that is the only
-    caller. ``test_hostbench_safety`` asserts the orchestrator cannot invoke it.
+  * ON BY DEFAULT — the operator's standing choice (host-exec always available). The kill-switch is
+    ``HACKPIT_HOST_BENCH=0`` (or false/no/off), which makes :func:`start` refuse and spawn NOTHING.
+    Note the posture: the env flag is no longer the wall — the two guardrails BELOW are, and they do
+    not depend on it.
+  * PROPOSER EXECUTES NOTHING + A HUMAN APPROVES. The loop MAY propose ``:capture`` as a surface
+    action (the operator's standing choice), but the proposer RUNS NOTHING — it emits a proposal the
+    human approves, and the FRONTEND routes that approved call to the gated ``/cockpit/bench/start``.
+    There is no MCP tool and no backend path from the proposer to this launcher, so a human always
+    approves before the bench boots. ``test_hostbench_safety`` locks the proposer-executes-nothing line.
   * A FIXED SCRIPT with WHITELISTED args — not a host shell. It runs exactly
     ``bash tools/capture-bench.sh`` with a validated arg set, passed as ARGV (never a shell string),
     so there is no injection and it can launch only that one known script.
@@ -35,8 +38,9 @@ from pydantic import BaseModel, Field
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BENCH = _REPO_ROOT / "tools" / "capture-bench.sh"
 
-#: The env flag that turns the host-bench launcher ON. OFF (unset) is the default and the audit-safe
-#: state: with it unset the backend cannot run a host command at all.
+#: The env flag. The launcher is ON BY DEFAULT (operator's standing choice); this flag is the
+#: kill-switch — set it to 0/false/no/off to disable. The real safety is the human-only + fixed-script
+#: constraints, which hold regardless of this flag.
 ENABLE_ENV = "HACKPIT_HOST_BENCH"
 
 #: A conservative allowlist for the operator-supplied path / name args. Blocks every shell
@@ -46,7 +50,9 @@ _SAFE = re.compile(r"^[A-Za-z0-9 ._:/\\()+-]*$")
 
 
 def enabled() -> bool:
-    return os.environ.get(ENABLE_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+    """ON by default (the operator's standing choice) — the host-bench endpoint is always live.
+    Disabled only when HACKPIT_HOST_BENCH is explicitly 0/false/no/off."""
+    return os.environ.get(ENABLE_ENV, "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 class BenchStartRequest(BaseModel):

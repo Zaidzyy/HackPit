@@ -483,6 +483,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#egress-control-a-rotating-attributable-source-ip-so-one-ban-doesnt-strand-the-engagement-2026-08-15">Egress control — a rotating, attributable source IP so one ban doesn't strand the engagement (2026-08-15)</a></li>
 <li><a href="#autonomy-modes-the-auto-runner-spine-manual-assisted-full-2026-08-15">Autonomy modes — the auto-runner spine (manual / assisted / full) (2026-08-15)</a></li>
 <li><a href="#continuous-hunting-being-first-to-see-a-new-asset-2026-08-15">Continuous hunting — being first to see a new asset (2026-08-15)</a></li>
+<li><a href="#the-autonomy-cockpit-driving-all-of-it-from-the-ui-2026-08-15">The autonomy cockpit — driving all of it from the UI (2026-08-15)</a></li>
 </ul>
 </li>
 </ul>
@@ -6696,7 +6697,29 @@ new the first time" is noise); after that only genuine deltas alert. It is <stro
 what recon/scan already ingested and writes only its own snapshot + alert rows, fires nothing, and
 imports no execution surface (an AST test asserts as much). Alerts are read at
 <code>GET /cockpit/watch/{id}</code>. <code>test_watch_diff.py</code> locks the silent-baseline → diff+alert → no-change
-lifecycle and the read-only-imports invariant. <em>Still ahead: the frontend (3-way toggle, decision
-queue, live feed, egress + RoE fields, new-asset alerts) and container-level egress routing.</em></p>
+lifecycle and the read-only-imports invariant.</p>
+<h2 id="the-autonomy-cockpit-driving-all-of-it-from-the-ui-2026-08-15">The autonomy cockpit — driving all of it from the UI (2026-08-15)</h2>
+<p><code>CockpitAutonomyPanel.tsx</code> (mounted in the engagement screen) is the operator's single surface for
+the whole build: the <strong>3-way mode toggle</strong> (manual/assisted/full, <code>POST /cockpit/engagement/autonomy</code>),
+the <strong>scheduler toggle + interval</strong> (<code>GET/POST /cockpit/autorun</code>), the <strong>egress pool + identify
+header</strong> (write-only, <code>POST /cockpit/engagement/egress</code>), the <strong>continuous-hunting new-asset alerts</strong>
+(<code>GET /cockpit/watch/{id}</code>) and the <strong>auto-runner activity feed</strong> (<code>GET /cockpit/autorun/audit</code>). It
+makes the two-switch safety story visible: a prominent line reads "⚠ FIRING AUTONOMOUSLY" only when
+the engagement mode is non-manual AND the scheduler is on, and "one is off" otherwise — the operator
+can always see whether anything can run without them. The pool field is write-only (never echoed
+back; the panel shows only the size + identify NAME). tsc 0, lint at the accepted baseline (11),
+build 0.</p>
+<p><strong>Live-verified end-to-end (2026-08-15)</strong> against the running stack: entering an engagement, the
+mode toggle round-trips (manual↔assisted↔full, the "⚠ FIRING AUTONOMOUSLY" line appearing only when
+mode≠manual AND the scheduler is on), the scheduler toggle flips the daemon and its kill-switch, and
+<code>GET /engagement/{id}/egress</code> returns the pool SIZE + identify NAME with the credentialled URLs never
+present in the body. The live check caught and fixed two defects a green build could not see: the
+scheduler POST returned only <code>{enabled, interval}</code> (the UI showed "min undefined") — both <code>/autorun</code>
+verbs now return the full status; and the panel's number/text fields wore <code>hp-ck-field</code>/<code>hp-ck-args</code>,
+which are WRAPPER classes whose CSS targets a child <code>input</code> — put on the element directly they
+mis-laid the fields out (a raised interval number), fixed with explicit inline styles matching
+<code>.hp-ck-field input</code>. <em>Still ahead: a durable decision-queue store + approve-from-queue UI (queued
+items are visible in the activity feed but re-firing one is not yet wired), and container-level
+egress routing.</em></p>
 </body>
 </html>

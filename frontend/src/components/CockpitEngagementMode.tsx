@@ -14,6 +14,7 @@ import {
   type FrontingSweep,
 } from "@/lib/api";
 import { CockpitLoop } from "./CockpitLoop";
+import { CockpitAutonomyPanel } from "./CockpitAutonomyPanel";
 
 /**
  * REAL-TARGET engagement mode — the SUPERVISED, highest-risk surface.
@@ -431,6 +432,11 @@ export function CockpitEngagementMode({
           </div>
         )}
       </section>
+
+      {/* ---- AUTONOMY: the auto-runner mode, scheduler, egress + continuous-hunting alerts.
+          Self-contained; refreshes the engagement record on a mode change so the header reflects
+          the new autonomy_mode. */}
+      <CockpitAutonomyPanel active={active} onModeChanged={() => refresh()} />
 
       {/* ---- IS IT CDN-FRONTED? (build #18 item 2) ---------------------------------------
           It sits next to the scope because the scope is its input. Build #17 measured that an

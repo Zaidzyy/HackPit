@@ -6661,5 +6661,30 @@ new the first time" is noise); after that only genuine deltas alert. It is **rea
 what recon/scan already ingested and writes only its own snapshot + alert rows, fires nothing, and
 imports no execution surface (an AST test asserts as much). Alerts are read at
 `GET /cockpit/watch/{id}`. `test_watch_diff.py` locks the silent-baseline → diff+alert → no-change
-lifecycle and the read-only-imports invariant. *Still ahead: the frontend (3-way toggle, decision
-queue, live feed, egress + RoE fields, new-asset alerts) and container-level egress routing.*
+lifecycle and the read-only-imports invariant.
+
+## The autonomy cockpit — driving all of it from the UI (2026-08-15)
+
+`CockpitAutonomyPanel.tsx` (mounted in the engagement screen) is the operator's single surface for
+the whole build: the **3-way mode toggle** (manual/assisted/full, `POST /cockpit/engagement/autonomy`),
+the **scheduler toggle + interval** (`GET/POST /cockpit/autorun`), the **egress pool + identify
+header** (write-only, `POST /cockpit/engagement/egress`), the **continuous-hunting new-asset alerts**
+(`GET /cockpit/watch/{id}`) and the **auto-runner activity feed** (`GET /cockpit/autorun/audit`). It
+makes the two-switch safety story visible: a prominent line reads "⚠ FIRING AUTONOMOUSLY" only when
+the engagement mode is non-manual AND the scheduler is on, and "one is off" otherwise — the operator
+can always see whether anything can run without them. The pool field is write-only (never echoed
+back; the panel shows only the size + identify NAME). tsc 0, lint at the accepted baseline (11),
+build 0.
+
+**Live-verified end-to-end (2026-08-15)** against the running stack: entering an engagement, the
+mode toggle round-trips (manual↔assisted↔full, the "⚠ FIRING AUTONOMOUSLY" line appearing only when
+mode≠manual AND the scheduler is on), the scheduler toggle flips the daemon and its kill-switch, and
+`GET /engagement/{id}/egress` returns the pool SIZE + identify NAME with the credentialled URLs never
+present in the body. The live check caught and fixed two defects a green build could not see: the
+scheduler POST returned only `{enabled, interval}` (the UI showed "min undefined") — both `/autorun`
+verbs now return the full status; and the panel's number/text fields wore `hp-ck-field`/`hp-ck-args`,
+which are WRAPPER classes whose CSS targets a child `input` — put on the element directly they
+mis-laid the fields out (a raised interval number), fixed with explicit inline styles matching
+`.hp-ck-field input`. *Still ahead: a durable decision-queue store + approve-from-queue UI (queued
+items are visible in the activity feed but re-firing one is not yet wired), and container-level
+egress routing.*

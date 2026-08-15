@@ -3066,18 +3066,9 @@ class AutorunToggleIn(BaseModel):
     interval: int = Field(60, ge=1, description="Seconds between cycles; floored at the daemon's MIN_INTERVAL.")
 
 
-@router.post("/autorun")
-def set_autorun(req: AutorunToggleIn) -> dict[str, Any]:
-    """Enable/disable the scheduler + set its interval. Even enabled, it only steps engagements
-    whose autonomy_mode is assisted/full — a manual engagement is never stepped."""
-    from . import autoloop
-
-    return autoloop.set_settings(req.enabled, req.interval)
-
-
-@router.get("/autorun")
-def get_autorun() -> dict[str, Any]:
-    """The scheduler's toggle + interval, and which active engagements it would step (assisted/full)."""
+def _autorun_status() -> dict[str, Any]:
+    """The full scheduler status — returned by BOTH the GET and the toggle POST so the UI never
+    loses a field (a POST that returned only {enabled, interval} once showed '(min undefined)')."""
     from . import autoloop
 
     return {
@@ -3088,6 +3079,23 @@ def get_autorun() -> dict[str, Any]:
     }
 
 
+@router.post("/autorun")
+def set_autorun(req: AutorunToggleIn) -> dict[str, Any]:
+    """Enable/disable the scheduler + set its interval. Even enabled, it only steps engagements
+    whose autonomy_mode is assisted/full — a manual engagement is never stepped. Returns the FULL
+    status (same shape as GET)."""
+    from . import autoloop
+
+    autoloop.set_settings(req.enabled, req.interval)
+    return _autorun_status()
+
+
+@router.get("/autorun")
+def get_autorun() -> dict[str, Any]:
+    """The scheduler's toggle + interval, and which active engagements it would step (assisted/full)."""
+    return _autorun_status()
+
+
 @router.get("/watch/{engagement_id}")
 def get_watch(engagement_id: str, limit: int = 50) -> dict[str, Any]:
     """Continuous-hunting NEW-ASSET alerts for an engagement (newest first) — subdomains/hosts/
@@ -3095,6 +3103,18 @@ def get_watch(engagement_id: str, limit: int = 50) -> dict[str, Any]:
     from . import watch
 
     return {"engagement_id": engagement_id, "alerts": watch.alerts(engagement_id, limit)}
+
+
+@router.get("/autorun/audit")
+def get_autorun_audit(engagement_id: str = "", limit: int = 50) -> dict[str, Any]:
+    """The auto-runner's append-only activity — what it FIRED and QUEUED, newest first, optionally
+    filtered to one engagement. Read-only (secrets already stripped at write time)."""
+    from . import autoaudit
+
+    rows = autoaudit.read_all()
+    if engagement_id:
+        rows = [r for r in rows if r.get("engagement_id") == engagement_id]
+    return {"engagement_id": engagement_id, "entries": list(reversed(rows))[: max(1, int(limit))]}
 
 
 @router.post("/proxy/bypass-headers")

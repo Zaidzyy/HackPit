@@ -1244,6 +1244,9 @@ export type EngagementRecord = {
   entered_at: string;
   exited_at: string | null;
   session_id: string | null;
+  /** The auto-runner mode: 'manual' (default, human drives), 'assisted' (passive auto-fires,
+   *  exploitation queued), or 'full' (everything auto-fires, bounded by RoE/scope/budget). */
+  autonomy_mode: AutonomyMode;
   /** The authorized PROGRAM SCOPE, exactly as the operator wrote it. */
   scope: string;
   /** IN-SCOPE patterns (exact hosts, *.wildcards, CIDRs). */
@@ -1311,6 +1314,98 @@ export const exitEngagement = (engagementId: string, signal?: AbortSignal) =>
   postJSON<{ engagement_id: string; exited: boolean }>(
     `/cockpit/engagement/${encodeURIComponent(engagementId)}/exit`,
     {},
+    signal
+  );
+
+/* ---------------------------------------------------------------------------
+ * AUTONOMY — the auto-runner (modes manual/assisted/full), the scheduler toggle,
+ * egress control, and continuous-hunting alerts. See ASSESSMENT "Autonomy modes".
+ * ------------------------------------------------------------------------- */
+
+export type AutonomyMode = "manual" | "assisted" | "full";
+
+/** Set how much the auto-runner may do without a per-command human approval on this engagement. */
+export const setAutonomyMode = (
+  engagementId: string,
+  mode: AutonomyMode,
+  signal?: AbortSignal
+) =>
+  postJSON<{ engagement_id: string; autonomy_mode: AutonomyMode }>(
+    "/cockpit/engagement/autonomy",
+    { engagement_id: engagementId, mode },
+    signal
+  );
+
+export type AutorunStatus = {
+  enabled: boolean;
+  interval: number;
+  min_interval: number;
+  steps_per_tick: number;
+  autonomous_engagements: string[];
+};
+
+/** The scheduler daemon's toggle + interval + which engagements it would step (assisted/full). */
+export const getAutorun = (signal?: AbortSignal) =>
+  getJSON<AutorunStatus>("/cockpit/autorun", signal);
+
+/** Enable/disable the scheduler daemon (off = kill-switch) and set its interval (floored). */
+export const setAutorun = (enabled: boolean, interval: number, signal?: AbortSignal) =>
+  postJSON<AutorunStatus>("/cockpit/autorun", { enabled, interval }, signal);
+
+/** One append-only auto-runner activity line — what it FIRED or QUEUED (secrets stripped at write). */
+export type AutorunAuditEntry = {
+  at: string;
+  engagement_id: string;
+  session_id: string;
+  mode: string;
+  tier: string;
+  action: string; // fire | queue | skip
+  kind: string; // surface | command | ask
+  outcome: string; // started | queued | skipped | error
+  run_id?: string;
+  surface?: string;
+  param_keys?: string[];
+  command?: string;
+  dangerous_flags?: string[];
+  error?: string;
+};
+
+export const getAutorunAudit = (engagementId: string, limit = 50, signal?: AbortSignal) =>
+  getJSON<{ engagement_id: string; entries: AutorunAuditEntry[] }>(
+    `/cockpit/autorun/audit?engagement_id=${encodeURIComponent(engagementId)}&limit=${limit}`,
+    signal
+  );
+
+/** New-asset alerts from continuous hunting — assets that appeared since the previous snapshot. */
+export type WatchAlert = { at: string; new_assets: Record<string, string[]> };
+
+export const getWatch = (engagementId: string, limit = 50, signal?: AbortSignal) =>
+  getJSON<{ engagement_id: string; alerts: WatchAlert[] }>(
+    `/cockpit/watch/${encodeURIComponent(engagementId)}?limit=${limit}`,
+    signal
+  );
+
+export type EgressConfig = {
+  engagement_id: string;
+  egress_pool_size: number;
+  egress_identify_name: string;
+  banned_count?: number;
+};
+
+export const getEgress = (engagementId: string, signal?: AbortSignal) =>
+  getJSON<EgressConfig>(`/cockpit/engagement/${encodeURIComponent(engagementId)}/egress`, signal);
+
+/* THE POOL URLS ARE CREDENTIALS AND ONLY TRAVEL ONE WAY. `setEgress` SENDS them; every reader
+ * (getEgress) answers with the SIZE + identify header NAME only — no route returns a URL. */
+export const setEgress = (
+  engagementId: string,
+  pool: string[],
+  identifyHeader: string,
+  signal?: AbortSignal
+) =>
+  postJSON<EgressConfig>(
+    "/cockpit/engagement/egress",
+    { engagement_id: engagementId, pool, identify_header: identifyHeader },
     signal
   );
 

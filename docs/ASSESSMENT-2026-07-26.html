@@ -480,6 +480,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#authenticated-automated-scanning-the-session-reaches-every-scan-surface-2026-08-15">Authenticated automated scanning — the session reaches every scan surface (2026-08-15)</a></li>
 <li><a href="#capture-a-host-bench-launcher-on-by-default-human-approved-2026-08-15">:capture — a host-bench launcher (on by default, human-approved) (2026-08-15)</a></li>
 <li><a href="#the-loop-can-invoke-hackpit-surfaces-not-just-raw-commands-2026-08-15">The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)</a></li>
+<li><a href="#egress-control-a-rotating-attributable-source-ip-so-one-ban-doesnt-strand-the-engagement-2026-08-15">Egress control — a rotating, attributable source IP so one ban doesn't strand the engagement (2026-08-15)</a></li>
 </ul>
 </li>
 </ul>
@@ -6593,5 +6594,34 @@ read-only graphs (<code>:cloud</code>, <code>:ad-graph</code>, <code>:killchain<
 single "run"; <code>:windows</code>, whose execution is already the raw-command path with a <code>windows_profile_id</code>
 the loop reaches; and <code>:kali</code> / <code>:terminal</code>, which stay human-only (the raw-command path already
 covers arbitrary commands).</p>
+<h2 id="egress-control-a-rotating-attributable-source-ip-so-one-ban-doesnt-strand-the-engagement-2026-08-15">Egress control — a rotating, attributable source IP so one ban doesn't strand the engagement (2026-08-15)</h2>
+<p>The tool-level proxy rewrite (build #14) could point a run at the loopback RECORDING proxy, but the
+engage sandbox still egressed to the internet from its single container IP — and one WAF ban on that
+IP strands a live program. Egress control adds a second, distinct use of the same argv-rewrite
+mechanism: route a run's OUTBOUND traffic through a <strong>rotating pool of controllable proxy IPs</strong>, and
+pin the program's <strong>identify header</strong> so a rotating IP stays inside the program's rules (many
+bug-bounty programs <em>require</em> you identify your traffic and <em>prohibit</em> blind anonymisers).</p>
+<p>It reuses, not duplicates, the existing machinery. <code>executor._proxy_rewrite</code> is the shared core under
+both <code>apply_proxy</code> (loopback capture, byte-identical to before) and the new <strong><code>apply_egress</code></strong> (an
+external pool URL); <code>apply_identify_header</code> uses the same <code>_place_flag</code> placement over a <code>_HEADER_FLAGS</code>
+map. A run opts in with <strong><code>egress=true</code></strong>; <code>apply_egress_to_request</code> picks one pool URL (round-robin,
+skipping any IP benched by <code>egress.mark_banned</code>), injects the tool's proxy flag and pins the header,
+then — like the proxy and pace rewrites — <strong>cancels a prevalidated verdict</strong> so the gates classify the
+argv that actually runs. It is <strong>engagement-mode only</strong> (a lab run has no IP to protect), skipped when
+the recording proxy is already in play (no double proxy flag), and, crucially, <strong>never lies</strong>: a tool
+with no proxy flag (<code>curl</code>/<code>python</code>/any unmapped binary), an engagement with no pool, or a lab/WinRM
+run goes <strong>direct from the sandbox IP and says so</strong> in the start event — the honesty that stops an
+operator believing every run rode the pool while some leaked the real IP.</p>
+<p><strong>The pool is a credential.</strong> A proxy URL may carry <code>user:pass</code>, so — exactly like the WAF-bypass
+header value — it is held only by <code>engagement.egress_config</code> and reaches nothing that records or
+renders: the <code>EngagementRecord</code> carries only <code>egress_pool_size</code> and the identify header's NAME, and
+every note masks the URL's userinfo (<code>_mask_proxy_url</code>). Config is set write-only via
+<code>POST /cockpit/engagement/egress</code>; <code>GET …/egress</code> returns size + name + benched-count, never a URL.
+<code>test_egress_safety.py</code> locks all of it: grants-nothing (only prepends; every gate still fires),
+engagement-mode-only + opt-in, the honest "went direct" paths, credential masking everywhere it could
+be recorded, rotation (wrap / skip-banned / exhaustion), and the credential never landing on the
+record. New: <code>cockpit/egress.py</code> (rotation) + <code>engagement.set_egress</code>/<code>egress_config</code> +
+<code>executor.apply_egress</code>/<code>apply_identify_header</code> + the two routes. <em>Container-level egress routing
+(proxychains in the sandbox, to cover unmapped binaries too) is the next step and not yet built.</em></p>
 </body>
 </html>

@@ -2968,6 +2968,64 @@ def delete_bypass_header(engagement_id: str, name: str) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# EGRESS-PROXY CONFIG — the OUTBOUND source-IP pool (distinct from the inbound recording proxy).
+# UNGATED, and for the same reason the bypass-header routes are: this configures state, it sends
+# no attack traffic. A run picks a pooled IP only when STARTED with egress=true, and that start
+# is the gated act. THE POOL URLS ARE CREDENTIALS AND NO ROUTE HERE RETURNS ONE — the setter
+# takes them; every reader answers with the SIZE and the identify header's NAME.
+# --------------------------------------------------------------------------- #
+class EgressConfigIn(BaseModel):
+    """Set the egress pool + identify header on an active engagement. Pool URLs are WRITE-ONLY."""
+
+    engagement_id: str = Field(..., description="The engagement to configure egress for.")
+    pool: list[str] = Field(
+        default_factory=list,
+        description="Egress proxy URLs (http(s)://[user:pass@]host:port or socks5://…) — a "
+        "rotating source-IP pool so one WAF ban does not strand the engagement. WRITE-ONLY: no "
+        "route returns these, because a URL may carry credentials.",
+    )
+    identify_header: str = Field(
+        "",
+        description="Optional 'Name: value' header pinned so a rotating IP stays within a "
+        "program's rules. Its VALUE is write-only; only the NAME is ever returned.",
+    )
+
+
+@router.post("/engagement/egress")
+def set_egress(req: EgressConfigIn) -> dict[str, Any]:
+    """Store the egress pool + identify header. Returns pool SIZE and identify NAME only.
+
+    422 for a malformed identify header; 404 when the engagement is not active. Configures only —
+    a run uses it when started with egress=true, which rewrites that one run's argv onto a
+    pooled IP and pins the identify header.
+    """
+    try:
+        size = engagement.set_egress(req.engagement_id, req.pool, req.identify_header)
+    except ValueError as exc:
+        code = 404 if "not active" in str(exc) else 422
+        raise HTTPException(status_code=code, detail=str(exc))
+    return {
+        "engagement_id": req.engagement_id,
+        "egress_pool_size": size,
+        "egress_identify_name": engagement.egress_identify_name(req.engagement_id),
+    }
+
+
+@router.get("/engagement/{engagement_id}/egress")
+def get_egress(engagement_id: str) -> dict[str, Any]:
+    """The egress config's SAFE projection — pool size + identify header NAME + benched count.
+    Never the URLs."""
+    from . import egress as egress_mod
+
+    return {
+        "engagement_id": engagement_id,
+        "egress_pool_size": engagement.egress_pool_size(engagement_id),
+        "egress_identify_name": engagement.egress_identify_name(engagement_id),
+        "banned_count": len(egress_mod.banned(engagement_id)),
+    }
+
+
 @router.post("/proxy/bypass-headers")
 def sync_bypass_headers(
     container: str = Query(..., description="Sandbox container the proxy runs in."),

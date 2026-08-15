@@ -623,6 +623,41 @@ def _place_flag(tool: str, args: list[str], prefix: list[str]) -> list[str]:
     return [*prefix, *args]
 
 
+def _mask_proxy_url(url: str) -> str:
+    """A proxy URL safe to show and RECORD — its ``user:pass@`` userinfo stripped. PURE.
+
+    A pool URL can carry credentials; the honesty note and any run record built from it must
+    not. Same rule that keeps the bypass-header VALUE and AD passwords out of persisted records.
+    """
+    if "://" not in url:
+        return url
+    scheme, rest = url.split("://", 1)
+    if "@" in rest:
+        rest = rest.rsplit("@", 1)[1]
+    return f"{scheme}://{rest}"
+
+
+def _proxy_rewrite(command: str, args: list[str], url: str) -> tuple[list[str], bool]:
+    """Inject a tool's own proxy flag pointing at ``url``. Returns ``(args, rewritten)``. PURE.
+
+    The shared core under both :func:`apply_proxy` (INBOUND capture, loopback) and
+    :func:`apply_egress` (OUTBOUND source-IP control, an external proxy). A proxy flag is a
+    proxy flag to every tool — only the URL and the honesty note differ, so the injection lives
+    once and the two public helpers format their own message. ``rewritten`` is False (and args
+    are returned unchanged) exactly when the tool has no known proxy flag, so each caller can
+    tell the honest "went direct" case and word it for its own purpose.
+    """
+    from .allowlist import _tool_name
+
+    tool = _tool_name(command)
+    entry = _PROXY_FLAGS.get(tool)
+    if entry is None:
+        return list(args), False
+    flag, joiner = entry
+    prefix = [f"{flag}={url}"] if joiner == "=" else [flag, url]
+    return _place_flag(tool, list(args), prefix), True
+
+
 def apply_proxy(command: str, args: list[str], port: int) -> tuple[list[str], str]:
     """Point one tool at the recording proxy. Returns ``(args, note)``. PURE.
 
@@ -635,20 +670,81 @@ def apply_proxy(command: str, args: list[str], port: int) -> tuple[list[str], st
     than not offering the option — the same honesty the lifecycle module applies to a listener
     whose bind it could not confirm.
     """
-    from .allowlist import _tool_name
-
     url = f"http://127.0.0.1:{int(port)}"
-    tool = _tool_name(command)
-    entry = _PROXY_FLAGS.get(tool)
-    if entry is None:
-        return list(args), (
+    new_args, rewritten = _proxy_rewrite(command, args, url)
+    if not rewritten:
+        return new_args, (
             f"{command} has no known proxy flag — this run was NOT captured, it went direct"
         )
+    return new_args, f"{command} routed through the recording proxy on {url}"
+
+
+def apply_egress(command: str, args: list[str], url: str) -> tuple[list[str], str]:
+    """Route one tool's OUTBOUND traffic through an external egress proxy. Returns ``(args, note)``. PURE.
+
+    Same argv-rewrite shape as :func:`apply_proxy`; the difference is intent and destination —
+    egress points at a controllable/rotating source-IP proxy (``url`` from the engagement's
+    pool) so a single WAF ban does not strand the engagement, not at the loopback recorder.
+
+    A TOOL WITH NO KNOWN PROXY FLAG IS RETURNED UNCHANGED AND THE NOTE SAYS SO PLAINLY: its
+    traffic left from the sandbox's own IP, uncontrolled. That is the whole point of saying it —
+    an operator who believes every run rode the rotating pool, while ``curl``/``python`` and any
+    unmapped binary went direct, is exactly how the real IP leaks and gets banned. Container-
+    level routing (proxychains in the engage sandbox) is the belt that covers those; this flag is
+    the suspenders for the tools that speak proxy natively.
+    """
+    new_args, rewritten = _proxy_rewrite(command, args, url)
+    if not rewritten:
+        return new_args, (
+            f"{command} has no known proxy flag — this run did NOT use the egress proxy, it "
+            "went direct from the sandbox IP"
+        )
+    return new_args, f"{command} egressing via {_mask_proxy_url(url)}"
+
+
+#: How each tool spells "add this request header". Same shape/rules as :data:`_PROXY_FLAGS`,
+#: keyed on the NORMALISED binary name. Used to PIN an identifying header (many bug-bounty
+#: programs REQUIRE you identify your traffic and PROHIBIT blind anonymisers) while the egress
+#: IP rotates underneath. A tool with no header flag takes the honest no-op path — the header
+#: was not added and the note says so, rather than pretending the run was attributable.
+_HEADER_FLAGS: dict[str, tuple[str, str]] = {
+    # name -> (flag, joiner)
+    "curl": ("-H", ""),
+    "ffuf": ("-H", ""),
+    "nuclei": ("-H", ""),
+    "katana": ("-H", ""),
+    "httpx": ("-H", ""),
+    "httpx-toolkit": ("-H", ""),
+    "sqlmap": ("--header", "="),
+    "feroxbuster": ("-H", ""),
+    "wpscan": ("--headers", ""),
+}
+
+
+def apply_identify_header(command: str, args: list[str], header: str) -> tuple[list[str], str]:
+    """Pin an identifying ``"Name: value"`` request header on one tool. Returns ``(args, note)``. PURE.
+
+    The attribution half of egress: it says "this traffic is me" so a rotating source IP stays
+    within a program's rules. Same honesty contract as the proxy rewrites — a tool with no known
+    header flag is returned UNCHANGED and the note says the run went out UN-attributed, because
+    an operator who thinks every run carried their identifying header when some did not is one
+    program-rule violation away from a ban or worse.
+    """
+    from .allowlist import _tool_name
+
+    header = header.strip()
+    if not header:
+        return list(args), ""
+    tool = _tool_name(command)
+    entry = _HEADER_FLAGS.get(tool)
+    if entry is None:
+        return list(args), (
+            f"{command} has no known header flag — the identify header was NOT added; this run "
+            "went out un-attributed"
+        )
     flag, joiner = entry
-    prefix = [f"{flag}={url}"] if joiner == "=" else [flag, url]
-    return _place_flag(tool, list(args), prefix), (
-        f"{command} routed through the recording proxy on {url}"
-    )
+    prefix = [f"{flag}={header}"] if joiner == "=" else [flag, header]
+    return _place_flag(tool, list(args), prefix), f"{command} tagged with identify header ({header.split(':', 1)[0]})"
 
 
 #: How each tool spells "go slower". Same shape as :data:`_PROXY_FLAGS` — keyed on the
@@ -828,6 +924,41 @@ def run_notes(request: ExecRequest) -> list[str]:
         else:
             _, note = apply_pace(request.command, list(request.args), int(rate))
             notes.append(note)
+    if getattr(request, "egress", False):
+        # The honest no-op cases only — each is determinable WITHOUT advancing rotation, so the
+        # "egressing via <ip>" note (the one case that IS rewritten) is left to
+        # apply_egress_to_request, which picks the URL exactly once. Reporting them here is the
+        # difference between an operator who knows this run left from the real IP and one who
+        # believes the pool covered it.
+        if request.windows_profile_id:
+            notes.append(
+                "egress control is not available over WinRM — that transport sends a PowerShell "
+                "string, not a command line with flags; this run was NOT routed through the pool"
+            )
+        elif not request.engagement_id:
+            notes.append(
+                "egress control applies in engagement mode only — this is a LAB run against the "
+                "isolated target and went direct"
+            )
+        elif getattr(request, "proxy", False):
+            notes.append(
+                "egress not applied — this run already routes through the recording proxy; "
+                "stacking a second proxy flag would be a contradiction the tool resolves silently"
+            )
+        else:
+            from . import engagement as engagement_mod
+            from .allowlist import _tool_name
+
+            if engagement_mod.egress_pool_size(request.engagement_id) == 0:
+                notes.append(
+                    "no egress pool is configured for this engagement — this run went direct "
+                    "from the sandbox IP"
+                )
+            elif _tool_name(request.command) not in _PROXY_FLAGS:
+                notes.append(
+                    f"{request.command} has no known proxy flag — this run did NOT use the "
+                    "egress proxy, it went direct from the sandbox IP"
+                )
     return notes
 
 
@@ -846,6 +977,44 @@ def apply_proxy_to_request(request: ExecRequest) -> tuple[ExecRequest, str]:
     if new_args == list(request.args):
         return request, ""
     return request.model_copy(update={"args": new_args}), note
+
+
+def apply_egress_to_request(request: ExecRequest) -> tuple[ExecRequest, str]:
+    """Route this run through the engagement's egress pool, if it asked and one is usable.
+
+    ENGAGEMENT MODE ONLY, like pacing and for the same reason: egress control exists to keep a
+    REAL program from banning your one source IP; a lab run is an isolated container with no IP
+    to protect, and WinRM sends a PowerShell string with no argv flag to add. Picks ONE pool URL
+    (advancing rotation once) and injects the tool's proxy flag, then pins the engagement's
+    identify header if one is set. Skipped when the recording proxy is already in play — two
+    proxy flags on one command line is a contradiction the tool resolves silently.
+
+    Returns the request UNCHANGED (empty note) whenever nothing was rewritten — same contract as
+    the sibling helpers, so the caller only discards a prevalidated verdict when the argv changed.
+    The honest "no pool / no flag / lab / captured instead" messages are produced by
+    :func:`run_notes`, which needs no rotation pick to word them.
+    """
+    if not getattr(request, "egress", False):
+        return request, ""
+    if request.windows_profile_id or not request.engagement_id:
+        return request, ""
+    if getattr(request, "proxy", False):  # recording proxy wins; don't stack a second proxy flag
+        return request, ""
+    from . import egress as egress_mod
+    from . import engagement as engagement_mod
+
+    url = egress_mod.pick(request.engagement_id)
+    if url is None:
+        return request, ""
+    new_args, _ = apply_egress(request.command, list(request.args), url)
+    _, header = engagement_mod.egress_config(request.engagement_id)
+    if header:
+        new_args, _ = apply_identify_header(request.command, new_args, header)
+    if new_args == list(request.args):
+        return request, ""
+    return request.model_copy(update={"args": new_args}), (
+        f"{request.command} egressing via {_mask_proxy_url(url)}"
+    )
 
 
 def _timeout_verdict(idle: float, total: float, idle_limit: int, ceiling: int) -> str:
@@ -905,6 +1074,13 @@ def iter_run(request: ExecRequest, prevalidated: bool = False) -> Iterator[dict[
         prevalidated = False
     request, pace_note = apply_pace_to_request(request)
     if pace_note:
+        prevalidated = False
+    # THE EGRESS REWRITE rides the same rails: it adds the tool's proxy flag (and maybe an
+    # identify header), so the argv the gates classify must be the argv that runs. Adding an
+    # argument can only make the danger classifier fire MORE, never less, so re-validating the
+    # rewritten request is strictly safe.
+    request, egress_note = apply_egress_to_request(request)
+    if egress_note:
         prevalidated = False
 
     if not prevalidated:

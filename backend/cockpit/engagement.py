@@ -115,6 +115,21 @@ def init_db() -> None:
             )
             """
         )
+        # Egress-proxy config: the OUTBOUND source-IP pool (distinct from the inbound recording
+        # proxy). A pool URL may embed credentials (http://user:pass@host:port), so — exactly
+        # like the bypass-header value — it is held HERE and returned ONLY by `egress_config`,
+        # never on the EngagementRecord, never rendered, never prompted. `egress_pool_size` /
+        # `egress_identify_name` are the safe-to-render projections.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS engagement_egress (
+                engagement_id   TEXT PRIMARY KEY,
+                pool            TEXT NOT NULL,
+                identify_header TEXT NOT NULL DEFAULT '',
+                updated_at      TEXT NOT NULL
+            )
+            """
+        )
 
 
 def _valid_target(target: str) -> str:
@@ -321,6 +336,82 @@ def bypass_headers(engagement_id: str) -> list[tuple[str, str]]:
 def bypass_header_names(engagement_id: str) -> list[str]:
     """The header NAMES this engagement holds. Safe to record, render and prompt with."""
     return [name for name, _ in bypass_headers(engagement_id)]
+
+
+# --------------------------------------------------------------------------- #
+# Egress-proxy config — the OUTBOUND source-IP control (distinct from cockpit/proxy.py's
+# INBOUND recording proxy). THE POOL URLS ARE CREDENTIALS: a proxy URL may carry user:pass, and
+# whoever holds it can route traffic as this engagement. So the same rule as the bypass header:
+#   * :func:`egress_config` is the ONLY function that returns the pool. Its callers are the
+#     rotation picker (`egress.pick`) and the executor argv-rewrite, which put a chosen URL on
+#     a tool's own proxy flag — an argv on an already-gated request — and never render the list.
+#   * :func:`egress_pool_size` / :func:`egress_identify_name` are the safe projections the
+#     status endpoint, run records, LLM proposer context and reports may see.
+# --------------------------------------------------------------------------- #
+def set_egress(engagement_id: str, pool: list[str], identify_header: str = "") -> int:
+    """Store (replace) the egress pool + identify header on an ACTIVE engagement. Returns pool size.
+
+    Replace, not upsert-per-url: the pool is one set the operator manages as a whole, and a
+    program that swaps its proxies mid-engagement should hand over the new list, not diff it.
+    The identify header, when given, must be a real ``"Name: value"`` — a bare name could not be
+    sent, and a program that REQUIRES you identify your traffic wants the whole header.
+    """
+    urls = [u.strip() for u in (pool or []) if u and u.strip()]
+    header = (identify_header or "").strip()
+    if header and ":" not in header:
+        raise ValueError(
+            f"identify header {header!r} must be 'Name: value' — a program that requires you "
+            "identify your traffic wants a real header, not a bare name"
+        )
+    if get_active(engagement_id) is None:
+        raise ValueError(
+            f"engagement {engagement_id!r} is not active — egress config belongs to a live "
+            "engagement, and one stored against an exited record could never be applied"
+        )
+    with _write_lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO engagement_egress (engagement_id, pool, identify_header, updated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(engagement_id) DO UPDATE SET pool = ?, "
+            "identify_header = ?, updated_at = ?",
+            (engagement_id, json.dumps(urls), header, _now(), json.dumps(urls), header, _now()),
+        )
+    return len(urls)
+
+
+def egress_config(engagement_id: str) -> tuple[list[str], str]:
+    """``(pool, identify_header)`` — THE ONLY FUNCTION THAT RETURNS THE POOL URLS (credentials).
+
+    Its callers are the rotation picker (`egress.pick`) and the executor rewrite. Anything that
+    RECORDS, RENDERS or PROMPTS must use :func:`egress_pool_size` / :func:`egress_identify_name`.
+    """
+    if not engagement_id:
+        return [], ""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT pool, identify_header FROM engagement_egress WHERE engagement_id = ?",
+                (engagement_id,),
+            ).fetchone()
+    except sqlite3.OperationalError:  # table not created yet — no config, not a failure
+        return [], ""
+    if row is None:
+        return [], ""
+    try:
+        pool = [str(u) for u in json.loads(row["pool"])]
+    except (ValueError, TypeError):
+        pool = []
+    return pool, row["identify_header"] or ""
+
+
+def egress_pool_size(engagement_id: str) -> int:
+    """How many egress IPs this engagement holds. Safe to record, render and prompt with."""
+    return len(egress_config(engagement_id)[0])
+
+
+def egress_identify_name(engagement_id: str) -> str:
+    """The identify header's NAME only (never its value). Safe to record, render and prompt with."""
+    header = egress_config(engagement_id)[1]
+    return header.split(":", 1)[0].strip() if header else ""
 
 
 def get_active(engagement_id: str) -> EngagementRecord | None:

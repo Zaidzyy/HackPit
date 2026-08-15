@@ -81,6 +81,18 @@ class ExecRequest(BaseModel):
         "and the start event says so rather than pretending the run was paced. Not a safety "
         "control — a paced command is quieter, not safer, and every gate still applies.",
     )
+    egress: bool = Field(
+        False,
+        description="ENGAGEMENT MODE ONLY: route this run's OUTBOUND traffic through the "
+        "engagement's egress-proxy pool (a rotating, controllable source IP) so a single WAF "
+        "ban does not strand the engagement, and pin the program's identify header if one is "
+        "configured. An argument rewrite on an already-gated request — the tool's own proxy "
+        "flag, no new capability, no new gate; the REWRITTEN argv is what the gates classify. "
+        "A tool with no proxy flag, a lab/WinRM run, or an engagement with no pool configured "
+        "runs UNCHANGED and the start event says so, rather than pretending the IP was "
+        "controlled. Mutually exclusive with `proxy` (the loopback recorder) — if both are "
+        "set the recording proxy wins and egress is skipped, said plainly.",
+    )
     step_id: str | None = Field(
         None, description="Optional attack-path step id ({phase}-{n}) this run realizes."
     )

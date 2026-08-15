@@ -4417,6 +4417,16 @@ the operator's explicit say-so. It was built to stay honest about that cost:</p>
 <li>the approval-FIELD line is never relaxed even here — the tool names no gate field in its schema;
   it hardcodes <code>approved</code>/<code>dangerous_ack</code> in its body, so an agent still cannot <em>name</em> approval.</li>
 </ul>
+<p><strong>Extended (2026-08-15) with <code>hackpit_surface</code></strong> — the operator's standing choice to let an MCP client
+run any HackPit <em>surface</em>, not just a raw command. <code>hackpit_surface(surface, params)</code> routes to the
+surface's real start engine (nuclei / discover / jsrecon / intruder / smuggle / cache / race /
+credentials / tokens / codescan / oob / tunnels / c2 / capture) with its scope, target-lock and mode
+checks intact — <code>repeater</code> is excluded, its send is human-only. It holds every property above: OFF
+unless the flag is <code>1</code>; honestly reported by <code>audit_no_execution_paths()</code> (its <code>_run_surface</code> reaches
+<code>.start</code>/<code>send</code>, already in <code>FORBIDDEN_CALLS</code>, so the audit is not blinded); tolerated only by name in
+<code>preflight()</code>; and it names no gate field — the schema is closed and <code>_surface_req</code> STRIPS any gate
+field the agent tries to pass, then forces it. <code>test_mcp_safety</code> locks all of this for both execution
+tools.</p>
 <p><code>test_mcp_safety.py</code> gained a test that pins all of this: execution is off by default, and when the
 opt-in surface is registered the audit stays honest while preflight tolerates only the named tool.
 This is a genuine loosening of the model's central guarantee, chosen deliberately — the safe

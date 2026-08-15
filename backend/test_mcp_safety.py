@@ -272,6 +272,15 @@ def test_EXECUTION_MODE_is_off_by_default_and_a_tested_opt_in() -> None:
         # ...but the APPROVAL-FIELD line still holds — the tool names no gate field.
         assert mcp_tools.audit_no_approval_fields() == [], "the execute tool exposed an approval field"
 
+        # the SURFACE tool is the same shape: write-flagged, HONESTLY caught by the execution audit
+        # (its _run_surface reaches `.start`/`send`), tolerated by name, and it names no gate field.
+        assert "hackpit_surface" in {t.name for t in mcp_tools.tools()}, "surface tool did not register"
+        assert next(t for t in mcp_tools.tools() if t.name == "hackpit_surface").writes is True
+        assert any(o.startswith("hackpit_surface") for o in execution), (
+            "the execution audit went blind to the surface tool: " + repr(execution))
+        assert "hackpit_surface" in mcp_tools.EXECUTION_TOOL_NAMES
+        assert mcp_tools.audit_no_approval_fields() == [], "a tool exposed an approval field"
+
         # With the flag OFF, preflight REFUSES even though the tool is registered.
         mcp_tools.EXECUTE_ENABLED = False
         raised = False
@@ -288,6 +297,8 @@ def test_EXECUTION_MODE_is_off_by_default_and_a_tested_opt_in() -> None:
         mcp_tools.EXECUTE_ENABLED = saved
         mcp_tools._REGISTRY.pop("hackpit_execute", None)
         mcp_tools._HANDLERS.pop("hackpit_execute", None)
+        mcp_tools._REGISTRY.pop("hackpit_surface", None)
+        mcp_tools._HANDLERS.pop("hackpit_surface", None)
     # Clean again: back to the eyes-and-no-hands default.
     mcp_server.preflight()
     assert mcp_tools.audit_no_execution_paths() == []

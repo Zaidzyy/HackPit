@@ -801,7 +801,91 @@ def propose_command(command: str, args: list[str] | None = None, rationale: str 
 # --------------------------------------------------------------------------- #
 #: The env-gated execution tools. Named so `mcp_server.preflight()` can tolerate exactly these
 #: (and nothing else) when execution mode is on.
-EXECUTION_TOOL_NAMES: tuple[str, ...] = ("hackpit_execute",)
+EXECUTION_TOOL_NAMES: tuple[str, ...] = ("hackpit_execute", "hackpit_surface")
+
+
+#: Surfaces the loop/UI drive that ALSO make sense as an agent action. `repeater` is EXCLUDED — its
+#: send is human-only (test_repeater_is_human_only); the graphs and `:kali`/`:terminal` stay out too.
+_MCP_SURFACES: tuple[str, ...] = (
+    "recon", "discover", "jsrecon", "nuclei", "intruder", "smuggle", "cache", "race",
+    "credentials", "tokens", "codescan", "oob", "tunnels", "c2", "capture",
+)
+
+
+def _surface_req(ReqCls: Any, params: dict[str, Any], sid: str, eid: str) -> Any:
+    """Build a surface request from MCP params, SELF-APPROVING the gate (this is the hands). The
+    agent's params can never carry a gate field — they are STRIPPED, then forced — and the ids are
+    filled only where the model actually has them."""
+    fields = ReqCls.model_fields
+    data = {k: v for k, v in dict(params or {}).items() if k not in ("approved", "dangerous_ack")}
+    if "approved" in fields:
+        data["approved"] = True
+    if "dangerous_ack" in fields:
+        data["dangerous_ack"] = True
+    if "session_id" in fields and not data.get("session_id"):
+        data["session_id"] = sid or eid or None
+    if "engagement_id" in fields and not data.get("engagement_id"):
+        data["engagement_id"] = eid or None
+    return ReqCls(**data)
+
+
+def _run_surface(surface: str, params: dict[str, Any], sid: str, eid: str) -> dict[str, Any]:
+    """Route a surface name + params to that surface's real start engine. The engine's own
+    scope / target-lock / mode checks still apply; this only self-approves the human gate. The
+    `.start`/`send` calls below are why `audit_no_execution_paths` honestly flags `hackpit_surface`."""
+    s = (surface or "").strip().lower()
+    p = dict(params or {})
+    if s == "repeater":
+        raise ValueError("repeater is human-only — its send has no agent path (by design)")
+    if s == "recon":
+        from cockpit import recon
+        fn = recon.start_passive if str(p.get("mode", "")).lower() == "passive" else recon.start_active
+        return _asdict(fn(_surface_req(recon.ReconRequest, p, sid, eid)))
+    if s == "discover":
+        from cockpit import discover
+        return _asdict(discover.start(_surface_req(discover.DiscoverRequest, p, sid, eid)))
+    if s == "jsrecon":
+        from cockpit import jsrecon
+        return _asdict(jsrecon.start(_surface_req(jsrecon.JsReconRequest, p, sid, eid)))
+    if s == "nuclei":
+        from cockpit import nuclei
+        return _asdict(nuclei.start(_surface_req(nuclei.NucleiRequest, p, sid, eid)))
+    if s == "intruder":
+        from cockpit import intruder
+        return _asdict(intruder.start(_surface_req(intruder.IntruderRequest, p, sid, eid)))
+    if s == "smuggle":
+        from cockpit import smuggle
+        return _asdict(smuggle.start(_surface_req(smuggle.SmuggleRequest, p, sid, eid)))
+    if s == "cache":
+        from cockpit import cache
+        return _asdict(cache.start(_surface_req(cache.CacheRequest, p, sid, eid)))
+    if s == "race":
+        from cockpit import race
+        return _asdict(race.start(_surface_req(race.RaceRequest, p, sid, eid)))
+    if s == "credentials":
+        from cockpit import credattack, router
+        if str(p.get("mode", "")).lower() == "crack":
+            return _asdict(router.start_crack(_surface_req(credattack.CrackRequest, p, sid, eid)))
+        return _asdict(router.start_spray(_surface_req(credattack.SprayRequest, p, sid, eid)))
+    if s == "tokens":
+        from cockpit import router, tokenjobs
+        return _asdict(router.start_token_crack(_surface_req(tokenjobs.TokenCrackRequest, p, sid, eid)))
+    if s == "codescan":
+        from codescan import router as cs_router
+        return _asdict(cs_router.codescan_scan(_surface_req(cs_router.ScanIn, p, sid, eid)))
+    if s == "oob":
+        from oob import tokens as oob_tokens
+        return _asdict(oob_tokens.mint(eid or sid or "", note=str(p.get("note", ""))))
+    if s == "tunnels":
+        from cockpit import tunnels
+        return _asdict(tunnels.start_tunnel(_surface_req(tunnels.TunnelStartRequest, p, sid, eid)))
+    if s == "c2":
+        from cockpit import sliver
+        return _asdict(sliver.start_server(_surface_req(sliver.SliverServerRequest, p, sid, eid)))
+    if s == "capture":
+        from cockpit import hostbench
+        return _asdict(hostbench.start(_surface_req(hostbench.BenchStartRequest, p, sid, eid)))
+    raise ValueError(f"unknown or non-invokable surface: {surface!r}")
 
 #: True only when the operator has explicitly opted in. Read once, at import.
 EXECUTE_ENABLED: bool = os.environ.get("HACKPIT_MCP_EXECUTE") == "1"
@@ -839,6 +923,28 @@ def _register_execution_tools() -> None:
         )
         record = executor.run_command(req)
         return _asdict(record)
+
+    @tool("hackpit_surface",
+          "RUN a HackPit SURFACE with NO human approval — exists only when HACKPIT_MCP_EXECUTE=1. It "
+          "self-approves the gate and calls the surface's real start engine (scope-filtered, "
+          "state-ingesting; the engine's target-lock and mode rules still apply). `surface` is one of: "
+          "recon, discover, jsrecon, nuclei, intruder, smuggle, cache, race, credentials, tokens, "
+          "codescan, oob, tunnels, c2, capture. `params` matches that surface (see the cockpit surface "
+          "contract, e.g. nuclei {targets, severities, attach_session}). NOT here: repeater — its send "
+          "is human-only. Prefer propose_command / a read tool unless this engagement runs agent-driven.",
+          _schema({
+              "surface": {"type": "string", "description": "One of the invokable surface names."},
+              "params": {"type": "object", "description": "Surface params (see the surface contract)."},
+              "session_id": {"type": "string"},
+              "engagement_id": {"type": "string"},
+          }, ["surface"]),
+          writes=True)
+    def hackpit_surface(surface: str, params: dict[str, Any] | None = None,
+                        session_id: str = "", engagement_id: str = "") -> dict[str, Any]:
+        """*** HANDS for the surfaces. *** Self-approves and calls the surface's real start engine —
+        the same opt-in the operator made for hackpit_execute. The agent cannot name a gate field
+        (the schema does not declare one and `_surface_req` strips any it tries to pass)."""
+        return _run_surface(surface, params or {}, session_id, engagement_id)
 
 
 if EXECUTE_ENABLED:

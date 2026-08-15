@@ -3026,6 +3026,34 @@ def get_egress(engagement_id: str) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# AUTONOMY MODE — the auto-runner switch (manual / assisted / full). A DELIBERATE change of how
+# much the loop may do without a per-command human approval. Setting it configures state; the
+# auto-runner acts on it. Default stays 'manual', so nothing changes behaviour until switched.
+# --------------------------------------------------------------------------- #
+class AutonomyIn(BaseModel):
+    """Set the auto-runner mode on an active engagement."""
+
+    engagement_id: str = Field(..., description="The engagement to switch.")
+    mode: str = Field(
+        ...,
+        description="'manual' (human drives every step, default/unchanged), 'assisted' (passive "
+        "auto-fired, exploitation queued for the operator), or 'full' (everything auto-fired, "
+        "bounded by RoE/scope/budget). Human-only actions never auto-fire in any mode.",
+    )
+
+
+@router.post("/engagement/autonomy")
+def set_autonomy(req: AutonomyIn) -> dict[str, Any]:
+    """Set the engagement's auto-runner mode. 422 for an unknown mode; 404 when not active."""
+    try:
+        mode = engagement.set_autonomy_mode(req.engagement_id, req.mode)
+    except ValueError as exc:
+        code = 404 if "not active" in str(exc) else 422
+        raise HTTPException(status_code=code, detail=str(exc))
+    return {"engagement_id": req.engagement_id, "autonomy_mode": mode}
+
+
 @router.post("/proxy/bypass-headers")
 def sync_bypass_headers(
     container: str = Query(..., description="Sandbox container the proxy runs in."),

@@ -208,6 +208,17 @@ class EngagementRecord(BaseModel):
     entered_at: str
     exited_at: str | None = None
     session_id: str | None = None
+    # --- autonomy mode (the auto-runner switch) ---
+    autonomy_mode: str = Field(
+        "manual",
+        description="How much the auto-runner may do WITHOUT a per-command human approval: "
+        "'manual' (default — the human drives every step, today's behaviour, unchanged), "
+        "'assisted' (the passive/read-only tier is auto-fired; exploitation is queued for the "
+        "operator), or 'full' (everything is auto-fired, bounded by RoE/scope/budget). Only "
+        "'assisted'/'full' ever fire autonomously, and human-only actions (the repeater, an "
+        "'ask') are NEVER auto-fired in any mode. Migration-safe: a record written before this "
+        "field reads back as 'manual'.",
+    )
     # --- program scope (resolved at entry) ---
     scope: str = Field("", description="The scope spec exactly as the operator gave it.")
     scope_include: list[str] = Field(

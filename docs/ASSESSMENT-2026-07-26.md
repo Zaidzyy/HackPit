@@ -6582,3 +6582,42 @@ be recorded, rotation (wrap / skip-banned / exhaustion), and the credential neve
 record. New: `cockpit/egress.py` (rotation) + `engagement.set_egress`/`egress_config` +
 `executor.apply_egress`/`apply_identify_header` + the two routes. *Container-level egress routing
 (proxychains in the sandbox, to cover unmapped binaries too) is the next step and not yet built.*
+
+## Autonomy modes — the auto-runner spine (manual / assisted / full) (2026-08-15)
+
+Until now the loop was propose-one-step, human-approves-every-command — deliberately. This adds a
+per-engagement **`autonomy_mode`** switch with three settings, so the same loop can run hands-off
+where the operator has authorised it, WITHOUT loosening the manual default:
+
+* **manual** (default, unchanged) — the human is the wall; every command is approved.
+* **assisted** — the auto-runner fires the **passive/read-only tier** on its own; anything
+  **exploitation-class** is queued for the operator. The human is the wall, but only at the
+  exploitation boundary.
+* **full** — passive AND exploitation fire autonomously; the wall becomes the **declared mode +
+  scope + audit** (RoE, budget and the scheduler kill-switch land with the scheduler, next).
+
+The safety heart is a **closed tier classifier** (`cockpit/autotier.py`): the passive allowlist is
+`discover`/`jsrecon`/`nuclei`, `recon` only when `mode=="passive"`, and `smuggle`/`cache` only at
+an **explicit** `stage=="detect"`. Everything else — `intruder`, `race`, `credentials`, `tokens`,
+`c2`, `tunnels`, `capture`, active recon, a confirm-stage plant, a dangerous-flagged command, **and
+any unknown/new surface** — is `exploitation`. The repeater and any `ask` are `human_only` and are
+**never auto-fired in any mode**. Fail-safe by construction: a surface added to the invokable set
+later without being added to the allowlist is exploitation by default — it can never silently
+become auto-fireable.
+
+The policy is a pure `decide(proposal, mode)` (`cockpit/autorun.py`) separated from the hands,
+`fire()`, which reuses the **same self-approving `mcp_tools._run_surface`** the opt-in MCP tool uses
+(deliberately NOT extracted to a shared module — that would blind the MCP execution-path audit,
+which only sees functions defined in `mcp_tools`; `test_mcp_safety` still passes). Every auto-fire
+appends one line to an **append-only audit** (`cockpit/autoaudit.py`, `autorun-audit.jsonl`) with
+secrets stripped (surface NAME + param KEYS, argv redacted) — the tamper-evident record that
+replaces the per-command human sign-off. The unit of work is `POST /sessions/{id}/autorun/step`
+(propose → decide → fire-or-queue → audit); the scheduler that calls it on a timer is the next
+build. `autonomy_mode` lives on the `EngagementRecord` (migration-safe default `manual`), set via
+`POST /cockpit/engagement/autonomy`.
+
+`test_autotier_safety.py` (closed allowlist cross-checked against the real invokable set, detect vs
+confirm, human-only, fail-safe) and `test_autorun_safety.py` (the full mode×tier matrix, and the
+teeth: **a simulated assisted loop over a mixed batch fires only the passive surfaces**, plus the
+append-only audit) lock it. *Still ahead: the scheduler daemon + RoE-as-wall + budget/kill-switch,
+continuous-hunting diff/alert, and the frontend 3-way toggle + decision queue.*

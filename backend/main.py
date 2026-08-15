@@ -61,6 +61,7 @@ from cockpit import engagement as cockpit_engagement  # noqa: E402
 from cockpit import reconcile as cockpit_reconcile  # noqa: E402
 from cockpit import loot as cockpit_loot  # noqa: E402
 from cockpit import proposals as cockpit_proposals  # noqa: E402  (approval queue — executes nothing)
+from cockpit import autorun as cockpit_autorun  # noqa: E402  (auto-runner — modes 2/3 decide+fire)
 from cockpit import winprofiles as cockpit_winprofiles  # noqa: E402  (Windows target store)
 from cockpit import sandbox as cockpit_sandbox  # noqa: E402  (read-only container probes)
 # The two evasion/exfil surfaces. Their ROUTES live here, not in cockpit/router.py, and NOT in
@@ -2897,6 +2898,70 @@ def loop_propose(session_id: str, req: LoopProposeIn = Body(default=None)) -> di
         except Exception:  # noqa: BLE001 - persistence is best-effort
             pass
     return result
+
+
+class AutorunStepIn(BaseModel):
+    """Take ONE autonomous step for an engagement running in assisted/full mode."""
+
+    engagement_id: str = Field(..., description="The active engagement whose autonomy_mode drives this step.")
+    avoid: list[str] = Field(default_factory=list, description="Commands/surfaces to skip proposing.")
+
+
+@app.post("/sessions/{session_id}/autorun/step")
+def autorun_step(session_id: str, req: AutorunStepIn = Body(...)) -> dict[str, Any]:
+    """Propose the next action and, per the engagement's ``autonomy_mode``, FIRE it, QUEUE it for
+    the operator, or SKIP. This is the auto-runner's unit of work — the scheduler (next build)
+    calls exactly this on a timer.
+
+    * manual   → nothing is proposed or fired.
+    * assisted → a passive action fires; exploitation and human-only are queued for the operator.
+    * full     → passive AND exploitation fire (bounded by scope/RoE/budget); human-only (the
+                 repeater, an 'ask') still queues.
+
+    Every fire is recorded in the append-only autorun audit. Firing reuses the same self-approving
+    surface/executor path the opt-in MCP tools use — the wall here is the DECLARED mode + scope,
+    not a per-command human approval.
+    """
+    session = sessions_db.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    eid = req.engagement_id
+    mode = cockpit_engagement.autonomy_mode(eid)
+    if mode == "manual":
+        return {
+            "mode": "manual", "action": "skip",
+            "reason": "manual mode — the human drives every step; nothing was proposed or fired",
+        }
+    plan = session.get("path") or {}
+    runs = [r.model_dump() for r in cockpit_runstore.list_runs_for_session(session_id)]
+    scope_ctx = _loop_scope_context(eid)
+    try:
+        result = orchestrator.propose_next(
+            plan, runs, llm.load_config(), list(req.avoid), scope_ctx, session_id
+        )
+    except llm.LLMError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    if not isinstance(result, dict) or result.get("done"):
+        return {
+            "mode": mode, "action": "skip", "done": True,
+            "reason": (result or {}).get("reason", "nothing left to propose"),
+        }
+    proposal = result.get("proposal")
+    decision = cockpit_autorun.decide(proposal, mode)
+    out: dict[str, Any] = {
+        "mode": mode, "action": decision.action, "tier": decision.tier,
+        "reason": decision.reason, "proposal": proposal,
+    }
+    if decision.action == "fire":
+        try:
+            out["result"] = cockpit_autorun.fire(
+                proposal, session_id, eid, mode=mode, tier=decision.tier
+            )
+        except Exception as exc:  # noqa: BLE001 — surface the fire failure to the caller
+            raise HTTPException(status_code=500, detail=f"autorun fire failed: {exc}")
+    else:
+        cockpit_autorun.note_non_fire(decision, proposal, session_id, eid, mode)
+    return out
 
 
 class LoopAnswerIn(BaseModel):

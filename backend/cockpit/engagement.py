@@ -85,6 +85,13 @@ def init_db() -> None:
             conn.execute("ALTER TABLE engagement_mode ADD COLUMN scope_spec TEXT")
         if "scope_ips" not in have:
             conn.execute("ALTER TABLE engagement_mode ADD COLUMN scope_ips TEXT")
+        # The auto-runner switch. Migration-safe: a pre-existing row has no column and reads back
+        # as 'manual' (today's behaviour), so autonomy is never entered by an upgrade — only by a
+        # deliberate set_autonomy_mode.
+        if "autonomy_mode" not in have:
+            conn.execute(
+                "ALTER TABLE engagement_mode ADD COLUMN autonomy_mode TEXT NOT NULL DEFAULT 'manual'"
+            )
         # Recon-driven expansion: every host a run's output revealed, with the scope verdict
         # recorded at the moment it was seen. in_scope=1 rows form the LIVE ALLOWED SET.
         conn.execute(
@@ -414,6 +421,39 @@ def egress_identify_name(engagement_id: str) -> str:
     return header.split(":", 1)[0].strip() if header else ""
 
 
+_AUTONOMY_MODES = ("manual", "assisted", "full")
+
+
+def set_autonomy_mode(engagement_id: str, mode: str) -> str:
+    """Set the auto-runner mode on an ACTIVE engagement. Returns the mode stored.
+
+    A DELIBERATE switch — the auto-runner does nothing until this leaves 'manual'. Refuses an
+    unknown mode (fail-closed: never silently leave it 'manual' when the operator asked for
+    autonomy, and never accept a typo as a mode) and an inactive engagement.
+    """
+    m = (mode or "").strip().lower()
+    if m not in _AUTONOMY_MODES:
+        raise ValueError(
+            f"unknown autonomy mode {mode!r} — must be one of {', '.join(_AUTONOMY_MODES)}"
+        )
+    if get_active(engagement_id) is None:
+        raise ValueError(
+            f"engagement {engagement_id!r} is not active — autonomy belongs to a live engagement"
+        )
+    with _write_lock, _connect() as conn:
+        conn.execute(
+            "UPDATE engagement_mode SET autonomy_mode = ? WHERE engagement_id = ? AND active = 1",
+            (m, engagement_id),
+        )
+    return m
+
+
+def autonomy_mode(engagement_id: str) -> str:
+    """The engagement's current auto-runner mode ('manual' when inactive/unknown — fail-closed)."""
+    rec = get_active(engagement_id)
+    return rec.autonomy_mode if rec else "manual"
+
+
 def get_active(engagement_id: str) -> EngagementRecord | None:
     """The engagement record ONLY while it is active (else None — fail closed)."""
     if not engagement_id:
@@ -503,6 +543,7 @@ def _row(row: sqlite3.Row) -> EngagementRecord:
         entered_at=row["entered_at"],
         exited_at=row["exited_at"],
         session_id=row["session_id"],
+        autonomy_mode=(_col(row, "autonomy_mode") or "manual"),
         scope=parsed.raw,
         scope_include=parsed.includes(),
         scope_exclude=parsed.excludes(),

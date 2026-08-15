@@ -3048,6 +3048,9 @@ export type IntruderRequest = {
   delay_ms: number;
   engagement_id?: string | null;
   session_id?: string | null;
+  /** Merge the engagement's stored operator session (session_store) into every send — same auth
+   *  mechanism as the scan surfaces. Typed headers win; added at send time, never in the record. */
+  attach_session?: boolean;
   use_cookie_jar: boolean;
   approved: boolean;
   /** Demanded by the GATE when the payloads warrant it, not by the form. */
@@ -3618,6 +3621,9 @@ export type NucleiRequest = {
   timeout_seconds?: number | null;
   engagement_id?: string | null;
   session_id?: string | null;
+  /** Scan AS the logged-in operator: merge the engagement's stored session (session_store) as -H,
+   *  so authenticated endpoints are scanned. The token is masked in the job record. */
+  attach_session?: boolean;
   approved: boolean;
   dangerous_ack: boolean;
 };
@@ -3866,6 +3872,9 @@ export type DiscoverRequest = {
   timeout_seconds?: number | null;
   engagement_id?: string | null;
   session_id?: string | null;
+  /** params/content: run the tool AS the logged-in operator (ffuf/feroxbuster -H, arjun --headers)
+   *  from the engagement's stored session. Masked in the record. Ignored for historical. */
+  attach_session?: boolean;
   approved: boolean;
   dangerous_ack: boolean;
 };
@@ -3989,6 +3998,9 @@ export type JsReconRequest = {
   timeout_seconds?: number | null;
   engagement_id?: string | null;
   session_id?: string | null;
+  /** Fetch JS AS the logged-in operator — the engagement's stored session rides in the engine's
+   *  STDIN job spec (never the argv), so login-gated bundles are collected + mined. */
+  attach_session?: boolean;
   approved: boolean;
   dangerous_ack: boolean;
 };

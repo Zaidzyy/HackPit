@@ -49,7 +49,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -63,7 +63,9 @@ from state.parsers import (
     parse_urls,
 )
 
-from . import config, engagement, loot, repeater as repeater_mod, runstore, scope as scope_mod
+from . import (
+    config, engagement, loot, repeater as repeater_mod, runstore, scope as scope_mod, session_store,
+)
 from .models import RunRecord
 
 #: The discovery modes. An unknown mode falls back to `params` and SAYS SO — it never refuses a typo.
@@ -165,6 +167,13 @@ class DiscoverRequest(BaseModel):
     timeout_seconds: int | None = None
     engagement_id: str | None = None
     session_id: str | None = None
+    attach_session: bool = Field(
+        False,
+        description="params/content: run the tool AS the logged-in operator — merge the engagement's "
+        "stored session (session_store) as auth headers (ffuf/feroxbuster -H, arjun --headers), so "
+        "content/params behind login are discovered. The operator's OWN session, MASKED in the record. "
+        "Ignored for historical (paramspider is archive-based).",
+    )
     # THE GATE FIELDS — the executor's, unchanged. Both default False so an omitted field is
     # REFUSED rather than granted.
     approved: bool = Field(False, description="Explicit human approval. Never defaulted true.")
@@ -277,9 +286,26 @@ def _impersonate_flags(tool: str) -> list[str]:
     return []
 
 
+def _auth_flags(tool: str, extra_headers: "Sequence[tuple[str, str]]") -> list[str]:
+    """Auth-header flags for ``tool`` from the operator's attached session — ffuf/feroxbuster take a
+    repeated ``-H "name: value"``, arjun takes one ``--headers`` with newline-joined pairs. Caller
+    resolves the session (this stays a pure transform), and the values are masked in the job record."""
+    if not extra_headers:
+        return []
+    t = (tool or "").lower()
+    if t in ("ffuf", "feroxbuster"):
+        out: list[str] = []
+        for hn, hv in extra_headers:
+            out += ["-H", f"{hn}: {hv}"]
+        return out
+    if t == "arjun":
+        return ["--headers", "\n".join(f"{hn}: {hv}" for hn, hv in extra_headers)]
+    return []
+
+
 def arjun_argv(
     url: str, method: str, out_path: str, param_wordlist: str = "", rate_limit: int | None = None,
-    impersonate: bool = False,
+    impersonate: bool = False, extra_headers: "Sequence[tuple[str, str]]" = (),
 ) -> list[str]:
     """arjun worker argv: probe ONE url for hidden params, JSON to a loot file (`-oJ`).
 
@@ -293,6 +319,7 @@ def arjun_argv(
         argv += ["--rate-limit", str(int(rate_limit))]
     if impersonate:
         argv += _impersonate_flags("arjun")
+    argv += _auth_flags("arjun", extra_headers)
     return argv
 
 
@@ -313,7 +340,7 @@ def _fuzz_url(url: str) -> str:
 
 def ffuf_argv(
     url: str, words_path: str, out_path: str, extensions: list[str], rate_limit: int | None = None,
-    impersonate: bool = False,
+    impersonate: bool = False, extra_headers: "Sequence[tuple[str, str]]" = (),
 ) -> list[str]:
     """ffuf worker argv: fuzz `FUZZ` in the url against a loot word file, JSON to a loot file."""
     argv = ["ffuf", "-u", _fuzz_url(url), "-w", words_path, "-mc", "all", "-o", out_path, "-of", "json"]
@@ -324,12 +351,13 @@ def ffuf_argv(
         argv += ["-rate", str(int(rate_limit))]
     if impersonate:
         argv += _impersonate_flags("ffuf")
+    argv += _auth_flags("ffuf", extra_headers)
     return argv
 
 
 def feroxbuster_argv(
     url: str, words_path: str, out_path: str, extensions: list[str], rate_limit: int | None = None,
-    impersonate: bool = False,
+    impersonate: bool = False, extra_headers: "Sequence[tuple[str, str]]" = (),
 ) -> list[str]:
     """feroxbuster worker argv: recursive content discovery, JSONL to a loot file (`--json -o`)."""
     argv = ["feroxbuster", "-u", (url or "").strip(), "-w", words_path, "-d", "2",
@@ -341,6 +369,7 @@ def feroxbuster_argv(
         argv += ["--rate-limit", str(int(rate_limit))]
     if impersonate:
         argv += _impersonate_flags("feroxbuster")
+    argv += _auth_flags("feroxbuster", extra_headers)
     return argv
 
 
@@ -686,6 +715,9 @@ def _run(job_id: str, req: DiscoverRequest, record, workdir: str, mode: str,
     matcher = engagement.resolved_scope(record)
     parsed = Parsed()
     last_text = ""
+    # Authenticated discovery: the operator's attached session rides as -H/--headers on the active
+    # tools (arjun/ffuf/feroxbuster). paramspider (historical) is archive-based and cannot auth.
+    extra = session_store.header_pairs(eng_id) if req.attach_session else []
 
     # Bring the JA3 MITM proxy up before an impersonated fuzz — the active tools route through it.
     # paramspider (historical) is passive/archive-based, so it never needs the proxy.
@@ -696,11 +728,12 @@ def _run(job_id: str, req: DiscoverRequest, record, workdir: str, mode: str,
         out_name = f"discover-{job_id}-arjun.json"
         argv = arjun_argv((req.url or "").strip(), req.method,
                           f"{loot.container_dir(eng_id)}/{out_name}", req.param_wordlist,
-                          req.rate_limit, impersonate=req.impersonate)
+                          req.rate_limit, impersonate=req.impersonate, extra_headers=extra)
         last_text = _spawn(job_id, argv, workdir, _timeout(req))
         file_text = _read_loot(eng_id, out_name)
         parsed.extend(parse_arjun(file_text or last_text, session_id, job_id))
-        _add_stage(job_id, "arjun", argv, "ran" if not _stopped(job_id) else "stopped",
+        _add_stage(job_id, "arjun", session_store.mask_header_flag_values(argv),
+                   "ran" if not _stopped(job_id) else "stopped",
                    f"{req.method.upper()} params on {req.url}")
 
     elif mode == "content":
@@ -712,12 +745,13 @@ def _run(job_id: str, req: DiscoverRequest, record, workdir: str, mode: str,
         out_path = f"{loot.container_dir(eng_id)}/{out_name}"
         builder = feroxbuster_argv if tool == "feroxbuster" else ffuf_argv
         argv = builder((req.url or "").strip(), words_path, out_path, req.extensions,
-                       req.rate_limit, impersonate=req.impersonate)
+                       req.rate_limit, impersonate=req.impersonate, extra_headers=extra)
         last_text = _spawn(job_id, argv, workdir, _timeout(req) * 2)
         file_text = _read_loot(eng_id, out_name)
         p = parse_feroxbuster if tool == "feroxbuster" else parse_ffuf
         parsed.extend(p(file_text or last_text, session_id, job_id))
-        _add_stage(job_id, tool, argv, "ran" if not _stopped(job_id) else "stopped",
+        _add_stage(job_id, tool, session_store.mask_header_flag_values(argv),
+                   "ran" if not _stopped(job_id) else "stopped",
                    f"{len(words)} words · {req.url}")
 
     else:  # historical

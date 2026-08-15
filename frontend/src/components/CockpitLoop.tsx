@@ -287,6 +287,7 @@ export function CockpitLoop({
           wordlist: str(p.wordlist),
           extensions: arr(p.extensions) ?? [],
           impersonate: Boolean(p.impersonate),
+          attach_session: Boolean(p.attach_session),
           ...ids,
         });
         break;
@@ -295,6 +296,7 @@ export function CockpitLoop({
           target: p.target ? str(p.target) : undefined,
           js_urls: arr(p.js_urls),
           include_state: p.include_state === undefined ? true : Boolean(p.include_state),
+          attach_session: Boolean(p.attach_session),
           ...ids,
         });
         break;
@@ -304,6 +306,7 @@ export function CockpitLoop({
           severities: arr(p.severities) ?? ["low", "medium", "high", "critical"],
           tags: arr(p.tags) ?? [],
           templates: arr(p.templates) ?? [],
+          attach_session: Boolean(p.attach_session),
           ...ids,
         });
         break;
@@ -321,6 +324,7 @@ export function CockpitLoop({
           insecure: Boolean(p.insecure),
           http2: false,
           impersonate: Boolean(p.impersonate),
+          attach_session: Boolean(p.attach_session),
           engagement_id: engagementId ?? null,
           session_id: sessionId,
         });
@@ -341,6 +345,7 @@ export function CockpitLoop({
           impersonate: Boolean(p.impersonate),
           delay_ms: typeof p.delay_ms === "number" ? p.delay_ms : 0,
           use_cookie_jar: true,
+          attach_session: Boolean(p.attach_session),
           ...ids,
         });
         break;

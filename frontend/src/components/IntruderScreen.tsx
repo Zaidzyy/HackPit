@@ -76,6 +76,7 @@ export function IntruderScreen() {
   const [engagementId, setEngagementId] = useState("");
   const [useJar, setUseJar] = useState(true);
   const [impersonate, setImpersonate] = useState(false);
+  const [attachSession, setAttachSession] = useState(false);
   const [approved, setApproved] = useState(false);
   const [ack, setAck] = useState(false);
   const [preview, setPreview] = useState<IntruderPreview | null>(null);
@@ -100,10 +101,11 @@ export function IntruderScreen() {
       session_id: engagementId.trim() || null,
       use_cookie_jar: useJar,
       impersonate,
+      attach_session: attachSession,
       approved,
       dangerous_ack: ack,
     }),
-    [url, method, body, payloads, mode, shapes, delayMs, engagementId, useJar, impersonate, approved, ack]
+    [url, method, body, payloads, mode, shapes, delayMs, engagementId, useJar, impersonate, attachSession, approved, ack]
   );
 
   useEffect(() => {
@@ -265,6 +267,14 @@ export function IntruderScreen() {
                 onChange={(e) => setImpersonate(e.target.checked)}
               />{" "}
               impersonate browser (WAF bypass)
+            </label>
+            <label title="Merge the engagement's stored operator session (saved in :repeater) into every send, so fuzzing runs authenticated. Your OWN session; added at send time, never stored.">
+              <input
+                type="checkbox"
+                checked={attachSession}
+                onChange={(e) => setAttachSession(e.target.checked)}
+              />{" "}
+              attach session (authenticated)
             </label>
             <input
               value={engagementId}

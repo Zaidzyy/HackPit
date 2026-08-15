@@ -46,11 +46,13 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Sequence
 
 from pydantic import BaseModel, Field
 
-from . import config, loot, repeater as repeater_mod, runstore, scope as scope_mod, shaping
+from . import (
+    config, loot, repeater as repeater_mod, runstore, scope as scope_mod, session_store, shaping,
+)
 from .models import RunRecord
 
 #: Payload positions reuse the SHAPING marker, and that is one vocabulary rather than two.
@@ -184,6 +186,12 @@ class IntruderRequest(BaseModel):
     session_id: str | None = None
     use_cookie_jar: bool = Field(
         True, description="Attach the repeater's session jar. Most fuzzing is authenticated."
+    )
+    attach_session: bool = Field(
+        False,
+        description="Also merge the engagement's stored operator session (session_store) into every "
+        "send — the same authenticated mechanism the scan surfaces use. Typed headers win; the "
+        "session is added at SEND time only, so the token never enters the job record. Login stays human.",
     )
     # THE GATE FIELDS — the scanner's, unchanged. Both default False so an omitted field is
     # REFUSED rather than granted.
@@ -401,11 +409,24 @@ def stop(job_id: str) -> IntruderJob | None:
 # --------------------------------------------------------------------------- #
 # execution
 # --------------------------------------------------------------------------- #
-def _send_one(req: IntruderRequest, url: str, body: str, cookie_header: str) -> dict[str, Any]:
-    """One curl, argv-only, inside the open sandbox. Returns a small dict, never raises."""
+def _send_one(
+    req: IntruderRequest, url: str, body: str, cookie_header: str,
+    extra_headers: "Sequence[tuple[str, str]]" = (),
+) -> dict[str, Any]:
+    """One curl, argv-only, inside the open sandbox. Returns a small dict, never raises.
+
+    ``extra_headers`` (the operator's attached session, resolved once in :func:`_run`) is merged in
+    HERE, at send time — typed headers win — so the token authenticates the send without ever being
+    stored in the job's ``request``."""
+    headers = list(req.headers)
+    if extra_headers:
+        headers += [
+            repeater_mod.RepeaterHeader(name=n, value=v)
+            for (n, v) in session_store.additional_session_headers([h.name for h in req.headers], extra_headers)
+        ]
     sentinel = repeater_mod._SENTINEL_TMPL.format(uuid.uuid4().hex)
     probe = repeater_mod.RepeaterRequest(
-        method=req.method, url=url, headers=req.headers, body=body,
+        method=req.method, url=url, headers=headers, body=body,
         follow_redirects=req.follow_redirects, insecure=req.insecure,
         timeout_seconds=req.timeout_seconds,
     )
@@ -454,6 +475,8 @@ def _run(job_id: str, req: IntruderRequest, work: list[tuple[int, str]]) -> None
 
     stop_ev = _stops[job_id]
     jar = cookiejar.jar_for(req.session_id) if req.use_cookie_jar else None
+    # Authenticated fuzzing via the attached operator session — resolved once, merged per send.
+    extra = session_store.header_pairs(req.engagement_id) if req.attach_session else []
 
     def cookie_for(url: str) -> str:
         if jar is None:
@@ -470,7 +493,7 @@ def _run(job_id: str, req: IntruderRequest, work: list[tuple[int, str]]) -> None
                     j.warnings.append(f"payload {payload!r} moved the request off-scope: {why}")
             return IntruderResult(index=index, payload=payload, position=position, url=url,
                                   error=f"NOT SENT — {why}")
-        out = _send_one(req, url, body, cookie_for(url))
+        out = _send_one(req, url, body, cookie_for(url), extra)
         return IntruderResult(
             index=index, payload=payload, position=position, url=url,
             status=out.get("status"), size_bytes=int(out.get("size_bytes") or 0),

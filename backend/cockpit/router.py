@@ -765,18 +765,15 @@ def _attach_session(req: repeater_mod.RepeaterRequest) -> repeater_mod.RepeaterR
     """
     if not (req.attach_session and req.engagement_id):
         return req
-    sess = session_store_mod.get_session(req.engagement_id)
-    if sess is None:
-        return req
-    have = {h.name.strip().lower() for h in req.headers}
-    extra = [
-        repeater_mod.RepeaterHeader(name=n, value=v)
-        for (n, v) in sess.headers
-        if n.strip().lower() not in have
-    ]
+    extra = session_store_mod.additional_session_headers(
+        [h.name for h in req.headers], session_store_mod.header_pairs(req.engagement_id)
+    )
     if not extra:
         return req
-    return req.model_copy(update={"headers": list(req.headers) + extra})
+    merged = list(req.headers) + [
+        repeater_mod.RepeaterHeader(name=n, value=v) for (n, v) in extra
+    ]
+    return req.model_copy(update={"headers": merged})
 
 
 @router.post("/repeater/send", response_model=repeater_mod.RepeaterExchange)

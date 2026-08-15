@@ -51,7 +51,7 @@ import subprocess
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -59,7 +59,9 @@ from state import store as state_store
 from state.models import Endpoint, Finding
 from state.parsers import parse_jsmine
 
-from . import config, engagement, loot, repeater as repeater_mod, runstore, scope as scope_mod
+from . import (
+    config, engagement, loot, repeater as repeater_mod, runstore, scope as scope_mod, session_store,
+)
 from .models import RunRecord
 
 #: The engine command the job runs, and the honest name the gate surface carries.
@@ -116,6 +118,12 @@ class JsReconRequest(BaseModel):
     timeout_seconds: int | None = None
     engagement_id: str | None = None
     session_id: str | None = None
+    attach_session: bool = Field(
+        False,
+        description="Fetch JS AS the logged-in operator — the engagement's stored session "
+        "(session_store) is added to the engine's fetch, so login-gated bundles are collected + "
+        "mined. The operator's OWN session; it rides in the STDIN job spec, never the argv/record.",
+    )
     # THE GATE FIELDS — the executor's, unchanged. Both default False so an omitted field is
     # REFUSED rather than granted.
     approved: bool = Field(False, description="Explicit human approval. Never defaulted true.")
@@ -231,16 +239,32 @@ def gate_argv(req: "JsReconRequest") -> list[str]:
     return argv
 
 
-def collect_job_spec(seeds: list[str], req: "JsReconRequest") -> dict[str, Any]:
-    """The JSON the engine's COLLECT action reads on stdin."""
-    return {"action": "collect", "seed_urls": seeds,
-            "timeout": config.clamp_timeout(req.timeout_seconds), "insecure": bool(req.insecure)}
+def collect_job_spec(
+    seeds: list[str], req: "JsReconRequest", extra_headers: "Sequence[tuple[str, str]]" = ()
+) -> dict[str, Any]:
+    """The JSON the engine's COLLECT action reads on stdin. ``extra_headers`` (the operator's attached
+    session, resolved by the caller — this stays PURE) authenticate the fetch; they ride on STDIN, so
+    the token never reaches the argv/job record."""
+    spec: dict[str, Any] = {"action": "collect", "seed_urls": seeds,
+                            "timeout": config.clamp_timeout(req.timeout_seconds),
+                            "insecure": bool(req.insecure)}
+    if extra_headers:
+        spec["headers"] = [[n, v] for n, v in extra_headers]
+    return spec
 
 
-def mine_job_spec(js_urls: list[str], req: "JsReconRequest") -> dict[str, Any]:
-    """The JSON the engine's MINE action reads on stdin."""
-    return {"action": "mine", "js_urls": js_urls, "maps": bool(req.maps), "verify": bool(req.verify),
-            "timeout": config.clamp_timeout(req.timeout_seconds), "insecure": bool(req.insecure)}
+def mine_job_spec(
+    js_urls: list[str], req: "JsReconRequest", extra_headers: "Sequence[tuple[str, str]]" = ()
+) -> dict[str, Any]:
+    """The JSON the engine's MINE action reads on stdin. ``extra_headers`` authenticate the fetch on
+    STDIN (never the argv)."""
+    spec: dict[str, Any] = {"action": "mine", "js_urls": js_urls, "maps": bool(req.maps),
+                            "verify": bool(req.verify),
+                            "timeout": config.clamp_timeout(req.timeout_seconds),
+                            "insecure": bool(req.insecure)}
+    if extra_headers:
+        spec["headers"] = [[n, v] for n, v in extra_headers]
+    return spec
 
 
 # --------------------------------------------------------------------------- #
@@ -580,10 +604,14 @@ def _run(job_id: str, req: JsReconRequest, record, workdir: str, target: str,
         except Exception:  # noqa: BLE001 - a state read must not take the job down
             pass
 
+    # Authenticated JS recon: resolve the operator's attached session once; it rides in the STDIN
+    # job spec (never the argv), so login-gated bundles are fetched without a token touching a record.
+    extra = session_store.header_pairs(req.engagement_id) if req.attach_session else []
+
     # STAGE 1 — collect (only when a target is given). Its output is DISCOVERED, so it is
     # scope-FILTERED, not refused.
     if target and not _stopped(job_id):
-        spec = collect_job_spec([target], req)
+        spec = collect_job_spec([target], req, extra_headers=extra)
         text = _spawn_json(job_id, spec, workdir, _timeout(req))
         collected, cerr = _parse_collect(text)
         candidates += collected
@@ -604,7 +632,7 @@ def _run(job_id: str, req: JsReconRequest, record, workdir: str, target: str,
 
     # STAGE 2 — mine the in-scope JS set.
     if in_scope_js and not _stopped(job_id):
-        spec = mine_job_spec(in_scope_js, req)
+        spec = mine_job_spec(in_scope_js, req, extra_headers=extra)
         last_text = _spawn_json(job_id, spec, workdir, _timeout(req) * 2)
         endpoints, secrets, maps, merr = parse_mine_output(last_text)
         for e in endpoints:

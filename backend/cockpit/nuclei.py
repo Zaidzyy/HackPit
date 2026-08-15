@@ -41,14 +41,14 @@ import subprocess
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from pydantic import BaseModel, Field
 
 from state import store as state_store
 from state.models import Finding, severity_rank
 
-from . import config, loot, repeater as repeater_mod, runstore
+from . import config, loot, repeater as repeater_mod, runstore, session_store
 from .models import RunRecord
 
 #: nuclei's five severities, in the order a results table ranks them.
@@ -109,6 +109,12 @@ class NucleiRequest(BaseModel):
     timeout_seconds: int | None = None
     engagement_id: str | None = None
     session_id: str | None = None
+    attach_session: bool = Field(
+        False,
+        description="Run this scan AS the logged-in operator: merge the engagement's stored session "
+        "(session_store) headers as -H flags, so authenticated endpoints are actually scanned. The "
+        "operator's OWN session; the token is MASKED in the job record. Login stays human.",
+    )
     # THE GATE FIELDS — the scanner's, unchanged. Both default False so an omitted field is
     # REFUSED rather than granted.
     approved: bool = Field(False, description="Explicit human approval. Never defaulted true.")
@@ -207,17 +213,24 @@ def _dedupe(items: Iterable[str]) -> list[str]:
     return out
 
 
-def nuclei_argv(targets: list[str], req: NucleiRequest) -> list[str]:
+def nuclei_argv(
+    targets: list[str], req: NucleiRequest, extra_headers: "Sequence[tuple[str, str]]" = ()
+) -> list[str]:
     """The command this job is EQUIVALENT TO, which is what the human approves. PURE, never a shell.
 
     ``-jsonl`` streams one JSON object per finding to stdout (which is what :func:`parse_findings`
     reads); ``-duc`` disables the startup update check (the sandbox has no egress to fetch one);
     ``-silent`` keeps stdout to results only. Every target rides as ``-u <target>`` so it lands
     where ``check_target_lock`` reads it — the target handrail sees the exact hosts that get hit.
+
+    ``extra_headers`` (the operator's attached session, resolved by the caller — this stays PURE and
+    never reads session_store) rides as ``-H "name: value"``, so the scan is authenticated.
     """
     argv = ["nuclei", "-jsonl", "-silent", "-duc"]
     for t in targets:
         argv += ["-u", t]
+    for hn, hv in extra_headers:
+        argv += ["-H", f"{hn}: {hv}"]
     sev = [s for s in (x.strip().lower() for x in req.severities) if s in SEVERITIES]
     if sev:
         argv += ["-severity", ",".join(sev)]
@@ -503,10 +516,16 @@ def start(req: NucleiRequest) -> NucleiJob:
             f"sandbox '{resolved.container}' is not running — nothing was scanned",
         )
 
-    argv = nuclei_argv(targets, req)
+    # Authenticated scan: the operator's attached session rides as -H. Build the REAL argv (with the
+    # live token) for the exec, but store a MASKED copy in the job record so the token never persists.
+    extra_headers = (
+        session_store.header_pairs(req.engagement_id) if req.attach_session else []
+    )
+    real_argv = nuclei_argv(targets, req, extra_headers=extra_headers)
+    job_argv = session_store.mask_header_flag_values(real_argv)
     job_id = uuid.uuid4().hex[:12]
     job = NucleiJob(
-        id=job_id, argv=argv, targets=targets, container=resolved.container,
+        id=job_id, argv=job_argv, targets=targets, container=resolved.container,
         mode=resolved.mode, engagement_id=req.engagement_id,
         session_id=req.session_id or req.engagement_id, started_at=_now(), warnings=warnings,
     )
@@ -514,7 +533,7 @@ def start(req: NucleiRequest) -> NucleiJob:
         _jobs[job_id] = job
         _stops[job_id] = threading.Event()
     threading.Thread(
-        target=_run, args=(job_id, argv, req, resolved), daemon=True, name=f"nuclei-{job_id}"
+        target=_run, args=(job_id, real_argv, req, resolved), daemon=True, name=f"nuclei-{job_id}"
     ).start()
     return job
 

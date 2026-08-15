@@ -260,6 +260,10 @@ _SURFACE_CONTRACT = (
     '  - "intruder": fuzz ONE request across a payload set (one marked position). params: {"url": '
     '"<in-scope url; put FUZZ where the payload goes>", "method": "…", "headers": [..], "body": '
     '"…", "payloads": ["..",".."], "mode": "sniper|battering-ram", "impersonate": <bool>}.\n'
+    'AUTHENTICATED: discover / jsrecon / nuclei / repeater / intruder accept "attach_session": true '
+    "to run AS the logged-in operator — the engagement's stored session (saved by the operator in "
+    ":repeater) is merged in, so endpoints behind login are actually tested. Most bounty bugs live "
+    "behind auth, so prefer attach_session=true once a session is attached to the engagement.\n"
     "The human still approves the surface call, and the surface re-checks its OWN scope/approval/"
     "danger before running (the repeater send stays human-approved). Use a raw command for anything "
     "these surfaces do not cover."

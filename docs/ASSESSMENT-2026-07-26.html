@@ -477,6 +477,7 @@ a { color: var(--accent); text-decoration: none; }
 </li>
 <li><a href="#mobile-apps-are-first-class-in-the-scope-model-app-2026-08-15">Mobile apps are first-class in the scope model — app: (2026-08-15)</a></li>
 <li><a href="#authenticated-testing-in-cockpit-attach-the-operators-session-2026-08-15">Authenticated testing in-cockpit: attach the operator's session (2026-08-15)</a></li>
+<li><a href="#authenticated-automated-scanning-the-session-reaches-every-scan-surface-2026-08-15">Authenticated automated scanning — the session reaches every scan surface (2026-08-15)</a></li>
 <li><a href="#the-loop-can-invoke-hackpit-surfaces-not-just-raw-commands-2026-08-15">The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)</a></li>
 </ul>
 </li>
@@ -6502,6 +6503,26 @@ override, no duplicate credential). Three endpoints (<code>POST</code>/<code>GET
 session" toggle. It is the in-cockpit form of what the orchestrator loop does across a whole
 engagement — keep probing the surface, now authenticated. <code>test_session_store.py</code> locks
 extract / memory-only-masked / attach-and-typed-wins.</p>
+<h2 id="authenticated-automated-scanning-the-session-reaches-every-scan-surface-2026-08-15">Authenticated automated scanning — the session reaches every scan surface (2026-08-15)</h2>
+<p>Attaching a session to the repeater tested authenticated <em>one request at a time</em>; the scanners still
+ran blind. <code>NucleiRequest</code>/<code>DiscoverRequest</code> carried no auth, and nuclei's docstring said so outright
+— <em>"NO SECRET, BY CONSTRUCTION."</em> Since most bounty bugs live behind auth, that was the real gap. Now
+<strong>nuclei, discover (arjun/ffuf/feroxbuster), jsrecon and intruder all accept <code>attach_session</code></strong> and run
+AS the logged-in operator, reusing the one <code>session_store</code> mechanism. The pattern is uniform and keeps
+the safety properties intact: the impure run path resolves the session and passes the header pairs
+<strong>into the pure argv builder as an explicit param</strong> (so the AST-checked "builds argv, executes nothing"
+invariant holds — the builder never reads <code>session_store</code>), and the <strong>token never lands in a record</strong> —
+nuclei/discover build the real argv for the exec but persist a <strong>masked</strong> copy (<code>mask_header_flag_values</code>),
+jsrecon rides the session in the engine's <strong>STDIN job spec</strong> (never the argv), and intruder merges it at
+<strong>send time</strong>, not into the stored <code>request</code>. Everywhere, a <strong>typed header wins</strong> over the attached
+session. This deliberately revisits nuclei's "no secret" note: the secret is now the operator's OWN
+ephemeral session (in-memory, expiring), masked wherever it is shown. The orchestrator contract advertises
+<code>attach_session</code>, so <strong>the loop can propose an authenticated sweep</strong> — the whole point, since it is the
+loop that keeps probing the surface. <code>test_authenticated_scanning.py</code> locks the cross-surface invariant
+(auth header present when attached, token absent from every persisted argv); the three <code>_safety</code> suites
+still hold. The jsrecon half needed a <code>docker/js_mine.py</code> engine change (it now reads a <code>headers</code> field),
+so <strong>that surface's auth is live only after an image rebuild</strong> — nuclei/discover/intruder use standard
+tool flags and are live immediately.</p>
 <h2 id="the-loop-can-invoke-hackpit-surfaces-not-just-raw-commands-2026-08-15">The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)</h2>
 <p>The orchestrator proposed ONE raw command at a time — so it could run the underlying engines
 (<code>curl_chrome116</code>, <code>ffuf</code>, <code>nuclei</code>, <code>js-mine</code>) but never HackPit's own wrapped SURFACES, which add

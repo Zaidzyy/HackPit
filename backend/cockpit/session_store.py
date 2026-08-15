@@ -75,3 +75,45 @@ def masked_view(engagement_id: str) -> dict[str, Any] | None:
         "label": s.label,
         "headers": [{"name": n, "value": f"•••• ({len(v)} chars)"} for n, v in s.headers],
     }
+
+
+# --------------------------------------------------------------------------- #
+# shared attach helpers — used by the repeater AND the scan surfaces so an
+# authenticated run is one mechanism, not five copies.
+# --------------------------------------------------------------------------- #
+def header_pairs(engagement_id: str) -> list[tuple[str, str]]:
+    """The engagement's stored session headers, or [] — so run paths stay branch-light."""
+    s = get_session(engagement_id)
+    return list(s.headers) if s else []
+
+
+def additional_session_headers(
+    existing_names: "list[str] | set[str]", stored: list[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """The stored headers NOT already present by name — typed headers always win (no override,
+    no duplicate credential). The one merge rule the repeater and every scan surface share."""
+    have = {n.strip().lower() for n in existing_names}
+    return [(n, v) for (n, v) in stored if n.strip().lower() not in have]
+
+
+#: argv flags whose VALUE is a header/cookie we must never persist in a job record.
+_HEADER_FLAGS = frozenset({"-H", "--header", "--headers", "-b", "--cookie"})
+
+
+def _mask_one_header(val: str) -> str:
+    """'Cookie: session_key=abc' -> 'Cookie: •••• (N chars)'; a bare cookie string -> fully masked."""
+    if ":" in val:
+        name, _, rest = val.partition(":")
+        return f"{name}: •••• ({len(rest.strip())} chars)"
+    return f"•••• ({len(val)} chars)"
+
+
+def mask_header_flag_values(argv: list[str]) -> list[str]:
+    """A copy of ``argv`` with the value after every header/cookie flag masked — for the job's
+    PERSISTED/displayed argv, so a session token never lands in a record. The real argv (with the
+    live value) is built only for the exec and is never stored."""
+    out = list(argv)
+    for i in range(len(out) - 1):
+        if out[i] in _HEADER_FLAGS:
+            out[i + 1] = _mask_one_header(out[i + 1])
+    return out

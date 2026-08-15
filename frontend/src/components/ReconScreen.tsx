@@ -286,6 +286,7 @@ export function ReconScreen() {
   const [paramWordlist, setParamWordlist] = useState("");
   const [discApproved, setDiscApproved] = useState(false);
   const [discImpersonate, setDiscImpersonate] = useState(false);
+  const [discAttachSession, setDiscAttachSession] = useState(false);
   const [discAck, setDiscAck] = useState(false);
   const [discPreview, setDiscPreview] = useState<DiscoverPreview | null>(null);
   const [discStarting, setDiscStarting] = useState(false);
@@ -298,6 +299,7 @@ export function ReconScreen() {
   const [jsIncludeState, setJsIncludeState] = useState(true);
   const [jsMaps, setJsMaps] = useState(true);
   const [jsVerify, setJsVerify] = useState(true);
+  const [jsAttachSession, setJsAttachSession] = useState(false);
   const [jsApproved, setJsApproved] = useState(false);
   const [jsAck, setJsAck] = useState(false);
   const [jsPreview, setJsPreview] = useState<JsReconPreview | null>(null);
@@ -333,12 +335,13 @@ export function ReconScreen() {
       param_wordlist: paramWordlist.trim(),
       rate_limit: Number.parseInt(rate, 10) || null,
       impersonate: discImpersonate,
+      attach_session: discAttachSession,
       engagement_id: sessionId.trim() || null,
       session_id: sessionId.trim() || null,
       approved: discApproved,
       dangerous_ack: discAck,
     }),
-    [discMode, url, domain, method, tool, words, wordlist, extText, paramWordlist, rate, discImpersonate, sessionId, discApproved, discAck]
+    [discMode, url, domain, method, tool, words, wordlist, extText, paramWordlist, rate, discImpersonate, discAttachSession, sessionId, discApproved, discAck]
   );
 
   const jsUrls = useMemo(
@@ -353,13 +356,14 @@ export function ReconScreen() {
       include_state: jsIncludeState,
       maps: jsMaps,
       verify: jsVerify,
+      attach_session: jsAttachSession,
       rate_limit: Number.parseInt(rate, 10) || null,
       engagement_id: sessionId.trim() || null,
       session_id: sessionId.trim() || null,
       approved: jsApproved,
       dangerous_ack: jsAck,
     }),
-    [jsTarget, jsUrls, jsIncludeState, jsMaps, jsVerify, rate, sessionId, jsApproved, jsAck]
+    [jsTarget, jsUrls, jsIncludeState, jsMaps, jsVerify, jsAttachSession, rate, sessionId, jsApproved, jsAck]
   );
 
   useEffect(() => {
@@ -987,6 +991,20 @@ export function ReconScreen() {
                     impersonate browser (WAF bypass — routes through the JA3 proxy)
                   </label>
                 )}
+                {discMode !== "historical" && (
+                  <label
+                    className="hp-tn-danger-why"
+                    style={{ display: "flex", gap: "0.4rem", alignItems: "flex-start" }}
+                    title="Run the tool AS the logged-in operator — merge the engagement's stored session (saved in :repeater) as auth headers, so content/params behind login are discovered. Ignored for historical."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={discAttachSession}
+                      onChange={(e) => setDiscAttachSession(e.target.checked)}
+                    />
+                    attach session (authenticated discovery)
+                  </label>
+                )}
                 <label className="hp-tn-danger-why" style={{ display: "flex", gap: "0.4rem", alignItems: "flex-start" }}>
                   <input type="checkbox" checked={discApproved} onChange={(e) => setDiscApproved(e.target.checked)} />
                   I approve this discovery job
@@ -1181,6 +1199,14 @@ export function ReconScreen() {
                   onClick={() => setJsVerify((v) => !v)}
                 >
                   verify keys (trufflehog)
+                </button>
+                <button
+                  type="button"
+                  className={`hp-tn-chip${jsAttachSession ? " is-on" : ""}`}
+                  onClick={() => setJsAttachSession((v) => !v)}
+                  title="Fetch JS AS the logged-in operator — the engagement's stored session (saved in :repeater) authenticates the fetch, so login-gated bundles are mined."
+                >
+                  attach session (authenticated)
                 </button>
               </div>
 

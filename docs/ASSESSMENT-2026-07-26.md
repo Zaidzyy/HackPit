@@ -6451,6 +6451,28 @@ session" toggle. It is the in-cockpit form of what the orchestrator loop does ac
 engagement — keep probing the surface, now authenticated. `test_session_store.py` locks
 extract / memory-only-masked / attach-and-typed-wins.
 
+## Authenticated automated scanning — the session reaches every scan surface (2026-08-15)
+
+Attaching a session to the repeater tested authenticated *one request at a time*; the scanners still
+ran blind. `NucleiRequest`/`DiscoverRequest` carried no auth, and nuclei's docstring said so outright
+— *"NO SECRET, BY CONSTRUCTION."* Since most bounty bugs live behind auth, that was the real gap. Now
+**nuclei, discover (arjun/ffuf/feroxbuster), jsrecon and intruder all accept `attach_session`** and run
+AS the logged-in operator, reusing the one `session_store` mechanism. The pattern is uniform and keeps
+the safety properties intact: the impure run path resolves the session and passes the header pairs
+**into the pure argv builder as an explicit param** (so the AST-checked "builds argv, executes nothing"
+invariant holds — the builder never reads `session_store`), and the **token never lands in a record** —
+nuclei/discover build the real argv for the exec but persist a **masked** copy (`mask_header_flag_values`),
+jsrecon rides the session in the engine's **STDIN job spec** (never the argv), and intruder merges it at
+**send time**, not into the stored `request`. Everywhere, a **typed header wins** over the attached
+session. This deliberately revisits nuclei's "no secret" note: the secret is now the operator's OWN
+ephemeral session (in-memory, expiring), masked wherever it is shown. The orchestrator contract advertises
+`attach_session`, so **the loop can propose an authenticated sweep** — the whole point, since it is the
+loop that keeps probing the surface. `test_authenticated_scanning.py` locks the cross-surface invariant
+(auth header present when attached, token absent from every persisted argv); the three `_safety` suites
+still hold. The jsrecon half needed a `docker/js_mine.py` engine change (it now reads a `headers` field),
+so **that surface's auth is live only after an image rebuild** — nuclei/discover/intruder use standard
+tool flags and are live immediately.
+
 ## The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)
 
 The orchestrator proposed ONE raw command at a time — so it could run the underlying engines

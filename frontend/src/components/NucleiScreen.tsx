@@ -58,6 +58,7 @@ export function NucleiScreen() {
   const [rate, setRate] = useState("");
   const [approved, setApproved] = useState(false);
   const [ack, setAck] = useState(false);
+  const [attachSession, setAttachSession] = useState(false);
   const [preview, setPreview] = useState<NucleiPreview | null>(null);
   const [starting, setStarting] = useState(false);
 
@@ -72,10 +73,11 @@ export function NucleiScreen() {
       rate_limit: Number.parseInt(rate, 10) || null,
       engagement_id: sessionId.trim() || null,
       session_id: sessionId.trim() || null,
+      attach_session: attachSession,
       approved,
       dangerous_ack: ack,
     }),
-    [targets, severities, tags, rate, sessionId, approved, ack]
+    [targets, severities, tags, rate, sessionId, approved, ack, attachSession]
   );
 
   useEffect(() => {
@@ -187,6 +189,17 @@ export function NucleiScreen() {
               aria-label="Rate limit, requests per second"
             />
           </div>
+          <label
+            className="hp-tn-danger-why"
+            style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}
+          >
+            <input
+              type="checkbox"
+              checked={attachSession}
+              onChange={(e) => setAttachSession(e.target.checked)}
+            />
+            attach session — scan as the logged-in operator (the engagement&rsquo;s stored session)
+          </label>
           <div className="hp-tn-form">
             <textarea
               value={targetText}

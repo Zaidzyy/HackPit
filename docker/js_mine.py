@@ -307,6 +307,22 @@ def _find_curl_impersonate() -> str:
 #: Resolved once at import. A module global so a hermetic test can force either path.
 _CURL_IMPERSONATE = _find_curl_impersonate()
 
+#: The operator's attached session, applied to EVERY JS fetch when the backend puts a "headers"
+#: field in the job spec (authenticated JS recon). Set once per process in main(). js-mine is a
+#: single-shot CLI per job, so a module global set from the spec is safe. Shape: [(name, value), …].
+_EXTRA_HEADERS: "list[tuple[str, str]]" = []
+
+
+def _norm_headers(job: "dict[str, Any]") -> "list[tuple[str, str]]":
+    """The job spec's optional ``headers`` -> [(name, value), …]. Accepts [[n,v],…] or [{name,value},…]."""
+    out: "list[tuple[str, str]]" = []
+    for h in job.get("headers") or []:
+        if isinstance(h, (list, tuple)) and len(h) == 2:
+            out.append((str(h[0]), str(h[1])))
+        elif isinstance(h, dict) and h.get("name"):
+            out.append((str(h["name"]), str(h.get("value", ""))))
+    return out
+
 
 def _ctx(insecure: bool) -> "ssl.SSLContext | None":
     if not insecure:
@@ -321,7 +337,10 @@ def _fetch_urllib(url: str, timeout: float, insecure: bool) -> tuple[str, str]:
     """Fetch via stdlib urllib. Works for a plain origin; a JA3-fingerprinting WAF will 403 this,
     which is why :func:`_fetch` prefers curl-impersonate. Byte-capped, time-bounded, never raises."""
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "hackpit-js-mine/1.0"})
+        hdrs = {"User-Agent": "hackpit-js-mine/1.0"}
+        for hn, hv in _EXTRA_HEADERS:
+            hdrs[hn] = hv
+        req = urllib.request.Request(url, headers=hdrs)
         with urllib.request.urlopen(req, timeout=timeout, context=_ctx(insecure)) as resp:
             raw = resp.read(MAX_BYTES + 1)
         if len(raw) > MAX_BYTES:
@@ -350,6 +369,8 @@ def _fetch_curl(exe: str, url: str, timeout: float, insecure: bool) -> "tuple[st
                     "-m", str(int(max(1.0, timeout))), "-o", body_path, "-w", "%{http_code}"]
             if insecure:
                 args.append("-k")
+            for hn, hv in _EXTRA_HEADERS:
+                args += ["-H", f"{hn}: {hv}"]
             args.append(url)
             proc = subprocess.run(args, capture_output=True, text=True,
                                   timeout=max(20.0, timeout * 2))
@@ -584,6 +605,8 @@ def main(argv: list[str]) -> int:
     if not isinstance(job, dict):
         print(json.dumps({"error": "job must be a JSON object"}))
         return 0
+    global _EXTRA_HEADERS
+    _EXTRA_HEADERS = _norm_headers(job)  # authenticated JS recon: apply to every fetch this run
     action = str(job.get("action") or "mine").strip().lower()
     try:
         out = do_collect(job) if action == "collect" else do_mine(job)

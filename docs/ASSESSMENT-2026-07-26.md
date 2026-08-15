@@ -6367,3 +6367,26 @@ Also this session: **operator live-chat beside the loop** (its own row above), a
 **stop** on the engagements list (exit ≠ delete), a launcher rebalance (`:workflows`/`:proposals` →
 infrastructure so both bands fill the 4-wide grid), and a plain-language rewrite of all 28 launcher
 card descriptions. Full backend suite **131 files pass**; tsc 0 · lint 11 · build 0.
+
+## Authenticated-testing on-ramp — captured-request import + a mobile-capture harness (2026-08-15)
+
+The remaining frontier is an authenticated cross-account IDOR test on a mobile-only API (Fishbowl's
+`/thread/{id}/messages`), whose `Invalid auth key` 401 gate is a header that lives in the app, not
+the web bundle. The login itself resists automation (app UI, verification, ToS) and the emulator
+can't run in the sandbox (KVM) — so those stay the operator's hands. Everything AROUND them is now
+tooled:
+
+- **Paste-and-parse (`cockpit/reqimport.py`, `:repeater` → "import a captured request").** A proxy
+  "copy as raw" or a curl line is parsed into the repeater's fields, and each credential-looking
+  header is flagged (app-key vs session/bearer). Pure — it parses text and sends nothing (the
+  repeater's human-only lock is untouched). **The deterministic bit:** paste BOTH accounts' captures
+  and `import-diff` reports which credential header is IDENTICAL across accounts (the shared app key,
+  static — answering "is the key per-user?") vs which DIFFERS (the per-user session token an IDOR
+  test swaps). `test_reqimport` covers raw-HTTP, curl, the two-account diff, and bad-paste-never-raises.
+- **Capture harness (`tools/mobile-capture.sh`).** A host script (runs where the emulator/adb/frida
+  live) that starts mitmproxy, installs its CA as a SYSTEM cert (hash computed, adb-pushed), finds
+  the app package, and launches a Frida SSL-unpinning — so Part B collapses to "run it → open the
+  app → log in." It orchestrates the operator's own device; it captures nothing on its own.
+
+This is the deliberate 80/20: automate the stable plumbing and the header classification, leave the
+login (the fragile, ToS-touching, expiring-token step) to the human.

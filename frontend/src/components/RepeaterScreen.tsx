@@ -11,6 +11,7 @@ import {
   getRepeaterStatus,
   repeaterCookies,
   getRepeaterShapes,
+  importCapturedRequest,
   repeaterPreview,
   repeaterSend,
   splitGraphQLBody,
@@ -52,6 +53,11 @@ export function RepeaterScreen() {
   const [url, setUrl] = useState("");
   const [headers, setHeaders] = useState<HeaderRow[]>([newHeader()]);
   const [body, setBody] = useState("");
+  // IMPORT A CAPTURED REQUEST — paste a proxy 'copy as raw' or a curl line; it fills the fields
+  // and flags which header is the app key vs the session token (the mobile-token workflow).
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importInfo, setImportInfo] = useState<string | null>(null);
   const [follow, setFollow] = useState(false);
   const [insecure, setInsecure] = useState(false);
   const [impersonate, setImpersonate] = useState(false);
@@ -353,6 +359,32 @@ export function RepeaterScreen() {
   const removeHeader = (id: number) =>
     setHeaders((hs) => (hs.length > 1 ? hs.filter((h) => h.id !== id) : hs));
 
+  const doImport = useCallback(() => {
+    const raw = importText.trim();
+    if (!raw) return;
+    importCapturedRequest(raw)
+      .then((r) => {
+        if (r.error) {
+          setImportInfo(`couldn't parse: ${r.error}`);
+          return;
+        }
+        setMethod(r.method || "GET");
+        setUrl(r.url);
+        setHeaders(
+          r.headers.length ? r.headers.map((h) => newHeader(h.name, h.value)) : [newHeader()]
+        );
+        setBody(r.body || "");
+        const bits: string[] = [];
+        if (r.auth_key_header) bits.push(`app auth key looks like: ${r.auth_key_header}`);
+        if (r.session_headers.length)
+          bits.push(`session token looks like: ${r.session_headers.join(", ")}`);
+        bits.push(...r.notes);
+        setImportInfo(bits.join(" · ") || "parsed — fields filled below");
+        setImportOpen(false);
+      })
+      .catch((e) => setImportInfo(e instanceof ApiError ? e.message : String(e)));
+  }, [importText]);
+
   const up = status?.up ?? false;
 
   return (
@@ -377,6 +409,51 @@ export function RepeaterScreen() {
         <div className="hp-rp-grid">
           {/* ---- request editor ---- */}
           <section className="hp-rp-req" aria-label="Request">
+            {/* IMPORT a captured request — the mobile-token workflow. Fills the fields below and
+                flags the app-key vs session-token headers. Inline-styled to add no new CSS class. */}
+            <div style={{ marginBottom: "10px" }}>
+              <button
+                type="button"
+                onClick={() => setImportOpen((o) => !o)}
+                style={{
+                  fontSize: "12px", color: "var(--dim)", background: "none",
+                  border: "none", cursor: "pointer", padding: 0,
+                }}
+              >
+                {importOpen ? "▾" : "▸"} import a captured request (proxy / curl)
+              </button>
+              {importOpen && (
+                <div style={{ marginTop: "6px" }}>
+                  <textarea
+                    value={importText}
+                    onChange={(e) => setImportText(e.target.value)}
+                    placeholder="Paste a captured request — a proxy 'copy as raw' (GET /path HTTP/2 …) or a curl line. It fills the fields below and flags the auth-key vs session-token headers."
+                    rows={6}
+                    spellCheck={false}
+                    style={{ width: "100%", fontFamily: "monospace", fontSize: "12px" }}
+                  />
+                  <div style={{ display: "flex", gap: "8px", marginTop: "6px" }}>
+                    <button type="button" onClick={doImport} disabled={!importText.trim()}>
+                      parse &amp; fill
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setImportText("");
+                        setImportInfo(null);
+                      }}
+                    >
+                      clear
+                    </button>
+                  </div>
+                </div>
+              )}
+              {importInfo && (
+                <p style={{ fontSize: "12px", color: "var(--accent)", marginTop: "6px" }}>
+                  {importInfo}
+                </p>
+              )}
+            </div>
             <div className="hp-rp-line">
               <select
                 className="hp-rp-method"

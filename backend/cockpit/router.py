@@ -69,6 +69,7 @@ from . import tokens as tokens_mod
 from . import tokenjobs as tokenjobs_mod
 from . import kali as kali_mod
 from . import repeater as repeater_mod
+from . import reqimport as reqimport_mod
 from . import terminal as terminal_mod
 from . import proxy as proxy_mod
 from . import tunnels as tunnels_mod
@@ -799,6 +800,34 @@ def repeater_preview(req: repeater_mod.RepeaterRequest) -> dict[str, Any]:
     """
     url, body, applied, warnings = repeater_mod.shape_request(req)
     return {"url": url, "body": body, "shapes_applied": applied, "warnings": warnings}
+
+
+# --- Import a captured request (paste-and-parse) ------------------------------------ #
+# Turn a request copied from a proxy / a curl line into the repeater's fields, and flag which
+# header is the shared app key vs the per-user session token. BOTH routes are pure parses over
+# pasted text — they send nothing and never touch repeater_mod.send (the human-only lock holds).
+class ImportRequestIn(BaseModel):
+    raw: str = Field(..., min_length=1,
+                     description="A captured HTTP request ('copy as raw') or a curl command line.")
+
+
+class ImportDiffIn(BaseModel):
+    raw_a: str = Field(..., min_length=1, description="Account A's captured request.")
+    raw_b: str = Field(..., min_length=1, description="Account B's captured request.")
+
+
+@router.post("/repeater/import")
+def repeater_import(req: ImportRequestIn) -> dict[str, Any]:
+    """Parse one captured request into structured fields + a heuristic credential guess."""
+    return reqimport_mod.parse_capture(req.raw).to_dict()
+
+
+@router.post("/repeater/import-diff")
+def repeater_import_diff(req: ImportDiffIn) -> dict[str, Any]:
+    """Diff two captures (account A + account B). A credential header IDENTICAL across both is the
+    SHARED app key; one that DIFFERS is the PER-USER session token — the header a cross-account
+    IDOR test swaps. Deterministic, sends nothing."""
+    return reqimport_mod.diff_captures(req.raw_a, req.raw_b)
 
 
 # --- GraphQL: the repeater's round trip (build #20 item 3) -------------------------- #

@@ -471,6 +471,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#js-recon-secret-endpoint-mining-the-s3bundlesecret-chain-live-jsrecon-2026-08-08">JS recon → secret / endpoint mining — the S3→bundle→secret chain, live (:jsrecon) (2026-08-08)</a></li>
 <li><a href="#dual-candidate-second-opinion-on-generated-commands-foundation-2026-08-09">Dual-candidate "second opinion" on generated commands — foundation (2026-08-09)</a></li>
 <li><a href="#waf-interaction-hardening-browser-impersonation-across-the-web-surfaces-2026-08-15">WAF-interaction hardening — browser impersonation across the web surfaces (2026-08-15)</a></li>
+<li><a href="#authenticated-testing-on-ramp-captured-request-import-a-mobile-capture-harness-2026-08-15">Authenticated-testing on-ramp — captured-request import + a mobile-capture harness (2026-08-15)</a></li>
 </ul>
 </li>
 </ul>
@@ -6420,5 +6421,26 @@ fingerprint, each proven live or test-locked.</p>
 <strong>stop</strong> on the engagements list (exit ≠ delete), a launcher rebalance (<code>:workflows</code>/<code>:proposals</code> →
 infrastructure so both bands fill the 4-wide grid), and a plain-language rewrite of all 28 launcher
 card descriptions. Full backend suite <strong>131 files pass</strong>; tsc 0 · lint 11 · build 0.</p>
+<h2 id="authenticated-testing-on-ramp-captured-request-import-a-mobile-capture-harness-2026-08-15">Authenticated-testing on-ramp — captured-request import + a mobile-capture harness (2026-08-15)</h2>
+<p>The remaining frontier is an authenticated cross-account IDOR test on a mobile-only API (Fishbowl's
+<code>/thread/{id}/messages</code>), whose <code>Invalid auth key</code> 401 gate is a header that lives in the app, not
+the web bundle. The login itself resists automation (app UI, verification, ToS) and the emulator
+can't run in the sandbox (KVM) — so those stay the operator's hands. Everything AROUND them is now
+tooled:</p>
+<ul>
+<li><strong>Paste-and-parse (<code>cockpit/reqimport.py</code>, <code>:repeater</code> → "import a captured request").</strong> A proxy
+  "copy as raw" or a curl line is parsed into the repeater's fields, and each credential-looking
+  header is flagged (app-key vs session/bearer). Pure — it parses text and sends nothing (the
+  repeater's human-only lock is untouched). <strong>The deterministic bit:</strong> paste BOTH accounts' captures
+  and <code>import-diff</code> reports which credential header is IDENTICAL across accounts (the shared app key,
+  static — answering "is the key per-user?") vs which DIFFERS (the per-user session token an IDOR
+  test swaps). <code>test_reqimport</code> covers raw-HTTP, curl, the two-account diff, and bad-paste-never-raises.</li>
+<li><strong>Capture harness (<code>tools/mobile-capture.sh</code>).</strong> A host script (runs where the emulator/adb/frida
+  live) that starts mitmproxy, installs its CA as a SYSTEM cert (hash computed, adb-pushed), finds
+  the app package, and launches a Frida SSL-unpinning — so Part B collapses to "run it → open the
+  app → log in." It orchestrates the operator's own device; it captures nothing on its own.</li>
+</ul>
+<p>This is the deliberate 80/20: automate the stable plumbing and the header classification, leave the
+login (the fragile, ToS-touching, expiring-token step) to the human.</p>
 </body>
 </html>

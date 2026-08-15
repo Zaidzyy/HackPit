@@ -2109,6 +2109,41 @@ export const getRepeaterStatus = (signal?: AbortSignal) =>
 export const repeaterSend = (req: RepeaterRequest, signal?: AbortSignal) =>
   postJSON<RepeaterExchange>("/cockpit/repeater/send", req, signal);
 
+/** A captured request parsed into repeater fields + a credential guess (POST /repeater/import). */
+export type ImportedRequest = {
+  method: string;
+  url: string;
+  headers: { name: string; value: string }[];
+  body: string;
+  /** header that looks like the SHARED app auth key (single-capture heuristic). */
+  auth_key_header: string;
+  /** headers that look like a per-user session / bearer / cookie credential. */
+  session_headers: string[];
+  notes: string[];
+  error: string;
+};
+
+/** Parse one captured request (proxy 'copy as raw' or a curl line) into repeater fields. */
+export const importCapturedRequest = (raw: string, signal?: AbortSignal) =>
+  postJSON<ImportedRequest>("/cockpit/repeater/import", { raw }, signal);
+
+/** The deterministic two-account verdict (POST /repeater/import-diff). */
+export type CaptureDiff = {
+  error: string;
+  identical_headers: string[];
+  differing_headers: string[];
+  likely_app_key: string;
+  likely_session_token: string;
+  notes: string[];
+  a: ImportedRequest;
+  b: ImportedRequest;
+};
+
+/** Diff account A vs account B captures: identical credential header = shared app key, differing =
+ *  per-user session token. */
+export const diffCaptures = (raw_a: string, raw_b: string, signal?: AbortSignal) =>
+  postJSON<CaptureDiff>("/cockpit/repeater/import-diff", { raw_a, raw_b }, signal);
+
 export const getRepeaterHistory = (
   sessionId?: string | null,
   signal?: AbortSignal

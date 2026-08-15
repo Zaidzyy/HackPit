@@ -69,17 +69,22 @@ PKG="$(adb shell pm list packages 2>/dev/null | tr -d '\r' | grep -i "$APP_MATCH
 if [ -z "$PKG" ]; then
   echo "   no package matching '$APP_MATCH' installed — install the app, then re-run."
   echo "   (list: adb shell pm list packages | grep -i $APP_MATCH)"
-elif command -v frida >/dev/null && [ -f "$UNPIN" ]; then
+elif command -v frida >/dev/null; then
   echo "   package: $PKG"
   echo "   >>> now OPEN THE APP and LOG IN as your test account <<<"
   echo "   launching Frida multiple-unpinning (Ctrl-C to stop)…"
-  frida -U -f "$PKG" -l "$UNPIN" 2>/tmp/hackpit-frida.log \
-    || echo "   frida failed (see /tmp/hackpit-frida.log) — if the app isn't pinned, just open it manually."
+  if [ -f "$UNPIN" ]; then
+    echo "   using local $UNPIN"
+    frida -U -f "$PKG" -l "$UNPIN" 2>/tmp/hackpit-frida.log \
+      || echo "   frida failed (see /tmp/hackpit-frida.log) — if the app isn't pinned, just open it manually."
+  else
+    echo "   no local frida-multiple-unpinning.js — pulling it from codeshare at runtime"
+    frida -U -f "$PKG" --codeshare akabe1/frida-multiple-unpinning 2>/tmp/hackpit-frida.log \
+      || echo "   frida failed (see /tmp/hackpit-frida.log) — grab the .js by hand or open the app manually if unpinned."
+  fi
 else
   echo "   package: $PKG"
-  [ -f "$UNPIN" ] || echo "   (no frida-multiple-unpinning.js next to this script — grab one from"
-  [ -f "$UNPIN" ] || echo "    https://codeshare.frida.re/@akabe1/frida-multiple-unpinning/ if the app is pinned)"
-  command -v frida >/dev/null || echo "   (frida not installed — 'pip install frida-tools' + a matching frida-server if pinned)"
+  echo "   (frida not installed — 'pip install frida-tools' + a matching frida-server if pinned)"
   echo "   if the app is NOT pinned, just open it and log in — traffic will already decrypt."
 fi
 

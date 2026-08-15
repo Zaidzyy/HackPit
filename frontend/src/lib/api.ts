@@ -1991,6 +1991,12 @@ export type RepeaterRequest = {
   engagement_id?: string | null;
   session_id?: string | null;
   /**
+   * ATTACH the operator's stored session for this engagement (session_store): its session/cookie
+   * headers are merged into this send so the request goes AS the logged-in operator. Typed headers
+   * win over stored ones. The operator's OWN session — login stays human; this only replays it.
+   */
+  attach_session?: boolean;
+  /**
    * THE COOKIE JAR (build #19 item 2). ON by default — the thing it fixes, every authenticated
    * flow breaking on the SECOND request, is the common case. `false` sends with NO session
    * WITHOUT emptying the jar: testing what an unauthenticated caller sees is a real test and it
@@ -2147,6 +2153,38 @@ export type CaptureDiff = {
  *  per-user session token. */
 export const diffCaptures = (raw_a: string, raw_b: string, signal?: AbortSignal) =>
   postJSON<CaptureDiff>("/cockpit/repeater/import-diff", { raw_a, raw_b }, signal);
+
+/** An operator session attached to an engagement. Values are MASKED (`•••• (N chars)`) — the
+ *  token is never returned to the client. Stored in memory only, never on disk. */
+export type AttachedSession = {
+  engagement_id: string;
+  attached: boolean;
+  label?: string;
+  headers: { name: string; value: string }[];
+};
+
+/** Store the session/cookie headers from a capture, so `attach_session` sends replay them
+ *  (POST /repeater/session). 422 if the capture has no session-looking header. */
+export const saveRepeaterSession = (
+  engagement_id: string,
+  raw: string,
+  label = "",
+  signal?: AbortSignal
+) => postJSON<AttachedSession>("/cockpit/repeater/session", { engagement_id, raw, label }, signal);
+
+/** The masked view of an engagement's attached session (GET /repeater/session). */
+export const getRepeaterSession = (engagementId: string, signal?: AbortSignal) =>
+  getJSON<AttachedSession>(
+    `/cockpit/repeater/session?engagement_id=${encodeURIComponent(engagementId)}`,
+    signal
+  );
+
+/** Forget an engagement's attached session (DELETE /repeater/session). */
+export const clearRepeaterSession = (engagementId: string, signal?: AbortSignal) =>
+  delJSON<{ engagement_id: string; cleared: boolean }>(
+    `/cockpit/repeater/session?engagement_id=${encodeURIComponent(engagementId)}`,
+    signal
+  );
 
 export const getRepeaterHistory = (
   sessionId?: string | null,

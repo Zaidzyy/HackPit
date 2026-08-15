@@ -6391,6 +6391,66 @@ tooled:
 This is the deliberate 80/20: automate the stable plumbing and the header classification, leave the
 login (the fragile, ToS-touching, expiring-token step) to the human.
 
+### The harness grew into a portable, one-command bench (2026-08-15)
+
+Driving `mobile-capture.sh` against a live Android-14 target surfaced the real-world friction, and
+each snag became a reusable, self-verifying script under `tools/` (all portable — SDK path, frida
+version, mitmproxy CA and app package are auto-detected via `tools/_bench-env.sh`, overridable by
+env, so the bench runs on any machine, not one hardcoded host):
+
+- **`install-fishbowl.sh`** — installs an `.apkm`/`.xapk` split bundle ABI-aware (`adb install-multiple`
+  base + the device's ABI split + language + densities), the gap a plain `adb install` can't cover.
+- **`setup-frida-server.sh`** — pushes+starts the matching-version, matching-ABI `frida-server`
+  (without it `frida -U -f` falls back to the failing "jailed/gadget" path).
+- **`install-system-cert.sh`** — trusts the mitmproxy CA as an Android-14 **system** cert, overlaying
+  BOTH `/system/etc/security/cacerts` and the **conscrypt APEX** store in the init mount namespace
+  (`nsenter`) — the A14 reality that a `/system` push alone misses, and doing it Frida-free.
+- **`capture-bench.sh`** — the capstone: one command chains boot → install → (optional frida) →
+  system-cert → proxy, then **pauses and asks the operator to log in**. This is the operator's
+  explicit opt-in to auto-fire the *mechanical bench* — the same shape as the env-gated MCP execute
+  surface — while the two lines that never move hold: **login stays human** (credentials + ToS), and
+  the **`:repeater` IDOR loop stays per-command-approved** (the bench automates plumbing, never attacks).
+
+Two hard-won facts are now encoded in the tooling. **Anti-tamper RASP:** Fishbowl runs an integrity
+check on foreground (`FishbowlApplication.onMoveToForeground` → a "Tamper exception") that detects
+Frida and crashes the app — so the bench's DEFAULT is the Frida-free system-cert route, with `--frida`
+reserved for pinned apps where an anti-tamper bypass is also in hand. **MSYS path-mangling:** Git-Bash
+rewrites Android paths (`/data`, `/system`) into `C:/Program Files/Git/...`; `MSYS_NO_PATHCONV=1` plus
+`cygpath -m` for native-tool args is baked into `_bench-env.sh`. None of this touches the app's safety
+model: every script is a host tool the operator runs, executing nothing against a target on its own.
+
+## Mobile apps are first-class in the scope model — `app:` (2026-08-15)
+
+The scope parser was host/IP/CIDR/wildcard only; a mobile app had no representation, and the audit's
+`parse_scope("… iOS")` finding — a name fragmenting into garbage hosts — was the symptom. The
+reviewed-and-accepted decision (2026-08-04) was that the trigger is *whitespace*, not mobile, so this
+does **not** reopen it: bare free text still splits exactly as before. What is new is an EXPLICIT
+token, `app:<id>{<hosts>}` (or `app:"My App iOS"{…}`), peeled out *before* the generic split so the
+`{…}` clause's commas/spaces survive. It records the app identifier for the engagement record AND
+scopes the backend host patterns in its clause — because a mobile app is not a network target, its
+API is, so the app itself matches no host and an `app:` with no `{host}` is refused (nothing to
+test). The target-lock is unchanged: the hosts inside `{…}` are the same explicit patterns, validated
+the same way, just grouped under the app. This makes mobile targets expressible without the scope
+model ever needing to "speak mobile" — the capture bench reduces the app to its HTTPS API, which the
+model already handles. Four new tests in `test_scope.py` (expansion, the ex-deferred quoted-id case,
+fail-closed app-with-no-host, coexistence with hosts + exclusions).
+
+## Authenticated testing in-cockpit: attach the operator's session (2026-08-15)
+
+Everything the manual authenticated run did by hand — paste a captured request, replay it with a
+swapped id — is now a cockpit feature. The operator logs in themselves (login stays human) and hands
+cockpit the session, parsed from a capture; `:repeater`'s new **attach session** then replays it, so
+probes go AS the logged-in operator. `cockpit/session_store.py` holds the session/cookie headers per
+engagement **in memory only** (never on disk — a live bearer token is more sensitive than a stored
+credential and expires on its own) and reads are **masked** (header names + lengths, never the
+value). The merge happens at the router boundary (`_attach_session`), so `repeater.send()` stays pure
+and its HUMAN-ONLY lock is untouched; a **typed header always wins** over the stored one (no silent
+override, no duplicate credential). Three endpoints (`POST`/`GET`/`DELETE /repeater/session`) + an
+`attach_session` flag on the send, a `:repeater` "save session → engagement" button and an "attach
+session" toggle. It is the in-cockpit form of what the orchestrator loop does across a whole
+engagement — keep probing the surface, now authenticated. `test_session_store.py` locks
+extract / memory-only-masked / attach-and-typed-wins.
+
 ## The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)
 
 The orchestrator proposed ONE raw command at a time — so it could run the underlying engines

@@ -17,6 +17,11 @@ entry — the same shape a real bug-bounty/pentest scope takes:
 * ``CIDR``      — a network range (``10.10.10.0/24``), matched against IP tokens.
 * ``!pattern``  — an EXCLUSION (any of the forms). Exclusions always win — including over
                   ``*``, so ``*, !prod.example.com`` is "everything except that one host".
+* ``app:id``    — a mobile-APP in scope: ``app:com.example{*.example.com}`` (or ``app:"My App
+                  iOS"{…}``) records the app identifier for the engagement record AND scopes the
+                  backend host patterns in its ``{…}``. The app itself matches no host — a mobile
+                  app is not a network target, its API is — so an ``app:`` with no ``{host}`` is
+                  refused (there would be nothing to test).
 
 Matching is deliberately LEXICAL/NUMERIC and does no DNS at match time: a *name* is judged
 against the host + wildcard patterns, an *IP* against the CIDR patterns and the addresses the
@@ -42,6 +47,12 @@ from dataclasses import dataclass, field
 
 # Separators accepted between patterns in a scope spec (comma / whitespace / newline).
 _SPLIT = re.compile(r"[\s,;]+")
+
+# A first-class mobile-APP scope token: app:<id> or app:"<id with spaces>", with an OPTIONAL
+# {host, *.wildcard, CIDR …} clause of backend patterns. Peeled out BEFORE the generic split so the
+# clause's own commas/spaces are not shattered — and it is the reason a bare "… iOS" no longer
+# fragments into garbage hosts: an app is named explicitly with this prefix, not by free text.
+_APP_RE = re.compile(r'app:(?:"([^"]*)"|([^\s,;{]+))(?:\{([^}]*)\})?', re.I)
 
 # A dotted name that could be a host in recon output (used by extract_hosts).
 _HOST_RE = re.compile(r"\b(?:[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?\.)+[A-Za-z]{2,63}\b")
@@ -117,6 +128,7 @@ class ResolvedScope:
     exclude: tuple[ScopePattern, ...] = ()
     seed_hosts: tuple[str, ...] = ()                           # exact-host includes (names/IPs)
     seed_ips: tuple[str, ...] = field(default_factory=tuple)   # what those hosts resolved to
+    apps: tuple[str, ...] = ()                                 # mobile-app identifiers in scope
 
     # -- matching ---------------------------------------------------------- #
     def in_scope(self, token: str) -> bool:
@@ -153,7 +165,8 @@ class ResolvedScope:
 
     def describe(self) -> str:
         """One-line human/LLM-readable summary of the scope."""
-        inc = ", ".join(self.includes()) or "(none)"
+        parts = [f"app {a}" for a in self.apps] + self.includes()
+        inc = ", ".join(parts) or "(none)"
         if self.unbounded():
             inc = "* (everything — no target check)"
         exc = ", ".join(self.excludes())
@@ -226,16 +239,39 @@ def parse_scope(spec: str, resolve: bool = True) -> ResolvedScope:
     text = (spec or "").strip()
     if not text:
         raise ValueError(
-            "a scope is required — name at least one in-scope host, *.wildcard or CIDR"
+            "a scope is required — name at least one in-scope host, *.wildcard, CIDR or app:"
         )
     include: list[ScopePattern] = []
     exclude: list[ScopePattern] = []
-    for token in _SPLIT.split(text):
+    apps: list[str] = []
+
+    # Peel app:<id>{host, …} tokens FIRST, so the {…} clause's commas/spaces are not shattered by
+    # the generic split. The identifier is recorded; each pattern in {…} is a normal include/exclude.
+    def _take_app(m: "re.Match[str]") -> str:
+        ident = (m.group(1) or m.group(2) or "").strip()
+        if ident:
+            apps.append(ident)
+        for tok in _SPLIT.split((m.group(3) or "").strip()):
+            if tok:
+                p = _parse_one(tok)
+                (exclude if p.exclude else include).append(p)
+        return " "
+
+    rest = _APP_RE.sub(_take_app, text)
+    for token in _SPLIT.split(rest):
         if not token:
             continue
         pat = _parse_one(token)
         (exclude if pat.exclude else include).append(pat)
-    if not include:
+
+    # An app matches no host by itself; fail-closed needs a real HOST-matching include to exist.
+    host_includes = [p for p in include if p.kind in ("any", "host", "wildcard", "cidr")]
+    if not host_includes:
+        if apps:
+            raise ValueError(
+                "scope names an app but no backend host to test — add its API host(s), "
+                "e.g. app:com.example{*.example.com}"
+            )
         raise ValueError("scope has no IN-SCOPE pattern — an exclusion-only scope allows nothing")
 
     hosts = tuple(p.value for p in include if p.kind == "host")
@@ -258,6 +294,7 @@ def parse_scope(spec: str, resolve: bool = True) -> ResolvedScope:
         exclude=tuple(exclude),
         seed_hosts=hosts,
         seed_ips=tuple(ips),
+        apps=tuple(apps),
     )
 
 

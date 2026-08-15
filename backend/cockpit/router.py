@@ -70,6 +70,7 @@ from . import tokenjobs as tokenjobs_mod
 from . import kali as kali_mod
 from . import repeater as repeater_mod
 from . import reqimport as reqimport_mod
+from . import session_store as session_store_mod
 from . import terminal as terminal_mod
 from . import proxy as proxy_mod
 from . import tunnels as tunnels_mod
@@ -755,6 +756,29 @@ def get_repeater_status() -> dict[str, Any]:
     return repeater_mod.status()
 
 
+def _attach_session(req: repeater_mod.RepeaterRequest) -> repeater_mod.RepeaterRequest:
+    """When ``attach_session`` is set, merge the engagement's stored session headers into the send.
+
+    The operator's OWN session (login stays human) — this only replays it. Typed headers WIN over
+    the stored ones (an explicit header the operator wrote is never silently overridden), so the
+    merge only ADDS session/cookie headers the request does not already carry.
+    """
+    if not (req.attach_session and req.engagement_id):
+        return req
+    sess = session_store_mod.get_session(req.engagement_id)
+    if sess is None:
+        return req
+    have = {h.name.strip().lower() for h in req.headers}
+    extra = [
+        repeater_mod.RepeaterHeader(name=n, value=v)
+        for (n, v) in sess.headers
+        if n.strip().lower() not in have
+    ]
+    if not extra:
+        return req
+    return req.model_copy(update={"headers": list(req.headers) + extra})
+
+
 @router.post("/repeater/send", response_model=repeater_mod.RepeaterExchange)
 def repeater_send(req: repeater_mod.RepeaterRequest) -> repeater_mod.RepeaterExchange:
     """Send ONE composed HTTP request from inside the open sandbox; return the parsed exchange.
@@ -764,7 +788,7 @@ def repeater_send(req: repeater_mod.RepeaterRequest) -> repeater_mod.RepeaterExc
     for a named active engagement (nothing is sent in either case).
     """
     try:
-        return repeater_mod.send(req)
+        return repeater_mod.send(_attach_session(req))
     except repeater_mod.RepeaterRefused as exc:
         reason = str(exc)
         # Out-of-scope is a scope refusal (403); everything else is availability (409).
@@ -798,7 +822,7 @@ def repeater_preview(req: repeater_mod.RepeaterRequest) -> dict[str, Any]:
     is nonetheless not the send route: the body is a whole request object, and a GET could not
     carry one.
     """
-    url, body, applied, warnings = repeater_mod.shape_request(req)
+    url, body, applied, warnings = repeater_mod.shape_request(_attach_session(req))
     return {"url": url, "body": body, "shapes_applied": applied, "warnings": warnings}
 
 
@@ -828,6 +852,45 @@ def repeater_import_diff(req: ImportDiffIn) -> dict[str, Any]:
     SHARED app key; one that DIFFERS is the PER-USER session token — the header a cross-account
     IDOR test swaps. Deterministic, sends nothing."""
     return reqimport_mod.diff_captures(req.raw_a, req.raw_b)
+
+
+# --- Attach an operator session to an engagement (authenticated testing) ------------ #
+# The operator logs in themselves and hands cockpit the session (parsed from a capture); the
+# repeater's `attach_session` then replays it. In memory only, never on disk; reads are masked.
+class SessionSaveIn(BaseModel):
+    engagement_id: str = Field(..., min_length=1, description="Engagement to attach the session to.")
+    raw: str = Field(..., min_length=1,
+                     description="A captured request ('copy as raw'/curl) whose session headers to store.")
+    label: str = Field("", description="Optional human label (e.g. 'account A').")
+
+
+@router.post("/repeater/session")
+def save_repeater_session(req: SessionSaveIn) -> dict[str, Any]:
+    """Store the session/cookie headers from a capture, so `attach_session` sends can use them.
+    422 if the capture carries no session-looking header (nothing to attach). Returns a MASKED view
+    — the token value is never echoed back."""
+    headers = session_store_mod.session_from_capture(req.raw)
+    if not headers:
+        raise HTTPException(
+            status_code=422,
+            detail="no session/cookie header found in the capture — nothing to attach",
+        )
+    session_store_mod.set_session(req.engagement_id, headers, req.label)
+    return session_store_mod.masked_view(req.engagement_id) or {}
+
+
+@router.get("/repeater/session")
+def get_repeater_session(engagement_id: str) -> dict[str, Any]:
+    """The masked view of the engagement's attached session (names + lengths, never values)."""
+    return session_store_mod.masked_view(engagement_id) or {
+        "engagement_id": engagement_id, "attached": False, "headers": [],
+    }
+
+
+@router.delete("/repeater/session")
+def delete_repeater_session(engagement_id: str) -> dict[str, Any]:
+    """Forget the engagement's attached session (it is memory-only anyway)."""
+    return {"engagement_id": engagement_id, "cleared": session_store_mod.clear_session(engagement_id)}
 
 
 # --- GraphQL: the repeater's round trip (build #20 item 3) -------------------------- #

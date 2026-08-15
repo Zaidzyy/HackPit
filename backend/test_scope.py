@@ -196,6 +196,54 @@ def test_extract_hosts_is_capped_and_deduped() -> None:
     print("  extraction is capped + de-duplicated: PASS")
 
 
+# --------------------------------------------------------------------------- #
+# 6. app: scope token (mobile app + its backend hosts)
+# --------------------------------------------------------------------------- #
+def test_app_scope_records_and_expands() -> None:
+    s = _scope("app:com.fishbowlmedia.fishbowl{*.fishbowlapp.com}")
+    assert s.apps == ("com.fishbowlmedia.fishbowl",), s.apps
+    assert s.in_scope("api.fishbowlapp.com"), "the app's backend host must be in scope"
+    assert s.in_scope("fishbowlapp.com"), "the wildcard apex must be in scope"
+    assert not s.in_scope("evil.com"), "an unrelated host must be out of scope"
+    assert "app com.fishbowlmedia.fishbowl" in s.describe(), s.describe()
+    print("  app: records the identifier AND scopes its backend hosts: PASS")
+
+
+def test_app_scope_quoted_id_no_longer_fragments() -> None:
+    # The formerly-deferred bug: 'THAT Concept Store iOS' split on whitespace into garbage hosts.
+    # With the explicit app: prefix + quotes, the id (spaces and all) is a single token.
+    s = _scope('app:"Fishbowl iOS"{*.fishbowlapp.com}')
+    assert s.apps == ("Fishbowl iOS",), s.apps
+    assert s.in_scope("api.fishbowlapp.com")
+    # 'iOS' / the spaces produced NO bogus host patterns:
+    assert not s.in_scope("ios"), "the app name must never become a host"
+    print("  app:\"quoted id\" does not fragment into garbage hosts: PASS")
+
+
+def test_app_scope_without_a_backend_host_is_refused() -> None:
+    bad = [
+        "app:com.example",                    # app named, but nothing to test
+        'app:"My App"',                       # quoted, still no host
+        "app:com.example, !admin.example.com",  # app + exclusion only, still no include
+    ]
+    for spec in bad:
+        try:
+            _scope(spec)
+        except ValueError:
+            continue
+        raise AssertionError(f"app-only scope {spec!r} must be refused (nothing to test)")
+    print("  FAIL-CLOSED: an app with no backend host is refused: PASS")
+
+
+def test_app_scope_coexists_with_hosts_and_exclusions() -> None:
+    s = _scope("app:com.example{*.example.com}, scanme.nmap.org, !admin.example.com")
+    assert s.apps == ("com.example",)
+    assert s.in_scope("api.example.com"), "app's backend host in scope"
+    assert s.in_scope("scanme.nmap.org"), "a normal host alongside the app stays in scope"
+    assert not s.in_scope("admin.example.com"), "a top-level exclusion still wins over the app hosts"
+    print("  app: coexists with normal hosts and exclusions still win: PASS")
+
+
 if __name__ == "__main__":
     test_parses_every_pattern_kind()
     test_url_and_port_forms_reduce_to_a_bare_host()
@@ -210,4 +258,8 @@ if __name__ == "__main__":
     test_seed_ips_let_an_ip_reach_a_named_host()
     test_extract_hosts_from_recon_output()
     test_extract_hosts_is_capped_and_deduped()
+    test_app_scope_records_and_expands()
+    test_app_scope_quoted_id_no_longer_fragments()
+    test_app_scope_without_a_backend_host_is_refused()
+    test_app_scope_coexists_with_hosts_and_exclusions()
     print("ALL scope tests pass")

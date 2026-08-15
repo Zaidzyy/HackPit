@@ -114,6 +114,13 @@ class RepeaterRequest(BaseModel):
         None, description="When set + active, the URL host is scope-checked; out-of-scope refused."
     )
     session_id: str | None = Field(None, description="Engagement to record + keep history against.")
+    attach_session: bool = Field(
+        False,
+        description="Attach the operator's stored session for this engagement (session_store): its "
+        "session/cookie headers are merged into this send so the request goes AS the logged-in "
+        "operator. Typed headers win over stored ones. It is the operator's OWN session — login "
+        "stays human; this only replays it.",
+    )
     # *** THE COOKIE JAR (build #19 item 2) — ON BY DEFAULT, AND DISCLOSED ON EVERY SEND. ***
     # Defaulting this False would have left the feature switched off for everyone who did not
     # know it existed, and the thing it fixes — every authenticated flow breaking on the SECOND

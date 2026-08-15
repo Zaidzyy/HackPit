@@ -13,6 +13,7 @@ import {
   getRepeaterShapes,
   importCapturedRequest,
   diffCaptures,
+  saveRepeaterSession,
   repeaterPreview,
   repeaterSend,
   splitGraphQLBody,
@@ -69,6 +70,9 @@ export function RepeaterScreen() {
   // have not looked" is a different thing from "the jar is empty", and the button says so.
   const [useJar, setUseJar] = useState(true);
   const [jarCount, setJarCount] = useState<number | null>(null);
+  // Attach the operator's OWN stored session (from a capture) to sends for this engagement.
+  const [attachSession, setAttachSession] = useState(false);
+  const [sessionMsg, setSessionMsg] = useState<string | null>(null);
 
   // ---- GraphQL mode (build #20 item 3) ------------------------------------------------
   // THE MEASURED PAIN: report #61's injection point is a GraphQL argument, and reaching it
@@ -163,6 +167,7 @@ export function RepeaterScreen() {
       session_id: engagementId.trim() || null,
       shapes,
       use_cookie_jar: useJar,
+      attach_session: attachSession,
     };
     try {
       const ex = await repeaterSend(req, ctrl.signal);
@@ -174,7 +179,7 @@ export function RepeaterScreen() {
     } finally {
       setSending(false);
     }
-  }, [method, url, headers, body, follow, insecure, impersonate, engagementId, sending, shapes, useJar]);
+  }, [method, url, headers, body, follow, insecure, impersonate, engagementId, sending, shapes, useJar, attachSession]);
 
   /** Empty this session's jar. Ungated — clearing state removes capability, never adds it. */
   const clearJar = useCallback(async () => {
@@ -222,15 +227,16 @@ export function RepeaterScreen() {
           insecure,
           http2: false,
           impersonate,
-          engagement_id: null,
+          engagement_id: engagementId.trim() || null,
           session_id: null,
           shapes,
+          attach_session: attachSession,
         })
       );
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     }
-  }, [method, url, headers, body, follow, insecure, impersonate, shapes]);
+  }, [method, url, headers, body, follow, insecure, impersonate, shapes, engagementId, attachSession]);
 
   const toggleShape = (name: string) =>
     setShapes((cur) =>
@@ -388,6 +394,24 @@ export function RepeaterScreen() {
       .catch((e) => setImportInfo(e instanceof ApiError ? e.message : String(e)));
   }, [importText]);
 
+  /** Store the capture's session as THIS engagement's session, so "attach session" replays it.
+   *  The operator's own session (login stays human); values are masked server-side. */
+  const doSaveSession = useCallback(() => {
+    const raw = importText.trim();
+    const eng = engagementId.trim();
+    if (!raw || !eng) {
+      setSessionMsg("need a capture above AND an engagement id (below) to attach a session");
+      return;
+    }
+    saveRepeaterSession(eng, raw)
+      .then((v) => {
+        const names = (v.headers ?? []).map((h) => h.name).join(", ") || "(none)";
+        setSessionMsg(`session attached to '${eng}' [${names}] — turn on “attach session” on Send`);
+        setAttachSession(true);
+      })
+      .catch((e) => setSessionMsg(e instanceof ApiError ? e.message : String(e)));
+  }, [importText, engagementId]);
+
   const doDiff = useCallback(() => {
     const a = importText.trim();
     const b = importTextB.trim();
@@ -473,6 +497,14 @@ export function RepeaterScreen() {
                     >
                       clear
                     </button>
+                    <button
+                      type="button"
+                      onClick={doSaveSession}
+                      disabled={!importText.trim() || !engagementId.trim()}
+                      title="Store this capture's session for the engagement, so 'attach session' sends replay it. Your OWN session — login stays human; the token is masked server-side."
+                    >
+                      save session → engagement
+                    </button>
                   </div>
                   <div
                     style={{
@@ -521,6 +553,11 @@ export function RepeaterScreen() {
               {importInfo && (
                 <p style={{ fontSize: "12px", color: "var(--accent)", marginTop: "6px" }}>
                   {importInfo}
+                </p>
+              )}
+              {sessionMsg && (
+                <p style={{ fontSize: "12px", color: "var(--accent)", marginTop: "6px" }}>
+                  {sessionMsg}
                 </p>
               )}
             </div>
@@ -748,6 +785,17 @@ export function RepeaterScreen() {
                   onChange={(e) => setUseJar(e.target.checked)}
                 />
                 use cookie jar
+              </label>
+              <label
+                className="hp-rp-opt"
+                title="Attach the engagement's stored session (from an imported capture) to this send, so it goes AS the logged-in operator. Your OWN session — login stays human. Typed headers win over the stored ones."
+              >
+                <input
+                  type="checkbox"
+                  checked={attachSession}
+                  onChange={(e) => setAttachSession(e.target.checked)}
+                />
+                attach session
               </label>
               <button type="button" className="hp-rp-addh" onClick={clearJar}>
                 empty jar{jarCount === null ? "" : ` (${jarCount})`}

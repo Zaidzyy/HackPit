@@ -471,7 +471,12 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#js-recon-secret-endpoint-mining-the-s3bundlesecret-chain-live-jsrecon-2026-08-08">JS recon → secret / endpoint mining — the S3→bundle→secret chain, live (:jsrecon) (2026-08-08)</a></li>
 <li><a href="#dual-candidate-second-opinion-on-generated-commands-foundation-2026-08-09">Dual-candidate "second opinion" on generated commands — foundation (2026-08-09)</a></li>
 <li><a href="#waf-interaction-hardening-browser-impersonation-across-the-web-surfaces-2026-08-15">WAF-interaction hardening — browser impersonation across the web surfaces (2026-08-15)</a></li>
-<li><a href="#authenticated-testing-on-ramp-captured-request-import-a-mobile-capture-harness-2026-08-15">Authenticated-testing on-ramp — captured-request import + a mobile-capture harness (2026-08-15)</a></li>
+<li><a href="#authenticated-testing-on-ramp-captured-request-import-a-mobile-capture-harness-2026-08-15">Authenticated-testing on-ramp — captured-request import + a mobile-capture harness (2026-08-15)</a><ul>
+<li><a href="#the-harness-grew-into-a-portable-one-command-bench-2026-08-15">The harness grew into a portable, one-command bench (2026-08-15)</a></li>
+</ul>
+</li>
+<li><a href="#mobile-apps-are-first-class-in-the-scope-model-app-2026-08-15">Mobile apps are first-class in the scope model — app: (2026-08-15)</a></li>
+<li><a href="#authenticated-testing-in-cockpit-attach-the-operators-session-2026-08-15">Authenticated testing in-cockpit: attach the operator's session (2026-08-15)</a></li>
 <li><a href="#the-loop-can-invoke-hackpit-surfaces-not-just-raw-commands-2026-08-15">The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)</a></li>
 </ul>
 </li>
@@ -6443,6 +6448,60 @@ tooled:</p>
 </ul>
 <p>This is the deliberate 80/20: automate the stable plumbing and the header classification, leave the
 login (the fragile, ToS-touching, expiring-token step) to the human.</p>
+<h3 id="the-harness-grew-into-a-portable-one-command-bench-2026-08-15">The harness grew into a portable, one-command bench (2026-08-15)</h3>
+<p>Driving <code>mobile-capture.sh</code> against a live Android-14 target surfaced the real-world friction, and
+each snag became a reusable, self-verifying script under <code>tools/</code> (all portable — SDK path, frida
+version, mitmproxy CA and app package are auto-detected via <code>tools/_bench-env.sh</code>, overridable by
+env, so the bench runs on any machine, not one hardcoded host):</p>
+<ul>
+<li><strong><code>install-fishbowl.sh</code></strong> — installs an <code>.apkm</code>/<code>.xapk</code> split bundle ABI-aware (<code>adb install-multiple</code>
+  base + the device's ABI split + language + densities), the gap a plain <code>adb install</code> can't cover.</li>
+<li><strong><code>setup-frida-server.sh</code></strong> — pushes+starts the matching-version, matching-ABI <code>frida-server</code>
+  (without it <code>frida -U -f</code> falls back to the failing "jailed/gadget" path).</li>
+<li><strong><code>install-system-cert.sh</code></strong> — trusts the mitmproxy CA as an Android-14 <strong>system</strong> cert, overlaying
+  BOTH <code>/system/etc/security/cacerts</code> and the <strong>conscrypt APEX</strong> store in the init mount namespace
+  (<code>nsenter</code>) — the A14 reality that a <code>/system</code> push alone misses, and doing it Frida-free.</li>
+<li><strong><code>capture-bench.sh</code></strong> — the capstone: one command chains boot → install → (optional frida) →
+  system-cert → proxy, then <strong>pauses and asks the operator to log in</strong>. This is the operator's
+  explicit opt-in to auto-fire the <em>mechanical bench</em> — the same shape as the env-gated MCP execute
+  surface — while the two lines that never move hold: <strong>login stays human</strong> (credentials + ToS), and
+  the <strong><code>:repeater</code> IDOR loop stays per-command-approved</strong> (the bench automates plumbing, never attacks).</li>
+</ul>
+<p>Two hard-won facts are now encoded in the tooling. <strong>Anti-tamper RASP:</strong> Fishbowl runs an integrity
+check on foreground (<code>FishbowlApplication.onMoveToForeground</code> → a "Tamper exception") that detects
+Frida and crashes the app — so the bench's DEFAULT is the Frida-free system-cert route, with <code>--frida</code>
+reserved for pinned apps where an anti-tamper bypass is also in hand. <strong>MSYS path-mangling:</strong> Git-Bash
+rewrites Android paths (<code>/data</code>, <code>/system</code>) into <code>C:/Program Files/Git/...</code>; <code>MSYS_NO_PATHCONV=1</code> plus
+<code>cygpath -m</code> for native-tool args is baked into <code>_bench-env.sh</code>. None of this touches the app's safety
+model: every script is a host tool the operator runs, executing nothing against a target on its own.</p>
+<h2 id="mobile-apps-are-first-class-in-the-scope-model-app-2026-08-15">Mobile apps are first-class in the scope model — <code>app:</code> (2026-08-15)</h2>
+<p>The scope parser was host/IP/CIDR/wildcard only; a mobile app had no representation, and the audit's
+<code>parse_scope("… iOS")</code> finding — a name fragmenting into garbage hosts — was the symptom. The
+reviewed-and-accepted decision (2026-08-04) was that the trigger is <em>whitespace</em>, not mobile, so this
+does <strong>not</strong> reopen it: bare free text still splits exactly as before. What is new is an EXPLICIT
+token, <code>app:&lt;id&gt;{&lt;hosts&gt;}</code> (or <code>app:"My App iOS"{…}</code>), peeled out <em>before</em> the generic split so the
+<code>{…}</code> clause's commas/spaces survive. It records the app identifier for the engagement record AND
+scopes the backend host patterns in its clause — because a mobile app is not a network target, its
+API is, so the app itself matches no host and an <code>app:</code> with no <code>{host}</code> is refused (nothing to
+test). The target-lock is unchanged: the hosts inside <code>{…}</code> are the same explicit patterns, validated
+the same way, just grouped under the app. This makes mobile targets expressible without the scope
+model ever needing to "speak mobile" — the capture bench reduces the app to its HTTPS API, which the
+model already handles. Four new tests in <code>test_scope.py</code> (expansion, the ex-deferred quoted-id case,
+fail-closed app-with-no-host, coexistence with hosts + exclusions).</p>
+<h2 id="authenticated-testing-in-cockpit-attach-the-operators-session-2026-08-15">Authenticated testing in-cockpit: attach the operator's session (2026-08-15)</h2>
+<p>Everything the manual authenticated run did by hand — paste a captured request, replay it with a
+swapped id — is now a cockpit feature. The operator logs in themselves (login stays human) and hands
+cockpit the session, parsed from a capture; <code>:repeater</code>'s new <strong>attach session</strong> then replays it, so
+probes go AS the logged-in operator. <code>cockpit/session_store.py</code> holds the session/cookie headers per
+engagement <strong>in memory only</strong> (never on disk — a live bearer token is more sensitive than a stored
+credential and expires on its own) and reads are <strong>masked</strong> (header names + lengths, never the
+value). The merge happens at the router boundary (<code>_attach_session</code>), so <code>repeater.send()</code> stays pure
+and its HUMAN-ONLY lock is untouched; a <strong>typed header always wins</strong> over the stored one (no silent
+override, no duplicate credential). Three endpoints (<code>POST</code>/<code>GET</code>/<code>DELETE /repeater/session</code>) + an
+<code>attach_session</code> flag on the send, a <code>:repeater</code> "save session → engagement" button and an "attach
+session" toggle. It is the in-cockpit form of what the orchestrator loop does across a whole
+engagement — keep probing the surface, now authenticated. <code>test_session_store.py</code> locks
+extract / memory-only-masked / attach-and-typed-wins.</p>
 <h2 id="the-loop-can-invoke-hackpit-surfaces-not-just-raw-commands-2026-08-15">The loop can invoke HackPit surfaces, not just raw commands (2026-08-15)</h2>
 <p>The orchestrator proposed ONE raw command at a time — so it could run the underlying engines
 (<code>curl_chrome116</code>, <code>ffuf</code>, <code>nuclei</code>, <code>js-mine</code>) but never HackPit's own wrapped SURFACES, which add

@@ -6591,11 +6591,13 @@ the pool with **no image rebuild, no config files, and no `argv[0]` change** (th
 classify the real command). The URL travels in the SUBPROCESS ENV via bare `docker exec -e NAME`
 (value forwarded from the client env), never on the docker argv, so a credentialled pool URL is not
 exposed in `ps`. `apply_egress_to_request` now returns the picked URL so the tool-flag and the
-container env use the SAME rotation slot (no double-advance). Mechanism live-proved: a bare `curl`
-with no `-x`, given only the env `_egress_exec` builds, rode a real proxy to a real echo.
-`test_egress_safety` gains the unmapped-tool case (argv unchanged, URL still returned, credential
-off the flags). Residual: a tool that ignores proxy env vars (rare) still goes direct — smaller than
-before and honestly noted in the start event.
+container env use the SAME rotation slot (no double-advance). Live-proved END TO END THROUGH THE REAL SANDBOX: an
+unmapped tool (`python3`) run *inside the actual `hackpit-engage-sandbox`* via the exact
+`docker exec -e HTTP_PROXY` mechanism the executor uses (bare `-e NAME` forwarding the value from
+the client env) rode a real proxy to a real echo — the echo saw the proxy stamp, so the in-sandbox
+tool went through the pool, not direct. `test_egress_safety` gains the unmapped-tool case (argv
+unchanged, URL still returned, credential off the flags). Residual: a tool that ignores proxy env
+vars (rare) still goes direct — smaller than before and honestly noted in the start event.
 
 ## Autonomy modes — the auto-runner spine (manual / assisted / full) (2026-08-15)
 

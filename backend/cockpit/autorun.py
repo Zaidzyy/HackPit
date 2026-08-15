@@ -106,3 +106,71 @@ def note_non_fire(decision: Decision, proposal: dict[str, Any], sid: str, eid: s
     autoaudit.record(engagement_id=eid, session_id=sid, mode=mode, tier=decision.tier,
                      action=decision.action, proposal=proposal,
                      outcome="queued" if decision.action == "queue" else "skipped")
+
+
+# --------------------------------------------------------------------------- #
+# THE UNIT OF WORK — propose -> decide -> fire-or-queue -> audit.
+# Shared by the /sessions/{id}/autorun/step endpoint AND the scheduler daemon, so the policy lives
+# in exactly one place. main registers its scope resolver here (the same set_*_resolver pattern the
+# ad/cloud graphs use) so the daemon can resolve an engagement's scope WITHOUT importing the app.
+# --------------------------------------------------------------------------- #
+_scope_resolver: Any = None
+
+
+def set_scope_resolver(fn: Any) -> None:
+    """main calls this with `_loop_scope_context` so a step run off the daemon resolves the same
+    program scope the endpoint would. Absent (never registered) → no scope context (lab-like)."""
+    global _scope_resolver
+    _scope_resolver = fn
+
+
+def _resolve_scope(engagement_id: str) -> Any:
+    if _scope_resolver is None or not engagement_id:
+        return None
+    try:
+        return _scope_resolver(engagement_id)
+    except Exception:  # noqa: BLE001 — a resolver hiccup must not fire an UNSCOPED step
+        raise
+
+
+def step_session(session_id: str, engagement_id: str) -> dict[str, Any]:
+    """One autonomous step: propose the next action and FIRE / QUEUE / SKIP it per the engagement's
+    autonomy_mode. Returns a summary dict; NEVER fires in manual mode. A propose/LLM error degrades
+    to a skip (so the daemon keeps its cadence); a FIRE error propagates (the caller logs/500s).
+
+    Lazy imports keep this module free of the app + heavy deps at import time and avoid cycles."""
+    import llm
+    import orchestrator
+    import sessions as sessions_db
+
+    from . import engagement as engagement_mod
+    from . import runstore
+
+    session = sessions_db.get_session(session_id)
+    if session is None:
+        return {"mode": "manual", "action": "skip", "reason": "session not found", "not_found": True}
+    mode = engagement_mod.autonomy_mode(engagement_id) if engagement_id else "manual"
+    if mode == "manual":
+        return {"mode": "manual", "action": "skip",
+                "reason": "manual mode — the human drives every step"}
+
+    plan = session.get("path") or {}
+    runs = [r.model_dump() for r in runstore.list_runs_for_session(session_id)]
+    scope_ctx = _resolve_scope(engagement_id)
+    try:
+        result = orchestrator.propose_next(plan, runs, llm.load_config(), [], scope_ctx, session_id)
+    except Exception as exc:  # noqa: BLE001 — LLM/propose failure: skip this cycle, don't crash
+        return {"mode": mode, "action": "skip", "reason": f"propose failed: {exc}"}
+    if not isinstance(result, dict) or result.get("done"):
+        return {"mode": mode, "action": "skip", "done": True,
+                "reason": (result or {}).get("reason", "nothing left to propose")}
+
+    proposal = result.get("proposal")
+    decision = decide(proposal, mode)
+    out: dict[str, Any] = {"mode": mode, "action": decision.action, "tier": decision.tier,
+                           "reason": decision.reason, "proposal": proposal}
+    if decision.action == "fire":
+        out["result"] = fire(proposal, session_id, engagement_id, mode=mode, tier=decision.tier)
+    else:
+        note_non_fire(decision, proposal, session_id, engagement_id, mode)
+    return out

@@ -6619,5 +6619,19 @@ build. `autonomy_mode` lives on the `EngagementRecord` (migration-safe default `
 `test_autotier_safety.py` (closed allowlist cross-checked against the real invokable set, detect vs
 confirm, human-only, fail-safe) and `test_autorun_safety.py` (the full mode×tier matrix, and the
 teeth: **a simulated assisted loop over a mixed batch fires only the passive surfaces**, plus the
-append-only audit) lock it. *Still ahead: the scheduler daemon + RoE-as-wall + budget/kill-switch,
-continuous-hunting diff/alert, and the frontend 3-way toggle + decision queue.*
+append-only audit) lock it.
+
+**The scheduler daemon (2026-08-15).** `cockpit/autoloop.py` is the background timer that actually
+drives autonomy — it calls `autorun.step_session` (the same unit of work the `/autorun/step`
+endpoint runs) for each active assisted/full engagement, mirroring the `oob/autopoll.py` daemon
+pattern. The load-bearing difference from oob-autopoll: **this daemon has hands, so it is DEFAULT
+OFF**, and TWO independent switches must both be on before anything fires — the daemon toggle
+(`POST /cockpit/autorun`, default disabled) AND the engagement's `autonomy_mode` (default manual).
+A manual engagement is never stepped even while the daemon runs. Disabling the daemon is the
+**kill-switch**, re-read every cycle and before each engagement's step so it halts mid-tick. Each
+cycle takes at most one step per engagement (the per-tick budget — bounded, observable), and a step
+that raises is contained to its own engagement. Started from the app lifespan next to
+`oob_autopoll.start`; `test_autoloop_safety.py` locks default-off, the manual-never-stepped filter,
+the mid-tick kill-switch, and the budget/containment. *Still ahead: Mode 3's RoE-as-wall +
+per-engagement budget, the continuous-hunting diff/alert, and the frontend 3-way toggle + decision
+queue.*

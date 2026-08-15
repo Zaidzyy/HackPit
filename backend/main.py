@@ -62,6 +62,7 @@ from cockpit import reconcile as cockpit_reconcile  # noqa: E402
 from cockpit import loot as cockpit_loot  # noqa: E402
 from cockpit import proposals as cockpit_proposals  # noqa: E402  (approval queue — executes nothing)
 from cockpit import autorun as cockpit_autorun  # noqa: E402  (auto-runner — modes 2/3 decide+fire)
+from cockpit import autoloop as cockpit_autoloop  # noqa: E402  (auto-runner scheduler — default OFF)
 from cockpit import winprofiles as cockpit_winprofiles  # noqa: E402  (Windows target store)
 from cockpit import sandbox as cockpit_sandbox  # noqa: E402  (read-only container probes)
 # The two evasion/exfil surfaces. Their ROUTES live here, not in cockpit/router.py, and NOT in
@@ -341,6 +342,8 @@ async def lifespan(app: FastAPI):
     cockpit_runstore.init_db()
     # engagement-mode records (deliberate real-target entry) share it too.
     cockpit_engagement.init_db()
+    # the auto-runner scheduler's toggle/interval (default OFF) shares it too.
+    cockpit_autoloop.init_db()
     # saved Windows-target connection profiles (WinRM driver) share it too.
     cockpit_winprofiles.init_db()
     # parsed AD attack-path graphs share it too.
@@ -406,6 +409,11 @@ async def lifespan(app: FastAPI):
     # without a click. It reaches poll_all -> ingest -> state and NO execution surface, so it does
     # not cross the propose-only invariant. Daemon thread; sleeps first, so start is never blocked.
     oob_autopoll.start(app)
+    # The auto-runner scheduler: a background timer that takes autonomous steps for engagements the
+    # operator switched to assisted/full. DEFAULT OFF and guarded by two switches (this toggle + the
+    # engagement's autonomy_mode), so it does nothing until both are deliberately on. Daemon thread;
+    # sleeps first; the toggle is the kill-switch, re-read every cycle.
+    cockpit_autoloop.start(app)
     yield
     set_codescan_kb(None, None, None, None)
     set_codescan_findings_sink(None)
@@ -2852,6 +2860,10 @@ set_ad_scope_resolver(_loop_scope_context)
 # The SAME resolver feeds the cloud orchestrator, for the same reason: the cloud proposer receives
 # only an inert, read-only scope description and cannot enter or look up an engagement itself.
 set_cloud_scope_resolver(_loop_scope_context)
+# And the SAME resolver feeds the auto-runner, so a step taken off the scheduler daemon resolves the
+# engagement's program scope exactly as the /autorun/step endpoint does — the daemon never imports
+# this module, it only receives the inert scope description through this resolver.
+cockpit_autorun.set_scope_resolver(_loop_scope_context)
 
 
 @app.post("/sessions/{session_id}/loop/propose", response_model=LoopProposeOut)
@@ -2922,46 +2934,14 @@ def autorun_step(session_id: str, req: AutorunStepIn = Body(...)) -> dict[str, A
     surface/executor path the opt-in MCP tools use — the wall here is the DECLARED mode + scope,
     not a per-command human approval.
     """
-    session = sessions_db.get_session(session_id)
-    if session is None:
+    if sessions_db.get_session(session_id) is None:
         raise HTTPException(status_code=404, detail="session not found")
-    eid = req.engagement_id
-    mode = cockpit_engagement.autonomy_mode(eid)
-    if mode == "manual":
-        return {
-            "mode": "manual", "action": "skip",
-            "reason": "manual mode — the human drives every step; nothing was proposed or fired",
-        }
-    plan = session.get("path") or {}
-    runs = [r.model_dump() for r in cockpit_runstore.list_runs_for_session(session_id)]
-    scope_ctx = _loop_scope_context(eid)
     try:
-        result = orchestrator.propose_next(
-            plan, runs, llm.load_config(), list(req.avoid), scope_ctx, session_id
-        )
-    except llm.LLMError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    if not isinstance(result, dict) or result.get("done"):
-        return {
-            "mode": mode, "action": "skip", "done": True,
-            "reason": (result or {}).get("reason", "nothing left to propose"),
-        }
-    proposal = result.get("proposal")
-    decision = cockpit_autorun.decide(proposal, mode)
-    out: dict[str, Any] = {
-        "mode": mode, "action": decision.action, "tier": decision.tier,
-        "reason": decision.reason, "proposal": proposal,
-    }
-    if decision.action == "fire":
-        try:
-            out["result"] = cockpit_autorun.fire(
-                proposal, session_id, eid, mode=mode, tier=decision.tier
-            )
-        except Exception as exc:  # noqa: BLE001 — surface the fire failure to the caller
-            raise HTTPException(status_code=500, detail=f"autorun fire failed: {exc}")
-    else:
-        cockpit_autorun.note_non_fire(decision, proposal, session_id, eid, mode)
-    return out
+        # The one code path the scheduler daemon also runs — propose → decide → fire-or-queue →
+        # audit. Its scope resolver was registered below (set_autorun_scope_resolver).
+        return cockpit_autorun.step_session(session_id, req.engagement_id)
+    except Exception as exc:  # noqa: BLE001 — a fire failure is the only thing step_session raises
+        raise HTTPException(status_code=500, detail=f"autorun fire failed: {exc}")
 
 
 class LoopAnswerIn(BaseModel):

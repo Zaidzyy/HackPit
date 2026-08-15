@@ -3054,6 +3054,40 @@ def set_autonomy(req: AutonomyIn) -> dict[str, Any]:
     return {"engagement_id": req.engagement_id, "autonomy_mode": mode}
 
 
+# --------------------------------------------------------------------------- #
+# THE AUTO-RUNNER SCHEDULER TOGGLE — the second of the two switches (the first is per-engagement
+# autonomy_mode). DEFAULT OFF: this daemon has hands, so nothing steps autonomously until it is
+# deliberately enabled. Turning it off is the KILL-SWITCH; the running loop re-reads it every cycle.
+# --------------------------------------------------------------------------- #
+class AutorunToggleIn(BaseModel):
+    """Enable/disable the auto-runner scheduler and set its interval (seconds, floored)."""
+
+    enabled: bool = Field(..., description="Master on/off for the scheduler daemon. Off = kill-switch.")
+    interval: int = Field(60, ge=1, description="Seconds between cycles; floored at the daemon's MIN_INTERVAL.")
+
+
+@router.post("/autorun")
+def set_autorun(req: AutorunToggleIn) -> dict[str, Any]:
+    """Enable/disable the scheduler + set its interval. Even enabled, it only steps engagements
+    whose autonomy_mode is assisted/full — a manual engagement is never stepped."""
+    from . import autoloop
+
+    return autoloop.set_settings(req.enabled, req.interval)
+
+
+@router.get("/autorun")
+def get_autorun() -> dict[str, Any]:
+    """The scheduler's toggle + interval, and which active engagements it would step (assisted/full)."""
+    from . import autoloop
+
+    return {
+        **autoloop.get_settings(),
+        "min_interval": autoloop.MIN_INTERVAL,
+        "steps_per_tick": autoloop.MAX_STEPS_PER_TICK,
+        "autonomous_engagements": [eid for eid, _sid in autoloop._active_autonomous()],
+    }
+
+
 @router.post("/proxy/bypass-headers")
 def sync_bypass_headers(
     container: str = Query(..., description="Sandbox container the proxy runs in."),

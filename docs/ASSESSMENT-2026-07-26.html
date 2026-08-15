@@ -6657,7 +6657,20 @@ build. <code>autonomy_mode</code> lives on the <code>EngagementRecord</code> (mi
 <p><code>test_autotier_safety.py</code> (closed allowlist cross-checked against the real invokable set, detect vs
 confirm, human-only, fail-safe) and <code>test_autorun_safety.py</code> (the full mode×tier matrix, and the
 teeth: <strong>a simulated assisted loop over a mixed batch fires only the passive surfaces</strong>, plus the
-append-only audit) lock it. <em>Still ahead: the scheduler daemon + RoE-as-wall + budget/kill-switch,
-continuous-hunting diff/alert, and the frontend 3-way toggle + decision queue.</em></p>
+append-only audit) lock it.</p>
+<p><strong>The scheduler daemon (2026-08-15).</strong> <code>cockpit/autoloop.py</code> is the background timer that actually
+drives autonomy — it calls <code>autorun.step_session</code> (the same unit of work the <code>/autorun/step</code>
+endpoint runs) for each active assisted/full engagement, mirroring the <code>oob/autopoll.py</code> daemon
+pattern. The load-bearing difference from oob-autopoll: <strong>this daemon has hands, so it is DEFAULT
+OFF</strong>, and TWO independent switches must both be on before anything fires — the daemon toggle
+(<code>POST /cockpit/autorun</code>, default disabled) AND the engagement's <code>autonomy_mode</code> (default manual).
+A manual engagement is never stepped even while the daemon runs. Disabling the daemon is the
+<strong>kill-switch</strong>, re-read every cycle and before each engagement's step so it halts mid-tick. Each
+cycle takes at most one step per engagement (the per-tick budget — bounded, observable), and a step
+that raises is contained to its own engagement. Started from the app lifespan next to
+<code>oob_autopoll.start</code>; <code>test_autoloop_safety.py</code> locks default-off, the manual-never-stepped filter,
+the mid-tick kill-switch, and the budget/containment. <em>Still ahead: Mode 3's RoE-as-wall +
+per-engagement budget, the continuous-hunting diff/alert, and the frontend 3-way toggle + decision
+queue.</em></p>
 </body>
 </html>

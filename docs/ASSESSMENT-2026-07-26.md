@@ -6720,3 +6720,18 @@ enqueue/dedup/pending round-trip, the mark lifecycle, and the teeth (approve fir
 404/409 hold). **Live-verified end-to-end (2026-08-15):** two seeded held actions rendered, skip
 removed one without firing, approve fired the other — the audit recorded `('human-approved',
 'recon', 'started')` and the queue emptied.
+
+## CI reconciliation — the suite now runs the autonomy tests, and a pre-existing red is fixed (2026-08-15)
+
+The final acceptance pass found two things a casual "is CI green?" would have missed. First, the
+seven new autonomy safety suites (egress, autotier, autorun, autoloop, roe-wall, watch,
+decision-queue) were not registered in `backend/run_safety_tests.sh`, so CI would have been green
+*without ever running them* — now added (134 hermetic test files total). Second, **CI had been red
+since the `hackpit_surface` MCP commit (`ec14be4`)**, unrelated to this build: that commit gave
+`mcp_tools._run_surface` a path to `tunnels.start_tunnel` and `sliver.start_server` and taught
+`test_mcp_safety` to tolerate it, but missed the *older* human-only reachability scans
+(`test_tunnels`, `test_sliver`, `test_sliver_safety`) that independently assert those lifecycles are
+human-only. Those scans are now reconciled to the same env-gated exception `test_mcp_safety` makes —
+`_run_surface` reaches them ONLY through `hackpit_surface`, registered ONLY when
+`HACKPIT_MCP_EXECUTE=1` (opt-in, off by default) — with the planted-violation control still guarding
+against any *accidental* reacher. The full hermetic suite is green again.

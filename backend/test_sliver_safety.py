@@ -61,7 +61,10 @@ SLIVER_TREE = ast.parse(SLIVER_SRC)
 # The ONLY two files allowed to name the Sliver module: the module itself, and the HTTP layer.
 # cockpit/router.py is deliberately NOT here — the routes live in main.py (see its "Sliver C2 +
 # DNS-tunnel obfuscation" section), so the cockpit router keeps no handle on this surface.
-ALLOWED_REFERENCES = {Path("cockpit/sliver.py"), Path("main.py")}
+# mcp_tools.py: `_run_surface` reaches start_server ONLY via `hackpit_surface`, registered ONLY when
+# HACKPIT_MCP_EXECUTE=1 (opt-in, off by default) — the env-gated execution path test_mcp_safety
+# already tolerates, not an accidental one (the planted-violation control still catches those).
+ALLOWED_REFERENCES = {Path("cockpit/sliver.py"), Path("main.py"), Path("mcp_tools.py")}
 
 _REFERENCE_PATTERNS = [
     r"\bstart_server\b",

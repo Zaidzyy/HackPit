@@ -707,7 +707,10 @@ def test_sliver_surface_is_human_only() -> None:
     landed in main.py instead (the cockpit router keeps no handle on this surface), so the
     allow-list is tightened back to the two files that actually reference it.
     """
-    allowed = {Path("cockpit/sliver.py"), Path("main.py")}
+    # mcp_tools.py: `_run_surface` reaches start_server ONLY via `hackpit_surface`, registered ONLY
+    # when HACKPIT_MCP_EXECUTE=1 (opt-in, off by default) — the env-gated execution path
+    # test_mcp_safety already tolerates, not an accidental one (the planted control still catches those).
+    allowed = {Path("cockpit/sliver.py"), Path("main.py"), Path("mcp_tools.py")}
     patterns = [
         r"\bstart_server\b",
         r"\bgenerate_implant\b",

@@ -485,6 +485,7 @@ a { color: var(--accent); text-decoration: none; }
 <li><a href="#continuous-hunting-being-first-to-see-a-new-asset-2026-08-15">Continuous hunting — being first to see a new asset (2026-08-15)</a></li>
 <li><a href="#the-autonomy-cockpit-driving-all-of-it-from-the-ui-2026-08-15">The autonomy cockpit — driving all of it from the UI (2026-08-15)</a></li>
 <li><a href="#the-decision-queue-approve-from-queue-completes-assisted-mode-2026-08-15">The decision queue — approve-from-queue completes assisted mode (2026-08-15)</a></li>
+<li><a href="#ci-reconciliation-the-suite-now-runs-the-autonomy-tests-and-a-pre-existing-red-is-fixed-2026-08-15">CI reconciliation — the suite now runs the autonomy tests, and a pre-existing red is fixed (2026-08-15)</a></li>
 </ul>
 </li>
 </ul>
@@ -6751,5 +6752,18 @@ enqueue/dedup/pending round-trip, the mark lifecycle, and the teeth (approve fir
 404/409 hold). <strong>Live-verified end-to-end (2026-08-15):</strong> two seeded held actions rendered, skip
 removed one without firing, approve fired the other — the audit recorded <code>('human-approved',
 'recon', 'started')</code> and the queue emptied.</p>
+<h2 id="ci-reconciliation-the-suite-now-runs-the-autonomy-tests-and-a-pre-existing-red-is-fixed-2026-08-15">CI reconciliation — the suite now runs the autonomy tests, and a pre-existing red is fixed (2026-08-15)</h2>
+<p>The final acceptance pass found two things a casual "is CI green?" would have missed. First, the
+seven new autonomy safety suites (egress, autotier, autorun, autoloop, roe-wall, watch,
+decision-queue) were not registered in <code>backend/run_safety_tests.sh</code>, so CI would have been green
+<em>without ever running them</em> — now added (134 hermetic test files total). Second, <strong>CI had been red
+since the <code>hackpit_surface</code> MCP commit (<code>ec14be4</code>)</strong>, unrelated to this build: that commit gave
+<code>mcp_tools._run_surface</code> a path to <code>tunnels.start_tunnel</code> and <code>sliver.start_server</code> and taught
+<code>test_mcp_safety</code> to tolerate it, but missed the <em>older</em> human-only reachability scans
+(<code>test_tunnels</code>, <code>test_sliver</code>, <code>test_sliver_safety</code>) that independently assert those lifecycles are
+human-only. Those scans are now reconciled to the same env-gated exception <code>test_mcp_safety</code> makes —
+<code>_run_surface</code> reaches them ONLY through <code>hackpit_surface</code>, registered ONLY when
+<code>HACKPIT_MCP_EXECUTE=1</code> (opt-in, off by default) — with the planted-violation control still guarding
+against any <em>accidental</em> reacher. The full hermetic suite is green again.</p>
 </body>
 </html>

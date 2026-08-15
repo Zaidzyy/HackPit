@@ -287,6 +287,60 @@ def default_payload(doc_type: str) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# RoE enforcement PREDICATE — reads the RoE and ANSWERS "does the RoE allow this action now?".
+# It only DESCRIBES (a read + a comparison); it blocks nothing and runs nothing — the auto-runner
+# is what turns a False here into a queued-instead-of-fired action. Consistent with this module's
+# rule (it may describe the formalised scope frame, never enforce it). Imports nothing new.
+# --------------------------------------------------------------------------- #
+def _within_windows(windows: Any, now: datetime | None = None) -> bool:
+    """True if ``now`` (UTC) falls inside any {'start':'HH:MM','end':'HH:MM'} window. An overnight
+    window (start > end) wraps midnight. A malformed window matches nothing (fail-closed: an
+    un-parseable time_windows list means the operator meant to restrict, so nothing is 'inside')."""
+    now = now or datetime.now(timezone.utc)
+    minute_of_day = now.hour * 60 + now.minute
+
+    def _mins(v: Any) -> int | None:
+        try:
+            hh, mm = str(v).strip().split(":")
+            h, m = int(hh), int(mm)
+            return h * 60 + m if 0 <= h < 24 and 0 <= m < 60 else None
+        except (ValueError, AttributeError):
+            return None
+
+    for w in windows if isinstance(windows, list) else []:
+        if not isinstance(w, dict):
+            continue
+        start, end = _mins(w.get("start")), _mins(w.get("end"))
+        if start is None or end is None:
+            continue
+        inside = start <= minute_of_day < end if start <= end else (minute_of_day >= start or minute_of_day < end)
+        if inside:
+            return True
+    return False
+
+
+def permits(session_id: str, action_class: str, now: datetime | None = None) -> tuple[bool, str]:
+    """``(allowed, reason)`` — does the RoE permit ``action_class`` for this session RIGHT NOW?
+
+    Reads the RoE payload: an action named in ``excluded_actions`` is forbidden, and if
+    ``time_windows`` is set the action is forbidden OUTSIDE those windows (a blackout). An empty
+    RoE permits everything — the wall only exists where the operator drew it. This ANSWERS; the
+    auto-runner ENFORCES (it queues rather than fires when this returns False)."""
+    payload = get_doc(session_id, DOC_ROE).payload or {}
+    ac = (action_class or "").strip().lower()
+
+    excluded = {str(a).strip().lower() for a in payload.get("excluded_actions", []) if str(a).strip()}
+    if ac and ac in excluded:
+        return False, f"RoE excluded_actions forbids {action_class!r}"
+
+    windows = payload.get("time_windows", [])
+    if windows and not _within_windows(windows, now):
+        return False, "outside the RoE time_windows (blackout)"
+
+    return True, ""
+
+
+# --------------------------------------------------------------------------- #
 # schema
 # --------------------------------------------------------------------------- #
 def init_db() -> None:

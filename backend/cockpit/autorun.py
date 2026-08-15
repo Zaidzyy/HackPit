@@ -109,6 +109,57 @@ def note_non_fire(decision: Decision, proposal: dict[str, Any], sid: str, eid: s
 
 
 # --------------------------------------------------------------------------- #
+# THE POLICY WALL for MODE 3 (and the budget for all autonomous fires). decide() says WHETHER the
+# mode allows firing; this says whether the DECLARED RoE + budget allow this specific action NOW.
+# A blocked fire is downgraded to a queue (never silently dropped), so the operator sees it.
+# --------------------------------------------------------------------------- #
+_DEFAULT_FIRE_BUDGET = 200  # total autonomous fires per engagement, unless the RoE raises it
+
+
+def _action_class(proposal: dict[str, Any]) -> str:
+    """The name the RoE's excluded_actions matches against: the surface name, or a command's binary."""
+    if str(proposal.get("kind", "command")).lower() == "surface":
+        return str(proposal.get("surface", "")).strip().lower()
+    return str(proposal.get("command", "")).strip().lower()
+
+
+def _fire_budget(session_id: str) -> int:
+    """The per-engagement autonomous-fire cap — the RoE's ``max_autonomous_fires`` if it set a
+    positive one, else the default. There is ALWAYS a finite budget (autonomy never runs unbounded)."""
+    try:
+        from state import governance
+
+        cap = int((governance.get_doc(session_id, governance.DOC_ROE).payload or {}).get(
+            "max_autonomous_fires", 0))
+        return cap if cap > 0 else _DEFAULT_FIRE_BUDGET
+    except Exception:  # noqa: BLE001 — never let a governance hiccup remove the budget
+        return _DEFAULT_FIRE_BUDGET
+
+
+def _fires_so_far(engagement_id: str) -> int:
+    return sum(1 for e in autoaudit.read_all()
+               if e.get("engagement_id") == engagement_id and e.get("outcome") == "started")
+
+
+def permitted_to_fire(proposal: dict[str, Any], session_id: str, engagement_id: str,
+                      now: Any = None) -> tuple[bool, str]:
+    """``(allowed, reason)`` — does the budget AND the declared RoE allow firing this action now?
+    Applies to EVERY autonomous fire (passive included): the budget caps total autonomous activity,
+    and the RoE's excluded_actions / time_windows are the operator's wall for mode 3."""
+    cap = _fire_budget(session_id)
+    fired = _fires_so_far(engagement_id)
+    if fired >= cap:
+        return False, f"autonomous fire budget reached ({fired}/{cap})"
+    try:
+        from state import governance
+
+        allowed, reason = governance.permits(session_id, _action_class(proposal), now)
+    except Exception:  # noqa: BLE001 — if the RoE cannot be read, do NOT auto-fire (fail closed)
+        return False, "RoE could not be read — refusing to auto-fire (fail closed)"
+    return (True, "") if allowed else (False, reason)
+
+
+# --------------------------------------------------------------------------- #
 # THE UNIT OF WORK — propose -> decide -> fire-or-queue -> audit.
 # Shared by the /sessions/{id}/autorun/step endpoint AND the scheduler daemon, so the policy lives
 # in exactly one place. main registers its scope resolver here (the same set_*_resolver pattern the
@@ -170,6 +221,14 @@ def step_session(session_id: str, engagement_id: str) -> dict[str, Any]:
     out: dict[str, Any] = {"mode": mode, "action": decision.action, "tier": decision.tier,
                            "reason": decision.reason, "proposal": proposal}
     if decision.action == "fire":
+        # THE MODE said fire; now the BUDGET + RoE get a veto. A blocked fire becomes a queue, so
+        # the operator sees it rather than it vanishing.
+        allowed, why = permitted_to_fire(proposal, session_id, engagement_id)
+        if not allowed:
+            blocked = Decision("queue", decision.tier, f"blocked by policy: {why}")
+            note_non_fire(blocked, proposal, session_id, engagement_id, mode)
+            out.update({"action": "queue", "reason": blocked.reason, "policy_blocked": True})
+            return out
         out["result"] = fire(proposal, session_id, engagement_id, mode=mode, tier=decision.tier)
     else:
         note_non_fire(decision, proposal, session_id, engagement_id, mode)

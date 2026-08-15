@@ -6632,6 +6632,19 @@ A manual engagement is never stepped even while the daemon runs. Disabling the d
 cycle takes at most one step per engagement (the per-tick budget — bounded, observable), and a step
 that raises is contained to its own engagement. Started from the app lifespan next to
 `oob_autopoll.start`; `test_autoloop_safety.py` locks default-off, the manual-never-stepped filter,
-the mid-tick kill-switch, and the budget/containment. *Still ahead: Mode 3's RoE-as-wall +
-per-engagement budget, the continuous-hunting diff/alert, and the frontend 3-way toggle + decision
-queue.*
+the mid-tick kill-switch, and the budget/containment.
+
+**Mode 3's wall is the declared RoE + a fire budget (2026-08-15).** With no human approving each
+command in full mode, *something* must bound autonomous exploitation — and that something is what
+the operator declared up front. `state/governance.permits(session_id, action_class, now)` reads the
+RoE and ANSWERS whether an action is allowed now: an action named in `excluded_actions` is
+forbidden, and if `time_windows` is set anything outside them is a blackout (an overnight window
+wraps midnight; a malformed window fails closed). It only describes — consistent with governance's
+standing rule that it may formalise the scope frame but never enforce or run (its AST safety test
+still passes). The ENFORCING happens in `autorun.permitted_to_fire`, consulted before EVERY
+autonomous fire: a per-engagement **budget** caps total autonomous fires (default 200, raised via
+the RoE's `max_autonomous_fires`), the RoE deny-list/blackout applies, and an **unreadable RoE fails
+closed** (refuse to auto-fire). A mode-allowed fire the RoE forbids is **downgraded to a queue**, not
+dropped, so the operator sees it — `test_roe_wall_safety.py` locks the predicate, the gate, and the
+teeth (a full-mode exploitation the RoE excludes is queued, never fired). *Still ahead: the
+continuous-hunting diff/alert, and the frontend 3-way toggle + decision queue + egress fields.*

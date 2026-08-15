@@ -5,8 +5,8 @@
 
 <p align="center">
   <em>Another AI that hacks?</em> Yawn — until you watch it plan a whole engagement from real technique knowledge,<br>
-  drive real <strong>Kali</strong> tooling, and draft the report<br>
-  — all without firing a single command you didn't approve.
+  drive real <strong>Kali</strong> tooling, and write the report. Run it <strong>three ways</strong>:<br>
+  approve every command, auto-run the safe stuff, or turn it fully autonomous inside rules you set.
 </p>
 
 <p align="center">
@@ -22,7 +22,7 @@
   <img alt="Powered by Claude" src="https://img.shields.io/badge/powered%20by-Claude%20Agent%20SDK%20(Opus)-D97757?style=flat-square&logo=anthropic&logoColor=white">
   <img alt="Offensive security" src="https://img.shields.io/badge/offensive%20security-red%20team-b31b1b?style=flat-square">
   <img alt="Pentest / bug bounty / CTF" src="https://img.shields.io/badge/pentest%20%C2%B7%20bug%20bounty%20%C2%B7%20CTF-8B0000?style=flat-square">
-  <img alt="LLM safety" src="https://img.shields.io/badge/LLM-grounded%20%C2%B7%20no%20autonomy-9b59b6?style=flat-square">
+  <img alt="LLM safety" src="https://img.shields.io/badge/LLM-grounded%20%C2%B7%20human--gated%20by%20default-9b59b6?style=flat-square">
   <img alt="Local-first" src="https://img.shields.io/badge/local--first-Ollama%20fallback-111111?style=flat-square">
 </p>
 
@@ -38,7 +38,7 @@
 <p align="center"><sub>Every technique you know, one keystroke away.</sub></p>
 
 > ### ⚠️ Authorized use only
-> The cockpit runs **real offensive tools against real hosts** — with C2, evasion tooling, and a live Windows/AD path. Use it only where you're authorized: your own lab, an HTB/PG box, or a client with a signed scope. Every command is gated on your explicit approval, and in engagement mode on a target you declared in scope. **Engagement mode has no network containment** — human approval is the only thing standing between a command and the internet. Read the [Safety model](#-safety-model); it's the core of the design, not a footnote.
+> The cockpit runs **real offensive tools against real hosts** — with C2, evasion tooling, and a live Windows/AD path. Use it only where you're authorized: your own lab, an HTB/PG box, or a client with a signed scope. By default every command is gated on your explicit approval; the **autonomous modes** (assisted / full) run hands-off only inside a scope and Rules of Engagement you declare, and stay **off until you deliberately turn them on**. **Engagement mode has no network containment** — your approval, or the RoE you wrote, is the only thing between a command and the internet. Read the [Autonomy & safety model](#-autonomy--safety-model); it's the core of the design, not a footnote.
 
 ---
 
@@ -46,37 +46,43 @@
 
 | | |
 |---|---|
+| 🕹️ **Run it three ways** | **Manual** — you approve every command (default). **Assisted** — auto-runs passive recon, queues exploitation for you. **Full** — autonomous inside your Rules of Engagement + a fire budget. Off until you flip two switches; the repeater and anything dangerous **never** auto-fire. |
 | 🔎 **Knowledge base + hybrid search** | 2,747 deduped, source-attributed techniques across 33 categories. `⌘K` finds them by meaning. |
 | 🧭 **Guided attack paths** | Recon → privesc walkthroughs, write-up-first, KB-grounded, AI gap-fill clearly marked. |
-| ⇄ **Second opinion on any command** | On demand, a step / proposal / graph-edge offers **one** AI-curated alternative + a plain *which-is-better* verdict — a different KB technique (grounded, verbatim) or a tuned command (badged `AI-SUGGESTED · VERIFY`). The primary is never touched; the verdict is advice, never a gate. On the attack path, orchestrator queue, and the AD / cloud / kill-chain graphs. |
+| ⇄ **Second opinion on any command** | One tap returns **one** honestly-labelled alternative — a different KB technique or a tuned variant — plus a *which-is-better* verdict. Advice only, never auto-selected. |
 | 🎯 **Gated cockpit** | Real Kali execution, one approved command at a time, behind four ordered gates. |
-| ▤ **Interactive persistent sessions** | Named, parallel **tmux** sessions in the open box with per-session cwd — **automatic prompt detection** flips a session to *"interactive — send input"* when `msfconsole` / `sliver-client` / `evil-winrm` / a REPL is waiting, long scans **auto-background at 60s** with a notify-once completion, and wedge / pipe-degradation recovery. **Input stays human-only, every line.** |
+| ▤ **Interactive persistent sessions** | Named, parallel **tmux** sessions that flip to *"send input"* when `msfconsole` / `evil-winrm` / a REPL is waiting, and auto-background long scans. **Input stays human-only, every line.** |
 | ◈ **Guided recon** | Scoped domain → recon as approved jobs → ranked attack surface; discoveries can only widen the set *within* scope. |
-| 🔦 **Parameter / content discovery** | Mine an endpoint's **hidden params** (arjun), **hidden paths** (ffuf / feroxbuster) and **historical params** (paramspider) as one gated job — each discovery is a **pre-filled hand-off** to `:intruder` / `:nuclei` / `:repeater`, never auto-fired, and only in-scope items land, by construction. |
-| 🧬 **JS recon → secrets / endpoints** | Pull a target's JavaScript (bundles + **source maps**), mine **endpoints, parameters and secrets / API keys** out of it as one gated job — endpoints feed the ranked surface, **secrets go to loot, never the finding text** (trufflehog-verified keys High); only in-scope JS is fetched and only in-scope mined hosts land, by construction. |
+| 🔦 **Parameter / content discovery** | Mine hidden **params** (arjun), **paths** (ffuf/feroxbuster) and **historical params** (paramspider) as one gated job — each result a pre-filled, in-scope hand-off to `:intruder` / `:nuclei` / `:repeater`. |
+| 🧬 **JS recon → secrets / endpoints** | Pull a target's JavaScript + **source maps** and mine **endpoints, params and secrets / API keys** — endpoints feed the ranked surface; secrets go to loot, never the finding text (verified keys = High). |
 | 🕸️ **Web app testing** | Recording proxy, repeater, intruder, GraphQL, browser interception, OOB callbacks. |
-| 🎟️ **Token workbench** | Decode / analyze / tamper **JWT**, **OAuth/OIDC** and **SAML** — alg-none, RS→HS confusion, kid/jku/jwk injection, redirect_uri & PKCE-downgrade builders, XSW1–8 — then send the mutated token through the repeater. The weak-secret crack is one gated job. |
-| ⇶ **Single-packet race** | Fire one request **N times so the copies arrive in the same instant** — HTTP/2 single-packet or HTTP/1.1 last-byte sync — to beat a check-then-act window (limit overrun, TOCTOU, coupon reuse, one-time-token replay). One approval buys the batch; the verdict is **"K of N won the race"** and a confirmed race becomes a High finding. |
-| ⇋ **Request smuggling / desync** | Probe a front-end/back-end pair for **CL.TE / TE.CL / CL.CL / TE.TE / CL.0** and the HTTP/2-downgrade **H2.CL / H2.TE / H2.0** variants. **Detection is safe-by-default** (timing-differential — hangs a back-end on its own probe, touches no other user); **confirmation** (socket poisoning) is a **separate approve-each with a co-tenant warning**. A per-mutation verdict matrix; a hit becomes a High/Critical finding. |
-| 🗄️ **Web cache poisoning / deception** | Probe a shared cache for **unkeyed inputs** (`X-Forwarded-Host` & friends, cloaked params, fat-GET body) reflected into a **cacheable** response, plus **cache deception** (a dynamic page cached under a `/…/foo.css` path). **Detection is safe-by-default** (reflection + cacheability — plants nothing); **confirmation** (poison-plant) is a **separate approve-each with a co-user warning**. A per-input verdict table; a hit becomes a High/Critical finding. |
+| 🔓 **Authenticated testing** | Log in yourself, hand HackPit the session, and every scanner **and** the repeater probe **as you** — token in memory, masked everywhere. Most bounty bugs live behind auth; now the loop reaches them. |
+| 🧱 **Beats the WAF** | A Cloudflare-style JA3/TLS block that 403s a plain client? Every web surface can wear a real **Chrome fingerprint** (opt-in), so the engagement doesn't die at the front door. |
+| 📱 **Mobile targets** | A first-class `app:` scope token + a one-command capture bench (boot → install → cert → proxy → *log in*) reduces a mobile app to its HTTPS API — which the cockpit already tests. |
+| 🎟️ **Token workbench** | Decode / tamper **JWT · OAuth/OIDC · SAML** — alg-none, RS→HS confusion, kid/jku/jwk injection, PKCE-downgrade, XSW1–8 — then replay through the repeater. The weak-secret crack is one gated job. |
+| ⇶ **Single-packet race** | Fire one request **N times to land in the same instant** (HTTP/2 single-packet or HTTP/1.1 last-byte) and beat a check-then-act window — limit overrun, TOCTOU, coupon reuse. Verdict: *K of N won the race*. |
+| ⇋ **Request smuggling / desync** | Probe a front-end/back-end pair for **CL.TE / TE.CL / CL.0** and HTTP/2-downgrade desync. **Detection is safe by default** (timing, touches no other user); **confirmation** is a separate approve-each with a co-tenant warning. |
+| 🗄️ **Web cache poisoning / deception** | Probe a shared cache for **unkeyed inputs** reflected into a cacheable response, plus **cache deception**. **Detection is safe by default**; **poison-plant confirmation** is a separate approve-each with a co-user warning. |
 | ◎ **Nuclei template scan** | Scoped target(s) → templates → severity-ranked findings, one approval; results flow into engagement state. |
 | 🪟 **Windows / AD** | BloodHound graph → route to Domain Admin → walk it live over WinRM. |
-| 📄 **AD CS (ESC1–8)** | `certipy find` → certtemplate/certauthority nodes + synthesized `ESC1…ESC8` edges → a low-priv enrollee → vulnerable template → Domain Admin, routed in the same graph; the agent picks an edge, you approve every command. |
-| 🎫 **Unconstrained delegation + tickets** | `unconstraineddelegation` → a routable `TrustedForDelegation` edge (own the host, coerce a DC, capture its TGT, DCSync) → Domain Admin; **golden / silver ticket forging** as propose-only persistence, offered only once you hold the secret and never a step on the route. |
-| ☁️ **Cloud IAM privesc** | ScoutSuite/Prowler/pacu/cloudfox → typed IAM graph → route to an admin/owner identity across AWS/Azure/GCP; the agent picks an edge, you approve every command. |
-| 🌉 **Web SSRF → cloud creds** | A captured IMDS response (from the repeater, a nuclei hit, or an OOB callback) → an **owned** cloud principal seeded into the IAM graph → the privesc walk starts from the identity you just stole. |
-| ⛓️ **Cross-domain kill-chain** | The capstone: **three swim-lanes** (web → cloud → on-prem AD) stitched into one routed chain by the cross-domain seams (SSRF→cloud metadata, cloud secret→AD credential, web RCE→host). The agent picks an edge, never a command — a seam crossing runs through the gated executor, a within-lane hop in its own `:cloud`/`:ad-graph` view. |
+| 📄 **AD CS (ESC1–8)** | `certipy find` → synthesized **ESC1–8** edges routing a low-priv enrollee → vulnerable template → Domain Admin in the same graph; the agent picks an edge, you approve every command. |
+| 🎫 **Unconstrained delegation + tickets** | A routable **unconstrained-delegation** edge (own host → coerce a DC → capture its TGT → DCSync) → Domain Admin, plus **golden / silver ticket** forging as propose-only persistence once you hold the secret. |
+| ☁️ **Cloud IAM privesc** | ScoutSuite/Prowler → typed **IAM privesc graph** → route to an admin identity across AWS/Azure/GCP; the agent picks an edge, you approve every command. |
+| 🌉 **Web SSRF → cloud creds** | A captured IMDS response (repeater, nuclei hit, or OOB callback) seeds an **owned** cloud principal into the IAM graph — the privesc walk starts from the identity you just stole. |
+| ⛓️ **Cross-domain kill-chain** | The capstone: **three swim-lanes** (web → cloud → on-prem AD) stitched into one route by the cross-domain seams (SSRF→metadata, cloud secret→AD cred, web RCE→host). Agent picks edges; you approve. |
 | 🔑 **Credential attack** | Spray captured/OSINT creds, crack captured hashes — one approval per job; secrets stay in loot files, a hit lights the AD graph. |
 | 📡 **C2 & tunnels** | Sliver implants, DNS tunnels, pivots, a public redirector — all gated. |
+| 🔁 **Rotating egress** | Route outbound through a pool of **attributable proxy IPs** with your program's identify-header pinned — one WAF ban doesn't strand a live engagement; the pool URL never lands on a record. |
+| 🔭 **Continuous hunting** | On a standing engagement it snapshots the surface and **alerts on new assets** — a fresh subdomain, a new endpoint — so the auto-runner targets whatever appeared *since*. |
 | 🛡️ **Purple-team view** | The defender's-eye footprint of every command, with an honest OPSEC channel. |
 | 📝 **Grounded reports** | OSCP/CPTS/H1 templates, evidence spliced from real state, CVSS computed not asserted. |
 | 🧰 **Arsenal · exploits · SAST** | 161-tool catalog, a 47k-exploit CVE index, and an 8-language code scanner. |
-| 🧩 **Binary/RE, pwn & forensics** | Ghidra / radare2 / gdb / pwntools / ROPgadget / ropper / one_gadget / angr / pwninit / checksec / patchelf for reversing & exploit-dev, plus volatility3 / binwalk / foremost / steghide / zsteg / stegseek / exiftool / bulk_extractor for forensics & CTF — proposable templates over `<binary>`/`<file>`, gated approve-each like every tool (no auto-exec). |
-| 🔬 **AI code-audit fan-out** | Point it at a repo → an agent maps the entrypoints & flows **once**, then verifies **one flow per agent** against source → deduped, severity-ranked findings, each with an attacker path + a propose-only PoC. `patched-since` audits only a git diff; one approved job, no new gate. |
-| ⛓️ **Web3 / smart-contract audit** | Three built-in playbooks on the same fan-out: **EVM external-flow** (reentrancy / access-control / oracle-manipulation / loss-of-funds), **Cosmos ABCI panic-halt** (four panic classes → consensus halt), **Anchor account-model** (missing-owner / signer-spoof / CPI-confusion / overflow). KB-grounded, chain/contract/function-tagged; an approve-each **slither / mythril / echidna** tool pass. |
-| ▣ **Finding pipeline** | Every producer emits one **structured schema** (attacker-path, source-refs, CVSS, custom fields) → duplicates **auto-merge** idempotently → a **pluggable severity ranker** (bug-bounty payout vs compliance) rescores per engagement → **post-scripts** validate / draft a report (in-process) or build a PoC (approve-each). Pure data; no new gate. |
-| ⧉ **Workflow builder** | Compose your own **reusable prompt-step playbooks** over the code-audit fan-out: each step is a focused prompt with **variables** (`{{repo}}`, dotted `{{steps.…output}}`, per-run extras), an output schema, and a **batch / depth / siblings** fan-out shape. Export / import them as portable JSON — imported ones are **inspected before they ever run** — and two proven built-ins ship visible on first load. Authoring executes nothing; a run is the audit's one approved job, no new gate. |
-| ⚖️ **Engagement governance** | Before an engagement goes live, draft + approve a formal **RoE / ConOps / Deconfliction / OPPLAN** package: objectives carry a status **state machine** + **MITRE ATT&CK** ids + OPSEC level, an objectives board + coverage matrix render it, and it flows into the report. The RoE **formalises** the scope handrail — advisory, not a machine veto; per-command human approval stays the bound. Generation is propose-only; no new gate. |
+| 🧩 **Binary/RE, pwn & forensics** | Ghidra · radare2 · gdb · pwntools · ROPgadget · angr · checksec for reversing & exploit-dev, plus volatility3 · binwalk · steghide · zsteg · exiftool for forensics/CTF — proposable templates, gated approve-each. |
+| 🔬 **AI code-audit fan-out** | Point it at a repo → an agent maps the flows **once**, then verifies **one flow per agent** → deduped, severity-ranked findings with an attacker path + propose-only PoC. `patched-since` audits a git diff. |
+| ⛓️ **Web3 / smart-contract audit** | Three playbooks on the same fan-out — **EVM external-flow**, **Cosmos ABCI panic-halt**, **Anchor account-model** — KB-grounded and chain/contract-tagged, with an approve-each **slither / mythril / echidna** pass. |
+| ▣ **Finding pipeline** | Every producer emits one **structured schema**; duplicates **auto-merge**; a **pluggable ranker** (bug-bounty vs compliance) rescores per engagement; **post-scripts** validate, draft a report, or build a PoC. |
+| ⧉ **Workflow builder** | Compose **reusable prompt-step playbooks** over the code-audit fan-out — variables, output schema, batch/depth fan-out — export/import as portable JSON (imported ones inspected before they run). Two built-ins ship ready. |
+| ⚖️ **Engagement governance** | Draft + approve a formal **RoE / ConOps / Deconfliction / OPPLAN** before go-live: objectives carry status + **MITRE ATT&CK** ids + OPSEC level, rendered as a board + coverage matrix, and it flows into the report. |
 | 🔌 **MCP server** | 22 read-only tools so another AI agent can *see* your engagement — eyes, not hands (opt-in execution available). |
 
 ---
@@ -132,6 +138,17 @@ Open one and it's a working engagement; finish it and the report writes itself f
   <img src="assets/screenshots/06b-attack-path-branches.jpg" alt="A grounded step with copy-ready commands and conditional branches" width="49%">
 </p>
 
+<p align="center">
+  <img src="assets/screenshots/52-engagement-state-task-tree.png" alt="Engagement state, built automatically from every run — captured hosts, endpoints and a live task tree the planner reasons over instead of re-reading raw output" width="90%">
+</p>
+<p align="center"><sub>State and a task tree the planner builds itself — and reasons over on the next step, instead of re-reading raw output.</sub></p>
+
+<p align="center">
+  <img src="assets/screenshots/53-assistant-grounded.png" alt="The session-aware assistant reasoning over your actual progress, grounded in real techniques" width="49%">
+  <img src="assets/screenshots/54-assistant-grounded-verify.png" alt="The assistant honestly labelling what is KB-grounded versus AI-suggested, with cited technique chips" width="49%">
+</p>
+<p align="center"><sub>Grounded first — and honest about what it's only suggesting.</sub></p>
+
 ### ⚖️ Engagement governance — RoE / ConOps / Deconfliction / OPPLAN
 
 The most on-brand addition: it turns *"human approves each command"* into *"human approves each command **inside a written, agreed operating frame**."* Before an engagement goes live, the operator drafts (LLM-assisted, **propose-only**) and approves four governance documents — **Rules of Engagement**, **Concept of Operations**, a **Deconfliction Plan** (how your traffic is told apart from a real incident), and an **OPPLAN**: a list of **objectives**, each with a status **state machine** (`pending → in-progress → completed / blocked / cancelled`, with `completed`/`cancelled` terminal), one or more **MITRE ATT&CK** technique ids, an OPSEC level and an optional C2 tier. Objectives drive the orchestrator's targeting — the proposer aims *toward an active objective*, each step still human-approved, and an approved exit-0 run records itself as the objective's advance evidence. A **MITRE ATT&CK coverage matrix** shows which tactics/techniques the engagement exercised, and the whole package flows into the report.
@@ -163,6 +180,11 @@ A Kali container driven from the UI, **one approved command at a time**. From he
 <p align="center">
   <img src="assets/screenshots/12-cockpit.png" alt="The cockpit — plot a path, then run it one approved command at a time" width="100%">
 </p>
+
+<p align="center">
+  <img src="assets/screenshots/51-cockpit-live-engagement.png" alt="The guided loop mid-engagement — the agent proposes the next command and you approve every one before it runs, with the session-aware assistant open alongside" width="100%">
+</p>
+<p align="center"><sub>The guided loop in flight — propose → approve → run, one command at a time.</sub></p>
 
 ### `:kali` and `:terminal` — three shells, on purpose
 
@@ -199,17 +221,17 @@ A token HackPit spots in **captured traffic** is modelled **names/claims-only** 
 
 ### Single-packet race tester — the primitive the intruder can't do
 
-The intruder's serial loop sends one request, then the next — so a target's *check-then-act* window closes between them and a race never fires. **`:race`** is the missing primitive: it takes **one** request and fires it **N times so the copies arrive in the same instant**, to hit limit-overrun / TOCTOU / coupon-reuse / one-time-token races. Two transports the operator picks: **HTTP/2 single-packet** — one connection, N requests queued with the **final frame withheld**, then every final frame **released together** so all N complete in a single packet (PortSwigger's technique, the reliable modern mode) — and **HTTP/1.1 last-byte sync** — N connections, every byte but the last sent, then the last byte **released on all at once**. The engine is a small in-repo client baked into the sandbox (`race-singlepacket`), invoked **argv-only with the whole request delivered on stdin** — no shell parses a request byte.
+The intruder sends requests one after another, so a target's *check-then-act* window closes between them and a race never fires. **`:race`** is the missing primitive: it takes **one** request and fires it **N times so the copies land in the same instant** — hitting limit-overrun, TOCTOU, coupon-reuse and one-time-token races. Two transports you pick: **HTTP/2 single-packet** (N requests queued on one connection, final frames released together — PortSwigger's reliable modern mode) and **HTTP/1.1 last-byte sync** (every byte but the last sent on N connections, then the last byte released at once). The engine is a baked in-repo client, invoked argv-only with the whole request on stdin.
 
-It is modelled **exactly on the intruder**: **one gated job**, the **same four gates** and no new ones, run inside the hardcoded open sandbox, **scope-checked on the wire** (an out-of-scope host refuses the whole batch, nothing sent), with an **ungated stop**. The whole request template *and* the concurrency count N are in the approved surface — the intruder's completeness rule, so a body carrying a shell pattern reaches the danger gate rather than hiding behind a count. The verdict is the race-window signal, not a raw dump: the N responses are clustered, and when the **rare** outcome a serial baseline returns *once* (the single "coupon applied") appears **more than once**, that is a race — reported as **"K of N requests won the race"**, and a confirmed race lands a **High finding** in engagement state. Available as a dedicated **`/race`** surface next to `:intruder`.
+It's modelled **exactly on the intruder** — one gated job, the same four gates, scope-checked on the wire, ungated stop — and both the request template and the count N sit in the approved surface, so a body carrying a shell pattern still hits the danger gate. The verdict is the race signal, not a raw dump: when the **rare** outcome a serial baseline returns *once* shows up **more than once**, that's a race — reported as **"K of N won the race"** and logged as a High finding. A dedicated **`/race`** surface next to `:intruder`.
 
 ### Request smuggling / desync — safe detection, gated confirmation
 
-Request smuggling is the other front-end/back-end parsing bug: when the edge and the origin disagree on where a request ends, bytes from one request prefix the next — used to bypass front-end access control, poison the response queue or cache, or capture another user's request. **`:smuggle`** probes a target for the whole family — **CL.TE, TE.CL, CL.CL, TE.TE, CL.0** and the modern HTTP/2-downgrade **H2.CL, H2.TE, H2.0** variants — and it is built around one rule the class demands: **detection is safe, confirmation is not, so they are split.**
+Request smuggling is the other front-end/back-end parsing bug: when the edge and origin disagree on where a request ends, bytes from one bleed into the next — bypassing access control, poisoning a cache, or capturing another user's request. **`:smuggle`** probes the whole family — **CL.TE, TE.CL, CL.CL, TE.TE, CL.0** and the HTTP/2-downgrade **H2.CL, H2.TE, H2.0** — around one rule: **detection is safe, confirmation isn't, so they're split.**
 
-**Detection is the default and it is self-contained.** For each chosen mutation it sends a request whose ambiguous framing makes a *back-end* wait for body bytes that never arrive; if a front-end/back-end pair disagree the probe hangs (a large timing delta over a normal baseline), and if a single RFC-consistent server handles it the probe returns immediately. **No other user's request is touched** — the delay is the whole signal. The screen renders a **per-mutation verdict matrix** (baseline vs probe vs Δ, susceptible / clear / inconclusive); a susceptible mutation lands a **High finding**.
+**Detection is the default and self-contained.** Each mutation sends a request whose ambiguous framing makes a *back-end* wait for body bytes that never arrive: a mismatched pair hangs (a timing delta), a consistent server answers immediately. **No other user's request is touched** — the delay is the whole signal. A per-mutation verdict matrix (baseline vs probe vs Δ) flags susceptible / clear / inconclusive; a hit is a High finding.
 
-**Confirmation is a separate approve-each with a co-tenant warning.** Socket-poisoning confirmation smuggles a partial request onto a shared connection then sends a normal one to observe the poisoned response — *this can affect the next request on that connection, possibly another user's*. So it is its own explicit approval carrying a plain-language co-tenant warning, one susceptible mutation at a time; a confirmed desync lands a **Critical finding**. It is still just approve-each — the **same four gates** the intruder/race clear, **no new gate class**. The engine is a small in-repo client baked into the sandbox (`smuggle-probe`), invoked **argv-only with the whole request delivered on stdin**; the standard external tools **`smuggler.py`** (defparam) and **`h2csmuggler`** (BishopFox) ship alongside for manual use. Scope-checked on the wire, ungated stop. Available as a dedicated **`/smuggle`** surface next to `:race`.
+**Confirmation is a separate approve-each with a co-tenant warning.** Socket-poisoning smuggles a partial request onto a shared connection then sends a normal one to watch the poisoned response — *which can affect the next request on that connection, possibly another user's* — so it's its own explicit approval, one mutation at a time; a confirmed desync is a Critical finding. Still approve-each, same four gates. The engine is a baked in-repo client (argv-only, request on stdin); **`smuggler.py`** and **`h2csmuggler`** ship alongside for manual use. A dedicated **`/smuggle`** surface next to `:race`.
 
 ![:smuggle — request-smuggling verdict matrix](assets/screenshots/smuggle.png)
 
@@ -221,11 +243,11 @@ Request smuggling is the other front-end/back-end parsing bug: when the edge and
 
 ### Web cache poisoning / deception — safe detection, gated poison-plant
 
-A shared cache trusts the origin's response and serves it to everyone who shares a cache key. **Web cache poisoning** turns that into an attack: send data in an **unkeyed input** — a header the cache omits from its key (`X-Forwarded-Host`, `X-Forwarded-Scheme`, `X-Host`, `X-Original-URL`, …), a **cloaked query parameter**, or a **fat GET body** — that the origin still reflects, so the poisoned response is stored under the base key and served to every subsequent user (a redirect to an attacker host, injected script, or a sensitive page). **`:cache`** probes for the whole family, plus **cache deception** (a dynamic page cached under a static-looking path like `/account/foo.css`), around the same rule its sibling `:smuggle` follows: **detection is safe, confirmation is not, so they are split.**
+A shared cache serves one stored response to everyone with the same cache key. **Web cache poisoning** abuses that: slip data into an **unkeyed input** the cache ignores when keying — a header like `X-Forwarded-Host`, a cloaked query param, or a fat GET body — that the origin still reflects, so your poisoned response (a redirect, injected script, a sensitive page) gets served to every later user. **`:cache`** probes the whole family plus **cache deception** (a dynamic page cached under a static-looking path like `/account/foo.css`), around the same rule as `:smuggle`: **detection is safe, confirmation isn't, so they're split.**
 
-**Detection is the default and it plants nothing.** For each candidate input it sends **one** request carrying a unique marker in that input and reports two observations — is the marker **reflected**, and is the response **cacheable** (`Cache-Control` public/max-age, `Age`, `X-Cache`/`CF-Cache-Status`). **Reflected + cacheable ⇒ a candidate.** The path-confusion deception probes run alongside. No cache entry is planted and nothing is served to anyone else — the screen renders a **per-input verdict table** (reflected / cacheable flags, candidate / clear / inconclusive) plus any cache-deception hit; a candidate or deception lands a **High finding**.
+**Detection is the default and plants nothing.** Each candidate input gets **one** request with a unique marker, reporting two things — is the marker **reflected**, and is the response **cacheable** (`Cache-Control`, `Age`, `X-Cache`/`CF-Cache-Status`). **Reflected + cacheable ⇒ a candidate.** Nothing is stored or served to anyone else; the screen shows a per-input verdict table plus any deception hit, and a candidate lands a High finding.
 
-**Confirmation is a separate approve-each with a co-user warning.** Poison-plant confirmation primes the cache with the marker request, then fetches it back with a **fresh request that never carried the marker** — if the cache serves the marker, the input is confirmed unkeyed and *the poisoned entry a fresh request receives is the same one a real co-user would receive until the cache expires.* So it is its own explicit approval carrying a plain-language **co-user warning**, one candidate at a time; a confirmed poisoning lands a **Critical finding**. It is still just approve-each — the **same four gates** the intruder/smuggle clear, **no new gate class**. The engine is a small stdlib-only in-repo client baked into the sandbox (`cache-probe`), invoked **argv-only with the whole request delivered on stdin**; Hackmanit's **`wcvs`** (web-cache-vulnerability-scanner) ships alongside for manual use. Scope-checked on the wire, ungated stop. Available as a dedicated **`/cache`** surface next to `:smuggle`.
+**Confirmation is a separate approve-each with a co-user warning.** Poison-plant primes the cache with the marker, then fetches it back with a **fresh request that never carried it** — if the cache serves the marker it's confirmed unkeyed, and *that poisoned entry is what a real co-user would receive until the cache expires.* So it's its own explicit approval, one candidate at a time; a confirmed poisoning is a Critical finding. Still approve-each, same four gates. The engine is a baked in-repo client (argv-only, request on stdin); Hackmanit's **`wcvs`** ships alongside. A dedicated **`/cache`** surface next to `:smuggle`.
 
 ![:cache — web cache poisoning verdict table + cache deception](assets/screenshots/cache.png)
 
@@ -366,7 +388,7 @@ The same graph now finishes the **Kerberos-delegation family**. RBCD and constra
 
 ## ☁️ Cloud attack surface & IAM privesc graph
 
-The cloud parallel to the AD graph. Point **`:cloud-graph`** at an account and it enumerates as **one approved job** — `ScoutSuite` + `Prowler`, with `pacu` and `cloudfox` added to the arsenal and the sandbox image in this build — then parses their JSON into a **typed IAM privilege-escalation graph**: principals (users, roles, groups, service accounts) and resources (buckets, functions, secrets, KMS keys) wired by the abusable IAM relationships an attacker actually walks — `sts:AssumeRole`, `iam:PassRole`, `iam:AttachRolePolicy`, `iam:CreatePolicyVersion`, `lambda:UpdateFunctionCode`, Azure `Owner`-on-self / app-credential-add, GCP `serviceAccountTokenCreator` / `actAs`. A BFS over the abusable edges finds the shortest route to an **admin/owner-equivalent** principal, and — exactly like the AD graph — the agent **picks an edge to abuse (an index into the real frontier), never authors a command**: each edge's abuse is grounded in the 534-entry cloud KB (with the precise CLI catalog behind it) and runs **only** through the same gated executor, so you approve every command individually. Advancing the walk requires a run that was actually approved and exited 0, checked server-side. The privilege-escalation paths and Prowler misconfigurations land as **findings** in engagement state. Multi-cloud by construction (provider on every node); enumeration is AWS-end-to-end today with Azure/GCP node/edge and technique support in place.
+The cloud parallel to the AD graph. Point **`:cloud-graph`** at an account and it enumerates as **one approved job** (`ScoutSuite` + `Prowler`, with `pacu` / `cloudfox` in the arsenal), then parses the JSON into a **typed IAM privilege-escalation graph**: principals and resources wired by the IAM relationships an attacker actually walks — `sts:AssumeRole`, `iam:PassRole`, `iam:CreatePolicyVersion`, `lambda:UpdateFunctionCode`, Azure `Owner`-on-self, GCP `serviceAccountTokenCreator`. A BFS finds the shortest route to an **admin/owner** principal, and — exactly like the AD graph — the agent **picks an edge (an index into the real frontier), never authors a command**: each abuse is grounded in the 534-entry cloud KB and runs only through the gated executor, approve-each, and advancing requires an approved exit-0 run. Privesc paths + Prowler misconfigs land as **findings**. Multi-cloud by construction; AWS is end-to-end today, with Azure/GCP nodes, edges and techniques in place.
 
 <p align="center">
   <img src="assets/screenshots/34-cloud.png" alt="The cloud IAM privesc graph — a synthetic AWS account renders a 3-hop route from an owned low-priv user to an admin role: dev-alice (owned) —MemberOf→ developers —AssumeRole→ ci-deployer —AttachRolePolicy→ break-glass-admin (admin/owner), with AWS/Azure/GCP provider tabs and the agent-proposes-an-edge orchestrator panel above" width="90%">
@@ -563,26 +585,38 @@ Embeddings for the vector half of search always run locally on **Ollama** (`nomi
 
 ---
 
-## 🔒 Safety model
+## 🔒 Autonomy & safety model
 
-This is the part worth reading first, because it constrains everything else.
+Read this first — it constrains everything else. HackPit runs **as hands-on or as hands-off as you authorize**, and the whole design is built to hold at the hands-off end.
 
-**Four ordered gates, on every command.** Nothing executes without passing all four:
+**Three modes, set per engagement:**
+
+| Mode | Who pulls the trigger |
+|---|---|
+| **Manual** *(default)* | You approve **every** command. The human is the wall. |
+| **Assisted** | The runner fires the **passive tier** itself (recon, discovery, nuclei); every **exploitation-class** action is queued for you to approve or skip. |
+| **Full** | Passive **and** exploitation fire autonomously — the wall becomes your **Rules of Engagement + scope + a fire budget + a tamper-evident audit**, not a per-command click. |
+
+**Autonomy is off until you turn it on — twice.** The scheduler that drives it is **default-off**, and *two* independent switches must both be on before anything fires: the daemon toggle **and** the engagement's mode (default `manual`). A manual engagement is never touched. Flipping the daemon off is a **kill-switch**, re-read every cycle. The UI flashes **"⚠ FIRING AUTONOMOUSLY"** only when both are live — you can always see whether anything can move without you.
+
+**What can never auto-fire.** A **closed, fail-safe classifier** decides what counts as "passive": only an explicit allowlist (recon / discovery / nuclei / detect-stage probes) is auto-runnable — *everything else, including any surface added later, is exploitation by default.* The **repeater and every "ask the operator" stay human-only in all three modes.**
+
+**Full mode's leash.** Each autonomous fire is checked against the RoE you wrote: excluded actions are forbidden, off-hours are blacked out, an **unreadable RoE fails closed**, and a per-engagement **fire budget** (default 200) caps the run. A fire the RoE forbids is **queued for you, never silently dropped.**
+
+**The model proposes; it never executes.** Even in full mode the LLM only *drafts* — a separate, deterministic runner does the firing, and only what the classifier and RoE allow. Source-scan tests fail the build if any orchestrator or agent module gains a code path to an execution surface. For Active Directory the agent picks an *edge index*, never a raw command.
+
+**Four gates on every command — autonomous or not:**
 
 | Gate | What it does |
 |---|---|
-| **Human approval** | Every command needs an explicit approve. No batch approval, no risk-tiered auto-run, no autonomous loop. |
-| **Scope lock** | In engagement mode an out-of-scope target **warns and refuses until you tick an explicit `scope_override`** — a deliberate second act, exactly like the red-confirm — then runs, loudly annotated `⚠ RAN OFF SCOPE (override)`. Approve alone won't do it; tick **and** approve will. Per-command approval is the real bound; scope is a handrail, not a wall. The **lab and Windows** locks stay **hard** — isolated and structurally-fixed hosts, no override. |
-| **Red confirm** | A heuristic flags dangerous commands (interpreters, reverse shells, payload generators, tunnels, RCE tooling) and demands a second acknowledgement that names *what* it flagged. |
-| **Audit** | Every action — including refusals that ran nothing — is recorded. |
+| **Approval** | Manual/assisted: an explicit human approve. Full: the RoE + budget + audit stand in — and you can still hand-approve any queued item. |
+| **Scope lock** | Engagement mode **warns and refuses** an out-of-scope target until you tick `scope_override` (then runs, loudly flagged `⚠ RAN OFF SCOPE`). Scope is a handrail; approval/RoE is the wall. **Lab and Windows locks stay hard** — no override. |
+| **Red confirm** | A heuristic flags dangerous commands (interpreters, reverse shells, tunnels, RCE tooling) and demands a second, named acknowledgement. |
+| **Audit** | Every action — refusals *and* every autonomous fire (secrets stripped, append-only) — is recorded. |
 
-**No autonomy — enforced, not promised.** The agent proposes; it never executes. Source-scan tests assert that no orchestrator, loop, or agent module has any code path to an execution surface, and they **fail the build** if one appears. For Active Directory the agent picks an *edge index*, never a command — it can't invent a host or author a command outside the graph.
+**Three sandboxes, deliberately different.** The **lab** container is *egress-less* (no route to the internet, your LAN, or your host — proven by a live isolation check). **`:kali`** is an open bridge for the human-only shell. The **engagement** container is fully open by design — a real target is on the internet — so there the bound is approval / RoE + scope, **not** network isolation.
 
-**Three sandboxes, deliberately different.** The **lab** container is *egress-less* — no route to the internet, your LAN, or your host — proven by a live Docker isolation check the executor's fourth gate depends on. The **`:kali`** container is an open bridge for the human-only shell. The **engagement** container is fully open and privileged by design, because a real target is on the internet; there the bound is **per-command approval** — with the scope lock an override-able handrail, not a hard wall — and **not** network isolation.
-
-**Describe, then prescribe — never one without the other.** The detection layer is describe-only and guarded against drifting into evasion advice. The OPSEC channel may be prescriptive, but only if every note names what still records the activity — and the blue-team footprint is always produced alongside and can't be suppressed.
-
-**93 test files**, run as one hermetic suite (`sh backend/run_safety_tests.sh`). Many exist purely to prove a guard *fires* — including planted-violation controls, because a safety test that can't fail is not evidence.
+**134 hermetic test files** (`sh backend/run_safety_tests.sh`), many built purely to prove a guard *fires* — including planted-violation controls, because a safety test that can't fail isn't evidence.
 
 ---
 

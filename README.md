@@ -92,6 +92,54 @@ https://github.com/user-attachments/assets/fc76e429-c021-410d-ad5c-96867f1ede55
 
 ---
 
+## ⚡ One command: `/engage` — the autonomous front door
+
+`/engage` is a Claude Code skill that turns HackPit's whole arsenal into a single hands-off run. You invoke it once, answer a short scoping interview — target, goal, **authorization**, identity, aggressiveness, time-box — and then it drives the entire loop by itself: **recon → rank the surface → hunt every relevant surface → chain findings → validate → write the report.** No approve-each. One stop, then it goes quiet until it's done.
+
+It's the concrete form of the "**turn it fully autonomous inside rules you set**" mode. Because the per-command human gate is gone on purpose, **scope-safety is the only wall** — so the rails are baked in, not optional: every request is scope-checked (out-of-scope is dropped, never sent) and logged to `audit.jsonl`; `:repeater` stays human-only and is excluded; reports are **written to disk, never auto-submitted**; and read-only is the default until you opt into `--aggressive`.
+
+> **Authorized use only.** The interview's authorization attestation is a hard gate — it stops the run if you can't confirm you're allowed to test the target. `/engage` is for your own lab, an HTB/PG box, or a target with a signed scope / in-scope bug-bounty program.
+
+### Install
+It ships **in this repo** — a fresh clone already has it. Open the project in Claude Code and `/engage` is available (project command at `.claude/commands/engage.md`).
+
+Make it global (available in every project):
+```bash
+cp skills/engage/SKILL.md ~/.claude/commands/engage.md   # invoke as /engage everywhere
+```
+
+Any other agent — one command via the skills CLI (Cursor, Codex, Copilot, Gemini CLI, opencode, and more):
+```bash
+npx skills add https://github.com/Zaidzyy/HackPit --skill engage
+```
+Add `-g` to install globally; drop it to scope to the current project.
+
+No installer? The whole skill is one file — copy `skills/engage/SKILL.md` to your agent's skill directory.
+
+| Agent | How it discovers |
+|---|---|
+| Claude Code | Reads `.claude/commands/engage.md` from the repo (or `~/.claude/commands/` when installed globally) |
+| Other agents | Point custom instructions at `skills/engage/SKILL.md` |
+
+### Use it
+From the project directory, ask your agent:
+```
+let's /engage acme-corp.com
+```
+Steer scope and posture with flags:
+```
+/engage acme-corp.com --goal "bug bounty, focus IDOR + SSRF" --auth-file .private/session.json
+/engage acme-corp.com --aggressive --time-box 2h
+```
+Not sure yet? **Dry-run** it — the interview runs, the scope + plan print, and it stops before a single request:
+```
+/engage acme-corp.com --dry-run
+```
+
+You get a `findings/<target>/` folder with the drafted reports (`report.md`, and `report.pdf` if the builder is present), a full request log at `hunt-memory/audit.jsonl`, and a one-line session summary — the findings ranked, what was tested, and what's left for `/pickup` next time. **Nothing is submitted; that call stays yours.**
+
+---
+
 ## 🧠 The companion
 
 ### Consolidated knowledge base + hybrid search

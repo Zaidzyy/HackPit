@@ -56,6 +56,7 @@
   section.wrap{padding-top:52px;padding-bottom:52px}
   .h{color:var(--dim);font-size:13px;letter-spacing:3px;text-transform:uppercase;margin-bottom:26px}.h span{color:var(--acc)}
   .demo{border:1px solid var(--line);border-radius:12px;padding:66px 20px;text-align:center;color:var(--dim);background:rgba(255,255,255,.02)}.demo .p{font-size:26px;color:var(--acc)}
+  .demovid{width:100%;border:1px solid var(--line);border-radius:12px;background:#000;display:block}
   /* how it works */
   .flow{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
   .step{background:rgba(255,255,255,.02);border:1px solid var(--line);border-radius:12px;padding:20px 16px;text-align:center;position:relative}
@@ -113,7 +114,7 @@
 </section>
 
 <section class="wrap reveal"><div class="h"><span>01</span> // demo</div>
-  <div class="demo"><div class="p">▶</div>demo video — coming here</div>
+  <video class="demovid" controls preload="metadata" playsinline><source src="demo.mp4" type="video/mp4">Your browser doesn't support embedded video — <a href="demo.mp4">download the demo</a>.</video>
 </section>
 
 <section class="wrap reveal" id="how"><div class="h"><span>02</span> // how it works</div>

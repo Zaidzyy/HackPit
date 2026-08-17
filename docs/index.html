@@ -46,6 +46,12 @@
   .engage p{color:var(--dim);font-size:14px}.engage p b{color:var(--fg)}
   .engage .term{background:#0a0b10;border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:13px;color:var(--acc);margin:14px 0;overflow-x:auto;white-space:nowrap}
   .engage .fine{font-size:12px;color:var(--dim);margin-top:4px}
+  .clone{text-align:center}
+  .clone h2{font-size:clamp(26px,4.6vw,44px);font-weight:800;color:#fff;letter-spacing:-1px;line-height:1.06}
+  .clone .sub2{color:var(--dim);max-width:560px;margin:14px auto 0;font-size:14px}
+  .clone .term{text-align:left;max-width:620px;margin:24px auto;background:#0a0b10;border:1px solid var(--line);border-radius:10px;padding:16px 18px;font-size:13px;color:var(--fg);white-space:pre;overflow-x:auto;line-height:1.9}
+  .clone .term b{color:var(--acc);font-weight:400}
+  .clone .term .d{color:var(--dim)}.clone .term .c{color:var(--dim);opacity:.7}
   section{padding:56px 0}
   section.wrap{padding-top:52px;padding-bottom:52px}
   .h{color:var(--dim);font-size:13px;letter-spacing:3px;text-transform:uppercase;margin-bottom:26px}.h span{color:var(--acc)}
@@ -184,6 +190,15 @@
 <section class="wrap reveal"><div class="strip">
   <div class="box"><h4><span>◆</span> Local-first</h4><p>Runs entirely on your machine — no cloud, no account, nothing leaving your box. Use a fully local LLM or a frontier one. The repo ships code only; the knowledge base builds locally, so a fresh clone starts empty.</p></div>
   <div class="box warn"><h4><span>⚠</span> Authorized use only</h4><p>A real offensive tool — with C2, evasion and a live Windows/AD path. Run it only against systems you own or have explicit written permission to test. In engagement mode, your approval is the only thing bounding where a command goes.</p></div>
+</div></section>
+
+<section class="wrap reveal"><div class="clone">
+  <h2>Clone it. Bring the stack up.</h2>
+  <p class="sub2">The repo ships <b style="color:var(--fg)">code only</b> — the knowledge base is kept private, so a fresh clone starts empty. Build your own, or message me for full access. It won't hunt without one.</p>
+  <div class="term"><span class="d">$</span> git clone <b>https://github.com/Zaidzyy/HackPit</b> && cd HackPit
+<span class="d">$</span> docker compose -f docker/docker-compose.yml up -d
+<span class="c"># → localhost:3000 · cockpit ready · KB: bring your own (or ask me)</span></div>
+  <a class="btn p" href="https://github.com/Zaidzyy/HackPit">Open the repository →</a>
 </div></section>
 
 <footer class="wrap reveal"><span>© 2026 HackPit · Apache-2.0</span><span>built by Zaid · <a href="https://github.com/Zaidzyy/HackPit">github.com/Zaidzyy/HackPit</a></span></footer>

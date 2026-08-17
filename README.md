@@ -29,6 +29,11 @@
 > ### 📦 KB not shared here, Contact me for full access to this tool
 > The knowledge sources the KB is built from — course notes, write-ups, cloned repos, PDFs, cheat sheets — are kept **local and git-ignored**. **a fresh clone starts with an empty knowledge base until you build one or get it from the author.**
 
+
+
+https://github.com/user-attachments/assets/c2e51d53-962b-4aea-b47b-8db6a952f747
+
+
 ---
 
 <p align="center">

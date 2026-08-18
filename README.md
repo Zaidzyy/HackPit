@@ -45,6 +45,15 @@ https://github.com/user-attachments/assets/fc76e429-c021-410d-ad5c-96867f1ede55
 > ### ⚠️ Authorized use only
 > The cockpit runs **real offensive tools against real hosts** — with C2, evasion tooling, and a live Windows/AD path. Use it only where you're authorized: your own lab, an HTB/PG box, or a client with a signed scope. By default every command is gated on your explicit approval; the **autonomous modes** (assisted / full) run hands-off only inside a scope and Rules of Engagement you declare, and stay **off until you deliberately turn them on**. **Engagement mode has no network containment** — your approval, or the RoE you wrote, is the only thing between a command and the internet. Read the [Autonomy & safety model](#-autonomy--safety-model); it's the core of the design, not a footnote.
 
+
+---
+
+## Demo 
+
+
+https://github.com/user-attachments/assets/a0700cb4-84d7-4b47-9415-56cdcfae8f8f
+
+
 ---
 
 ## What you get, at a glance
